@@ -35,7 +35,7 @@ _NATIVE_UI_ENVIRONMENT = frozenset({
     "DOBBY_LOG_ROOT",
     "DOBBY_LOG_PRECREATED",
     "GODEBUG",
-    # The native UI smoke driver resolves PowerShell through shutil.which() for
+    # The native UI helper resolves PowerShell through shutil.which() for
     # clipboard and UI Automation operations.  The scheduled task runs with
     # the interactive account's environment, but ProcessStartInfo receives a
     # deliberately bounded environment below, so carry the system PATH
@@ -345,7 +345,7 @@ def _native_ui_wrapper(
     child_pid: Path,
     exit_code: Path,
 ) -> str:
-    """Build the user-session PowerShell wrapper for the native UI smoke.
+    """Build the user-session PowerShell wrapper for the native UI runner.
 
     The wrapper starts the actual Python process with only the runtime values
     the desktop client needs.  ``ProcessStartInfo`` gives us an exact child
@@ -380,7 +380,7 @@ def _native_ui_wrapper(
         "  }",
         # ProcessStartInfo starts with the task's user environment.  Clear it
         # before applying the allow-list so credentials or unrelated runner
-        # settings cannot leak into the product smoke process.
+        # settings cannot leak into the product UI process.
         "  $info.EnvironmentVariables.Clear()",
         "  foreach ($entry in $userEnvironment.GetEnumerator()) { $info.EnvironmentVariables[$entry.Key] = $entry.Value }",
         # The controller records the exact production UI PID immediately

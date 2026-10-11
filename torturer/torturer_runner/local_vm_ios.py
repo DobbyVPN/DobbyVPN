@@ -56,6 +56,7 @@ def run(
     logs: Path,
     timeout: float,
     native_cases: list[str] | None = None,
+    repeat: int = 1,
 ) -> dict:
     from .local_vm import _read_state, _write_json
 
@@ -131,6 +132,7 @@ def run(
             candidate_root=run_dir / "source", work_dir=work, runner=runner,
             contract=contract, budget=budget,
             native_cases=native_cases,
+            repeat=repeat,
             source_sha=(
                 candidate.get("source_sha")
                 if isinstance(candidate.get("source_sha"), str)
@@ -171,9 +173,14 @@ def run(
             "kind": "native-cases" if native_cases is not None else "suite",
             "native_case_selection": "explicit" if native_cases is not None else "suite-default",
             "native_cases": selected_cases,
+            "repeat": repeat,
             "xctest_filters": list(
                 getattr(evidence, "selected_tests", ios.ui_test_selection(native_cases))
             ),
+            "required_xctest_methods": list(
+                getattr(evidence, "required_test_cases", ios.required_ui_test_cases(native_cases))
+            ),
+            "xctest_results": getattr(evidence, "xctest_results", None),
         },
     })
     return _read_state(run_dir)["runtime"]

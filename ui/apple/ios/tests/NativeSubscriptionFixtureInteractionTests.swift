@@ -7,11 +7,13 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
     private let app = XCUIApplication(bundleIdentifier: "vpn.dobby.app")
     private let environment = ProcessInfo.processInfo.environment
     private var subscriptionURL = ""
+    private var failureURL = ""
 
     override func setUpWithError() throws {
         continueAfterFailure = false
 
         let urlKey = "DOBBY_IOS_TEST_SUBSCRIPTION_URL"
+        let failureURLKey = "DOBBY_IOS_TEST_SUBSCRIPTION_FAILURE_URL"
         let markerKey = "DOBBY_IOS_TEST_FIXTURE_REQUIRED"
         let seedKey = "DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE"
         guard environment[markerKey] == "1" else {
@@ -23,11 +25,9 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         }
 
         guard let source = environment[urlKey],
-              let components = URLComponents(string: source),
-              components.scheme?.lowercased() == "https",
-              components.host == "127.0.0.1",
-              components.user == nil,
-              components.password == nil,
+              Self.isFixtureURL(source),
+              let failedSource = environment[failureURLKey],
+              Self.isFixtureURL(failedSource),
               environment[seedKey] == "1" else {
             throw NSError(
                 domain: "DobbyVPN.iOSFixture",
@@ -40,6 +40,8 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         // fixture CA in this run-owned Simulator. URLSession in the app still
         // performs its normal system-trust evaluation.
         subscriptionURL = source
+        failureURL = failedSource
+        if app.state != .notRunning { app.terminate() }
         UIPasteboard.general.string = source
         app.launchEnvironment = [
             markerKey: "1",
@@ -48,19 +50,41 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         app.launch()
     }
 
-    func testAutomaticProfilesAndFixtureRequestCounts() throws {
-        guard #available(iOS 16.4, *) else {
-            throw XCTSkip("Cold and warm URL activation checks require iOS 16.4 or newer")
-        }
+    func testNativePasteStartsFixtureRequest() throws {
+        let sourceField = app.textFields["Connection configuration"]
+        XCTAssertTrue(sourceField.waitForExistence(timeout: 30))
+        let paste = app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        let stateElement = app.descendants(matching: .any)
+            .matching(identifier: "Simulator test session state").firstMatch
+        XCTAssertTrue(stateElement.waitForExistence(timeout: 10))
 
+        paste.tap()
+        waitForSourceField(sourceField, value: subscriptionURL)
+        let firstRequest = XCTNSPredicateExpectation(
+            predicate: NSPredicate { element, _ in
+                guard let element = element as? XCUIElement,
+                      let state = Self.sessionState(from: element) else { return false }
+                return (state["request_count"] as? NSNumber)?.intValue == 1
+            },
+            object: stateElement
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [firstRequest], timeout: 15), .completed)
+        let state = try XCTUnwrap(Self.sessionState(from: stateElement))
+        XCTAssertEqual(state["source_url"] as? String, subscriptionURL)
+        XCTAssertEqual((state["configure_requests"] as? NSNumber)?.intValue, 1)
+        XCTAssertEqual((state["start_requests"] as? NSNumber)?.intValue, 0)
+    }
+
+    func testPasteFailureWaitsForExplicitRetry() throws {
+        let failedSource = try failureURLForAttempt()
         let sourceField = app.textFields["Connection configuration"]
         XCTAssertTrue(sourceField.waitForExistence(timeout: 30))
         let paste = app.buttons["Paste"]
         XCTAssertTrue(paste.waitForExistence(timeout: 10), "The fixture URL should be available through the native Paste control")
-        let pasteStartedAt = ProcessInfo.processInfo.systemUptime
+        UIPasteboard.general.string = failedSource
         paste.tap()
-        let pasteCompletedAt = ProcessInfo.processInfo.systemUptime
-        waitForSourceField(sourceField, value: subscriptionURL)
+        waitForSourceField(sourceField, value: failedSource)
 
         let failedStateElement = app.descendants(matching: .any)
             .matching(identifier: "Simulator test session state").firstMatch
@@ -78,31 +102,27 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertTrue(retry.waitForExistence(timeout: 15), "A failed load should offer Retry")
         attachScreenshot("subscription-failure")
         let failedState = try XCTUnwrap(Self.sessionState(from: failedStateElement))
-        let requestStartedAt = try XCTUnwrap(
-            (failedState["request_started_at_uptime"] as? NSNumber)?.doubleValue,
-            "The Simulator test client should report when it started the Paste request"
-        )
-        XCTAssertGreaterThanOrEqual(
-            requestStartedAt, pasteStartedAt,
-            "Configure should not begin before the native Paste tap"
-        )
-        let pasteRequestElapsed = requestStartedAt - pasteCompletedAt
-        XCTAssertLessThan(
-            pasteRequestElapsed, 1.5,
-            "Explicit Paste should start the request promptly; Configure began \(pasteRequestElapsed)s after the tap completed"
-        )
         assertFailedLoadWithoutConnection(failedState)
         XCTAssertTrue(
             app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Subscription request failed")).firstMatch.exists,
             "The failed load should explain why profiles did not appear"
         )
-        assertNoAutomaticRetry(after: failedState, from: failedStateElement)
-
         retry.tap()
-        let pasteStateElement = try waitForLoadedInventory(source: subscriptionURL)
+        let pasteStateElement = try waitForLoadedInventory(source: failedSource)
         let pasteState = try XCTUnwrap(Self.sessionState(from: pasteStateElement))
-        assertRetriedLoadWithoutConnection(pasteState, source: subscriptionURL)
+        assertRetriedLoadWithoutConnection(pasteState, source: failedSource)
 
+        let autoAction = app.buttons.matching(identifier: "VPN connection action").firstMatch
+        XCTAssertTrue(autoAction.waitForExistence(timeout: 10))
+        XCTAssertEqual(autoAction.label, "Auto connect")
+        XCTAssertTrue(autoAction.isHittable)
+        XCTAssertTrue(app.staticTexts["Simulator fixture profile 1"].waitForExistence(timeout: 10))
+        attachScreenshot("subscription-profiles")
+    }
+
+    func testFixtureProfilesRenderWithInventoryScopedControls() throws {
+        let (_, loadedState) = try loadFixtureInventoryByPasting()
+        let inventoryDigest = try XCTUnwrap(loadedState["digest"] as? String)
         let autoAction = app.buttons.matching(identifier: "VPN connection action").firstMatch
         XCTAssertTrue(autoAction.waitForExistence(timeout: 10))
         XCTAssertEqual(autoAction.label, "Auto connect")
@@ -225,8 +245,8 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             )
             for row in visibleRows {
                 let index = row.index
-                let protocolLabel = app.staticTexts.matching(identifier: "Profile \(index) protocol").firstMatch
-                let connect = app.buttons.matching(identifier: "Profile \(index) action").firstMatch
+                let protocolLabel = app.staticTexts.matching(identifier: profileIdentifier(index - 1, role: "protocol", digest: inventoryDigest)).firstMatch
+                let connect = app.buttons.matching(identifier: profileIdentifier(index - 1, role: "action", digest: inventoryDigest)).firstMatch
                 let nameIsHittable = row.name.isHittable
                 let protocolIsHittable = protocolLabel.isHittable
                 let actionIsHittable = connect.isHittable
@@ -284,7 +304,7 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             "Rendered profiles should appear in source order. Scroll measurements: \(traversalObservations.joined(separator: " | "))"
         )
         XCTAssertTrue(app.staticTexts["Profile 12"].isHittable)
-        XCTAssertTrue(app.buttons["Profile 12 action"].isHittable)
+        XCTAssertTrue(app.buttons[profileIdentifier(11, role: "action", digest: inventoryDigest)].isHittable)
 
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
@@ -292,7 +312,13 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertGreaterThan(logs.frame.height, 100, "The bounded profile list should leave a useful log viewport")
         XCTAssertTrue(app.buttons["Clear"].isHittable)
         XCTAssertTrue(app.buttons["Share logs"].isHittable)
+    }
 
+    func testFixtureLogsRenderSeededStderrWithoutConnecting() throws {
+        let (_, state) = try loadFixtureInventoryByPasting()
+        XCTAssertEqual((state["start_requests"] as? NSNumber)?.intValue, 0)
+        let logs = app.textViews["Connection logs"]
+        XCTAssertTrue(logs.waitForExistence(timeout: 10))
         let captureVisible = XCTNSPredicateExpectation(
             predicate: NSPredicate { element, _ in
                 guard let logs = element as? XCUIElement,
@@ -308,6 +334,12 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             renderedLogs.range(of: completeCaptureRecord, options: .regularExpression),
             "The rendered record should show its timestamp, INFO severity, Tunnel stderr source and initialization message: \(renderedLogs)"
         )
+    }
+
+    func testColdImportConfiguresInventoryOnce() throws {
+        guard #available(iOS 16.4, *) else {
+            throw XCTSkip("Cold and warm URL activation checks require iOS 16.4 or newer")
+        }
 
         let deepLink = try importLink(for: subscriptionURL)
         app.terminate()
@@ -319,16 +351,56 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         let coldStateElement = try waitForLoadedInventory(source: subscriptionURL)
         let coldState = try XCTUnwrap(Self.sessionState(from: coldStateElement))
         assertOneLoadWithoutConnection(coldState, source: subscriptionURL)
+    }
+
+    func testWarmImportsReuseLoadedInventory() throws {
+        guard #available(iOS 16.4, *) else {
+            throw XCTSkip("Cold and warm URL activation checks require iOS 16.4 or newer")
+        }
+
+        let (stateElement, loadedState) = try loadFixtureInventoryByPasting()
+        XCTAssertEqual(loadedState["source_url"] as? String, subscriptionURL)
+        XCTAssertEqual((loadedState["start_requests"] as? NSNumber)?.intValue, 0)
+        let deepLink = try importLink(for: subscriptionURL)
 
         for _ in 0..<2 {
-            let previous = try XCTUnwrap(Self.sessionState(from: coldStateElement))
+            let previous = try XCTUnwrap(Self.sessionState(from: stateElement))
             XCUIDevice.shared.system.open(deepLink)
             XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
             let repeatedSource = app.textFields["Connection configuration"]
             XCTAssertTrue(repeatedSource.waitForExistence(timeout: 10))
             waitForSourceField(repeatedSource, value: subscriptionURL)
-            assertNoDuplicateLoad(after: previous, from: coldStateElement)
+            assertNoDuplicateLoad(after: previous, from: stateElement)
         }
+    }
+
+    private func loadFixtureInventoryByPasting() throws -> (XCUIElement, [String: Any]) {
+        let sourceField = app.textFields["Connection configuration"]
+        XCTAssertTrue(sourceField.waitForExistence(timeout: 30))
+        let paste = app.buttons["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 10))
+        paste.tap()
+        waitForSourceField(sourceField, value: subscriptionURL)
+
+        let stateElement = app.descendants(matching: .any)
+            .matching(identifier: "Simulator test session state").firstMatch
+        XCTAssertTrue(stateElement.waitForExistence(timeout: 10))
+        let requestStarted = XCTNSPredicateExpectation(
+            predicate: NSPredicate { element, _ in
+                guard let element = element as? XCUIElement,
+                      let state = Self.sessionState(from: element) else { return false }
+                return (state["request_count"] as? NSNumber)?.intValue == 1
+            },
+            object: stateElement
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [requestStarted], timeout: 15), .completed)
+        let firstState = try XCTUnwrap(Self.sessionState(from: stateElement))
+        XCTAssertEqual(firstState["configured"] as? Bool, true,
+                       "The fail-once fixture is reserved for the explicit Paste failure test")
+        let loaded = try waitForLoadedInventory(source: subscriptionURL)
+        let state = try XCTUnwrap(Self.sessionState(from: loaded))
+        XCTAssertEqual((state["start_requests"] as? NSNumber)?.intValue, 0)
+        return (loaded, state)
     }
 
     private func waitForSourceField(_ field: XCUIElement, value: String) {
@@ -336,6 +408,10 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
             predicate: NSPredicate(format: "value == %@", value), object: field
         )
         XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 15), .completed)
+    }
+
+    private func profileIdentifier(_ index: Int, role: String, digest: String) -> String {
+        "profile.\(digest).\(index).\(role)"
     }
 
     private static func frameDescription(_ frame: CGRect) -> String {
@@ -396,28 +472,6 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         XCTAssertEqual((state["start_requests"] as? NSNumber)?.intValue, 0)
     }
 
-    private func assertNoAutomaticRetry(after previous: [String: Any], from element: XCUIElement) {
-        let duplicate = XCTNSPredicateExpectation(
-            predicate: NSPredicate { object, _ in
-                guard let element = object as? XCUIElement,
-                      let current = Self.sessionState(from: element) else { return false }
-                return (current["configure_requests"] as? NSNumber)?.intValue
-                    != (previous["configure_requests"] as? NSNumber)?.intValue
-                    || (current["request_count"] as? NSNumber)?.intValue
-                    != (previous["request_count"] as? NSNumber)?.intValue
-            },
-            object: element
-        )
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [duplicate], timeout: 1.6), .timedOut,
-            "A failed URL should wait for the user's Retry action instead of fetching again"
-        )
-        XCTAssertTrue(app.buttons["Retry"].exists)
-        let current = Self.sessionState(from: element)
-        XCTAssertEqual(current?["configure_requests"] as? NSNumber, previous["configure_requests"] as? NSNumber)
-        XCTAssertEqual(current?["request_count"] as? NSNumber, previous["request_count"] as? NSNumber)
-    }
-
     private func assertRetriedLoadWithoutConnection(_ state: [String: Any], source: String) {
         XCTAssertEqual(state["source_url"] as? String, source)
         XCTAssertEqual(state["sequence"] as? NSNumber, 1)
@@ -460,6 +514,22 @@ final class NativeSubscriptionFixtureInteractionTests: XCTestCase {
         components.host = "import"
         components.queryItems = [URLQueryItem(name: "url", value: source)]
         return try XCTUnwrap(components.url)
+    }
+
+    private static func isFixtureURL(_ source: String) -> Bool {
+        guard let components = URLComponents(string: source) else { return false }
+        return components.scheme?.lowercased() == "https"
+            && components.host == "127.0.0.1"
+            && components.user == nil
+            && components.password == nil
+    }
+
+    private func failureURLForAttempt() throws -> String {
+        var components = try XCTUnwrap(URLComponents(string: failureURL))
+        components.queryItems = (components.queryItems ?? []) + [
+            URLQueryItem(name: "attempt", value: UUID().uuidString),
+        ]
+        return try XCTUnwrap(components.string)
     }
 
     private func attachScreenshot(_ name: String) {

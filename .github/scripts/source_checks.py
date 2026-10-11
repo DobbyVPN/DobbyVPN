@@ -122,6 +122,7 @@ def go_environment(go_executable: Path) -> dict[str, str]:
 
 def capture(
     command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None,
+    emit_stdout: bool = True,
 ) -> str:
     log("$ " + " ".join(command))
     try:
@@ -136,7 +137,7 @@ def capture(
         )
     except FileNotFoundError as error:
         raise CheckError(f"required command is missing: {error.filename}") from error
-    if result.stdout:
+    if result.stdout and emit_stdout:
         sys.stdout.write(result.stdout)
         sys.stdout.flush()
     if result.stderr:
@@ -429,7 +430,7 @@ def swift_unit(args: argparse.Namespace) -> None:
             run([xcrun, "swiftc", str(ROOT / "ui/apple/ios/integration/SharedKeychainSecretStore.swift"),
                  str(SCRIPT_DIR / "ios/keychain_collision_test.swift"), "-o", str(executable)])
             run([str(executable)])
-        run([swift, "test", "-v", "--enable-code-coverage", "--package-path", str(ROOT / "ui" / "apple")])
+        run([swift, "test", "--enable-code-coverage", "--package-path", str(ROOT / "ui" / "apple")])
         bin_path = capture([swift, "build", "--show-bin-path", "--package-path", str(ROOT / "ui" / "apple")]).strip()
         build_path = Path(bin_path)
         profiles = list(build_path.glob("**/codecov/default.profdata"))
@@ -443,7 +444,8 @@ def swift_unit(args: argparse.Namespace) -> None:
         coverage = output / "swift-lifecycle-core.profdata"
         shutil.copyfile(profiles[0], coverage)
         report = capture(
-            [xcrun, "llvm-cov", "export", str(tests[0]), f"-instr-profile={profiles[0]}", "-format=lcov"]
+            [xcrun, "llvm-cov", "export", str(tests[0]), f"-instr-profile={profiles[0]}", "-format=lcov"],
+            emit_stdout=False,
         )
         lcov.write_text(report, encoding="utf-8")
         run(
@@ -521,6 +523,15 @@ def lint_android(tools: Tools) -> None:
     if not lock_file.is_file() or lock_file.stat().st_size == 0:
         raise CheckError("Gradle did not produce the Android release dependency lockfile")
     trivy_scan(tools, (lock_file,))
+
+
+def android_unit() -> None:
+    """Exercise the production presentation module without app, Go or SDK builds."""
+    gradle = ROOT / "ui" / "android" / "gradlew"
+    if not gradle.is_file():
+        raise CheckError(f"Android Gradle wrapper is missing: {gradle}")
+    run([str(gradle), ":presentation:test", "--no-daemon", "--stacktrace"],
+        cwd=ROOT / "ui" / "android")
 
 
 def lint_swift(tools: Tools) -> None:
@@ -619,7 +630,8 @@ def parse_args() -> argparse.Namespace:
         "check",
         choices=(
             "python-tests", "go-tests", "go-unit", "go-race", "go-native-runtime",
-            "swift-unit", "lint-go", "lint-android", "lint-swift", "security",
+            "swift-unit", "swift-mutations", "windows-mutations", "android-unit", "android-mutations",
+            "lint-go", "lint-android", "lint-swift", "security",
             "actionlint", "cache-clean",
         ),
     )
@@ -647,6 +659,16 @@ def main() -> int:
             go_native_runtime()
         elif args.check == "swift-unit":
             swift_unit(args)
+        elif args.check == "swift-mutations":
+            require_platform("darwin")
+            run([sys.executable, str(ROOT / "ui" / "apple" / "check_production_mutations.py")])
+        elif args.check == "windows-mutations":
+            require_platform("windows")
+            run([sys.executable, str(ROOT / "torturer" / "native_ui" / "windows" / "verify_production_mutations.py")])
+        elif args.check == "android-unit":
+            android_unit()
+        elif args.check == "android-mutations":
+            run([sys.executable, str(ROOT / "ui" / "android" / "check_presentation_mutations.py")])
         elif args.check == "python-tests":
             python_tests()
         elif args.check == "lint-go":

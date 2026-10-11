@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from .native_cases import (
+    IOS_LEAF_CASES,
     IOS_LOGS_FREEZE_RESUME_CASE,
     IOS_RENDERER_SEVERITY_CASE,
     IOS_SUBSCRIPTION_FIXTURE_CASE,
@@ -20,21 +21,74 @@ _DEFAULT_UI_TEST_SELECTION = (
     "iosAppUITests/NativeUIInteractionTests",
     "iosAppUITests/NativeRendererInteractionTests/"
     "testSeverityColorsResolveForLightAndDarkAppearances",
-    "iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
-    "testAutomaticProfilesAndFixtureRequestCounts",
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests",
 )
+_NATIVE_UI_TEST_CASES = (
+    "iosAppUITests/NativeUIInteractionTests/testUnsupportedTypedURLKeepsControlsUsable",
+    "iosAppUITests/NativeUIInteractionTests/testAboutShowsSelectedProductRevision",
+    "iosAppUITests/NativeUIInteractionTests/testClearRemovesEarlierRenderedRecordsAndRetainsLaterRecord",
+    "iosAppUITests/NativeUIInteractionTests/testColdImportKeepsItsValidSource",
+    "iosAppUITests/NativeUIInteractionTests/testWarmAndInvalidImportsKeepTheLatestValidSource",
+    "iosAppUITests/NativeUIInteractionTests/testLargeTextKeepsLogsAndControlsVisible",
+    "iosAppUITests/NativeUIInteractionTests/testCompactLandscapeKeepsConnectionControlsAndLogsReachable",
+    "iosAppUITests/NativeUIInteractionTests/testEmptyAndNonTextClipboardDoesNotFillSubscriptionField",
+    "iosAppUITests/NativeUIInteractionTests/testPasteReadsClipboardOnlyAfterTapAndRejectsNonHTTPSInput",
+    "iosAppUITests/NativeUIInteractionTests/testValidNativePasteAcceptedOnTap",
+    "iosAppUITests/NativeUIInteractionTests/testLogDetailsRevealAndCollapseTheOriginalRecord",
+    "iosAppUITests/NativeUIInteractionTests/testFrozenLogsKeepTheirReadingPositionDuringConfigurationAndAbout",
+    "iosAppUITests/NativeUIInteractionTests/testFrozenLogPositionSurvivesRotation",
+    "iosAppUITests/NativeUIInteractionTests/testFollowingResumesWhenReaderReturnsToBottom",
+)
+_RENDERER_SEVERITY_TEST = _DEFAULT_UI_TEST_SELECTION[1]
+_SUBSCRIPTION_FIXTURE_TEST_CASES = (
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests/testNativePasteStartsFixtureRequest",
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests/testPasteFailureWaitsForExplicitRetry",
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests/testFixtureProfilesRenderWithInventoryScopedControls",
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests/testFixtureLogsRenderSeededStderrWithoutConnecting",
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests/testColdImportConfiguresInventoryOnce",
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests/testWarmImportsReuseLoadedInventory",
+)
+_UI_TEST_CLASS_CASES = {
+    "iosAppUITests/NativeUIInteractionTests": _NATIVE_UI_TEST_CASES,
+    "iosAppUITests/NativeRendererInteractionTests": (_RENDERER_SEVERITY_TEST,),
+    "iosAppUITests/NativeSubscriptionFixtureInteractionTests": _SUBSCRIPTION_FIXTURE_TEST_CASES,
+}
+SUBSCRIPTION_FIXTURE_TEST_GETS = dict(zip(
+    _SUBSCRIPTION_FIXTURE_TEST_CASES,
+    (1, 2, 1, 1, 1, 1),
+))
 _NATIVE_CASE_TEST_SELECTIONS = {
     IOS_LOGS_FREEZE_RESUME_CASE: (
-        "iosAppUITests/NativeUIInteractionTests/testLogsFreezeAndResumeAtBottom",
-        "iosAppUITests/NativeUIInteractionTests/testNativeConnectionAboutAndLogs",
+        "iosAppUITests/NativeUIInteractionTests/testFrozenLogsKeepTheirReadingPositionDuringConfigurationAndAbout",
+        "iosAppUITests/NativeUIInteractionTests/testFrozenLogPositionSurvivesRotation",
+        "iosAppUITests/NativeUIInteractionTests/testFollowingResumesWhenReaderReturnsToBottom",
     ),
     IOS_RENDERER_SEVERITY_CASE: (_DEFAULT_UI_TEST_SELECTION[1],),
     IOS_SUBSCRIPTION_FIXTURE_CASE:
         (
-            "iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
-            "testAutomaticProfilesAndFixtureRequestCounts",
+            "iosAppUITests/NativeSubscriptionFixtureInteractionTests",
         ),
+    "ios-subscription-paste": (_SUBSCRIPTION_FIXTURE_TEST_CASES[0],),
+    "ios-subscription-failure-retry": (_SUBSCRIPTION_FIXTURE_TEST_CASES[1],),
+    "ios-subscription-profiles": (_SUBSCRIPTION_FIXTURE_TEST_CASES[2],),
+    "ios-subscription-logs": (_SUBSCRIPTION_FIXTURE_TEST_CASES[3],),
+    "ios-subscription-cold-import": (_SUBSCRIPTION_FIXTURE_TEST_CASES[4],),
+    "ios-subscription-warm-import": (_SUBSCRIPTION_FIXTURE_TEST_CASES[5],),
+    "ios-logs-details": (_NATIVE_UI_TEST_CASES[10],),
+    "ios-logs-clear": (_NATIVE_UI_TEST_CASES[2],),
+    "ios-logs-freeze-configuration": (_NATIVE_UI_TEST_CASES[11],),
+    "ios-logs-freeze-rotation": (_NATIVE_UI_TEST_CASES[12],),
+    "ios-logs-follow-resume": (_NATIVE_UI_TEST_CASES[13],),
+    "ios-about": (_NATIVE_UI_TEST_CASES[1],),
+    "ios-layout-large-text": (_NATIVE_UI_TEST_CASES[5],),
+    "ios-layout-compact-landscape": (_NATIVE_UI_TEST_CASES[6],),
 }
+if set(IOS_LEAF_CASES) != set(_NATIVE_CASE_TEST_SELECTIONS) - {
+    IOS_LOGS_FREEZE_RESUME_CASE,
+    IOS_RENDERER_SEVERITY_CASE,
+    IOS_SUBSCRIPTION_FIXTURE_CASE,
+}:
+    raise RuntimeError("iOS native leaf case registry and XCTest selections diverged")
 
 
 class IOSSimulatorContractError(ValueError):
@@ -58,6 +112,28 @@ def ui_test_selection(native_cases: Sequence[str] | None = None) -> tuple[str, .
         raise IOSSimulatorContractError(
             f"unsupported iOS Simulator native case: {error.args[0]}"
         ) from error
+
+
+def required_ui_test_cases(native_cases: Sequence[str] | None = None) -> tuple[str, ...]:
+    """Expand selected class filters into the exact required test methods."""
+    expanded: list[str] = []
+    for selection in ui_test_selection(native_cases):
+        expanded.extend(_UI_TEST_CLASS_CASES.get(selection, (selection,)))
+    if len(set(expanded)) != len(expanded):
+        raise IOSSimulatorContractError(
+            "selected native XCTest cases overlap and would run a method more than once"
+        )
+    return tuple(expanded)
+
+
+def expected_subscription_fixture_gets(
+    native_cases: Sequence[str] | None = None,
+) -> int:
+    """Return the exact subscription GET count implied by selected XCTest leaves."""
+    return sum(
+        SUBSCRIPTION_FIXTURE_TEST_GETS.get(test, 0)
+        for test in required_ui_test_cases(native_cases)
+    )
 
 
 @dataclass(frozen=True)
@@ -146,6 +222,7 @@ def xcodebuild_ui_test_without_building_command(
     architecture: str,
     native_cases: Sequence[str] | None = None,
     test_environment: Mapping[str, str] | None = None,
+    repeat: int = 1,
 ) -> list[str]:
     """Run prepared XCTest products and retain their result bundle."""
     app_project = Path(project)
@@ -166,6 +243,8 @@ def xcodebuild_ui_test_without_building_command(
     udid = _validate_udid(device_udid)
     simulator_architecture = "x86_64" if architecture == "amd64" else architecture
     selection = ui_test_selection(native_cases)
+    if type(repeat) is not int or repeat < 1:
+        raise IOSSimulatorContractError("XCTest repeat count must be positive")
     command = [
         "xcodebuild",
         "-project", str(app_project),
@@ -186,6 +265,12 @@ def xcodebuild_ui_test_without_building_command(
         "CODE_SIGN_IDENTITY=-",
         "test-without-building",
     ]
+    # Xcode rejects an explicit one-iteration request. Its default is one run;
+    # pass the option only when the caller requests repeated XCTest execution.
+    if repeat > 1:
+        command[command.index("-only-testing:" + selection[0]):command.index("-only-testing:" + selection[0])] = [
+            "-test-iterations", str(repeat),
+        ]
     if test_environment is None:
         return command
     environment_arguments: list[str] = []

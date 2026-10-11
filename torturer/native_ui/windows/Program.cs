@@ -12,46 +12,26 @@ using System.Text;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Automation;
-using Microsoft.Win32.SafeHandles;
 using Forms = System.Windows.Forms;
 
 // Runs only in the interactive test user's session, outside the shipped app.
-internal static class Program
+internal static partial class Program
 {
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(NativePoint point);
     [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
-    [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll", SetLastError = true)] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
-    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr GetThreadDesktop(uint threadId);
-    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);
-    [DllImport("user32.dll", SetLastError = true)] private static extern bool CloseDesktop(IntPtr desktop);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool GetUserObjectInformation(IntPtr handle, int index, StringBuilder information, uint length, out uint needed);
-    [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
-    [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeProcessHandle OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
-    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetProcessTimes(
-        SafeProcessHandle process, out NativeFileTime creationTime, out NativeFileTime exitTime,
-        out NativeFileTime kernelTime, out NativeFileTime userTime);
-    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint GetProcessId(SafeProcessHandle process);
-    [DllImport("dbghelp.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool MiniDumpWriteDump(
-        SafeProcessHandle process, uint processId, SafeFileHandle file, uint dumpType,
-        IntPtr exceptionParam, IntPtr userStreamParam, IntPtr callbackParam);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
     [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
@@ -79,7 +59,6 @@ internal static class Program
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
-    [StructLayout(LayoutKind.Sequential)] private struct NativeFileTime { public uint Low, High; }
     // INPUT and MOUSEINPUT use a pointer-sized dwExtraInfo on both architectures.
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeInput
@@ -104,7 +83,6 @@ internal static class Program
     private const string WindowsTextSizeSliderAutomationId = "SystemSettings_EaseOfAccess_Experience_TextScalingDesktop_Slider";
     private const string WindowsTextSizeApplyAutomationId = "SystemSettings_EaseOfAccess_Experience_TextScalingDesktop_ButtonRemove";
     private const uint WmClose = 0x0010;
-    private const uint WmNull = 0x0000;
     private const uint WmNcHitTest = 0x0084;
     private const uint SmtoAbortIfHung = 0x0002;
     private const uint SmtoErrorOnExit = 0x0020;
@@ -116,20 +94,6 @@ internal static class Program
     private const uint MouseEventLeftDown = 0x0002;
     private const uint MouseEventLeftUp = 0x0004;
     private const uint MouseEventWheel = 0x0800;
-    private const int WheelDelta = 120;
-    private const uint ProcessQueryInformation = 0x0400;
-    private const uint ProcessVmRead = 0x0010;
-    private const uint MiniDumpWithFullMemory = 0x00000002;
-    private const uint MiniDumpWithThreadInfo = 0x00001000;
-    private const int UiaElementNotAvailableHResult = unchecked((int)0x80040201);
-
-    private const int UiaBoundingRectanglePropertyId = 30001;
-    private const int UiaProcessIdPropertyId = 30002;
-    private const int UiaControlTypePropertyId = 30003;
-    private const int UiaNamePropertyId = 30005;
-    private const int UiaAutomationIdPropertyId = 30011;
-    private const int UiaIsOffscreenPropertyId = 30022;
-    private static readonly Guid CUIAutomationClassId = new("FF48DBA4-60EF-4201-AA87-54103EEF594E");
 
     private readonly record struct SettingsWindowCandidate(
         IntPtr Window,
@@ -139,37 +103,6 @@ internal static class Program
         long OwnerStartTimeUtcTicks,
         string WindowClassName,
         bool IsApplicationFrameHost);
-
-    // Only the needed methods are callable. The unused declarations preserve the COM vtable order.
-    [ComImport]
-    [Guid("30CBE57D-D9D0-452A-AB13-7AC5AC4825EE")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IUIAutomationClientCom
-    {
-        [PreserveSig] int CompareElements(IntPtr element1, IntPtr element2, [MarshalAs(UnmanagedType.Bool)] out bool same);
-        [PreserveSig] int CompareRuntimeIds(IntPtr runtimeId1, IntPtr runtimeId2, [MarshalAs(UnmanagedType.Bool)] out bool same);
-        [PreserveSig] int GetRootElement(out IntPtr root);
-        [PreserveSig] int ElementFromHandle(IntPtr window, out IntPtr element);
-        [PreserveSig] int ElementFromPoint(NativePoint point, [MarshalAs(UnmanagedType.Interface)] out IUIAutomationElementCom element);
-    }
-
-    [ComImport]
-    [Guid("D22108AA-8AC5-49A5-837B-37BBB3D7591E")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IUIAutomationElementCom
-    {
-        [PreserveSig] int SetFocus();
-        [PreserveSig] int GetRuntimeId(out IntPtr runtimeId);
-        [PreserveSig] int FindFirst(int scope, IntPtr condition, out IntPtr found);
-        [PreserveSig] int FindAll(int scope, IntPtr condition, out IntPtr found);
-        [PreserveSig] int FindFirstBuildCache(int scope, IntPtr condition, IntPtr cacheRequest, out IntPtr found);
-        [PreserveSig] int FindAllBuildCache(int scope, IntPtr condition, IntPtr cacheRequest, out IntPtr found);
-        [PreserveSig] int BuildUpdatedCache(IntPtr cacheRequest, out IntPtr updatedElement);
-        [PreserveSig]
-        int GetCurrentPropertyValue(
-            int propertyId,
-            [MarshalAs(UnmanagedType.Struct)] out object? value);
-    }
 
     private static NativePoint GetPhysicalClientOrigin(IntPtr window) =>
         InPerMonitorV2DpiContext(() =>
@@ -225,73 +158,8 @@ internal static class Program
         return result;
     }
 
-    private static string ReadUserObjectName(IntPtr handle, string description)
-    {
-        const int UoiName = 2;
-        var name = new StringBuilder(256);
-        Marshal.SetLastPInvokeError(0);
-        if (!GetUserObjectInformation(handle, UoiName, name, checked((uint)(name.Capacity * sizeof(char))), out _))
-            throw new System.ComponentModel.Win32Exception(
-                Marshal.GetLastWin32Error(), $"Could not read the {description} name");
-        return name.ToString();
-    }
-
-    private static Dictionary<string, object?> DescribeThreadDesktop(uint threadId)
-    {
-        var result = new Dictionary<string, object?> { ["threadId"] = threadId };
-        try
-        {
-            Marshal.SetLastPInvokeError(0);
-            var desktop = GetThreadDesktop(threadId);
-            result["handle"] = $"0x{desktop.ToInt64():X}";
-            if (desktop == IntPtr.Zero)
-                throw new System.ComponentModel.Win32Exception(
-                    Marshal.GetLastWin32Error(), "Could not get the thread desktop");
-            result["name"] = ReadUserObjectName(desktop, "thread desktop");
-        }
-        catch (Exception error)
-        {
-            result["error"] = error.ToString();
-        }
-        return result;
-    }
-
-    private static Dictionary<string, object?> DescribeInputDesktop()
-    {
-        var result = new Dictionary<string, object?>();
-        var errors = new List<string>();
-        var desktop = IntPtr.Zero;
-        try
-        {
-            Marshal.SetLastPInvokeError(0);
-            desktop = OpenInputDesktop(0, false, 0x0001); // DESKTOP_READOBJECTS
-            result["handle"] = $"0x{desktop.ToInt64():X}";
-            if (desktop == IntPtr.Zero)
-                throw new System.ComponentModel.Win32Exception(
-                    Marshal.GetLastWin32Error(), "Could not open the input desktop for a read-only name query");
-            result["name"] = ReadUserObjectName(desktop, "input desktop");
-        }
-        catch (Exception error)
-        {
-            errors.Add(error.ToString());
-        }
-        finally
-        {
-            if (desktop != IntPtr.Zero)
-            {
-                Marshal.SetLastPInvokeError(0);
-                if (!CloseDesktop(desktop))
-                    errors.Add(new System.ComponentModel.Win32Exception(
-                        Marshal.GetLastWin32Error(), "Could not close the input desktop handle").ToString());
-            }
-        }
-        result["errors"] = errors;
-        return result;
-    }
-
     private static Dictionary<string, object?> DescribeWindowContext(
         IntPtr window,
-        bool includeThreadDesktop,
         bool includeGeometry)
     {
         var result = new Dictionary<string, object?>
@@ -317,9 +185,6 @@ internal static class Program
                 result["sessionIdError"] = new System.ComponentModel.Win32Exception(
                     Marshal.GetLastWin32Error(), $"Could not read session ID for process {processId}").ToString();
         }
-
-        if (includeThreadDesktop && threadId != 0)
-            result["threadDesktop"] = DescribeThreadDesktop(threadId);
 
         if (includeGeometry)
         {
@@ -362,600 +227,11 @@ internal static class Program
         return result;
     }
 
-    private static Dictionary<string, object?> CapturePointContextBeforeFromPoint(
-        IntPtr targetWindow,
-        int pointX,
-        int pointY)
-    {
-        return InPerMonitorV2DpiContext(() =>
-        {
-            var helperThreadId = GetCurrentThreadId();
-            var helperProcessId = GetCurrentProcessId();
-            var helper = new Dictionary<string, object?>
-            {
-                ["processId"] = helperProcessId,
-                ["threadId"] = helperThreadId,
-                ["apartmentState"] = Thread.CurrentThread.GetApartmentState().ToString(),
-                ["threadDesktop"] = DescribeThreadDesktop(helperThreadId),
-            };
-            Marshal.SetLastPInvokeError(0);
-            if (ProcessIdToSessionId(helperProcessId, out var helperSessionId))
-                helper["sessionId"] = helperSessionId;
-            else
-                helper["sessionIdError"] = new System.ComponentModel.Win32Exception(
-                    Marshal.GetLastWin32Error(), "Could not read the helper process session ID").ToString();
-
-            var inputDesktop = DescribeInputDesktop();
-            var targetWindowDescription = DescribeWindowContext(
-                targetWindow, includeThreadDesktop: true, includeGeometry: true);
-            var result = new Dictionary<string, object?>
-            {
-                ["coordinateSpace"] = "physical-screen-pixels",
-                ["point"] = new { x = pointX, y = pointY },
-                ["helper"] = helper,
-                ["inputDesktop"] = inputDesktop,
-                ["targetWindow"] = targetWindowDescription,
-            };
-
-            var foregroundWindow = GetForegroundWindow();
-            Marshal.SetLastPInvokeError(0);
-            var pointWindowHandle = WindowFromPoint(new NativePoint { X = pointX, Y = pointY });
-            var pointWindow = DescribeWindowContext(
-                pointWindowHandle, includeThreadDesktop: true, includeGeometry: true);
-            try
-            {
-                Marshal.SetLastPInvokeError(0);
-                var rootWindow = GetAncestor(pointWindowHandle, 2); // GA_ROOT
-                pointWindow["root"] = DescribeWindowContext(rootWindow, includeThreadDesktop: false, includeGeometry: true);
-            }
-            catch (Exception error)
-            {
-                pointWindow["rootError"] = error.ToString();
-            }
-            try
-            {
-                var ownerWindow = GetWindow(pointWindowHandle, 4); // GW_OWNER
-                pointWindow["ownerWindow"] = DescribeWindowContext(ownerWindow, includeThreadDesktop: false, includeGeometry: true);
-            }
-            catch (Exception error)
-            {
-                pointWindow["ownerWindowError"] = error.ToString();
-            }
-            result["capturedAtUtc"] = UtcTimestamp();
-            result["foregroundWindow"] = DescribeWindowContext(
-                foregroundWindow, includeThreadDesktop: false, includeGeometry: false);
-            result["windowFromPoint"] = pointWindow;
-            return result;
-        });
-    }
-
-    private static Dictionary<string, object?> ProbeWindowMessageResponsiveness(
-        IntPtr window,
-        int expectedProcessId,
-        string expectedProcessIdentity)
-    {
-        const uint timeoutMs = 1000;
-        var started = Stopwatch.GetTimestamp();
-        var result = new Dictionary<string, object?>
-        {
-            ["capturedAtUtc"] = UtcTimestamp(),
-            ["message"] = "WM_NULL",
-            ["timeoutMs"] = timeoutMs,
-            ["flags"] = "SMTO_ABORTIFHUNG|SMTO_ERRORONEXIT",
-            ["windowHandle"] = $"0x{window.ToInt64():X}",
-            ["expectedProcessId"] = expectedProcessId,
-            ["expectedProcessIdentity"] = expectedProcessIdentity,
-            ["sendAttempted"] = false,
-        };
-        try
-        {
-            var windowContext = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: false);
-            result["windowContext"] = windowContext;
-            var isWindow = IsWindow(window);
-            result["isWindow"] = isWindow;
-            var threadId = windowContext.GetValueOrDefault("threadId") is uint observedThreadId ? observedThreadId : 0;
-            var processId = windowContext.GetValueOrDefault("processId") is uint observedProcessId ? observedProcessId : 0;
-            if (!isWindow || threadId == 0 || processId != checked((uint)expectedProcessId))
-                throw new InvalidOperationException("The target HWND no longer has the verified window/process owner");
-
-            string actualIdentity;
-            try
-            {
-                using var owner = Process.GetProcessById(checked((int)processId));
-                actualIdentity = owner.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
-            }
-            catch (Exception error)
-            {
-                result["ownerProcessIdentityError"] = error.ToString();
-                throw;
-            }
-            result["ownerProcessIdentity"] = actualIdentity;
-            if (actualIdentity != expectedProcessIdentity)
-                throw new InvalidOperationException("The target HWND PID no longer has the verified process identity");
-
-            Marshal.SetLastPInvokeError(0);
-            var sendStarted = Stopwatch.GetTimestamp();
-            result["sendAttempted"] = true;
-            try
-            {
-                var messageResult = SendMessageTimeout(window, WmNull, IntPtr.Zero, IntPtr.Zero,
-                    SmtoAbortIfHung | SmtoErrorOnExit, timeoutMs, out var returnedResult);
-                var lastError = Marshal.GetLastWin32Error();
-                result["sendMessageTimeoutSucceeded"] = messageResult != IntPtr.Zero;
-                result["windowProcedureResult"] = returnedResult.ToUInt64();
-                result["lastError"] = lastError;
-                if (messageResult == IntPtr.Zero)
-                    result["error"] = lastError == 0
-                        ? "SendMessageTimeoutW returned zero without setting a Win32 last error"
-                        : new System.ComponentModel.Win32Exception(lastError, "SendMessageTimeoutW failed or timed out").ToString();
-            }
-            finally { result["sendDurationMs"] = Stopwatch.GetElapsedTime(sendStarted).TotalMilliseconds; }
-        }
-        catch (Exception error)
-        {
-            result["error"] = error.ToString();
-        }
-        result["durationMs"] = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-        return result;
-    }
-
-    private static Dictionary<string, object?> CapturePointFailureDump(
-        Process process,
-        string expectedIdentity,
-        JsonElement request,
-        string failure,
-        string dumpPrefix = "uia-point-failure")
-    {
-        const uint dumpType = MiniDumpWithFullMemory | MiniDumpWithThreadInfo;
-        var result = new Dictionary<string, object?>
-        {
-            ["attempted"] = true,
-            ["failure"] = failure,
-            ["processId"] = process.Id,
-            ["expectedProcessIdentity"] = expectedIdentity,
-            ["dumpTypeFlags"] = dumpType,
-            ["dumpType"] = "MiniDumpWithFullMemory|MiniDumpWithThreadInfo",
-            ["captureIntent"] = "live process memory and thread state; no exception record supplied",
-            ["exceptionInformationIncluded"] = false,
-            ["written"] = false,
-        };
-        string? partialPath = null;
-        try
-        {
-            if (!request.TryGetProperty("dumpDirectory", out var directoryElement) ||
-                string.IsNullOrWhiteSpace(directoryElement.GetString()))
-                throw new InvalidOperationException("Failure dump directory was not supplied by the Windows test harness");
-            var directory = Path.GetFullPath(directoryElement.GetString()!);
-            if (!Directory.Exists(directory))
-                throw new DirectoryNotFoundException($"Failure dump directory does not exist: {directory}");
-            result["dumpDirectory"] = directory;
-            try { result["availableDiskBytesBeforeDump"] = new DriveInfo(Path.GetPathRoot(directory)!).AvailableFreeSpace; }
-            catch (Exception error) { result["availableDiskBytesError"] = error.ToString(); }
-            try
-            {
-                process.Refresh();
-                result["workingSetBytesBeforeDump"] = process.WorkingSet64;
-                result["privateMemoryBytesBeforeDump"] = process.PrivateMemorySize64;
-            }
-            catch (Exception error) { result["processMemorySnapshotError"] = error.ToString(); }
-
-            using var target = OpenProcess(
-                ProcessQueryInformation | ProcessVmRead, false, checked((uint)process.Id));
-            if (target.IsInvalid)
-            {
-                var code = Marshal.GetLastWin32Error();
-                result["openProcessLastError"] = code;
-                throw new System.ComponentModel.Win32Exception(code, "OpenProcess for failure dump failed");
-            }
-            var actualPid = GetProcessId(target);
-            if (actualPid == 0)
-            {
-                var code = Marshal.GetLastWin32Error();
-                result["getProcessIdLastError"] = code;
-                throw new System.ComponentModel.Win32Exception(code, "GetProcessId for failure dump handle failed");
-            }
-            if (actualPid != process.Id)
-                throw new InvalidOperationException($"Failure dump handle PID changed: expected {process.Id}, observed {actualPid}");
-            if (!GetProcessTimes(target, out var creation, out _, out _, out _))
-            {
-                var code = Marshal.GetLastWin32Error();
-                result["getProcessTimesLastError"] = code;
-                throw new System.ComponentModel.Win32Exception(code, "GetProcessTimes for failure dump handle failed");
-            }
-            var creationFileTime = unchecked(((long)creation.High << 32) | creation.Low);
-            var actualIdentity = DateTime.FromFileTimeUtc(creationFileTime).Ticks.ToString(CultureInfo.InvariantCulture);
-            result["actualProcessIdentity"] = actualIdentity;
-            result["processIdentityVerified"] = actualIdentity == expectedIdentity;
-            if (actualIdentity != expectedIdentity)
-                throw new InvalidOperationException("Failure dump handle no longer refers to the verified process instance");
-
-            var dumpPath = Path.Combine(directory, $"{dumpPrefix}-{process.Id}-{Guid.NewGuid():N}.dmp");
-            partialPath = dumpPath + ".partial";
-            result["dumpPath"] = dumpPath;
-            result["partialPath"] = partialPath;
-            using (var dump = new FileStream(partialPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read))
-            {
-                var written = MiniDumpWriteDump(target, actualPid, dump.SafeFileHandle, dumpType,
-                    IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
-                if (!written)
-                {
-                    var code = Marshal.GetLastWin32Error();
-                    result["miniDumpWriteDumpLastError"] = code;
-                    throw new System.ComponentModel.Win32Exception(code, "MiniDumpWriteDump failed");
-                }
-                dump.Flush(flushToDisk: true);
-                result["bytesWritten"] = dump.Length;
-                if (dump.Length == 0) throw new InvalidDataException("MiniDumpWriteDump returned success but wrote an empty file");
-            }
-            File.Move(partialPath, dumpPath);
-            result["partialPath"] = null;
-            result["written"] = true;
-        }
-        catch (Exception error)
-        {
-            result["error"] = error.ToString();
-            if (partialPath is not null && File.Exists(partialPath))
-            {
-                result["partialPath"] = partialPath;
-                try { result["partialBytes"] = new FileInfo(partialPath).Length; }
-                catch (Exception sizeError) { result["partialSizeError"] = sizeError.ToString(); }
-            }
-        }
-        return result;
-    }
-
     private static AutomationElement RequireAutomationId(AutomationElement root, string automationId)
     {
         var condition = new PropertyCondition(AutomationElement.AutomationIdProperty, automationId);
         return root.FindFirst(TreeScope.Descendants, condition)
             ?? throw new InvalidOperationException($"Native UI element was not found: {automationId}");
-    }
-
-    private readonly record struct NativeActionState(
-        AutomationElement? Element,
-        string AutomationId,
-        string? Name,
-        string? ControlType,
-        bool? IsControlElement,
-        bool? Enabled,
-        bool? Offscreen)
-    {
-        public object ToDiagnostic() => new { automation_id = AutomationId, found = Element is not null,
-            name = Name, control_type = ControlType, is_control_element = IsControlElement,
-            enabled = Enabled, offscreen = Offscreen };
-    }
-
-    private static NativeActionState ReadActionState(AutomationElement scope, string automationId)
-    {
-        var element = scope.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
-        if (element is null) return new NativeActionState(null, automationId, null, null, null, null, null);
-        var current = element.Current;
-        return new NativeActionState(element, current.AutomationId, current.Name, current.ControlType.ProgrammaticName,
-            current.IsControlElement, current.IsEnabled, current.IsOffscreen);
-    }
-
-    private static Dictionary<string, NativeActionState> ReadActionStates(
-        AutomationElement scope, params string[] automationIds)
-    {
-        if (automationIds.Length == 0 || automationIds.Distinct(StringComparer.Ordinal).Count() != automationIds.Length)
-            throw new ArgumentException("A UI Automation snapshot requires distinct action identifiers", nameof(automationIds));
-
-        var cache = new CacheRequest
-        {
-            TreeScope = TreeScope.Element,
-            AutomationElementMode = AutomationElementMode.Full,
-        };
-        cache.Add(AutomationElement.AutomationIdProperty);
-        cache.Add(AutomationElement.NameProperty);
-        cache.Add(AutomationElement.ControlTypeProperty);
-        cache.Add(AutomationElement.IsControlElementProperty);
-        cache.Add(AutomationElement.IsEnabledProperty);
-        cache.Add(AutomationElement.IsOffscreenProperty);
-
-        var conditions = automationIds
-            .Select(id => (Condition)new PropertyCondition(AutomationElement.AutomationIdProperty, id))
-            .ToArray();
-        var states = new Dictionary<string, NativeActionState>(StringComparer.Ordinal);
-        using (cache.Activate())
-        {
-            var elements = scope.FindAll(TreeScope.Descendants, new OrCondition(conditions));
-            foreach (AutomationElement element in elements)
-            {
-                var current = element.Cached;
-                var automationId = current.AutomationId;
-                var state = new NativeActionState(element, automationId, current.Name, current.ControlType.ProgrammaticName,
-                    current.IsControlElement, current.IsEnabled, current.IsOffscreen);
-                if (!states.TryAdd(automationId, state))
-                    throw new InvalidOperationException($"Multiple native UI elements matched automation identifier: {automationId}");
-            }
-        }
-
-        foreach (var automationId in automationIds)
-            if (!states.ContainsKey(automationId))
-                states.Add(automationId, new NativeActionState(null, automationId, null, null, null, null, null));
-        return states;
-    }
-
-    private static Dictionary<string, object?> ProfileSwitchAction(
-        AutomationElement root, IntPtr window, Process process, string identity,
-        string targetId, string competingId, bool observeOnly = false)
-    {
-        if (!TryGetProfileNumber(targetId, " action", out _) ||
-            !TryGetProfileNumber(competingId, " action", out _) || targetId == competingId)
-            throw new ArgumentException("Profile switch action requires two distinct profile action identifiers");
-
-        // Reacquire dynamic control scopes for each sample; WinUI recreates profile action peers on each Snapshot.
-        AutomationElement FindScope(AutomationElement scope, string automationId)
-        {
-            TracePhase($"profile-switch-find-start utc={UtcTimestamp()} automation_id={JsonSerializer.Serialize(automationId)}");
-            try
-            {
-                var element = RequireAutomationId(scope, automationId);
-                TracePhase($"profile-switch-find-complete utc={UtcTimestamp()} automation_id={JsonSerializer.Serialize(automationId)}");
-                return element;
-            }
-            catch (Exception error)
-            {
-                TracePhase($"profile-switch-find-exception utc={UtcTimestamp()} automation_id={JsonSerializer.Serialize(automationId)} error={JsonSerializer.Serialize(error.ToString())}");
-                throw;
-            }
-        }
-        var controls = FindScope(root, "Connection controls");
-        _ = FindScope(controls, "Profile list viewport");
-        _ = FindScope(controls, "VPN connection action");
-        static bool IsElementUnavailable(Exception error) =>
-            error is ElementNotAvailableException ||
-            error is COMException comError && comError.HResult == UiaElementNotAvailableHResult;
-        NativeActionState before = default;
-        NativeActionState competingBefore = default;
-        Dictionary<string, object?>? lastBaselineSample = null;
-        string? latestBaselineException = null;
-        var baselineSampleNumber = 0;
-        Dictionary<string, NativeActionState> ReadBaselineActionStates(int sampleNumber, bool trace)
-        {
-            var started = Stopwatch.GetTimestamp();
-            if (trace)
-                TracePhase($"profile-switch-baseline-cache-read-start utc={UtcTimestamp()} sample={sampleNumber}");
-            try
-            {
-                var sampleControls = FindScope(root, "Connection controls");
-                var states = ReadActionStates(sampleControls, targetId, competingId, "VPN connection action");
-                if (trace)
-                    TracePhase($"profile-switch-baseline-cache-read-complete utc={UtcTimestamp()} sample={sampleNumber} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} states={JsonSerializer.Serialize(states.ToDictionary(pair => pair.Key, pair => pair.Value.ToDiagnostic(), StringComparer.Ordinal))}");
-                return states;
-            }
-            catch (Exception error)
-            {
-                if (trace)
-                    TracePhase($"profile-switch-baseline-cache-read-exception utc={UtcTimestamp()} sample={sampleNumber} duration_ms={Stopwatch.GetElapsedTime(started).TotalMilliseconds:F3} error={JsonSerializer.Serialize(error.ToString())}");
-                throw;
-            }
-        }
-        bool CanConnect(NativeActionState target, NativeActionState competing) =>
-            target.AutomationId == targetId && target.ControlType == ControlType.Button.ProgrammaticName &&
-            target.IsControlElement == true && target.Name == "Connect" && target.Enabled == true && target.Offscreen == false &&
-            competing.AutomationId == competingId && competing.ControlType == ControlType.Button.ProgrammaticName &&
-            competing.IsControlElement == true && competing.Name is ("Connect" or "Disconnect") &&
-            competing.Enabled == true && competing.Offscreen == false;
-        try
-        {
-            WaitFor(() =>
-            {
-                var sampleNumber = Interlocked.Increment(ref baselineSampleNumber);
-                var sampledTarget = default(NativeActionState);
-                var sampledCompeting = default(NativeActionState);
-                var sampledConnection = default(NativeActionState);
-                try
-                {
-                    var states = ReadBaselineActionStates(sampleNumber, sampleNumber == 1);
-                    sampledTarget = states[targetId];
-                    sampledCompeting = states[competingId];
-                    sampledConnection = states["VPN connection action"];
-                    var ready = CanConnect(sampledTarget, sampledCompeting);
-                    if (ready)
-                    {
-                        before = sampledTarget;
-                        competingBefore = sampledCompeting;
-                    }
-                    lastBaselineSample = new Dictionary<string, object?>
-                    {
-                        ["ready"] = ready,
-                        ["target"] = sampledTarget.ToDiagnostic(),
-                        ["competing"] = sampledCompeting.ToDiagnostic(),
-                        ["connection"] = sampledConnection.ToDiagnostic(),
-                    };
-                    Console.Error.WriteLine(
-                        $"native-ui-phase=profile-switch-baseline-sample {JsonSerializer.Serialize(lastBaselineSample)}");
-                    Console.Error.Flush();
-                    return ready;
-                }
-                catch (Exception error) when (IsElementUnavailable(error))
-                {
-                    latestBaselineException = error.ToString();
-                    lastBaselineSample = new Dictionary<string, object?>
-                    {
-                        ["ready"] = false,
-                        ["target"] = sampledTarget.ToDiagnostic(),
-                        ["competing"] = sampledCompeting.ToDiagnostic(),
-                        ["connection"] = sampledConnection.ToDiagnostic(),
-                        ["exception"] = latestBaselineException,
-                    };
-                    Console.Error.WriteLine(
-                        $"native-ui-phase=profile-switch-baseline-element-unavailable {JsonSerializer.Serialize(lastBaselineSample)}");
-                    Console.Error.WriteLine(latestBaselineException);
-                    Console.Error.Flush();
-                    return false;
-                }
-            }, "Profile actions did not become visible and enabled before Connect", seconds: 15);
-        }
-        catch (TimeoutException error)
-        {
-            var failure = new Dictionary<string, object?>
-            {
-                ["last_sample"] = lastBaselineSample,
-                ["latest_element_not_available_exception"] = latestBaselineException,
-                ["wait_exception"] = error.ToString(),
-            };
-            Console.Error.WriteLine(
-                $"native-ui-phase=profile-switch-baseline-timeout {JsonSerializer.Serialize(failure)}");
-            Console.Error.Flush();
-            throw new InvalidOperationException(
-                $"Profile actions did not become visible and enabled before Connect: {JsonSerializer.Serialize(failure)}", error);
-        }
-        bool CanStop(NativeActionState target, NativeActionState competing, NativeActionState connection)
-        {
-            var connectionName = connection.Name;
-            var connectionIsObserved = connection.Element is not null && connection.AutomationId == "VPN connection action" &&
-                connection.ControlType == ControlType.Button.ProgrammaticName &&
-                connection.IsControlElement == true &&
-                (connectionName is "Connect" or "Auto connect" or "Stop" or "Disconnect") &&
-                connection.Enabled is not null && connection.Offscreen == false;
-            return target.AutomationId == targetId && competing.AutomationId == competingId &&
-                target.ControlType == ControlType.Button.ProgrammaticName && target.IsControlElement == true && target.Name == "Stop" &&
-                target.Enabled == true && target.Offscreen == false &&
-                competing.ControlType == ControlType.Button.ProgrammaticName && competing.IsControlElement == true && competing.Name == "Connect" &&
-                competing.Enabled == false && competing.Offscreen == false && connectionIsObserved &&
-                (connectionName is not ("Connect" or "Auto connect") || connection.Enabled == false);
-        }
-        if (before.Element is null || !before.Element.TryGetCurrentPattern(InvokePattern.Pattern, out var connectPattern))
-            throw new InvalidOperationException($"Profile action has no native InvokePattern: {targetId}");
-        RequireForeground(window, "profile switch Connect");
-        var clockStarted = Stopwatch.GetTimestamp();
-        var utcStarted = DateTimeOffset.UtcNow;
-        string Timestamp(long tick) => utcStarted.Add(Stopwatch.GetElapsedTime(clockStarted, tick))
-            .ToString("O", CultureInfo.InvariantCulture);
-        var connectedAt = Stopwatch.GetTimestamp();
-        var connectedAtUtc = Timestamp(connectedAt);
-        Console.Error.WriteLine($"native-ui-phase=profile-switch-connect-invoke-start started_at_utc={connectedAtUtc}");
-        Console.Error.Flush();
-        var invokeReturned = false;
-        try
-        {
-            ((InvokePattern)connectPattern).Invoke();
-            invokeReturned = true;
-        }
-        finally
-        {
-            var invokeFinished = Stopwatch.GetTimestamp();
-            Console.Error.WriteLine(
-                $"native-ui-phase=profile-switch-connect-invoke-finish started_at_utc={connectedAtUtc} " +
-                $"finished_at_utc={Timestamp(invokeFinished)} returned={invokeReturned} " +
-                $"duration_ms={Stopwatch.GetElapsedTime(connectedAt, invokeFinished).TotalMilliseconds}");
-            Console.Error.Flush();
-        }
-
-        var lastTarget = before;
-        var lastCompeting = competingBefore;
-        var lastConnection = default(NativeActionState);
-        string? unavailable = null;
-        var deadline = Stopwatch.GetTimestamp() + 5 * Stopwatch.Frequency;
-        var observation = 0;
-        void TraceObservation(Dictionary<string, object?> sample)
-        {
-            sample["observation"] = ++observation;
-            sample["recorded_at_utc"] = Timestamp(Stopwatch.GetTimestamp());
-            Console.Error.WriteLine(
-                $"native-ui-phase=profile-switch-observation {JsonSerializer.Serialize(sample)}");
-            Console.Error.Flush();
-        }
-        Dictionary<string, NativeActionState> ReadTimed(Dictionary<string, object?> sample, string label)
-        {
-            var started = Stopwatch.GetTimestamp();
-            sample[$"{label}_read_started_at_utc"] = Timestamp(started);
-            try
-            {
-                var sampleControls = FindScope(root, "Connection controls");
-                var states = ReadActionStates(sampleControls, targetId, competingId, "VPN connection action");
-                sample[$"{label}_states"] = states.ToDictionary(
-                    pair => pair.Key, pair => pair.Value.ToDiagnostic(), StringComparer.Ordinal);
-                return states;
-            }
-            catch (Exception error)
-            {
-                sample[$"{label}_exception"] = error.ToString();
-                throw;
-            }
-            finally
-            {
-                var finished = Stopwatch.GetTimestamp();
-                sample[$"{label}_read_finished_at_utc"] = Timestamp(finished);
-                sample[$"{label}_read_duration_ms"] = Stopwatch.GetElapsedTime(started, finished).TotalMilliseconds;
-            }
-        }
-        while (Stopwatch.GetTimestamp() < deadline)
-        {
-            var sample = new Dictionary<string, object?>();
-            try
-            {
-                var states = ReadTimed(sample, "poll_cache");
-                var target = states[targetId];
-                var competing = states[competingId];
-                var connection = states["VPN connection action"];
-                lastTarget = target; lastCompeting = competing; lastConnection = connection;
-                if (CanStop(target, competing, connection))
-                {
-                    RequireForeground(window, "profile switch Stop");
-                    states = ReadTimed(sample, "verify_cache");
-                    target = states[targetId];
-                    competing = states[competingId];
-                    connection = states["VPN connection action"];
-                    lastTarget = target; lastCompeting = competing; lastConnection = connection;
-                    if (CanStop(target, competing, connection))
-                    {
-                        var stopElement = target.Element;
-                        if (stopElement is null)
-                            throw new InvalidOperationException($"Observed Stop action disappeared before invocation: {targetId}");
-                        var current = stopElement.Current;
-                        if (current.Name != "Stop" || !current.IsEnabled || current.IsOffscreen)
-                            throw new InvalidOperationException("The selected profile action changed from Stop before Invoke");
-                        var observedAt = Stopwatch.GetTimestamp();
-                        if (observeOnly)
-                            return new Dictionary<string, object?>
-                            {
-                                ["ready"] = true, ["pid"] = process.Id, ["identity"] = identity,
-                                ["window_handle"] = $"0x{window.ToInt64():X}",
-                                ["target_automation_id"] = targetId, ["competing_automation_id"] = competingId,
-                                ["observe_only"] = true,
-                                ["connect_invoked_at_utc"] = connectedAtUtc,
-                                ["stop_observed_at_utc"] = Timestamp(observedAt),
-                                ["target_at_stop"] = target.ToDiagnostic(),
-                                ["competing_at_stop"] = competing.ToDiagnostic(),
-                                ["connection_action_at_stop"] = connection.ToDiagnostic(),
-                            };
-                        if (!stopElement.TryGetCurrentPattern(InvokePattern.Pattern, out var stopPattern))
-                            throw new InvalidOperationException($"Observed Stop action has no native InvokePattern: {targetId}");
-                        var invokedAt = Stopwatch.GetTimestamp();
-                        ((InvokePattern)stopPattern).Invoke();
-                        return new Dictionary<string, object?>
-                        {
-                            ["ready"] = true, ["pid"] = process.Id, ["identity"] = identity,
-                            ["target_automation_id"] = targetId, ["competing_automation_id"] = competingId,
-                            ["connect_invoked_at_utc"] = connectedAtUtc,
-                            ["stop_observed_at_utc"] = Timestamp(observedAt), ["stop_invoked_at_utc"] = Timestamp(invokedAt),
-                            ["target_at_stop"] = target.ToDiagnostic(), ["competing_at_stop"] = competing.ToDiagnostic(),
-                            ["connection_action_at_stop"] = connection.ToDiagnostic(),
-                        };
-                    }
-                }
-            }
-            catch (Exception error) when (IsElementUnavailable(error))
-            {
-                unavailable = error.ToString();
-                Console.Error.WriteLine(unavailable);
-                Console.Error.Flush();
-            }
-            finally
-            {
-                TraceObservation(sample);
-            }
-            Thread.Sleep(20);
-        }
-        throw new TimeoutException(
-            "Profile switch did not expose an enabled Stop action within five seconds; " +
-            $"last_target={JsonSerializer.Serialize(lastTarget.ToDiagnostic())}; " +
-            $"last_competing={JsonSerializer.Serialize(lastCompeting.ToDiagnostic())}; " +
-            $"last_connection_action={JsonSerializer.Serialize(lastConnection.ToDiagnostic())}; " +
-            $"last_element_unavailable_exception={unavailable ?? "none"}");
     }
 
     private static System.Windows.Rect PhysicalBounds(AutomationElement element, string description)
@@ -983,18 +259,6 @@ internal static class Program
         element.Left >= viewport.Left && element.Top >= viewport.Top &&
         element.Right <= viewport.Right && element.Bottom <= viewport.Bottom;
 
-    private static bool TryGetProfileNumber(string automationId, string suffix, out int number)
-    {
-        const string prefix = "Profile ";
-        number = 0;
-        if (!automationId.StartsWith(prefix, StringComparison.Ordinal) ||
-            !automationId.EndsWith(suffix, StringComparison.Ordinal))
-            return false;
-
-        var numberText = automationId.Substring(prefix.Length, automationId.Length - prefix.Length - suffix.Length);
-        return int.TryParse(numberText, NumberStyles.None, CultureInfo.InvariantCulture, out number) && number > 0;
-    }
-
     private static Dictionary<string, object?> ProfileListLayout(AutomationElement root, IntPtr window)
     {
         var controls = RequireAutomationId(root, "Connection controls");
@@ -1012,44 +276,63 @@ internal static class Program
         var profileElements = profileViewport.FindAll(TreeScope.Descendants, new OrCondition(
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text),
             new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button)));
-        var visibleActions = new List<(int Number, string AutomationId)>();
-        var profileNames = new Dictionary<int, (string Name, string Protocol)>();
-        var profileActions = new Dictionary<int, string>();
+        var visibleActions = new List<(int Index, string AutomationId)>();
+        var profileNames = new Dictionary<int, (string Name, string AutomationId)>();
+        var profileProtocols = new Dictionary<int, (string Protocol, string AutomationId)>();
+        var profileActions = new Dictionary<int, (string Action, string AutomationId)>();
         var profileOrder = new List<int>();
+        string? profileDigest = null;
         foreach (AutomationElement element in profileElements)
         {
             var automationId = element.Current.AutomationId;
-            if (TryGetProfileNumber(automationId, " description", out var descriptionNumber))
+            if (DobbyVPN.Windows.ProfileAutomationIds.TryParse(automationId, out var digest, out var profileIndex, out var role))
             {
+                if (profileDigest is not null && profileDigest != digest)
+                    throw new InvalidOperationException("Rendered profile rows did not share one accepted configuration digest");
+                profileDigest = digest;
                 var renderedText = element.Current.Name;
-                var separator = renderedText.LastIndexOf(" · ", StringComparison.Ordinal);
-                if (separator <= 0 || separator + 3 >= renderedText.Length ||
-                    !profileNames.TryAdd(descriptionNumber,
-                        (renderedText[..separator], renderedText[(separator + 3)..])))
-                    throw new InvalidOperationException(
-                        $"Profile {descriptionNumber} has missing, duplicate, or malformed rendered description text: {renderedText}");
-                profileOrder.Add(descriptionNumber);
-            }
-            else if (TryGetProfileNumber(automationId, " action", out var actionNumber))
-            {
-                if (!profileActions.TryAdd(actionNumber, element.Current.Name))
-                    throw new InvalidOperationException($"Profile {actionNumber} has duplicate rendered action controls");
+                switch (role)
+                {
+                    case "description":
+                        if (string.IsNullOrWhiteSpace(renderedText) ||
+                            !profileNames.TryAdd(profileIndex, (renderedText, automationId)))
+                            throw new InvalidOperationException(
+                                $"Profile {profileIndex} has missing or duplicate rendered description text: {renderedText}");
+                        profileOrder.Add(profileIndex);
+                        break;
+                    case "protocol":
+                        if (string.IsNullOrWhiteSpace(renderedText) ||
+                            !profileProtocols.TryAdd(profileIndex, (renderedText, automationId)))
+                            throw new InvalidOperationException(
+                                $"Profile {profileIndex} has missing or duplicate rendered protocol text: {renderedText}");
+                        break;
+                    case "action":
+                        if (!profileActions.TryAdd(profileIndex, (renderedText, automationId)))
+                            throw new InvalidOperationException($"Profile {profileIndex} has duplicate rendered action controls");
 
-                var actionBounds = element.Current.BoundingRectangle;
-                if (element.Current.ControlType == ControlType.Button && HasUsableBounds(actionBounds) &&
-                    FullyInside(actionBounds, viewportBounds))
-                    visibleActions.Add((actionNumber, automationId));
+                        var actionBounds = element.Current.BoundingRectangle;
+                        if (element.Current.ControlType == ControlType.Button && HasUsableBounds(actionBounds) &&
+                            FullyInside(actionBounds, viewportBounds))
+                            visibleActions.Add((profileIndex, automationId));
+                        break;
+                }
             }
         }
 
-        if (profileNames.Count != profileActions.Count || profileNames.Keys.Any(index => !profileActions.ContainsKey(index)))
-            throw new InvalidOperationException("Rendered profile descriptions and actions did not have matching identifiers");
+        if (profileNames.Count != profileProtocols.Count || profileNames.Count != profileActions.Count ||
+            profileNames.Keys.Any(index => !profileProtocols.ContainsKey(index) || !profileActions.ContainsKey(index)))
+            throw new InvalidOperationException("Rendered profile descriptions, protocols, and actions did not have matching identifiers");
         var profileRows = profileOrder.Select(index => new Dictionary<string, object?>
         {
-            ["index"] = index,
+            ["index"] = index + 1,
+            ["profile_index"] = index,
+            ["profile_digest"] = profileDigest!,
             ["name"] = profileNames[index].Name,
-            ["protocol"] = profileNames[index].Protocol,
-            ["action"] = profileActions[index],
+            ["protocol"] = profileProtocols[index].Protocol,
+            ["action"] = profileActions[index].Action,
+            ["description_automation_id"] = profileNames[index].AutomationId,
+            ["protocol_automation_id"] = profileProtocols[index].AutomationId,
+            ["action_automation_id"] = profileActions[index].AutomationId,
         }).ToArray();
 
         return new Dictionary<string, object?>
@@ -1061,50 +344,13 @@ internal static class Program
             ["connection_action"] = RectJson(PhysicalBounds(connectionAction, "VPN connection action")),
             ["logs"] = RectJson(PhysicalBounds(logs, "Backend logs")),
             ["scroll_position"] = scrollPosition,
+            ["profile_digest"] = profileDigest ?? "",
             ["profile_rows"] = profileRows,
             ["visible_profile_actions"] = visibleActions
-                .OrderBy(action => action.Number)
+                .OrderBy(action => action.Index)
                 .Select(action => action.AutomationId)
                 .ToArray(),
         };
-    }
-
-    private static Dictionary<string, object?> ScrollProfileList(
-        AutomationElement root,
-        IntPtr window,
-        string position)
-    {
-        double targetPosition;
-        if (position == "top") targetPosition = 0;
-        else if (position == "bottom") targetPosition = 100;
-        else if (!double.TryParse(position, NumberStyles.Float, CultureInfo.InvariantCulture, out targetPosition) ||
-                 !double.IsFinite(targetPosition) || targetPosition < 0 || targetPosition > 100)
-            throw new ArgumentException("Profile list position must be top, bottom, or a finite percentage from 0 to 100");
-
-        var viewport = RequireAutomationId(root, "Profile list viewport");
-        if (!viewport.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
-            throw new InvalidOperationException("Profile list viewport does not expose ScrollPattern");
-        var scroll = (ScrollPattern)scrollPattern;
-        if (scroll.Current.VerticalScrollPercent < 0)
-            throw new InvalidOperationException("Profile list viewport does not expose a vertical scroll range");
-
-        scroll.SetScrollPercent(ScrollPattern.NoScroll, targetPosition);
-        WaitFor(() =>
-        {
-            var actualPosition = scroll.Current.VerticalScrollPercent;
-            return position == "top" ? actualPosition <= 1 : position == "bottom"
-                ? actualPosition >= 99 : Math.Abs(actualPosition - targetPosition) <= 1;
-        }, $"Profile list viewport did not scroll to {position}", seconds: 3);
-
-        var layout = ProfileListLayout(root, window);
-        if (layout["scroll_position"] is not double measuredPosition)
-            throw new InvalidOperationException("Profile list viewport did not report its scroll position after scrolling");
-        var settled = position == "top" ? measuredPosition <= 1 : position == "bottom"
-            ? measuredPosition >= 99 : Math.Abs(measuredPosition - targetPosition) <= 1;
-        if (!settled)
-            throw new InvalidOperationException(
-                $"Profile list viewport did not remain at {position}; position={measuredPosition.ToString(CultureInfo.InvariantCulture)}");
-        return layout;
     }
 
     private static void TracePhase(string name)
@@ -1115,149 +361,6 @@ internal static class Program
 
     private static string UtcTimestamp() =>
         DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
-
-    private static string ElapsedMilliseconds(long started) =>
-        Stopwatch.GetElapsedTime(started).TotalMilliseconds.ToString("F3", CultureInfo.InvariantCulture);
-
-    private static string FormatHresult(int hresult) =>
-        $"0x{unchecked((uint)hresult):X8}";
-
-    private static void ReleaseComObject(
-        object? value,
-        string responseKey,
-        Dictionary<string, object?> response)
-    {
-        if (value is null || !Marshal.IsComObject(value)) return;
-        try
-        {
-            response[responseKey] = Marshal.ReleaseComObject(value);
-        }
-        catch (Exception error)
-        {
-            response[$"{responseKey}Exception"] = error.ToString();
-        }
-    }
-
-    private static void CaptureComPointTargetMetadata(
-        IUIAutomationElementCom target,
-        JsonElement request,
-        Dictionary<string, object?> response)
-    {
-        var propertiesStarted = Stopwatch.GetTimestamp();
-        var hresults = new Dictionary<string, string>();
-        var errors = new Dictionary<string, string>();
-        object? Read(int propertyId, string propertyName)
-        {
-            try
-            {
-                var hresult = target.GetCurrentPropertyValue(propertyId, out var value);
-                hresults[propertyName] = FormatHresult(hresult);
-                if (hresult < 0)
-                    errors[propertyName] = new COMException(
-                        $"GetCurrentPropertyValue failed for {propertyName} ({propertyId})", hresult).ToString();
-                return hresult < 0 ? null : value;
-            }
-            catch (Exception error)
-            {
-                errors[propertyName] = error.ToString();
-                return null;
-            }
-        }
-
-        try
-        {
-            var automationIdValue = Read(UiaAutomationIdPropertyId, "automationId");
-            var nameValue = Read(UiaNamePropertyId, "name");
-            var controlTypeValue = Read(UiaControlTypePropertyId, "controlType");
-            var processIdValue = Read(UiaProcessIdPropertyId, "processId");
-            var boundsValue = Read(UiaBoundingRectanglePropertyId, "bounds");
-            var offscreenValue = Read(UiaIsOffscreenPropertyId, "isOffscreen");
-            response["targetPropertyHresults"] = hresults;
-            if (errors.Count > 0)
-            {
-                response["targetPropertyExceptions"] = errors;
-                response["targetMetadataException"] = string.Join(Environment.NewLine, errors.Values);
-                return;
-            }
-
-            var automationId = automationIdValue as string ?? string.Empty;
-            var name = nameValue as string ?? string.Empty;
-            var controlTypeId = Convert.ToInt32(controlTypeValue, CultureInfo.InvariantCulture);
-            var controlTypeInformation = ControlType.LookupById(controlTypeId);
-            var controlTypeProgrammaticName = controlTypeInformation?.ProgrammaticName
-                ?? $"ControlType.{controlTypeId.ToString(CultureInfo.InvariantCulture)}";
-            var controlType = controlTypeProgrammaticName.StartsWith("ControlType.", StringComparison.Ordinal)
-                ? controlTypeProgrammaticName["ControlType.".Length..]
-                : controlTypeProgrammaticName;
-            var processId = Convert.ToInt32(processIdValue, CultureInfo.InvariantCulture);
-            var isOffscreen = Convert.ToBoolean(offscreenValue, CultureInfo.InvariantCulture);
-            System.Windows.Rect? bounds = null;
-            if (boundsValue is Array coordinates && coordinates.Rank == 1 && coordinates.Length == 4)
-            {
-                bounds = new System.Windows.Rect(
-                    Convert.ToDouble(coordinates.GetValue(0), CultureInfo.InvariantCulture),
-                    Convert.ToDouble(coordinates.GetValue(1), CultureInfo.InvariantCulture),
-                    Convert.ToDouble(coordinates.GetValue(2), CultureInfo.InvariantCulture),
-                    Convert.ToDouble(coordinates.GetValue(3), CultureInfo.InvariantCulture));
-            }
-            else if (boundsValue is not null)
-            {
-                throw new InvalidOperationException("UIA bounding rectangle was not four screen coordinates");
-            }
-            var expectedAutomationId = request.GetProperty("expectedAutomationId").GetString();
-            var expectedName = request.GetProperty("expectedName").GetString();
-            var expectedControlType = request.GetProperty("expectedControlType").GetString();
-            var expectedProcessId = request.GetProperty("expectedProcessId").GetInt32();
-            var matchesExpected = new
-            {
-                automationId = automationId == expectedAutomationId,
-                name = name == expectedName,
-                controlType = controlType == expectedControlType,
-                processId = processId == expectedProcessId,
-                all = automationId == expectedAutomationId && name == expectedName &&
-                      controlType == expectedControlType && processId == expectedProcessId,
-            };
-            response["target"] = new
-            {
-                automationId,
-                name,
-                controlType,
-                controlTypeId,
-                controlTypeProgrammaticName,
-                processId,
-                bounds = bounds is null ? null : RectJson(bounds.Value),
-                boundsCoordinateSpace = "physical-screen-pixels",
-                isOffscreen,
-            };
-            response["expected"] = new
-            {
-                automationId = expectedAutomationId,
-                name = expectedName,
-                controlType = expectedControlType,
-                processId = expectedProcessId,
-            };
-            response["matchesExpected"] = matchesExpected;
-            response["targetMetadataCompleted"] = true;
-        }
-        catch (Exception error)
-        {
-            response["targetPropertyHresults"] = hresults;
-            response["targetMetadataException"] = error.ToString();
-        }
-        finally
-        {
-            response["targetMetadataDurationMs"] = Stopwatch.GetElapsedTime(propertiesStarted).TotalMilliseconds;
-        }
-    }
-
-    private static IntPtr ParseWindowHandle(string value)
-    {
-        var digits = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
-        return new IntPtr(unchecked((long)ulong.Parse(digits, NumberStyles.HexNumber, CultureInfo.InvariantCulture)));
-    }
-
-    private static string NormalizeLineEndings(string value) =>
-        value.Replace("\r\n", "\n").Replace('\r', '\n');
 
     private static string DescribeWindow(IntPtr window)
     {
@@ -1752,7 +855,7 @@ internal static class Program
             },
         };
         var isWindow = IsWindow(window);
-        var windowContext = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: false);
+        var windowContext = DescribeWindowContext(window, includeGeometry: false);
         windowContext["isWindow"] = isWindow;
         windowContext["isWindowVisible"] = isWindow && IsWindowVisible(window);
         if (isWindow)
@@ -1771,7 +874,7 @@ internal static class Program
         snapshot["window"] = windowContext;
         var rootOwner = isWindow ? GetAncestor(window, GaRootOwner) : IntPtr.Zero;
         var rootOwnerContext = DescribeWindowContext(
-            rootOwner, includeThreadDesktop: false, includeGeometry: false);
+            rootOwner, includeGeometry: false);
         rootOwnerContext["isWindow"] = IsWindow(rootOwner);
         rootOwnerContext["isWindowVisible"] = IsWindow(rootOwner) && IsWindowVisible(rootOwner);
         snapshot["rootOwner"] = rootOwnerContext;
@@ -1801,7 +904,8 @@ internal static class Program
         AutomationElement apply,
         int target,
         int expectedCurrent,
-        Dictionary<string, object?> response)
+        Dictionary<string, object?> response,
+        LogsCaseDeadline? caseDeadline = null)
     {
         if (apply.Current.AutomationId != WindowsTextSizeApplyAutomationId)
             throw new InvalidOperationException("Refusing to apply Text size through an unverified Settings control");
@@ -1832,9 +936,9 @@ internal static class Program
             throw new InvalidOperationException(
                 $"Text size Slider read back {setValueReadback.ToString(CultureInfo.InvariantCulture)}% after setting {target}%");
 
-        WaitFor(() => FindSettingsTextSizeControl(
+        WaitTextSizeSettings(() => FindSettingsTextSizeControl(
             root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply")?.Current.IsEnabled == true,
-            "Settings Apply did not enable after changing Text size", seconds: 5);
+            "Settings Apply did not enable after changing Text size", caseDeadline, seconds: 5);
         apply = FindSettingsTextSizeControl(
             root, WindowsTextSizeApplyAutomationId, ControlType.Button, "Apply")
             ?? throw new InvalidOperationException("Exact Text size Apply button disappeared after changing the slider");
@@ -1846,7 +950,7 @@ internal static class Program
         ((InvokePattern)invokePattern).Invoke();
         response["applyInvoked"] = true;
 
-        WaitFor(() =>
+        WaitTextSizeSettings(() =>
         {
             var currentSlider = FindSettingsTextSizeControl(
                 root, WindowsTextSizeSliderAutomationId, ControlType.Slider, "Text size");
@@ -1890,10 +994,12 @@ internal static class Program
             response["slider"] = sliderObservation;
             response["apply"] = applyObservation;
             return true;
-        }, "Text size Apply did not settle at the requested value", seconds: 10);
+        }, "Text size Apply did not settle at the requested value", caseDeadline, seconds: 10);
     }
 
-    private static int OperateWindowsTextSizeSettings(JsonElement request)
+    private static Dictionary<string, object?> ReadWindowsTextSizeSettings(
+        JsonElement request, LogsCaseDeadline? caseDeadline = null,
+        LogsCaseDeadline? cleanupDeadline = null)
     {
         var action = request.GetProperty("action").GetString()!;
         var target = action == "apply" ? request.GetProperty("target").GetInt32() : (int?)null;
@@ -1935,7 +1041,7 @@ internal static class Program
                 .ToArray();
             activationAttempted = true;
             activation = Process.Start(new ProcessStartInfo(WindowsTextSizeSettingsUri) { UseShellExecute = true });
-            WaitFor(() =>
+            WaitTextSizeSettings(() =>
             {
                 var refreshedSettings = FindSettingsProcessForSession(sessionId);
                 settings?.Dispose();
@@ -1955,7 +1061,7 @@ internal static class Program
                     return true;
                 }
                 return false;
-            }, "Settings did not expose one visible window in the helper session", seconds: 10);
+            }, "Settings did not expose one visible window in the helper session", caseDeadline, seconds: 10);
             if (settings is null || selectedWindow is null || window == IntPtr.Zero)
                 throw new InvalidOperationException("Settings window unavailable after URI activation");
             var candidateWindow = selectedWindow.Value;
@@ -2001,7 +1107,7 @@ internal static class Program
             {
                 if (range is null || apply is null)
                     throw new InvalidOperationException("Text size apply requires RangeValue data and the exact Apply control");
-                ApplyWindowsTextSize(root, slider, apply, target!.Value, expectedCurrent!.Value, response);
+                ApplyWindowsTextSize(root, slider, apply, target!.Value, expectedCurrent!.Value, response, caseDeadline);
                 ready = true;
             }
             response["ready"] = ready;
@@ -2038,12 +1144,12 @@ internal static class Program
                             throw new System.ComponentModel.Win32Exception(
                                 Marshal.GetLastWin32Error(), "Could not close new Settings window");
                         closeMessagePosted = true;
-                        WaitFor(() =>
+                        WaitTextSizeSettings(() =>
                         {
                             if (!IsWindow(window)) return true;
                             GetWindowThreadProcessId(window, out var pid);
                             return pid == 0 || pid != candidateWindow.OwnerProcessId;
-                        }, "New Settings window did not close", seconds: 5);
+                        }, "New Settings window did not close", cleanupDeadline, seconds: 5);
                         response["newSettingsWindowClosed"] = true;
                     }
                 }
@@ -2079,8 +1185,7 @@ internal static class Program
             response["available"] = false;
         }
         response["finishedAtUtc"] = UtcTimestamp();
-        Console.WriteLine(JsonSerializer.Serialize(response));
-        return 0;
+        return response;
     }
 
     private static string DescribeElement(AutomationElement element)
@@ -2093,15 +1198,6 @@ internal static class Program
                $"name=\"{current.Name}\" patterns[invoke={invoke},selectionItem={selection},value={value}]";
     }
 
-    private static AutomationElement? ByAutomationId(AutomationElement root, string id, Action<string>? trace = null)
-    {
-        return Walk(root, trace).FirstOrDefault(element =>
-        {
-            var current = element.Current;
-            return current.IsControlElement && current.AutomationId == id;
-        });
-    }
-
     private static void WaitFor(Func<bool> condition, string message, double seconds = 15)
     {
         var limit = Stopwatch.StartNew();
@@ -2112,73 +1208,6 @@ internal static class Program
             Thread.Sleep(50);
         } while (limit.Elapsed.TotalSeconds < seconds);
         throw new TimeoutException(message);
-    }
-
-    private static void VerifyNarrowWindow(AutomationElement root, IntPtr window, int processId, string sourcePath)
-    {
-        var fixtureDirectory = Path.GetDirectoryName(Path.GetFullPath(sourcePath))
-            ?? throw new InvalidOperationException("Subscription fixture source path has no directory");
-        var marker = Path.Combine(fixtureDirectory, ".windows-narrow-window-rendered-passed");
-        if (File.Exists(marker)) return;
-
-        var originalBounds = new Rect();
-        if (!GetWindowRect(window, out originalBounds))
-            throw new InvalidOperationException("Could not capture the original window bounds for narrow-window test");
-        var windowElement = AutomationElement.FromHandle(window);
-        if (!windowElement.TryGetCurrentPattern(WindowPattern.Pattern, out var windowPattern) ||
-            !((WindowPattern)windowPattern).Current.CanMaximize)
-            throw new InvalidOperationException("Native window does not expose a maximizable WindowPattern");
-
-        var screenshot = Path.Combine(Path.GetTempPath(), "dobby-narrow-window-" + Guid.NewGuid().ToString("N") + ".png");
-        Exception? operationFailure = null;
-        try
-        {
-            WaitFor(() =>
-            {
-                var first = ByAutomationId(root, "Profile 1 action");
-                var second = ByAutomationId(root, "Profile 2 action");
-                return first is not null && second is not null && !first.Current.IsOffscreen && !second.Current.IsOffscreen;
-            }, "Two profile actions did not render before the narrow-window check");
-
-            var display = Forms.Screen.FromHandle(window).WorkingArea;
-            if (display.Width < 680 || display.Height < 680)
-                throw new InvalidOperationException($"Display is too small for the narrow-window interaction: {display.Width}x{display.Height}");
-            if (!SetWindowPos(window, IntPtr.Zero, display.Left + 20, display.Top + 20, 640, 640, 0x0004 | 0x0010))
-                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not resize the native window to the narrow test size");
-            WaitFor(() => GetWindowRect(window, out var bounds) && bounds.Right - bounds.Left <= 660 && bounds.Bottom - bounds.Top <= 660,
-                "Native window did not render at the narrow test size");
-
-            foreach (var id in new[] { "Connection configuration", "VPN connection action", "Profile 1 action", "Profile 2 action", "Backend logs" })
-            {
-                var element = ByAutomationId(root, id);
-                if (element is null || element.Current.IsOffscreen)
-                    throw new InvalidOperationException($"Native control was not rendered in the narrow window: {id}");
-            }
-            RequireForeground(window, "narrow-window screenshot");
-            Capture(window, processId, screenshot);
-        }
-        catch (Exception error) { operationFailure = error; throw; }
-        finally
-        {
-            var cleanupFailures = new List<Exception>();
-            try
-            {
-                if (!SetWindowPos(window, IntPtr.Zero, originalBounds.Left, originalBounds.Top,
-                        originalBounds.Right - originalBounds.Left, originalBounds.Bottom - originalBounds.Top, 0x0004 | 0x0010))
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not restore native window bounds after narrow-window test");
-            }
-            catch (Exception error) { cleanupFailures.Add(error); }
-            try { if (File.Exists(screenshot)) File.Delete(screenshot); }
-            catch (Exception error) { cleanupFailures.Add(error); }
-            if (cleanupFailures.Count > 0)
-            {
-                if (operationFailure is not null) cleanupFailures.Insert(0, operationFailure);
-                throw new AggregateException("Narrow-window interaction or cleanup failed", cleanupFailures);
-            }
-        }
-        File.WriteAllText(marker, "rendered narrow-window two-profile interaction passed\n", Encoding.ASCII);
-        Console.Error.WriteLine("Windows narrow-window rendered two-profile interaction passed");
-        Console.Error.Flush();
     }
 
     private static Rectangle ClientScreenBounds(IntPtr window, Rectangle target)
@@ -2214,9 +1243,9 @@ internal static class Program
         var measurement = new Dictionary<string, object?>
         {
             ["operation"] = operation,
-            ["target"] = DescribeWindowContext(window, includeThreadDesktop: false, includeGeometry: true),
+            ["target"] = DescribeWindowContext(window, includeGeometry: true),
             ["foregroundBefore"] = DescribeWindowContext(
-                foregroundBeforeHandle, includeThreadDesktop: false, includeGeometry: true),
+                foregroundBeforeHandle, includeGeometry: true),
         };
 
         try
@@ -2229,7 +1258,7 @@ internal static class Program
             var foregroundAfterRequestHandle = GetForegroundWindow();
             measurement["setForegroundWindowResult"] = foregroundRequested;
             measurement["foregroundAfterRequest"] = DescribeWindowContext(
-                foregroundAfterRequestHandle, includeThreadDesktop: false, includeGeometry: true);
+                foregroundAfterRequestHandle, includeGeometry: true);
 
             if (foregroundAfterRequestHandle != window)
             {
@@ -2297,7 +1326,7 @@ internal static class Program
             }
             var foregroundAfterHandle = GetForegroundWindow();
             measurement["foregroundAfter"] = DescribeWindowContext(
-                foregroundAfterHandle, includeThreadDesktop: false, includeGeometry: true);
+                foregroundAfterHandle, includeGeometry: true);
             if (!IsWindow(window) || !IsWindowVisible(window) || IsIconic(window) || foregroundAfterHandle != window)
                 throw new InvalidOperationException("Candidate UI window did not become the actual foreground window");
             measurement["ready"] = true;
@@ -2305,7 +1334,7 @@ internal static class Program
         catch (Exception error)
         {
             measurement["foregroundAtFailure"] = DescribeWindowContext(
-                GetForegroundWindow(), includeThreadDesktop: false, includeGeometry: true);
+                GetForegroundWindow(), includeGeometry: true);
             measurement["ready"] = false;
             measurement["error"] = error.ToString();
             var serializedFailure = JsonSerializer.Serialize(measurement);
@@ -2400,37 +1429,33 @@ internal static class Program
                 NativeDiagnosticsTests.RunAsync().GetAwaiter().GetResult();
                 return 0;
             }
+
             SetProcessDpiAwarenessContext(new IntPtr(-4));
-            using var input = JsonDocument.Parse(Console.In.ReadToEnd());
+            var requestLine = Console.In.ReadLine()
+                ?? throw new EndOfStreamException("Native UI helper did not receive its initial JSON request line");
+            using var input = JsonDocument.Parse(requestLine);
             var request = input.RootElement;
             string Text(string key) => request.GetProperty(key).GetString()!;
             var operation = Text("operation");
             mainOperation = operation;
             TracePhase($"main-operation-start utc={UtcTimestamp()} operation={JsonSerializer.Serialize(operation)}");
-            if (operation == "cancel-profile-switch")
-                TracePhase($"profile-switch-request-parsed utc={UtcTimestamp()} target={JsonSerializer.Serialize(Text("target"))} competing={JsonSerializer.Serialize(Text("competing"))}");
+            if (operation == "native-case") return RunNativeCase(request);
+            if (operation != "probe") throw new ArgumentException($"Unknown operation: {operation}");
+
             var settleRedirectWorkers = false;
-            if (request.TryGetProperty("settle_redirect_workers", out var settleRedirectWorkersValue))
+            if (request.TryGetProperty("settle_redirect_workers", out var settleValue))
             {
-                if (settleRedirectWorkersValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                if (settleValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                     throw new ArgumentException("settle_redirect_workers must be a JSON boolean");
-                settleRedirectWorkers = settleRedirectWorkersValue.GetBoolean();
+                settleRedirectWorkers = settleValue.GetBoolean();
             }
-            if (settleRedirectWorkers && operation != "probe")
-                throw new ArgumentException("settle_redirect_workers is only valid for an unbound probe");
             if (settleRedirectWorkers && request.TryGetProperty("pid", out _))
                 throw new ArgumentException("settle_redirect_workers cannot be combined with a PID-bound probe");
             if (settleRedirectWorkers && request.TryGetProperty("identity", out _))
                 throw new ArgumentException("settle_redirect_workers cannot be combined with an identity-bound probe");
-            if (operation == "settings-text-size")
-            {
-                ValidateSettingsTextSizeRequest(request);
-                return OperateWindowsTextSizeSettings(request);
-            }
+
             var expected = Path.GetFullPath(Text("executable"));
             Process? found = null;
-            if (operation == "cancel-profile-switch")
-                TracePhase($"profile-switch-process-validation-start utc={UtcTimestamp()} pid={(request.TryGetProperty("pid", out var cancelPid) ? cancelPid.ToString() : "unbound")}");
             if (settleRedirectWorkers)
             {
                 found = FindSettledProbeProcess(expected);
@@ -2438,7 +1463,11 @@ internal static class Program
             else if (request.TryGetProperty("pid", out var requestedPid))
             {
                 try { found = Process.GetProcessById(requestedPid.GetInt32()); }
-                catch (ArgumentException) { Console.WriteLine("{\"ready\":false,\"alive\":false}"); return 0; }
+                catch (ArgumentException)
+                {
+                    Console.WriteLine("{\"ready\":false,\"alive\":false}");
+                    return 0;
+                }
             }
             else
             {
@@ -2465,7 +1494,12 @@ internal static class Program
                     }
                 }
             }
-            if (found is null) { Console.WriteLine("{\"ready\":false,\"alive\":false}"); return 0; }
+
+            if (found is null)
+            {
+                Console.WriteLine("{\"ready\":false,\"alive\":false}");
+                return 0;
+            }
             using var process = found;
             if (process.HasExited)
             {
@@ -2477,1085 +1511,15 @@ internal static class Program
             var identity = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
             if (request.TryGetProperty("identity", out var prior) && prior.GetString() != identity)
                 throw new InvalidOperationException("UI process creation time changed");
-            if (operation == "cancel-profile-switch")
+            process.Refresh();
+            var window = process.MainWindowHandle;
+            Console.WriteLine(JsonSerializer.Serialize(new
             {
-                TracePhase($"profile-switch-process-identity-verified utc={UtcTimestamp()} pid={process.Id} identity={identity}");
-                // Preserve baseline tracing without suspending the live candidate
-                // for an invasive memory dump while UIA is still interacting.
-            }
-            if (operation == "probe")
-            {
-                process.Refresh();
-                var probeWindowHandle = process.MainWindowHandle;
-                Console.WriteLine(JsonSerializer.Serialize(new {
-                    alive = true, pid = process.Id, identity,
-                    windowHandle = probeWindowHandle == IntPtr.Zero ? null : $"0x{probeWindowHandle.ToInt64():X}"
-                }));
-                return 0;
-            }
-            if (operation == "close")
-            {
-                if (!process.CloseMainWindow()) throw new InvalidOperationException("Native window close request failed");
-                Console.WriteLine("{}");
-                return 0;
-            }
-            if (operation == "kill")
-            {
-                process.Kill(entireProcessTree: true);
-                if (!process.WaitForExit(5000)) throw new TimeoutException("UI process did not exit");
-                Console.WriteLine("{}");
-                return 0;
-            }
-            var traceTree = operation == "tree";
-            var traceWin32Baseline = operation == "windows-baseline";
-            var traceAutomationPoint = operation == "uia-point";
-            var traceWindow = traceTree || traceWin32Baseline;
-            var activateAndDiscoverWindow = traceWindow || operation == "resize-window";
-            var baselineStarted = traceWin32Baseline ? Stopwatch.GetTimestamp() : 0;
-            if (traceTree) TracePhase($"tree-window-discovery-start pid={process.Id}");
-            if (traceWin32Baseline)
-                TracePhase($"configure-tree-win32-baseline-start utc={UtcTimestamp()} pid={process.Id}");
-            IntPtr window = IntPtr.Zero;
-            if (activateAndDiscoverWindow)
-            {
-                string[] lastWindows = Array.Empty<string>();
-                string lastTitle = "unavailable";
-                IntPtr activationRequestedFor = IntPtr.Zero;
-                try
-                {
-                    WaitFor(() =>
-                    {
-                        process.Refresh();
-                        window = process.MainWindowHandle;
-                        GetWindowThreadProcessId(window, out var ownerPid);
-                        if (window == IntPtr.Zero || ownerPid != process.Id)
-                        {
-                            var ownedWindows = EnumerateProcessWindows(process).Where(candidate =>
-                            {
-                                GetWindowThreadProcessId(candidate, out var candidatePid);
-                                return candidatePid == process.Id;
-                            }).ToArray();
-                            window = ownedWindows.FirstOrDefault(candidate =>
-                                IsWindowVisible(candidate) && !IsIconic(candidate));
-                            if (window == IntPtr.Zero)
-                                window = ownedWindows.FirstOrDefault();
-                        }
-                        if (window != IntPtr.Zero && (!IsWindowVisible(window) || IsIconic(window)) && window != activationRequestedFor)
-                        {
-                            activationRequestedFor = window;
-                            var showCommand = IsIconic(window) ? 9 : 5; // SW_RESTORE or SW_SHOW
-                            var showQueued = ShowWindowAsync(window, showCommand);
-                            var foregroundRequested = SetForegroundWindow(window);
-                            TracePhase(
-                                $"tree-window-activation hwnd=0x{window.ToInt64():X} " +
-                                $"showCommand={showCommand} showQueued={showQueued} foregroundRequested={foregroundRequested}");
-                        }
-                        lastWindows = DescribeProcessWindows(process);
-                        lastTitle = process.MainWindowTitle;
-                        return window != IntPtr.Zero && IsWindowVisible(window) && !IsIconic(window);
-                    }, "UI process did not expose a visible, non-minimized window for the tree snapshot", seconds: 20.0);
-                }
-                catch (TimeoutException error)
-                {
-                    throw new TimeoutException(
-                        $"{error.Message}; pid={process.Id}; session={process.SessionId}; " +
-                        $"mainWindowTitle=\"{lastTitle}\"; processTopLevelWindows=[{string.Join(" || ", lastWindows)}]",
-                        error);
-                }
-            }
-            else
-            {
-                if (operation == "cancel-profile-switch")
-                    TracePhase($"profile-switch-main-window-read-start utc={UtcTimestamp()} pid={process.Id}");
-                process.Refresh();
-                if (traceAutomationPoint)
-                {
-                    window = ParseWindowHandle(request.GetProperty("windowHandle").GetString()
-                        ?? throw new InvalidOperationException("UIA point query requires the baseline window handle"));
-                    GetWindowThreadProcessId(window, out var requestedOwnerPid);
-                    if (window == IntPtr.Zero || requestedOwnerPid != process.Id)
-                        throw new InvalidOperationException("UIA point query window does not belong to the verified UI process");
-                }
-                else
-                {
-                    window = process.MainWindowHandle;
-                }
-                if (operation == "cancel-profile-switch")
-                    TracePhase($"profile-switch-main-window-read-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
-            }
-            if (traceTree) TracePhase($"tree-window-discovery-complete hwnd=0x{window.ToInt64():X}");
-            if (traceWin32Baseline)
-                TracePhase($"configure-tree-win32-baseline-window-discovery-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
-            var visible = window != IntPtr.Zero && IsWindowVisible(window);
-            var minimized = window != IntPtr.Zero && IsIconic(window);
-            if (operation == "cancel-profile-switch")
-                TracePhase($"profile-switch-window-visibility utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X} visible={visible} minimized={minimized}");
-            if ((!visible || minimized) && !traceAutomationPoint)
-            {
-                uint windowOwnerPid = 0;
-                if (window != IntPtr.Zero) GetWindowThreadProcessId(window, out windowOwnerPid);
-                Console.WriteLine(JsonSerializer.Serialize(new
-                {
-                    ready = false,
-                    pid = process.Id,
-                    identity,
-                    windowHandle = $"0x{window.ToInt64():X}",
-                    visible,
-                    minimized,
-                    ownerPid = windowOwnerPid,
-                    candidateSessionId = process.SessionId,
-                    helperSessionId = Process.GetCurrentProcess().SessionId,
-                    mainWindowTitle = process.MainWindowTitle,
-                    windowDescription = window == IntPtr.Zero ? "unavailable" : DescribeWindow(window),
-                    processTopLevelWindows = DescribeProcessWindows(process),
-                    executablePath = process.MainModule?.FileName,
-                    processStartUtc = process.StartTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
-                }));
-                if (traceWin32Baseline)
-                    TracePhase($"configure-tree-win32-baseline-incomplete utc={UtcTimestamp()} elapsed_ms={ElapsedMilliseconds(baselineStarted)}");
-                return 0;
-            }
-            if (operation == "cancel-profile-switch")
-                TracePhase($"profile-switch-window-owner-read-start utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
-            var windowThreadId = GetWindowThreadProcessId(window, out var owner);
-            if (operation == "cancel-profile-switch")
-                TracePhase($"profile-switch-window-owner-read-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X} thread={windowThreadId} owner_pid={owner}");
-            if (owner != process.Id) throw new InvalidOperationException("UI window ownership changed");
-            if (traceWin32Baseline)
-            {
-                var boundsAvailable = GetWindowRect(window, out var bounds);
-                var boundsText = boundsAvailable
-                    ? $"{bounds.Left},{bounds.Top} {bounds.Right - bounds.Left}x{bounds.Bottom - bounds.Top}"
-                    : "unavailable";
-                Console.WriteLine(JsonSerializer.Serialize(new
-                {
-                    ready = true,
-                    pid = process.Id,
-                    identity,
-                    executablePath = process.MainModule?.FileName,
-                    processStartUtc = process.StartTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
-                    sessionId = process.SessionId,
-                    threadCount = process.Threads.Count,
-                    workingSetBytes = process.WorkingSet64,
-                    windowHandle = $"0x{window.ToInt64():X}",
-                    windowThreadId,
-                    ownerPid = owner,
-                    visible,
-                    minimized,
-                    mainWindowTitle = process.MainWindowTitle,
-                    windowBounds = boundsText,
-                    windowDescription = DescribeWindow(window),
-                    processTopLevelWindows = DescribeProcessWindows(process),
-                }));
-                TracePhase($"configure-tree-win32-baseline-complete utc={UtcTimestamp()} elapsed_ms={ElapsedMilliseconds(baselineStarted)} hwnd=0x{window.ToInt64():X}");
-                return 0;
-            }
-            if (traceAutomationPoint)
-            {
-                var pointQueryResult = 0;
-                ExceptionDispatchInfo? pointQueryError = null;
-                var pointQueryThread = new Thread(() =>
-                {
-                    try
-                    {
-                        pointQueryResult = MeasureAutomationElementFromPoint(process, identity, window, request);
-                    }
-                    catch (Exception error)
-                    {
-                        pointQueryError = ExceptionDispatchInfo.Capture(error);
-                    }
-                });
-                pointQueryThread.SetApartmentState(ApartmentState.MTA);
-                pointQueryThread.Start();
-                pointQueryThread.Join();
-                pointQueryError?.Throw();
-                return pointQueryResult;
-            }
-            if (traceTree) TracePhase($"tree-uia-root-start hwnd=0x{window.ToInt64():X}");
-            if (operation == "cancel-profile-switch")
-                TracePhase($"profile-switch-uia-root-start utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
-            var root = AutomationElement.FromHandle(window);
-            if (traceTree) TracePhase("tree-uia-root-complete");
-            if (operation == "cancel-profile-switch")
-                TracePhase($"profile-switch-uia-root-complete utc={UtcTimestamp()} hwnd=0x{window.ToInt64():X}");
-            if (operation == "resize-window")
-            {
-                if (!GetWindowRect(window, out var original))
-                    throw new InvalidOperationException("Could not read native window bounds before resize");
-                var width = request.TryGetProperty("width", out var requestedWidth) ? requestedWidth.GetInt32() : 0;
-                var height = request.TryGetProperty("height", out var requestedHeight) ? requestedHeight.GetInt32() : 0;
-                if (width < 560 || height < 460)
-                    throw new ArgumentOutOfRangeException("width", "Requested native window is below its supported minimum");
-                var left = request.TryGetProperty("left", out var requestedLeft) ? requestedLeft.GetInt32() : original.Left;
-                var top = request.TryGetProperty("top", out var requestedTop) ? requestedTop.GetInt32() : original.Top;
-                if (!SetWindowPos(window, IntPtr.Zero, left, top, width, height, 0x0004 | 0x0010))
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not resize the native window");
-                Rect resized = default;
-                WaitFor(() => GetWindowRect(window, out resized) &&
-                    Math.Abs((resized.Right - resized.Left) - width) <= 20 &&
-                    Math.Abs((resized.Bottom - resized.Top) - height) <= 20,
-                    $"Native window did not settle at the requested {width}x{height} size");
-                Console.WriteLine(JsonSerializer.Serialize(new
-                {
-                    ready = true,
-                    left = original.Left,
-                    top = original.Top,
-                    width = original.Right - original.Left,
-                    height = original.Bottom - original.Top,
-                    resized_width = resized.Right - resized.Left,
-                    resized_height = resized.Bottom - resized.Top,
-                }));
-                return 0;
-            }
-            AutomationElement Find(string name, bool editor = false, bool actionable = false)
-            {
-                AutomationElement? FindBy(bool automationId)
-                {
-                    foreach (var candidate in Walk(root,
-                                 traceTree ? message => TracePhase($"tree-action-{message}") : null))
-                    {
-                        var current = candidate.Current;
-                        if (!current.IsControlElement || current.IsOffscreen ||
-                            (automationId ? current.AutomationId : current.Name) != name ||
-                            (editor && current.ControlType != ControlType.Edit))
-                            continue;
-                        if (actionable &&
-                            !candidate.TryGetCurrentPattern(InvokePattern.Pattern, out _) &&
-                            !candidate.TryGetCurrentPattern(SelectionItemPattern.Pattern, out _))
-                            continue;
-                        return candidate;
-                    }
-                    return null;
-                }
-
-                // Resolve stable identifiers before user-facing labels to avoid matching a tab and its label.
-                var element = FindBy(automationId: true) ?? FindBy(automationId: false);
-                if (element is null)
-                    throw new InvalidOperationException($"Expected one visible {name}, found no matching control");
-                if (!element.Current.IsEnabled) throw new InvalidOperationException($"Control disabled: {name}");
-                return element;
-            }
-            if (operation == "cancel-profile-switch")
-            {
-                var observeOnly = request.TryGetProperty("observe_only", out var observeOnlyValue) &&
-                    observeOnlyValue.GetBoolean();
-                var result = ProfileSwitchAction(
-                    root, window, process, identity, Text("target"), Text("competing"), observeOnly: observeOnly);
-                Console.WriteLine(JsonSerializer.Serialize(result));
-                return 0;
-            }
-            if (operation == "profile-list-layout")
-            {
-                Console.WriteLine(JsonSerializer.Serialize(ProfileListLayout(root, window)));
-                return 0;
-            }
-            if (operation == "scroll-profile-list")
-            {
-                Console.WriteLine(JsonSerializer.Serialize(ScrollProfileList(root, window, Text("position"))));
-                return 0;
-            }
-            bool VisibleInLogViewport(AutomationElement element, System.Windows.Rect viewport)
-            {
-                var current = element.Current;
-                var bounds = current.BoundingRectangle;
-                return !current.IsOffscreen && HasUsableBounds(bounds) &&
-                    HasUsableBounds(System.Windows.Rect.Intersect(bounds, viewport));
-            }
-            if (operation == "logs")
-            {
-                var logRoot = Find("Backend logs");
-                var verifyDetails = request.TryGetProperty("verify_details", out var verifyDetailsValue) &&
-                    verifyDetailsValue.GetBoolean();
-                var paletteMarker = request.TryGetProperty("marker", out var markerValue)
-                    && markerValue.ValueKind == JsonValueKind.String
-                        ? markerValue.GetString() : null;
-                System.Windows.Rect? logViewport = string.IsNullOrEmpty(paletteMarker)
-                    ? null : PhysicalBounds(logRoot, "Backend logs");
-                // Reuse peers for frozen Details; live reads traverse as they consume elements.
-                IEnumerable<AutomationElement> initialLogElements = verifyDetails
-                    ? Walk(logRoot).ToArray()
-                    : Walk(logRoot);
-                var entries = initialLogElements
-                    .Where(element => element.Current.ControlType == ControlType.Text)
-                    .Select(element =>
-                    {
-                        var text = element.Current.Name;
-                        int? foreground = null;
-                        if (!string.IsNullOrEmpty(paletteMarker) &&
-                            text.Contains(paletteMarker, StringComparison.Ordinal) &&
-                            element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern))
-                        {
-                            var value = ((TextPattern)pattern).DocumentRange.GetAttributeValue(TextPattern.ForegroundColorAttribute);
-                            if (value is int color) foreground = color;
-                        }
-                        bool? offscreen = null;
-                        bool? visibleInViewport = null;
-                        object? bounds = null;
-                        if (logViewport is not null && text.Contains(paletteMarker!, StringComparison.Ordinal))
-                        {
-                            var elementBounds = element.Current.BoundingRectangle;
-                            offscreen = element.Current.IsOffscreen;
-                            if (HasUsableBounds(elementBounds))
-                            {
-                                bounds = RectJson(elementBounds);
-                                visibleInViewport = !offscreen.Value && FullyInside(elementBounds, logViewport.Value);
-                            }
-                            else
-                            {
-                                visibleInViewport = false;
-                            }
-                        }
-                        return new { text, foreground, offscreen, bounds, visible_in_viewport = visibleInViewport };
-                    })
-                    .Where(entry => entry.text.Length > 0)
-                    .ToArray();
-                string expandedRecord = "";
-                var expansionVerified = false;
-                if (verifyDetails)
-                {
-                    var detailsViewport = PhysicalBounds(logRoot, "Backend logs");
-                    var details = initialLogElements.FirstOrDefault(element => element.Current.Name == "Details" &&
-                        element.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out _) &&
-                        VisibleInLogViewport(element, detailsViewport));
-                    if (details is not null && details.TryGetCurrentPattern(ExpandCollapsePattern.Pattern, out var expand))
-                    {
-                        var control = (ExpandCollapsePattern)expand;
-                        Exception? traceFailure = null;
-                        void TraceDetails(string stage, object? observation = null, Exception? operationError = null)
-                        {
-                            try { TracePhase("logs-details " + JsonSerializer.Serialize(new { stage, utc = UtcTimestamp(), observation, operation_exception = operationError?.ToString() })); }
-                            catch (Exception error) { traceFailure = traceFailure is null ? error : new AggregateException("Windows log Details diagnostics failed.", traceFailure, error); }
-                        }
-                        string? failureScreenshotPath = request.TryGetProperty("failure_screenshot_path", out var screenshotPathValue)
-                            && screenshotPathValue.ValueKind == JsonValueKind.String
-                                ? screenshotPathValue.GetString() : null;
-
-                        object ObserveDetailsState()
-                        {
-                            var peerObservation = new Dictionary<string, object?>();
-                            string? currentState = null;
-                            string? stateReadException = null;
-                            try { currentState = control.Current.ExpandCollapseState.ToString(); }
-                            catch (Exception error) { stateReadException = error.ToString(); }
-                            try { peerObservation["runtime_id"] = details.GetRuntimeId(); }
-                            catch (Exception error) { peerObservation["runtime_id_read_exception"] = error.ToString(); }
-                            try
-                            {
-                                var current = details.Current;
-                                peerObservation["automation_id"] = current.AutomationId;
-                                peerObservation["name"] = current.Name;
-                                peerObservation["control_type"] = current.ControlType.ProgrammaticName;
-                            }
-                            catch (Exception error) { peerObservation["identity_read_exception"] = error.ToString(); }
-                            try { peerObservation["is_offscreen"] = details.Current.IsOffscreen; }
-                            catch (Exception error) { peerObservation["offscreen_read_exception"] = error.ToString(); }
-                            try
-                            {
-                                var bounds = details.Current.BoundingRectangle;
-                                peerObservation["bounds"] = HasUsableBounds(bounds) ? RectJson(bounds) : null;
-                            }
-                            catch (Exception error) { peerObservation["bounds_read_exception"] = error.ToString(); }
-                            return new
-                            {
-                                current_state = currentState,
-                                current_state_read_exception = stateReadException,
-                                details_peer = peerObservation,
-                            };
-                        }
-
-                        object peer;
-                        try
-                        {
-                            var current = details.Current;
-                            var bounds = current.BoundingRectangle;
-                            peer = new { runtime_id = details.GetRuntimeId(), automation_id = current.AutomationId, name = current.Name,
-                                control_type = current.ControlType.ProgrammaticName, is_offscreen = current.IsOffscreen,
-                                bounds = HasUsableBounds(bounds) ? RectJson(bounds) : null };
-                        }
-                        catch (Exception error) { peer = new { observation_exception = error.ToString() }; }
-                        object viewport;
-                        try
-                        {
-                            var bounds = PhysicalBounds(logRoot, "Backend logs");
-                            var hasScroll = logRoot.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern);
-                            var position = hasScroll ? ((ScrollPattern)scrollPattern).Current.VerticalScrollPercent : (double?)null;
-                            viewport = new { bounds = RectJson(bounds), scroll_pattern_available = hasScroll, scroll_position = position };
-                        }
-                        catch (Exception error) { viewport = new { observation_exception = error.ToString() }; }
-                        ExpandCollapseState? initialState = null;
-                        bool? wasExpanded = null;
-                        Exception? detailsFailure = null;
-                        Exception? collapseFailure = null;
-                        Exception? screenshotFailure = null;
-                        var activeStage = "initial-state-read";
-                        try
-                        {
-                            TraceDetails("initial-state-read-start");
-                            initialState = control.Current.ExpandCollapseState;
-                            wasExpanded = initialState == ExpandCollapseState.Expanded;
-                            TraceDetails("initial-state-read-complete", new
-                            {
-                                details_peer = peer,
-                                current_state = initialState.Value.ToString(),
-                                log_viewport = viewport,
-                            });
-                            activeStage = "expand";
-                            TraceDetails("expand-start", new { skipped = wasExpanded });
-                            if (wasExpanded == false) control.Expand();
-                            TraceDetails("post-expand-state", new { skipped = wasExpanded, state = ObserveDetailsState() });
-                            TraceDetails("expand-outcome", new { skipped = wasExpanded });
-                            activeStage = "text-extraction";
-                            TraceDetails("text-extraction-start");
-                            expandedRecord = Walk(logRoot)
-                                .Where(element => element.Current.ControlType == ControlType.Text)
-                                .Select(element => element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)
-                                    ? ((TextPattern)pattern).DocumentRange.GetText(-1) : element.Current.Name)
-                                .FirstOrDefault(value => value.TrimStart().StartsWith("{", StringComparison.Ordinal)) ?? "";
-                            expansionVerified = expandedRecord.Length > 0;
-                            TraceDetails("text-extraction-outcome", new { expansionVerified, record_length = expandedRecord.Length });
-                            if (!expansionVerified)
-                            {
-                                detailsFailure = new InvalidOperationException(
-                                    "Windows log Details expansion did not expose a structured JSON record.");
-                                TraceDetails("zero-record-primary-failure", new
-                                {
-                                    expansionVerified,
-                                    record_length = expandedRecord.Length,
-                                    failure = detailsFailure.Message,
-                                });
-                            }
-                        }
-                        catch (Exception error)
-                        {
-                            detailsFailure = error;
-                            TraceDetails($"{activeStage}-exception", new
-                            {
-                                details_peer = peer,
-                                log_viewport = viewport,
-                                current_state = initialState?.ToString(),
-                            }, error);
-                        }
-                        finally
-                        {
-                            if (detailsFailure is not null)
-                            {
-                                if (string.IsNullOrWhiteSpace(failureScreenshotPath))
-                                {
-                                    TraceDetails("failure-screenshot-skipped", new { reason = "failure screenshot path was not supplied" });
-                                }
-                                else
-                                {
-                                    try
-                                    {
-                                        TraceDetails("failure-screenshot-start", new { path = failureScreenshotPath });
-                                        var screenshotBounds = Capture(window, process.Id, failureScreenshotPath);
-                                        TraceDetails("failure-screenshot-complete", new
-                                        {
-                                            path = failureScreenshotPath,
-                                            screen_bounds = new { x = screenshotBounds.X, y = screenshotBounds.Y,
-                                                width = screenshotBounds.Width, height = screenshotBounds.Height },
-                                        });
-                                    }
-                                    catch (Exception error)
-                                    {
-                                        screenshotFailure = error;
-                                        TraceDetails("failure-screenshot-exception", new { path = failureScreenshotPath }, error);
-                                    }
-                                }
-                            }
-                            if (wasExpanded == false)
-                            {
-                                TraceDetails("pre-collapse-state", ObserveDetailsState());
-                                TraceDetails("collapse-start");
-                                try
-                                {
-                                    control.Collapse();
-                                    TraceDetails("collapse-outcome");
-                                }
-                                catch (Exception error)
-                                {
-                                    collapseFailure = error;
-                                    TraceDetails("collapse-exception", operationError: error);
-                                }
-                            }
-                            else if (wasExpanded == true)
-                            {
-                                TraceDetails("collapse-skipped-already-expanded");
-                            }
-                            else
-                            {
-                                TraceDetails("collapse-skipped-initial-state-read-failed");
-                            }
-                        }
-
-                        Exception? failure = detailsFailure;
-                        if (collapseFailure is not null)
-                            failure = failure is null ? collapseFailure
-                                : new AggregateException("Windows log Details action and Collapse cleanup both failed.", failure, collapseFailure);
-                        if (screenshotFailure is not null)
-                            failure = failure is null ? screenshotFailure
-                                : new AggregateException("Windows log Details failure screenshot also failed.", failure, screenshotFailure);
-                        if (traceFailure is not null)
-                            failure = failure is null ? traceFailure
-                                : new AggregateException("Windows log Details operation and diagnostics failed.", failure, traceFailure);
-                        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
-                    }
-                }
-                Console.WriteLine(JsonSerializer.Serialize(new {
-                    ready = true,
-                    text = string.Join("\n", entries.Select(entry => entry.text)),
-                    entries,
-                    logs_viewport = logViewport is null ? null : RectJson(logViewport.Value),
-                    expanded_record = expandedRecord,
-                    expansion_verified = expansionVerified
-                }));
-                return 0;
-            }
-            if (operation == "select-log-text")
-            {
-                var logRoot = Find("Backend logs");
-                var logViewport = PhysicalBounds(logRoot, "Backend logs");
-                var entry = Walk(logRoot).FirstOrDefault(element =>
-                    element.Current.ControlType == ControlType.Text && VisibleInLogViewport(element, logViewport) &&
-                    element.TryGetCurrentPattern(TextPattern.Pattern, out var pattern) &&
-                    ((TextPattern)pattern).DocumentRange.GetText(-1).Contains(" · ", StringComparison.Ordinal));
-                if (entry is null || !entry.TryGetCurrentPattern(TextPattern.Pattern, out var entryPattern))
-                    throw new InvalidOperationException("No structured log entry is available for text selection");
-                var range = ((TextPattern)entryPattern).DocumentRange;
-                range.Select();
-                var selected = ((TextPattern)entryPattern).GetSelection()
-                    .Select(selection => selection.GetText(-1)).FirstOrDefault() ?? "";
-                if (selected.Length == 0)
-                    throw new InvalidOperationException("Native log text selection returned no selected text");
-                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, selected }));
-                return 0;
-            }
-            if (operation == "log-position")
-            {
-                var logRoot = Find("Backend logs");
-                if (!logRoot.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
-                    throw new InvalidOperationException("Native log viewer does not expose scrolling");
-                var scroll = (ScrollPattern)scrollPattern;
-                var position = scroll.Current.VerticalScrollPercent;
-                if (position < 0)
-                    throw new InvalidOperationException("Native log viewer does not expose a vertical scroll position");
-                var logViewport = PhysicalBounds(logRoot, "Backend logs");
-                var firstVisibleElement = Walk(logRoot).FirstOrDefault(element =>
-                    element.Current.ControlType == ControlType.Text &&
-                    element.Current.Name.Contains(" · ", StringComparison.Ordinal) &&
-                    VisibleInLogViewport(element, logViewport));
-                if (firstVisibleElement is null)
-                    throw new InvalidOperationException(
-                        $"Native log viewer has no visible structured record: vertical_scroll_percent={position.ToString(CultureInfo.InvariantCulture)} " +
-                        $"logs_viewport={JsonSerializer.Serialize(RectJson(logViewport))}");
-                Console.WriteLine(JsonSerializer.Serialize(new {
-                    ready = true, vertical_scroll_percent = position,
-                    logs_viewport = RectJson(logViewport),
-                    visible_first_record = firstVisibleElement.Current.Name,
-                    visible_first_record_bounds = RectJson(firstVisibleElement.Current.BoundingRectangle),
-                }));
-                return 0;
-            }
-            if (operation == "scroll-logs")
-            {
-                var position = Text("position");
-                if (position is not ("top" or "bottom")) throw new ArgumentException("Log scroll position must be top or bottom");
-                var logRoot = Find("Backend logs");
-                if (!logRoot.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
-                    throw new InvalidOperationException("Native log viewer does not expose scrolling");
-                var scroll = (ScrollPattern)scrollPattern;
-                var initialPercent = scroll.Current.VerticalScrollPercent;
-                if (initialPercent < 0)
-                    throw new InvalidOperationException("Native log viewer does not expose a vertical scroll range");
-                RequireForeground(window, "log scrolling");
-
-                var logBounds = PhysicalBounds(logRoot, "Backend logs");
-                if (logRoot.Current.IsOffscreen)
-                    throw new InvalidOperationException("Native log viewport is offscreen");
-                var windowBounds = GetPhysicalWindowRect(window);
-                var visibleLeft = Math.Max(logBounds.Left, windowBounds.Left);
-                var visibleTop = Math.Max(logBounds.Top, windowBounds.Top);
-                var visibleRight = Math.Min(logBounds.Right, windowBounds.Right);
-                var visibleBottom = Math.Min(logBounds.Bottom, windowBounds.Bottom);
-                if (visibleRight <= visibleLeft || visibleBottom <= visibleTop)
-                    throw new InvalidOperationException("Native log viewport has no visible area inside its window");
-                var point = new NativePoint
-                {
-                    X = checked((int)Math.Round((visibleLeft + visibleRight) / 2, MidpointRounding.AwayFromZero)),
-                    Y = checked((int)Math.Round((visibleTop + visibleBottom) / 2, MidpointRounding.AwayFromZero)),
-                };
-                var visibleViewport = new System.Windows.Rect(
-                    visibleLeft, visibleTop, visibleRight - visibleLeft, visibleBottom - visibleTop);
-                TracePhase("scroll-logs-target " + JsonSerializer.Serialize(new
-                {
-                    utc = UtcTimestamp(),
-                    position,
-                    initial_vertical_scroll_percent = initialPercent,
-                    log_bounds = RectJson(logBounds),
-                    window_bounds = RectJson(windowBounds),
-                    visible_viewport = RectJson(visibleViewport),
-                    point = new { x = point.X, y = point.Y },
-                }));
-                bool AtRequestedEnd(double percent) => percent >= 0 && (position == "top" ? percent <= 1 : percent >= 99);
-                const double ScrollSettleMilliseconds = 750;
-                var actual = initialPercent;
-                var beforeWheelPercent = initialPercent;
-                void SendWheel()
-                {
-                    RequireForeground(window, "log scrolling before native wheel input");
-                    var pointWindow = WindowFromPoint(point);
-                    var pointRoot = pointWindow == IntPtr.Zero ? IntPtr.Zero : GetAncestor(pointWindow, GaRoot);
-                    if (pointRoot != window)
-                        throw new InvalidOperationException(
-                            $"Refusing log wheel input at ({point.X},{point.Y}): WindowFromPoint root " +
-                            $"0x{pointRoot.ToInt64():X} does not match candidate 0x{window.ToInt64():X}");
-                    Marshal.SetLastPInvokeError(0);
-                    if (!SetCursorPos(point.X, point.Y))
-                        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
-                            $"Could not move the pointer to the visible log viewport at ({point.X},{point.Y})");
-                    Marshal.SetLastPInvokeError(0);
-                    if (!GetCursorPos(out var cursor))
-                        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
-                            "Could not verify the pointer position before log wheel input");
-                    if (cursor.X != point.X || cursor.Y != point.Y)
-                        throw new InvalidOperationException(
-                            $"Pointer did not reach the visible log viewport: expected=({point.X},{point.Y}) " +
-                            $"actual=({cursor.X},{cursor.Y})");
-                    if (GetForegroundWindow() != window)
-                        throw new InvalidOperationException("Native window lost foreground before log wheel input");
-
-                    beforeWheelPercent = scroll.Current.VerticalScrollPercent;
-                    var wheelDelta = position == "top" ? WheelDelta : -WheelDelta;
-                    var wheelInput = CreateMouseInput(MouseEventWheel, unchecked((uint)wheelDelta));
-                    Marshal.SetLastPInvokeError(0);
-                    var inserted = SendInput(1, new[] { wheelInput }, Marshal.SizeOf<NativeInput>());
-                    var sendInputError = Marshal.GetLastPInvokeError();
-                    if (inserted != 1)
-                        throw new InvalidOperationException(
-                            $"SendInput inserted {inserted} of 1 log wheel events; lastError={sendInputError}");
-                    actual = scroll.Current.VerticalScrollPercent;
-                    TracePhase("scroll-logs-after-wheel " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, wheel_delta = wheelDelta, before_vertical_scroll_percent = beforeWheelPercent, vertical_scroll_percent = actual }));
-                }
-
-                if (position == "top")
-                {
-                    SendWheel();
-                    if (beforeWheelPercent > 0)
-                    {
-                        // NativeUIController enforces this operation's existing watchdog.
-                        while (!(actual >= 0 && actual < beforeWheelPercent))
-                        {
-                            Thread.Sleep(50);
-                            RequireForeground(window, "log scrolling while awaiting upward wheel movement");
-                            actual = scroll.Current.VerticalScrollPercent;
-                        }
-                        TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = "await-upward-wheel", vertical_scroll_percent = actual }));
-                    }
-
-                    var lastWheelPercent = actual;
-                    var wheelStableSince = Stopwatch.GetTimestamp();
-                    while (Stopwatch.GetElapsedTime(wheelStableSince).TotalMilliseconds < ScrollSettleMilliseconds)
-                    {
-                        Thread.Sleep(50);
-                        RequireForeground(window, "log scrolling while settling upward wheel movement");
-                        actual = scroll.Current.VerticalScrollPercent;
-                        if (!(actual >= 0))
-                            throw new InvalidOperationException(
-                                "Native log viewer stopped exposing its vertical scroll position while settling upward wheel movement");
-                        if (!actual.Equals(lastWheelPercent))
-                        {
-                            lastWheelPercent = actual;
-                            wheelStableSince = Stopwatch.GetTimestamp();
-                            TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new
-                            {
-                                utc = UtcTimestamp(), position, stage = "settle-upward-wheel",
-                                vertical_scroll_percent = actual,
-                            }));
-                        }
-                    }
-                    TracePhase("scroll-logs-wheel-settled " + JsonSerializer.Serialize(new
-                    {
-                        utc = UtcTimestamp(), position, vertical_scroll_percent = actual,
-                        stable_ms = Stopwatch.GetElapsedTime(wheelStableSince).TotalMilliseconds,
-                    }));
-                }
-
-                RequireForeground(window, "log scrolling before setting the endpoint");
-                scroll.SetScrollPercent(ScrollPattern.NoScroll, position == "top" ? 0 : 100);
-                actual = scroll.Current.VerticalScrollPercent;
-                TracePhase("scroll-logs-after-set " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, vertical_scroll_percent = actual }));
-                var lastLoggedPercent = actual;
-                // NativeUIController enforces this operation's existing watchdog.
-                while (!AtRequestedEnd(actual))
-                {
-                    Thread.Sleep(50);
-                    actual = scroll.Current.VerticalScrollPercent;
-                    if (actual.Equals(lastLoggedPercent)) continue;
-                    lastLoggedPercent = actual;
-                    TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = "await-endpoint", vertical_scroll_percent = actual }));
-                }
-                TracePhase("scroll-logs-endpoint " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = position == "bottom" ? "before-downward-wheel" : "after-upward-wheel-set", vertical_scroll_percent = actual }));
-                if (position == "bottom")
-                {
-                    SendWheel();
-                    if (!AtRequestedEnd(actual))
-                        throw new InvalidOperationException(
-                            $"Native log wheel input moved the viewer away from the {position} endpoint: " +
-                            $"vertical_scroll_percent={actual.ToString(CultureInfo.InvariantCulture)}");
-                }
-
-                var lastObservedPercent = actual;
-                var wasAtEndpoint = AtRequestedEnd(actual);
-                var stableSince = Stopwatch.GetTimestamp();
-                while (!wasAtEndpoint ||
-                    Stopwatch.GetElapsedTime(stableSince).TotalMilliseconds < ScrollSettleMilliseconds)
-                {
-                    Thread.Sleep(50);
-                    RequireForeground(window, "log scrolling through the foreground refresh window");
-                    actual = scroll.Current.VerticalScrollPercent;
-                    var atEndpoint = AtRequestedEnd(actual);
-                    if (!atEndpoint || !wasAtEndpoint)
-                        stableSince = Stopwatch.GetTimestamp();
-                    if (!actual.Equals(lastObservedPercent))
-                    {
-                        lastObservedPercent = actual;
-                        TracePhase("scroll-logs-sample " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, stage = "settle-endpoint", vertical_scroll_percent = actual }));
-                    }
-                    wasAtEndpoint = atEndpoint;
-                }
-                TracePhase("scroll-logs-endpoint " + JsonSerializer.Serialize(new { utc = UtcTimestamp(), position, vertical_scroll_percent = actual, stable_ms = Stopwatch.GetElapsedTime(stableSince).TotalMilliseconds }));
-                Console.WriteLine(JsonSerializer.Serialize(new { ready = true, position = actual }));
-                return 0;
-            }
-            if (operation == "tree")
-            {
-                string[] labels;
-                string[] enabled_controls;
-                string[] help_texts;
-                string? source_text = null;
-                try
-                {
-                    TracePhase("tree-uia-targeted-start");
-                    var visibleControls = Walk(root, message => TracePhase($"tree-uia-{message}"))
-                        .Where(element =>
-                        {
-                            var current = element.Current;
-                            return current.IsControlElement && !current.IsOffscreen;
-                        })
-                        .ToList();
-                    var profileCount = visibleControls.Count(element =>
-                    {
-                        var id = element.Current.AutomationId;
-                        return id.StartsWith("Profile ", StringComparison.Ordinal) &&
-                               id.EndsWith(" action", StringComparison.Ordinal);
-                    });
-                    if (profileCount >= 8192)
-                        throw new InvalidOperationException("Visible profile actions exceed 8192 controls");
-
-                    var sourceEditor = visibleControls.FirstOrDefault(element =>
-                        element.Current.AutomationId == "Connection configuration");
-                    if (sourceEditor is not null &&
-                        sourceEditor.TryGetCurrentPattern(ValuePattern.Pattern, out var sourceValue))
-                        source_text = ((ValuePattern)sourceValue).Current.Value;
-
-                    labels = visibleControls.SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
-                        .Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
-                    enabled_controls = visibleControls.Where(e => e.Current.IsEnabled)
-                        .SelectMany(e => new[] { e.Current.AutomationId, e.Current.Name })
-                        .Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
-                    help_texts = visibleControls.Select(e => e.Current.HelpText)
-                        .Where(value => value.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
-                    TracePhase($"tree-uia-targeted-complete controls={visibleControls.Count} profiles={profileCount}");
-                }
-                catch (ElementNotAvailableException error)
-                {
-                    Console.Error.WriteLine(error.ToString());
-                    Console.Error.Flush();
-                    Console.WriteLine(JsonSerializer.Serialize(new {
-                        ready = false, alive = true, pid = process.Id, identity, source_text
-                    }));
-                    return 0;
-                }
-                catch (COMException error) when (error.HResult == unchecked((int)0x8000FFFF))
-                {
-                    Console.WriteLine(JsonSerializer.Serialize(new {
-                        ready = false, alive = true, pid = process.Id, identity,
-                        uiaError = error.ToString(), source_text
-                    }));
-                    return 0;
-                }
-                Console.WriteLine(JsonSerializer.Serialize(new {
-                    ready = true, pid = process.Id, identity, labels, enabled_controls, help_texts, source_text
-                }));
-                return 0;
-            }
-            long? pasteInvokedAtUnixMs = null;
-            Rectangle? capturedScreenBounds = null;
-            switch (operation)
-            {
-                case "focus":
-                {
-                    RequireForeground(window, "initial focus");
-                    break;
-                }
-                case "click":
-                    var element = Find(Text("target"), actionable: true);
-                    RequireForeground(window, "UI Automation click");
-                    if (element.TryGetCurrentPattern(InvokePattern.Pattern, out var invoke))
-                        ((InvokePattern)invoke).Invoke();
-                    else if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var select))
-                        ((SelectionItemPattern)select).Select();
-                    else throw new InvalidOperationException("Control has no native invoke or selection action");
-                    break;
-                case "disconnect":
-                {
-                    RequireForeground(window, "UI Automation disconnect");
-                    var mainAction = RequireAutomationId(root, "VPN connection action");
-                    var mainRendersDisconnect = Walk(mainAction)
-                        .Any(candidate => candidate.Current.Name == "Disconnect");
-                    var disconnectAction = mainRendersDisconnect
-                        ? mainAction
-                        : Walk(root).FirstOrDefault(candidate =>
-                        {
-                            var current = candidate.Current;
-                            return current.IsControlElement && current.ControlType == ControlType.Button &&
-                                current.Name == "Disconnect" && !current.IsOffscreen && current.IsEnabled &&
-                                candidate.TryGetCurrentPattern(InvokePattern.Pattern, out _);
-                        });
-                    if (disconnectAction is null)
-                        throw new InvalidOperationException(
-                            "No visible, enabled native button renders Disconnect with an InvokePattern");
-
-                    var disconnectCurrent = disconnectAction.Current;
-                    if (!disconnectCurrent.IsControlElement || disconnectCurrent.ControlType != ControlType.Button ||
-                        disconnectCurrent.IsOffscreen || !disconnectCurrent.IsEnabled)
-                        throw new InvalidOperationException(
-                            $"Rendered Disconnect action is not a visible, enabled button: {DescribeElement(disconnectAction)}");
-                    if (!disconnectAction.TryGetCurrentPattern(InvokePattern.Pattern, out var disconnectInvoke))
-                        throw new InvalidOperationException(
-                            $"Rendered Disconnect button has no native InvokePattern: {DescribeElement(disconnectAction)}");
-
-                    ((InvokePattern)disconnectInvoke).Invoke();
-                    Console.WriteLine(JsonSerializer.Serialize(new { ready = true }));
-                    return 0;
-                }
-                case "type":
-                    TracePhase("type-find-editor");
-                    var editor = Find("Connection configuration", editor: true);
-                    TracePhase("type-read-profile");
-                    var value = File.ReadAllText(Text("source"));
-                    TracePhase("type-activate-window");
-                    RequireForeground(window, "typing");
-                    TracePhase("type-focus-editor");
-                    editor.SetFocus();
-                    TracePhase("type-read-clipboard");
-                    var previous = Forms.Clipboard.GetDataObject();
-                    var clipboard = new Forms.DataObject();
-                    if (previous is not null)
-                    {
-                        TracePhase("type-enumerate-clipboard-formats");
-                        var formats = previous.GetFormats(false);
-                        for (var index = 0; index < formats.Length; index++)
-                        {
-                            TracePhase($"type-copy-clipboard-format-{index + 1}");
-                            var format = formats[index];
-                            clipboard.SetData(format, false, previous.GetData(format, false));
-                        }
-                    }
-                    Exception? primary = null;
-                    try
-                    {
-                        TracePhase("type-set-clipboard-text");
-                        // Windows text clipboard data requires CRLF line endings.
-                        Forms.Clipboard.SetText(
-                            NormalizeLineEndings(value).Replace("\n", "\r\n"),
-                            Forms.TextDataFormat.UnicodeText);
-                        TracePhase("type-send-select-all");
-                        Forms.SendKeys.SendWait("^a");
-                        TracePhase("type-send-paste");
-                        Forms.SendKeys.SendWait("^v");
-                        TracePhase("type-verify-pasted-value");
-                        var limit = Stopwatch.StartNew();
-                        string observed = "";
-                        do
-                        {
-                            observed = ((ValuePattern)editor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
-                            if (NormalizeLineEndings(observed) == NormalizeLineEndings(value)) break;
-                            Thread.Sleep(50);
-                        } while (limit.Elapsed.TotalSeconds < 5);
-                        if (NormalizeLineEndings(observed) != NormalizeLineEndings(value))
-                            throw new InvalidOperationException("Native pasted configuration does not match the source");
-                    }
-                    catch (Exception error) { primary = error; throw; }
-                    finally
-                    {
-                        try
-                        {
-                            if (previous is null)
-                            {
-                                TracePhase("type-clear-clipboard");
-                                Forms.Clipboard.Clear();
-                            }
-                            else
-                            {
-                                TracePhase("type-restore-clipboard");
-                                Forms.Clipboard.SetDataObject(clipboard, true);
-                            }
-                        }
-                        catch (Exception cleanup)
-                        {
-                            if (primary is null) throw;
-                            throw new AggregateException(primary, cleanup);
-                        }
-                    }
-                    break;
-                case "paste":
-                    TracePhase("paste-find-editor");
-                    var pasteEditor = Find("Connection configuration", editor: true);
-                    var pasteValue = File.ReadAllText(Text("source")).Trim();
-                    var expectedPasteValue = pasteValue;
-                    var pasteMismatchMessage = "Native Paste did not place clipboard text in the subscription field";
-                    if (request.TryGetProperty("expectedSource", out var expectedSource))
-                    {
-                        if (expectedSource.ValueKind != JsonValueKind.String)
-                            throw new ArgumentException("Expected Paste source must be a string");
-                        expectedPasteValue = expectedSource.GetString()!;
-                        pasteMismatchMessage = "Native Paste did not preserve the expected subscription field value";
-                    }
-                    var fieldBeforeClipboard = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
-                    TracePhase("paste-activate-window");
-                    RequireForeground(window, "Paste");
-                    TracePhase("paste-read-clipboard");
-                    var previousPaste = Forms.Clipboard.GetDataObject();
-                    var savedClipboard = new Forms.DataObject();
-                    if (previousPaste is not null)
-                    {
-                        foreach (var format in previousPaste.GetFormats(false))
-                            savedClipboard.SetData(format, false, previousPaste.GetData(format, false));
-                    }
-                    Exception? pasteFailure = null;
-                    try
-                    {
-                        bool PasteAvailable()
-                        {
-                            var pasteButton = Walk(root).FirstOrDefault(element =>
-                            {
-                                var current = element.Current;
-                                return current.Name == "Paste" &&
-                                       current.ControlType == ControlType.Button &&
-                                       current.IsControlElement &&
-                                       !current.IsOffscreen &&
-                                       current.IsEnabled &&
-                                       element.TryGetCurrentPattern(InvokePattern.Pattern, out _);
-                            });
-                            return pasteButton is not null;
-                        }
-                        void WaitForPasteAvailability(bool expected, string clipboardDescription)
-                        {
-                            var availabilityWait = Stopwatch.StartNew();
-                            while (PasteAvailable() != expected)
-                            {
-                                if (availabilityWait.Elapsed.TotalSeconds >= 5)
-                                    throw new TimeoutException($"Native Paste availability did not match {clipboardDescription} clipboard content");
-                                Thread.Sleep(50);
-                            }
-                        }
-                        void RequireEditorUnchanged(string stage)
-                        {
-                            var observed = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
-                            if (NormalizeLineEndings(observed) != NormalizeLineEndings(fieldBeforeClipboard))
-                                throw new InvalidOperationException($"Clipboard {stage} changed the subscription field before Paste was tapped");
-                        }
-
-                        TracePhase("paste-clear-clipboard");
-                        Forms.Clipboard.Clear();
-                        WaitForPasteAvailability(false, "empty");
-                        RequireEditorUnchanged("empty availability check");
-
-                        TracePhase("paste-set-bitmap-only-clipboard");
-                        using (var bitmap = new Bitmap(2, 2))
-                        {
-                            var nonText = new Forms.DataObject();
-                            nonText.SetData(Forms.DataFormats.Bitmap, false, bitmap);
-                            Forms.Clipboard.SetDataObject(nonText, true);
-                        }
-                        WaitForPasteAvailability(false, "non-text");
-                        RequireEditorUnchanged("non-text availability check");
-
-                        TracePhase("paste-set-clipboard-text");
-                        Forms.Clipboard.SetText(pasteValue, Forms.TextDataFormat.UnicodeText);
-                        TracePhase("paste-wait-for-button");
-                        WaitForPasteAvailability(true, "text");
-                        AutomationElement pasteButton;
-                        pasteButton = Find("Paste", actionable: true);
-                        var fieldAtAvailability = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
-                        if (NormalizeLineEndings(fieldAtAvailability) != NormalizeLineEndings(fieldBeforeClipboard))
-                            throw new InvalidOperationException("Clipboard availability inspection changed the configuration before Paste was tapped");
-                        if (!pasteButton.TryGetCurrentPattern(InvokePattern.Pattern, out var pasteInvoke))
-                            throw new InvalidOperationException("Native Paste button has no invoke action");
-                        TracePhase("paste-invoke-button");
-                        pasteInvokedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                        ((InvokePattern)pasteInvoke).Invoke();
-                        TracePhase("paste-verify-field");
-                        var valueWait = Stopwatch.StartNew();
-                        string pasteObserved = "";
-                        do
-                        {
-                            pasteObserved = ((ValuePattern)pasteEditor.GetCurrentPattern(ValuePattern.Pattern)).Current.Value;
-                            if (NormalizeLineEndings(pasteObserved).Trim() == NormalizeLineEndings(expectedPasteValue)) break;
-                            Thread.Sleep(50);
-                        } while (valueWait.Elapsed.TotalSeconds < 5);
-                        if (NormalizeLineEndings(pasteObserved).Trim() != NormalizeLineEndings(expectedPasteValue))
-                            throw new InvalidOperationException(pasteMismatchMessage);
-
-                        TracePhase("paste-verify-narrow-window-layout");
-                        VerifyNarrowWindow(root, window, process.Id, Text("source"));
-                    }
-                    catch (Exception error) { pasteFailure = error; throw; }
-                    finally
-                    {
-                        try
-                        {
-                            if (previousPaste is null)
-                            {
-                                TracePhase("paste-clear-clipboard");
-                                Forms.Clipboard.Clear();
-                            }
-                            else
-                            {
-                                TracePhase("paste-restore-clipboard");
-                                Forms.Clipboard.SetDataObject(savedClipboard, true);
-                            }
-                        }
-                        catch (Exception cleanup)
-                        {
-                            if (pasteFailure is null) throw;
-                            throw new AggregateException(pasteFailure, cleanup);
-                        }
-                    }
-                    break;
-                case "capture":
-                    capturedScreenBounds = Capture(window, process.Id, Text("path"));
-                    break;
-                default: throw new ArgumentException($"Unknown operation: {operation}");
-            }
-            var response = new Dictionary<string, object?>
-            {
-                ["ready"] = true,
-                ["pid"] = process.Id,
-                ["identity"] = identity,
-                ["labels"] = Array.Empty<string>(),
-                ["paste_invoked_at_unix_ms"] = pasteInvokedAtUnixMs,
-            };
-            if (capturedScreenBounds is { } capturedBounds)
-                response["screen_bounds"] = new {
-                    x = capturedBounds.X, y = capturedBounds.Y,
-                    width = capturedBounds.Width, height = capturedBounds.Height,
-                };
-            TracePhase($"main-response-write-start utc={UtcTimestamp()} operation={JsonSerializer.Serialize(operation)}");
-            Console.Out.WriteLine(JsonSerializer.Serialize(response));
-            Console.Out.Flush();
-            TracePhase($"main-response-flush-complete utc={UtcTimestamp()} operation={JsonSerializer.Serialize(operation)}");
+                alive = true,
+                pid = process.Id,
+                identity,
+                windowHandle = window == IntPtr.Zero ? null : $"0x{window.ToInt64():X}",
+            }));
             return 0;
         }
         catch (Exception error)
@@ -3608,305 +1572,6 @@ internal static class Program
             }
             trace?.Invoke($"children-complete node={count} depth={depth} child_count={siblingIndex} path={path}");
         }
-    }
-
-    private static int MeasureAutomationElementFromPoint(
-        Process process,
-        string identity,
-        IntPtr window,
-        JsonElement request)
-    {
-        var response = new Dictionary<string, object?>
-        {
-            ["completed"] = false,
-            ["ready"] = false,
-            ["pid"] = process.Id,
-            ["identity"] = identity,
-            ["diagnosticOnly"] = true,
-            ["schema"] = "dobbyvpn.windows-uia-point/v1",
-            ["clientApartmentState"] = Thread.CurrentThread.GetApartmentState().ToString(),
-        };
-        object? comAutomationObject = null;
-        IUIAutomationClientCom? comAutomation = null;
-        IUIAutomationElementCom? comTarget = null;
-        var comPointSucceeded = false;
-        var operationStarted = Stopwatch.GetTimestamp();
-        try
-        {
-            var clientApi = request.TryGetProperty("clientApi", out var clientApiElement)
-                ? clientApiElement.GetString()
-                : "managed";
-            response["clientApi"] = clientApi;
-            if (clientApi is not ("managed" or "com"))
-                throw new ArgumentException("UIA point clientApi must be managed or com");
-            if (clientApi == "managed") response["maximumAncestors"] = 8;
-            response["fromPointMethod"] = clientApi == "com"
-                ? "IUIAutomation::ElementFromPoint"
-                : "System.Windows.Automation.AutomationElement.FromPoint";
-
-            var requestedX = request.GetProperty("x").GetInt32();
-            var requestedY = request.GetProperty("y").GetInt32();
-            var expectedClientX = request.GetProperty("clientOriginX").GetInt32();
-            var expectedClientY = request.GetProperty("clientOriginY").GetInt32();
-            response["requestedPoint"] = new { x = requestedX, y = requestedY };
-
-            var activationStarted = Stopwatch.GetTimestamp();
-            try
-            {
-                var restoreQueued = ShowWindowAsync(window, 9); // SW_RESTORE
-                var foregroundRequested = SetForegroundWindow(window);
-                WaitFor(() => IsWindowVisible(window) && !IsIconic(window),
-                    "UI window did not restore before the UIA point query", seconds: 3);
-                var focusWait = Stopwatch.StartNew();
-                while (GetForegroundWindow() != window && focusWait.Elapsed.TotalSeconds < 3)
-                    Thread.Sleep(25);
-                response["windowActivation"] = new
-                {
-                    restoreQueued,
-                    foregroundRequested,
-                    foregroundConfirmed = GetForegroundWindow() == window,
-                    visible = IsWindowVisible(window),
-                    minimized = IsIconic(window),
-                };
-            }
-            catch (Exception error)
-            {
-                response["windowActivationException"] = error.ToString();
-            }
-            response["windowActivationDurationMs"] = Stopwatch.GetElapsedTime(activationStarted).TotalMilliseconds;
-
-            var pointX = requestedX;
-            var pointY = requestedY;
-            NativePoint currentClientOrigin;
-            try
-            {
-                currentClientOrigin = GetPhysicalClientOrigin(window);
-                pointX = checked(requestedX + currentClientOrigin.X - expectedClientX);
-                pointY = checked(requestedY + currentClientOrigin.Y - expectedClientY);
-                response["currentClientOrigin"] = new { x = currentClientOrigin.X, y = currentClientOrigin.Y };
-            }
-            catch (Exception error)
-            {
-                response["clientOriginException"] = error.ToString();
-            }
-            response["point"] = new
-            {
-                x = pointX,
-                y = pointY,
-                coordinateSpace = "physical-screen-pixels",
-                adjustedForWindowMove = pointX != requestedX || pointY != requestedY,
-            };
-
-            if (clientApi == "com")
-            {
-                var comClientStarted = Stopwatch.GetTimestamp();
-                try
-                {
-                    var automationType = Type.GetTypeFromCLSID(CUIAutomationClassId, throwOnError: true)
-                        ?? throw new InvalidOperationException("CUIAutomation COM class was not registered");
-                    comAutomationObject = Activator.CreateInstance(automationType)
-                        ?? throw new InvalidOperationException("CUIAutomation COM activation returned null");
-                    comAutomation = comAutomationObject as IUIAutomationClientCom
-                        ?? throw new InvalidCastException("CUIAutomation did not expose IUIAutomation");
-                    response["comClientInitializationCompleted"] = true;
-                }
-                catch (Exception error)
-                {
-                    response["comClientInitializationException"] = error.ToString();
-                }
-                response["comClientInitializationDurationMs"] =
-                    Stopwatch.GetElapsedTime(comClientStarted).TotalMilliseconds;
-            }
-
-            var pointContextStarted = Stopwatch.GetTimestamp();
-            try
-            {
-                response["pointContextBeforeFromPoint"] =
-                    CapturePointContextBeforeFromPoint(window, pointX, pointY);
-            }
-            catch (Exception error)
-            {
-                response["pointContextSnapshotException"] = error.ToString();
-            }
-            response["pointContextSnapshotDurationMs"] =
-                Stopwatch.GetElapsedTime(pointContextStarted).TotalMilliseconds;
-
-            AutomationElement? target = null;
-            if (clientApi == "com" && comAutomation is null)
-            {
-                response["fromPointAttempted"] = false;
-                response["fromPointSkipped"] = "CUIAutomation initialization failed; no point query was attempted";
-            }
-            else if (clientApi == "com")
-            {
-                response["windowMessageBeforeFromPoint"] =
-                    ProbeWindowMessageResponsiveness(window, process.Id, identity);
-                var fromPointStarted = Stopwatch.GetTimestamp();
-                response["fromPointAttempted"] = true;
-                int? hresult = null;
-                IUIAutomationElementCom? foundTarget = null;
-                try
-                {
-                    hresult = comAutomation!.ElementFromPoint(
-                        new NativePoint { X = pointX, Y = pointY }, out foundTarget);
-                }
-                catch (Exception error)
-                {
-                    response["fromPointException"] = error.ToString();
-                }
-                finally
-                {
-                    response["fromPointDurationMs"] = Stopwatch.GetElapsedTime(fromPointStarted).TotalMilliseconds;
-                    response["windowMessageAfterFromPoint"] =
-                        ProbeWindowMessageResponsiveness(window, process.Id, identity);
-                }
-                comTarget = foundTarget;
-                if (hresult is int result)
-                {
-                    response["fromPointHresult"] = FormatHresult(result);
-                    response["fromPointCompleted"] = result >= 0;
-                    response["targetFound"] = result >= 0 && comTarget is not null;
-                    comPointSucceeded = result >= 0;
-                    if (result < 0)
-                        response["fromPointException"] = new COMException(
-                            "IUIAutomation::ElementFromPoint failed", result).ToString();
-                }
-                var failedHresult = hresult.HasValue && hresult.Value < 0;
-                if (failedHresult || response.ContainsKey("fromPointException"))
-                {
-                    var failure = failedHresult
-                        ? $"IUIAutomation::ElementFromPoint returned {FormatHresult(hresult!.Value)}"
-                        : "IUIAutomation::ElementFromPoint threw an exception";
-                    response["failureDump"] = CapturePointFailureDump(process, identity, request, failure);
-                }
-            }
-            else
-            {
-                var fromPointStarted = Stopwatch.GetTimestamp();
-                response["fromPointAttempted"] = true;
-                try
-                {
-                    target = AutomationElement.FromPoint(new System.Windows.Point(pointX, pointY));
-                    response["fromPointCompleted"] = true;
-                    response["targetFound"] = target is not null;
-                }
-                catch (Exception error)
-                {
-                    response["fromPointException"] = error.ToString();
-                }
-                response["fromPointDurationMs"] = Stopwatch.GetElapsedTime(fromPointStarted).TotalMilliseconds;
-            }
-
-            if (clientApi == "com" && comPointSucceeded && comTarget is not null)
-            {
-                response["targetMetadataClientApi"] = "com";
-                CaptureComPointTargetMetadata(comTarget, request, response);
-            }
-            else if (clientApi == "managed" && target is not null)
-            {
-                var propertiesStarted = Stopwatch.GetTimestamp();
-                try
-                {
-                    var current = target.Current;
-                    var controlTypeProgrammaticName = current.ControlType.ProgrammaticName;
-                    var controlType = controlTypeProgrammaticName.StartsWith("ControlType.", StringComparison.Ordinal)
-                        ? controlTypeProgrammaticName["ControlType.".Length..]
-                        : controlTypeProgrammaticName;
-                    var automationId = current.AutomationId;
-                    var name = current.Name;
-                    var processId = current.ProcessId;
-                    var expectedAutomationId = request.GetProperty("expectedAutomationId").GetString();
-                    var expectedName = request.GetProperty("expectedName").GetString();
-                    var expectedControlType = request.GetProperty("expectedControlType").GetString();
-                    var expectedProcessId = request.GetProperty("expectedProcessId").GetInt32();
-                    var matchesExpected = new
-                    {
-                        automationId = automationId == expectedAutomationId,
-                        name = name == expectedName,
-                        controlType = controlType == expectedControlType,
-                        processId = processId == expectedProcessId,
-                        all = automationId == expectedAutomationId && name == expectedName &&
-                              controlType == expectedControlType && processId == expectedProcessId,
-                    };
-                    response["target"] = new
-                    {
-                        automationId,
-                        name,
-                        controlType,
-                        controlTypeProgrammaticName,
-                        processId,
-                        isControlElement = current.IsControlElement,
-                        isContentElement = current.IsContentElement,
-                        isOffscreen = current.IsOffscreen,
-                    };
-                    response["expected"] = new
-                    {
-                        automationId = expectedAutomationId,
-                        name = expectedName,
-                        controlType = expectedControlType,
-                        processId = expectedProcessId,
-                    };
-                    response["matchesExpected"] = matchesExpected;
-
-                    var ancestors = new List<object>();
-                    var ancestorStarted = Stopwatch.GetTimestamp();
-                    try
-                    {
-                        var walker = TreeWalker.ControlViewWalker;
-                        var ancestor = walker.GetParent(target);
-                        for (var depth = 1; ancestor is not null && depth <= 8; depth++)
-                        {
-                            var properties = ancestor.Current;
-                            ancestors.Add(new
-                            {
-                                depth,
-                                automationId = properties.AutomationId,
-                                name = properties.Name,
-                                controlType = properties.ControlType.ProgrammaticName,
-                                processId = properties.ProcessId,
-                            });
-                            ancestor = depth == 8 ? null : walker.GetParent(ancestor);
-                        }
-                    }
-                    catch (Exception error)
-                    {
-                        response["ancestorException"] = error.ToString();
-                    }
-                    response["ancestors"] = ancestors;
-                    response["ancestorDurationMs"] = Stopwatch.GetElapsedTime(ancestorStarted).TotalMilliseconds;
-                    response["targetMetadataCompleted"] = true;
-                }
-                catch (Exception error)
-                {
-                    response["targetMetadataException"] = error.ToString();
-                }
-                response["targetMetadataDurationMs"] = Stopwatch.GetElapsedTime(propertiesStarted).TotalMilliseconds;
-            }
-        }
-        catch (Exception error)
-        {
-            response["measurementException"] = error.ToString();
-        }
-        finally
-        {
-            ReleaseComObject(comTarget, "comTargetReleaseRemainingReferences", response);
-            ReleaseComObject(comAutomationObject, "comClientReleaseRemainingReferences", response);
-            response["durationMs"] = Stopwatch.GetElapsedTime(operationStarted).TotalMilliseconds;
-            try
-            {
-                process.Refresh();
-                response["processAliveAfterQuery"] = !process.HasExited;
-            }
-            catch (Exception error)
-            {
-                response["processLivenessException"] = error.ToString();
-            }
-        }
-
-        response["completed"] = response.ContainsKey("fromPointDurationMs");
-        response["ready"] = response.ContainsKey("targetMetadataCompleted");
-        Console.WriteLine(JsonSerializer.Serialize(response));
-        return 0;
     }
 
     private static Rectangle Capture(IntPtr window, int expectedPid, string path) =>

@@ -8,23 +8,23 @@ final class SessionViewModelTests: XCTestCase {
     func testTypedEditsWaitForDebounceAndOnlyConfigureLatestURL() async throws {
         let fixture = try ViewModelFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.sessionID == "test-session" }
 
         let first = "https://example.invalid/first"
         let latest = "https://example.invalid/latest"
         model.sourceChanged(first)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        fixture.scheduler.advance(byNanoseconds: 399_000_000)
         XCTAssertTrue(fixture.client.startedConfigureSources.isEmpty, "Typed input must still be debounced")
 
         model.sourceChanged(latest)
-        let latestEditAt = Date()
-        try await Task.sleep(nanoseconds: 350_000_000)
+        fixture.scheduler.advance(byNanoseconds: 399_000_000)
         XCTAssertTrue(fixture.client.startedConfigureSources.isEmpty, "A later edit restarts the debounce interval")
+        fixture.scheduler.advance(byNanoseconds: 1_000_000)
         let configured = await waitUntil(timeout: 2) { fixture.client.startedConfigureSources.count == 1 }
         XCTAssertTrue(configured)
-        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(latestEditAt), 0.38)
-        XCTAssertEqual(fixture.client.startedConfigureSources, [latest])
+        XCTAssertEqual(fixture.client.startedConfigureSources, [latest],
+                       "Only the latest typed URL should Configure at the debounce boundary")
         await waitForSnapshot(model) { $0.sourceURL == latest }
         XCTAssertEqual(model.sourceText, latest)
         XCTAssertTrue(model.inventoryReady)
@@ -39,17 +39,18 @@ final class SessionViewModelTests: XCTestCase {
             fixture.client.releaseConfigure(source)
             try? FileManager.default.removeItem(at: fixture.directory)
         }
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.sessionID == "test-session" }
 
         model.sourceChanged(source)
+        fixture.scheduler.advance(byNanoseconds: 400_000_000)
         let firstStarted = await waitUntil(timeout: 2) {
             fixture.client.startedConfigureSources == [source]
         }
         XCTAssertTrue(firstStarted)
 
         model.sourceChanged(source)
-        try await Task.sleep(nanoseconds: 450_000_000)
+        fixture.scheduler.advance(byNanoseconds: 400_000_000)
         XCTAssertTrue(model.loading, "The original Configure should remain held during the repeated edit")
         XCTAssertEqual(fixture.client.startedConfigureSources, [source],
                        "An unchanged edit must not queue a second Configure behind the held request")
@@ -60,23 +61,22 @@ final class SessionViewModelTests: XCTestCase {
             model.inventoryReady && model.snapshot.sourceURL == source
         }
         XCTAssertTrue(accepted, "The original typed Configure should still be accepted")
-        try await Task.sleep(nanoseconds: 450_000_000)
         XCTAssertEqual(fixture.client.startedConfigureSources, [source])
         XCTAssertEqual(fixture.client.completedConfigureSources, [source])
         XCTAssertEqual(fixture.client.maximumConcurrentConfigures, 1)
 
         model.sourceChanged(source)
-        try await Task.sleep(nanoseconds: 450_000_000)
         XCTAssertEqual(fixture.client.startedConfigureSources, [source],
                        "Typing the already accepted URL again must not refetch its inventory")
         XCTAssertTrue(model.inventoryReady)
+        XCTAssertEqual(fixture.scheduler.pendingCount, 0)
     }
 
     @MainActor
     func testPasteIsImmediateFencesOldResultAndLeavesStopAndLogsResponsive() async throws {
         let fixture = try ViewModelFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.sessionID == "test-session" }
 
         let oldSource = "https://example.invalid/old"
@@ -88,7 +88,6 @@ final class SessionViewModelTests: XCTestCase {
         XCTAssertTrue(oldStarted)
 
         model.paste(pastedSource)
-        try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(model.sourceText, pastedSource)
         model.stop()
         let stopped = await waitUntil(timeout: 1) { fixture.client.stopCount == 1 }
@@ -102,12 +101,13 @@ final class SessionViewModelTests: XCTestCase {
         logsSubscription.cancel()
 
         fixture.client.releaseConfigure(oldSource)
-        let pastedStarted = await waitUntil(timeout: 0.35) {
+        let pastedStarted = await waitUntil(timeout: 2) {
             fixture.client.startedConfigureSources == [oldSource, pastedSource]
         }
         XCTAssertTrue(pastedStarted, "Paste must start the next serialized Configure without a typing debounce")
         XCTAssertEqual(model.sourceText, pastedSource, "The old Configure result must not restore its superseded URL")
         XCTAssertEqual(fixture.client.maximumConcurrentConfigures, 1)
+        XCTAssertEqual(fixture.scheduler.pendingCount, 0, "Paste must bypass the typing scheduler")
 
         fixture.client.releaseConfigure(pastedSource)
         await waitForSnapshot(model) { $0.sourceURL == pastedSource }
@@ -121,14 +121,16 @@ final class SessionViewModelTests: XCTestCase {
         let source = "https://example.invalid/restored"
         let fixture = try ViewModelFixture(initialSource: source, inventoryConfigured: false)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
 
         await waitForSnapshot(model) { $0.configured && $0.sourceURL == source }
         XCTAssertEqual(fixture.client.startedConfigureSources, [source])
         XCTAssertEqual(model.sourceText, source)
 
+        let previousSnapshots = fixture.client.snapshotCount
         model.refreshSnapshot()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        let refreshed = await waitUntil(timeout: 2) { fixture.client.snapshotCount > previousSnapshots }
+        XCTAssertTrue(refreshed)
         XCTAssertEqual(fixture.client.startedConfigureSources, [source], "Unchanged Snapshot polling must not fetch the restored URL again")
     }
 
@@ -137,15 +139,17 @@ final class SessionViewModelTests: XCTestCase {
         let source = "https://example.invalid/saved"
         let fixture = try ViewModelFixture(initialSource: source, inventoryConfigured: true)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
 
         await waitForSnapshot(model) { $0.configured && $0.sourceURL == source }
         XCTAssertEqual(model.sourceText, source)
         XCTAssertTrue(model.inventoryReady)
         XCTAssertTrue(fixture.client.startedConfigureSources.isEmpty)
 
+        let previousSnapshots = fixture.client.snapshotCount
         model.refreshSnapshot()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        let refreshed = await waitUntil(timeout: 2) { fixture.client.snapshotCount > previousSnapshots }
+        XCTAssertTrue(refreshed)
         XCTAssertEqual(fixture.client.startedConfigureSources, [], "A configured saved inventory must be reused without another Configure")
     }
 
@@ -153,7 +157,7 @@ final class SessionViewModelTests: XCTestCase {
     func testFailedLoadWaitsForExplicitRetryAndRetryLoadsProfiles() async throws {
         let fixture = try ViewModelFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.sessionID == "test-session" }
 
         let source = "https://example.invalid/retry"
@@ -171,7 +175,10 @@ final class SessionViewModelTests: XCTestCase {
         XCTAssertTrue(failureShown, "The failed request should expose actionable load feedback")
         XCTAssertFalse(model.loading)
         XCTAssertEqual(fixture.client.startedConfigureSources, [source])
-        try await Task.sleep(nanoseconds: 900_000_000)
+        let previousSnapshots = fixture.client.snapshotCount
+        model.refreshSnapshot()
+        let refreshed = await waitUntil(timeout: 2) { fixture.client.snapshotCount > previousSnapshots }
+        XCTAssertTrue(refreshed)
         XCTAssertEqual(fixture.client.startedConfigureSources, [source], "Snapshot polling must not retry a failed load")
 
         model.retryLoad()
@@ -180,6 +187,7 @@ final class SessionViewModelTests: XCTestCase {
         XCTAssertTrue(model.loadError.isEmpty)
         XCTAssertEqual(fixture.client.startedConfigureSources, [source, source])
         XCTAssertEqual(fixture.client.maximumConcurrentConfigures, 1)
+        XCTAssertEqual(fixture.scheduler.pendingCount, 0, "Retry must bypass the typing scheduler")
     }
 
     @MainActor
@@ -188,7 +196,7 @@ final class SessionViewModelTests: XCTestCase {
         let imported = "https://example.invalid/imported"
         let fixture = try ViewModelFixture(initialSource: original, inventoryConfigured: true)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.configured && $0.sourceURL == original }
         let generation = model.snapshot.generation
 
@@ -196,20 +204,20 @@ final class SessionViewModelTests: XCTestCase {
         await waitForSnapshot(model) { $0.sourceURL == imported }
         model.importLink(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fimported")!)
         model.importLink(URL(string: "dobbyvpn://")!)
-        try await Task.sleep(nanoseconds: 150_000_000)
 
         XCTAssertEqual(model.snapshot.sourceURL, imported)
         XCTAssertEqual(model.snapshot.generation, generation)
         XCTAssertEqual(fixture.client.startedConfigureSources, [imported])
         XCTAssertEqual(fixture.client.startCount, 0)
         XCTAssertEqual(fixture.client.stopCount, 0)
+        XCTAssertEqual(fixture.scheduler.pendingCount, 0, "Link import must bypass the typing scheduler")
     }
 
     @MainActor
     func testInvalidImportGuidanceSurvivesConnectionSnapshotError() async throws {
         let fixture = try ViewModelFixture(initialSource: "https://example.invalid/original", inventoryConfigured: true)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.configured && $0.sourceURL == "https://example.invalid/original" }
 
         model.importLink(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fa&url=duplicate")!)
@@ -239,7 +247,7 @@ final class SessionViewModelTests: XCTestCase {
             "pending_target": ["digest": "digest", "mode": "PROFILE_INDEX", "index": 1],
             "can_switch": false,
         ])
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.configured && $0.sourceURL == original && $0.state == "PROBING" }
         let generation = model.snapshot.generation
 
@@ -270,7 +278,7 @@ final class SessionViewModelTests: XCTestCase {
             ],
             "can_switch": true,
         ])
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.configured && $0.profiles.count == 2 }
 
         XCTAssertEqual(model.actionTitle(0), "Disconnect")
@@ -345,7 +353,7 @@ final class SessionViewModelTests: XCTestCase {
             "active_index": 0,
             "can_switch": true,
         ])
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.configured && $0.sourceURL == original && $0.profiles.count == 2 }
 
         XCTAssertEqual(model.actionTitle(0), "Disconnect")
@@ -438,7 +446,7 @@ final class SessionViewModelTests: XCTestCase {
         fixture.client.holdConfigure(stale)
         fixture.client.holdConfigure(newest)
         fixture.client.failNextConfigure(newest)
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.sourceURL == original && $0.digest == "original-digest" }
 
         model.sourceChanged(stale, immediate: true)
@@ -525,7 +533,7 @@ final class SessionViewModelTests: XCTestCase {
             "digest": "original-session-digest",
             "profiles": [["index": 0, "protocol": "Outline", "description": "Original session profile"]],
         ])
-        let model = DobbySessionViewModel(client: fixture.client)
+        let model = DobbySessionViewModel(client: fixture.client, debounceScheduler: fixture.scheduler)
         await waitForSnapshot(model) { $0.sourceURL == original && $0.digest == "original-session-digest" }
         model.sourceChanged("not a subscription URL")
 
@@ -571,14 +579,16 @@ private func waitUntil(timeout: TimeInterval, condition: @escaping () -> Bool) a
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
         if condition() { return true }
-        try? await Task.sleep(nanoseconds: 10_000_000)
+        await Task.yield()
     }
     return condition()
 }
 
+@MainActor
 private struct ViewModelFixture {
     let directory: URL
     let client: ViewModelTestClient
+    let scheduler = ManualDebounceScheduler()
 
     init(initialSource: String = "", inventoryConfigured: Bool = true) throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -592,6 +602,47 @@ private struct ViewModelFixture {
             initialSource: initialSource,
             inventoryConfigured: inventoryConfigured
         )
+    }
+}
+
+@MainActor
+private final class ManualDebounceScheduler: DobbySessionDebounceScheduling {
+    private var now: UInt64 = 0
+    private var scheduled: [ManualScheduledWork] = []
+
+    var pendingCount: Int { scheduled.filter { !$0.isCancelled }.count }
+
+    func schedule(afterNanoseconds delay: UInt64, action: @escaping @MainActor () -> Void) -> any DobbySessionScheduledWork {
+        let work = ManualScheduledWork(deadline: now + delay, action: action)
+        scheduled.append(work)
+        return work
+    }
+
+    func advance(byNanoseconds amount: UInt64) {
+        now += amount
+        let due = scheduled.filter { !$0.isCancelled && $0.deadline <= now }
+        scheduled.removeAll { $0.isCancelled || $0.deadline <= now }
+        due.forEach { $0.run() }
+    }
+}
+
+@MainActor
+private final class ManualScheduledWork: DobbySessionScheduledWork {
+    let deadline: UInt64
+    private var action: (@MainActor () -> Void)?
+    var isCancelled: Bool { action == nil }
+
+    init(deadline: UInt64, action: @escaping @MainActor () -> Void) {
+        self.deadline = deadline
+        self.action = action
+    }
+
+    func cancel() { action = nil }
+
+    func run() {
+        let pending = action
+        action = nil
+        pending?()
     }
 }
 
@@ -618,6 +669,7 @@ private final class ViewModelTestClient: DobbySessionClient, @unchecked Sendable
     private var recordedStartRequests: [[String: Any]] = []
     private var startsHeld = false
     private var startsReleased = false
+    private var snapshots = 0
     private var snapshotOverrides: [String: Any] = [:]
     private var configureSnapshotOverrides: [String: [String: Any]] = [:]
 
@@ -651,6 +703,11 @@ private final class ViewModelTestClient: DobbySessionClient, @unchecked Sendable
     var startCount: Int {
         condition.lock(); defer { condition.unlock() }
         return starts
+    }
+
+    var snapshotCount: Int {
+        condition.lock(); defer { condition.unlock() }
+        return snapshots
     }
 
     var startRequests: [[String: Any]] {
@@ -709,6 +766,7 @@ private final class ViewModelTestClient: DobbySessionClient, @unchecked Sendable
         switch method {
         case "Snapshot":
             condition.lock()
+            snapshots += 1
             let currentSequence = sequence
             let source = configuredSource
             let configured = inventoryConfigured

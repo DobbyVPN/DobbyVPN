@@ -16,6 +16,28 @@ from torturer_runner.subscription_fixture import SubscriptionFixture
 
 
 class SubscriptionFixtureTests(unittest.TestCase):
+    def test_failure_url_is_independent_of_normal_requests_and_repeat_attempts(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            profile = root / "profile.toml"
+            profile.write_bytes(b"[[Outline]]\nDescription = \"independent\"\n")
+            fixture = SubscriptionFixture(profile, root / "fixture", "untrusted")
+            try:
+                normal = fixture.start()
+                context = ssl.create_default_context(cafile=str(fixture.certificate))
+                for attempt in range(2):
+                    failing = fixture.failure_url + f"?attempt={attempt}"
+                    with urllib.request.urlopen(normal, context=context, timeout=5) as response:
+                        self.assertEqual(response.read(), profile.read_bytes())
+                    with self.assertRaises(urllib.error.HTTPError) as error:
+                        urllib.request.urlopen(failing, context=context, timeout=5)
+                    self.assertEqual(error.exception.code, 503)
+                    with urllib.request.urlopen(failing, context=context, timeout=5) as response:
+                        self.assertEqual(response.read(), profile.read_bytes())
+                self.assertEqual(fixture.control_stats()["subscription_gets"], 6)
+            finally:
+                fixture.close()
+
     def test_test_control_counts_loads_replaces_payload_and_controls_responses(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)

@@ -2,6 +2,36 @@ import Combine
 import Foundation
 
 @MainActor
+protocol DobbySessionScheduledWork: AnyObject {
+    func cancel()
+}
+
+@MainActor
+protocol DobbySessionDebounceScheduling {
+    func schedule(afterNanoseconds delay: UInt64, action: @escaping @MainActor () -> Void) -> any DobbySessionScheduledWork
+}
+
+@MainActor
+private final class TaskScheduledWork: DobbySessionScheduledWork {
+    var task: Task<Void, Never>?
+
+    func cancel() { task?.cancel() }
+}
+
+@MainActor
+private struct SystemSessionDebounceScheduler: DobbySessionDebounceScheduling {
+    func schedule(afterNanoseconds delay: UInt64, action: @escaping @MainActor () -> Void) -> any DobbySessionScheduledWork {
+        let work = TaskScheduledWork()
+        work.task = Task {
+            do { try await Task.sleep(nanoseconds: delay) } catch { return }
+            guard !Task.isCancelled else { return }
+            action()
+        }
+        return work
+    }
+}
+
+@MainActor
 public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
     @Published public private(set) var busy = false
@@ -25,7 +55,8 @@ public final class DobbySessionViewModel: ObservableObject {
     private var loadInFlight = false
     private var loadRevision = 0
     private var pendingLoad: String?
-    private var debounce: Task<Void, Never>?
+    private let debounceScheduler: any DobbySessionDebounceScheduling
+    private var debounce: (any DobbySessionScheduledWork)?
     private var restoredLoad = ""
     private var acceptedSequence: Int64 = 0
 
@@ -44,8 +75,13 @@ public final class DobbySessionViewModel: ObservableObject {
     private var diagnosticWriteError = ""
     private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
 
-    public init(client: DobbySessionClient) {
+    public convenience init(client: DobbySessionClient) {
+        self.init(client: client, debounceScheduler: SystemSessionDebounceScheduler())
+    }
+
+    init(client: DobbySessionClient, debounceScheduler: any DobbySessionDebounceScheduling) {
         self.client = client
+        self.debounceScheduler = debounceScheduler
         refreshSnapshot()
         timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -104,13 +140,19 @@ public final class DobbySessionViewModel: ObservableObject {
         loadRevision += 1
         pendingLoad = nil
         debounce?.cancel()
+        debounce = nil
         let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard validSubscription(source) else { return }
-        debounce = Task { [weak self] in
-            if !immediate { try? await Task.sleep(nanoseconds: 400_000_000) }
-            guard !Task.isCancelled, let self else { return }
+        let enqueueLoad: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            self.debounce = nil
             self.pendingLoad = source
             self.loadNext()
+        }
+        if immediate {
+            enqueueLoad()
+        } else {
+            debounce = debounceScheduler.schedule(afterNanoseconds: 400_000_000, action: enqueueLoad)
         }
     }
 

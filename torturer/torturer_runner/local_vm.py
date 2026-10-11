@@ -38,6 +38,7 @@ import traceback
 from typing import Any
 
 from .diagnostics import collect_installed_backend_logs, output_text
+from .build_reuse import production_inputs, validate_reuse_manifest
 from .ios_simulator import ui_test_selection
 from .native_cases import (
     ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,
@@ -62,7 +63,7 @@ _BUILD_WORKFLOW = ".github/workflows/build.yml"
 # A desktop full lane is supervised by the VM worker's task deadline.  Give
 # the hosted journey an inner deadline so it can emit its failure JSON and
 # leave enough time for the exact-process/task cleanup boundary to run.  The
-# hosted journey has its own reserve before it waits on the real-window smoke
+# hosted journey has its own reserve before it waits on the native case helper
 # process (see ui/journey.py).
 _NATIVE_UI_TASK_TIMEOUT_RESERVE_SECONDS = 90.0
 _NATIVE_UI_TASK_TIMEOUT_CAP_SECONDS = 900.0
@@ -73,7 +74,7 @@ _SCREENSHOT_DECODER_INSTALL_TIMEOUT_SECONDS = 180.0
 # runtime purpose here.  In particular, do not let CI credentials, endpoints,
 # or arbitrary tool configuration cross the desktop boundary.
 _NATIVE_UI_HOST_ENVIRONMENT = frozenset({
-    # The native UI smoke driver resolves macOS helpers (and Windows PowerShell) by
+    # The native desktop runner resolves macOS helpers (and Windows PowerShell) by
     # name, while the Go backend and CLI use HOME for their user-owned stores.
     "PATH",
     "HOME",
@@ -129,12 +130,34 @@ def _native_ui_environment(platform: str, runtime: dict[str, Any]) -> dict[str, 
 
 
 def _prepare_desktop_ui_home(run_dir: Path) -> str:
-    """Give each desktop UI phase an isolated user store and log history."""
+    """Give UI-local state a disposable home; Go uses the OS account home."""
 
     home = run_dir / "ui-home"
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     home.chmod(0o700)
     return str(home)
+
+
+def _desktop_source_store(run_dir: Path, platform: str, logs: Path,
+                          timeout: float, operation: str) -> None:
+    script = run_dir / "source" / "torturer" / "torturer_runner" / "desktop_source_store.py"
+    command = [sys.executable, str(script), operation, "--run", str(run_dir)]
+    if operation in {"isolate", "restore"}:
+        if platform == "windows":
+            import winreg
+            sid = _windows_control_pipe_sid(run_dir, logs, timeout)
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" + "\\" + sid) as key:
+                profile, _ = winreg.QueryValueEx(key, "ProfileImagePath")
+            home = Path(os.path.expandvars(profile))
+        else:
+            import pwd
+            home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        command.extend(("--home", str(home)))
+    if platform == "macos":
+        command = ["sudo", "-n", *command]
+    _run_logged(command, cwd=run_dir, logs=logs,
+                label=f"desktop-source-{operation}", timeout=timeout)
 
 
 def _install_screenshot_decoder(
@@ -219,10 +242,14 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--native-case", action="append", dest="native_cases")
         if action == "run":
             command.add_argument("--scenario", action="append", dest="scenarios")
+            command.add_argument("--repeat", type=int, default=1)
         if action == "prepare":
             command.add_argument("--architecture")
             command.add_argument("--skip-deps", action="store_true")
             command.add_argument("--source-checks", action="store_true")
+            command.add_argument("--ci-source-checked", action="store_true")
+            command.add_argument("--production-analysis", action="store_true",
+                                 help="run the separate iOS production analysis/archive check")
             command.add_argument("--source-sha")
             command.add_argument("--source-tree")
             command.add_argument("--network-interface")
@@ -230,6 +257,9 @@ def build_parser() -> argparse.ArgumentParser:
                 "--build-manifest", type=_absolute_path,
                 help="owner-verified exact Build package manifest",
             )
+            command.add_argument("--reuse-manifest", type=_absolute_path)
+            command.add_argument("--installer-migration", action="store_true",
+                                 help="check installer upgrade and rollback separately")
     return parser
 
 
@@ -347,7 +377,7 @@ def _record_failure(run_dir: Path, state: dict[str, Any], error: Exception) -> N
     except LocalVMError:
         persisted = None
     if persisted is not None:
-        for key in ("candidate", "runtime", "build"):
+        for key in ("candidate", "runtime", "build", "reusable_build", "provenance"):
             if key in persisted:
                 state[key] = persisted[key]
     state["status"] = "failed"
@@ -963,7 +993,8 @@ def _candidate_mode(descriptor: dict[str, Any]) -> str:
     return mode
 
 
-def _run_platform_source_checks(run_dir: Path, platform: str, logs: Path, timeout: float) -> None:
+def _run_platform_source_checks(run_dir: Path, platform: str, logs: Path, timeout: float,
+                                ci_checked: bool = False) -> None:
     """Run the same platform source commands used by CI on the selected source."""
     commands = {
         "linux": ("go-tests", "go-native-runtime", "lint-go", "python-tests"),
@@ -971,6 +1002,14 @@ def _run_platform_source_checks(run_dir: Path, platform: str, logs: Path, timeou
         "windows": ("go-native-runtime",),
         "macos": ("go-native-runtime", "swift-unit", "lint-swift"),
     }.get(platform, ())
+    if ci_checked:
+        # CI owns shared checks at this SHA. Keep guest architecture coverage
+        # that differs from hosted CI and Linux's real native runtime checks.
+        commands = {
+            "linux": ("go-native-runtime",),
+            "macos": (("go-native-runtime", "swift-unit")
+                      if host_platform.machine().lower() in {"x86_64", "amd64"} else ()),
+        }.get(platform, ())
     source = run_dir / "source"
     script = source / ".github" / "scripts" / "source_checks.py"
     for check in commands:
@@ -984,15 +1023,76 @@ def _run_platform_source_checks(run_dir: Path, platform: str, logs: Path, timeou
         )
 
 
+def _retain_reusable_package(run_dir: Path, platform: str, app_sha: str,
+                             architecture: str, package: Path) -> None:
+    """Keep one identified package with this run's normal retained output."""
+    destination = run_dir / "output" / "packages" / package.name
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if package.resolve() != destination.resolve():
+        shutil.copyfile(package, destination)
+    state = _read_state(run_dir) or {}
+    state["reusable_build"] = {
+        "schema": 1, "platform": platform, "app_sha": app_sha,
+        "production_inputs": state.get("production_inputs") or production_inputs(run_dir / "source"),
+        "artifacts": [{"role": "package", "architecture": architecture,
+                       "file_name": destination.name,
+                       "relative_path": destination.relative_to(run_dir).as_posix(),
+                       "sha256": _file_sha256(destination)}],
+    }
+    _write_json(run_dir / "platform.json", state)
+
+
+def _prepare_reused_candidate(run_dir: Path, platform: str, manifest_path: Path,
+                              logs: Path, timeout: float,
+                              architecture: str | None) -> dict[str, Any]:
+    source = run_dir / "source"
+    manifest_path = _inside(manifest_path, run_dir)
+    manifest = _build_document(manifest_path, label="reuse manifest")
+    architecture = architecture or (
+        "arm64" if host_platform.machine().lower() in {"arm64", "aarch64"} else "amd64"
+    )
+    try:
+        package = validate_reuse_manifest(source, run_dir, manifest, platform, architecture)
+    except ValueError as error:
+        raise LocalVMError(str(error)) from error
+    if platform not in {"windows", "macos", "linux"}:
+        raise LocalVMError("this candidate needs a platform-specific reuse preparation")
+    descriptor_path = run_dir / "reused-desktop-package.json"
+    _write_json(descriptor_path, {
+        "schema": 1, "mode": "desktop-package", "configuration": "Release",
+        "platform": platform, "architecture": architecture,
+        "version": (source / "VERSION").read_text(encoding="utf-8").strip(),
+        "source_sha": manifest["app_sha"],
+        "package": {"file_name": package.name, "path": str(package),
+                    "sha256": _file_sha256(package)},
+        "package_path": str(package), "package_sha256": _file_sha256(package),
+    })
+    _retain_reusable_package(run_dir, platform, manifest["app_sha"], architecture, package)
+    candidate = _install_desktop_package(run_dir, descriptor_path, platform, logs, timeout)
+    state = _read_state(run_dir) or {}
+    state["provenance"] = {
+        "app_sha": manifest["app_sha"], "test_sha": manifest["test_sha"],
+        "package_sha256": _file_sha256(package), "architecture": architecture,
+        "mixed_revision": manifest["app_sha"] != manifest["test_sha"],
+        "purpose": "development-diagnostic",
+    }
+    _write_json(run_dir / "platform.json", state)
+    return candidate
+
+
 def _prepare_desktop_package(
     run_dir: Path, platform: str, source_sha: str, logs: Path,
     timeout: float, *, architecture: str | None, skip_deps: bool,
+    installer_migration: bool = False,
 ) -> dict[str, Any]:
     """Build and install the same native package used by hosted Build."""
     source = run_dir / "source"
     script = source / ".github" / "scripts" / "desktop" / "desktop_package.py"
     output = run_dir / "output" / "desktop-package"
     version = (source / "VERSION").read_text(encoding="utf-8").strip()
+    state = _read_state(run_dir) or {}
+    state["production_inputs"] = production_inputs(source)
+    _write_json(run_dir / "platform.json", state)
     control_pipe_sid = (
         _windows_control_pipe_sid(run_dir, logs, timeout)
         if platform == "windows" else None
@@ -1007,6 +1107,9 @@ def _prepare_desktop_package(
     if skip_deps:
         build.append("--skip-deps")
     _run_logged(build, cwd=source, logs=logs, label="desktop-package-build", timeout=timeout)
+    built = _build_document(output / "desktop-package.json", label="built package")
+    _retain_reusable_package(run_dir, platform, source_sha, str(built["architecture"]),
+                             Path(built["package_path"]))
     if platform == "windows":
         _run_logged(
             [
@@ -1019,7 +1122,7 @@ def _prepare_desktop_package(
             label="windows-pre-installer-cache-clean",
             timeout=timeout,
         )
-    if platform in {"windows", "macos"}:
+    if installer_migration and platform in {"windows", "macos"}:
         package_name = "dobbyVPN-windows-amd64.msi" if platform == "windows" else (
             "dobbyVPN-macos-aarch64.pkg" if host_platform.machine().lower() in {"arm64", "aarch64"}
             else "dobbyVPN-macos-amd64.pkg"
@@ -1071,9 +1174,20 @@ def _prepare_desktop_package(
                 migration,
                 cwd=source, logs=logs, label="desktop-installer-migration", timeout=timeout,
             )
+    return _install_desktop_package(run_dir, output / "desktop-package.json", platform,
+                                    logs, timeout, control_pipe_sid)
+
+
+def _install_desktop_package(run_dir: Path, descriptor_path: Path, platform: str,
+                             logs: Path, timeout: float,
+                             control_pipe_sid: str | None = None) -> dict[str, Any]:
+    source = run_dir / "source"
+    script = source / ".github" / "scripts" / "desktop" / "desktop_package.py"
+    if platform == "windows" and control_pipe_sid is None:
+        control_pipe_sid = _windows_control_pipe_sid(run_dir, logs, timeout)
     install = [
         sys.executable, str(script), "install", "--build-descriptor",
-        str(output / "desktop-package.json"), "--run-dir", str(run_dir),
+        str(descriptor_path), "--run-dir", str(run_dir),
         "--output", str(run_dir / "installed.json"),
     ]
     if control_pipe_sid is not None:
@@ -1592,9 +1706,10 @@ def _start_ios(
     logs: Path,
     timeout: float,
     native_cases: list[str] | None = None,
+    repeat: int = 1,
 ) -> dict[str, Any]:
     from .local_vm_ios import run
-    return run(run_dir, descriptor, logs, timeout, native_cases=native_cases)
+    return run(run_dir, descriptor, logs, timeout, native_cases=native_cases, repeat=repeat)
 
 
 def _prepare_ios(
@@ -1693,14 +1808,12 @@ def _native_ui_command(
     ui_helper: Path,
     native_cases: tuple[str, ...] | None = None,
     source_sha: str | None = None,
+    repeat: int = 1,
 ) -> list[str]:
     """Build the real-window journey command for desktop full guests."""
     if platform not in {"windows", "macos"}:
         raise LocalVMError(f"native GUI qualification is unsupported on {platform}")
-    smoke = run_dir / "source" / "torturer" / "torturer_runner" / "ui" / "smoke.py"
     module = run_dir / "source" / "torturer" / "torturer_runner" / "ui" / "journey.py"
-    if not smoke.is_file():
-        raise LocalVMError("native desktop UI qualification script is missing")
     if not module.is_file():
         raise LocalVMError("native desktop UI journey module is missing")
     if not ui_helper.is_file():
@@ -1748,7 +1861,19 @@ def _native_ui_command(
         command.extend(("--routing-firewall-helper", str(helper)))
     for native_case in native_cases or ():
         command.extend(("--native-case", native_case))
+    if native_cases is not None:
+        command.extend(("--repeat", str(repeat)))
     return command
+
+
+def _native_application_sha(descriptor: dict[str, Any], source_sha: str | None) -> str | None:
+    """Prefer the installed app's embedded identity over the test checkout."""
+    value = descriptor.get("source_sha")
+    if value is None:
+        value = source_sha
+    if value is not None and (not isinstance(value, str) or _SOURCE_SHA.fullmatch(value) is None):
+        raise LocalVMError("native desktop UI application source SHA is invalid")
+    return value
 
 
 def _run_native_ui(
@@ -1761,7 +1886,7 @@ def _run_native_ui(
     timeout: float,
     environment: dict[str, str],
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run desktop UI smoke in the platform's actual interactive context."""
+    """Run native desktop cases in the platform's actual interactive context."""
 
     if platform == "windows":
         from .local_vm_windows import run_interactive_ui
@@ -1930,16 +2055,44 @@ def prepare(args: argparse.Namespace) -> int:
             state["status"] = "preparing"
             _write_json(run_dir / "platform.json", state)
 
+        ui_helper: Path | None = None
+        if args.suite == "full" and args.platform in {"windows", "macos"}:
+            from .ui.helper import prepare_helper
+
+            ui_helper = _timed_call(
+                "native-ui-helper-build",
+                lambda: prepare_helper(args.platform, run_dir, logs, args.timeout),
+                platform=args.platform,
+            ).resolve()
+
         if args.source_checks:
             state["source_checks_attempted"] = True
             state["status"] = "source-checks"
             _write_json(run_dir / "platform.json", state)
-            _run_platform_source_checks(run_dir, args.platform, logs, args.timeout)
+            _run_platform_source_checks(run_dir, args.platform, logs, args.timeout,
+                                        ci_checked=getattr(args, "ci_source_checked", False))
             state["source_checks"] = "passed"
             state["status"] = "preparing"
             _write_json(run_dir / "platform.json", state)
 
-        if args.platform == "ios-simulator":
+        if args.platform in {"windows", "macos"}:
+            # Reset the marker before setup. A pre-existing record must never
+            # let cleanup act as though this run moved the account URL.
+            state["desktop_source_store_isolated"] = False
+            _write_json(run_dir / "platform.json", state)
+            _desktop_source_store(run_dir, args.platform, logs, min(args.timeout, 30), "isolate")
+            state["desktop_source_store_isolated"] = True
+            _write_json(run_dir / "platform.json", state)
+
+        if getattr(args, "reuse_manifest", None) is not None:
+            candidate = _timed_call(
+                "reused-package-install",
+                lambda: _prepare_reused_candidate(run_dir, args.platform, args.reuse_manifest,
+                                                  logs, args.timeout, args.architecture),
+                platform=args.platform,
+            )
+            state.update(_read_state(run_dir) or {})
+        elif args.platform == "ios-simulator":
             candidate = _timed_call(
                 "ios-simulator-build",
                 lambda: _prepare_ios(
@@ -1965,9 +2118,11 @@ def prepare(args: argparse.Namespace) -> int:
                 lambda: _prepare_desktop_package(
                     run_dir, args.platform, args.source_sha, logs, args.timeout,
                     architecture=args.architecture, skip_deps=args.skip_deps,
+                    installer_migration=getattr(args, "installer_migration", False),
                 ),
                 platform=args.platform,
             )
+            state.update(_read_state(run_dir) or {})
         else:
             candidate = _timed_call(
                 "candidate-build",
@@ -2012,7 +2167,9 @@ def prepare(args: argparse.Namespace) -> int:
                     "plist": "/Library/LaunchDaemons/com.dobby.vpnservice.plist",
                 }
         _write_json(run_dir / "platform.json", state)
-        if args.platform == "ios-simulator" and args.source_sha is not None:
+        if getattr(args, "production_analysis", False):
+            if args.platform != "ios-simulator" or args.source_sha is None:
+                raise LocalVMError("production analysis requires an iOS source revision")
             from .local_vm_ios import check_production
 
             _timed_call(
@@ -2030,16 +2187,8 @@ def prepare(args: argparse.Namespace) -> int:
             candidate["screenshot_python"] = str(screenshot_python)
             state["candidate"] = candidate
             _write_json(run_dir / "platform.json", state)
-        if args.suite == "full" and args.platform in {"windows", "macos"}:
-            from .ui.helper import prepare_helper
-
-            candidate["ui_helper"] = str(
-                _timed_call(
-                    "native-ui-helper-build",
-                    lambda: prepare_helper(args.platform, run_dir, logs, args.timeout),
-                    platform=args.platform,
-                ).resolve()
-            )
+        if ui_helper is not None:
+            candidate["ui_helper"] = str(ui_helper)
             state["candidate"] = candidate
             _write_json(run_dir / "platform.json", state)
 
@@ -2126,6 +2275,7 @@ def run(args: argparse.Namespace) -> int:
                 lambda: _start_ios(
                     run_dir, descriptor, logs, args.timeout,
                     native_cases=list(native_cases) if native_cases is not None else None,
+                    repeat=getattr(args, "repeat", 1),
                 ),
                 platform=args.platform,
             )
@@ -2215,6 +2365,7 @@ def run(args: argparse.Namespace) -> int:
                 lambda: run_android_ui(
                     run_dir, runtime, logs, args.timeout,
                     native_cases=list(native_cases) if native_cases is not None else None,
+                    repeat=getattr(args, "repeat", 1),
                 ),
                 platform=args.platform,
             )
@@ -2307,7 +2458,10 @@ def run(args: argparse.Namespace) -> int:
                             run_dir, native_descriptor, runtime, args.platform,
                             native_task_timeout, ui_helper,
                             native_cases=native_cases,
-                            source_sha=getattr(args, "source_sha", None),
+                            source_sha=_native_application_sha(
+                                descriptor, getattr(args, "source_sha", None)
+                            ),
+                            repeat=getattr(args, "repeat", 1),
                         ),
                         platform=args.platform,
                         run_dir=run_dir,
@@ -2747,6 +2901,18 @@ def cleanup(args: argparse.Namespace) -> int:
             else Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "DobbyVPN" / "Logs"
         )
         collect_installed_backend_logs(directory, logs, errors)
+    source_backup = run_dir / "source-url-backup"
+    source_store_pending = (
+        state.get("desktop_source_store_isolated") is True
+        or source_backup.exists()
+        or source_backup.is_symlink()
+    )
+    if args.platform in {"windows", "macos"} and source_store_pending:
+        try:
+            _desktop_source_store(run_dir, args.platform, logs, min(args.timeout, 30), "restore")
+            state["desktop_source_store_isolated"] = False
+        except BaseException as error:
+            errors.append("cleanup-desktop-source: " + "".join(traceback.format_exception(error)))
     if state.get("source_checks_attempted") is True:
         source = run_dir / "source"
         _cleanup_logged(

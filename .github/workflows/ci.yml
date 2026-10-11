@@ -137,6 +137,28 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
+  android_unit:
+    name: Android presentation unit tests
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Read Java version
+        id: pins
+        run: echo "java_major=$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin java_major)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: ${{ steps.pins.outputs.java_major }}
+
+      - name: Run production presentation tests
+        run: python3 .github/scripts/source_checks.py android-unit
+
   android_lint:
     name: Android lint
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
@@ -293,6 +315,22 @@ jobs:
           python3 .github/scripts/android/android_debug_build.py \
             --source-sha "$GITHUB_SHA" --go-binary "$GOROOT/bin/go" \
             --output "$build_root/app-debug.apk"
+
+  ios_production:
+    name: iOS production analysis and archive
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Check production iOS source
+        run: python3 .github/scripts/ios/ios_production_check.py --source-sha "$GITHUB_SHA" --output-dir "$RUNNER_TEMP/ios-production"
 
   ios_simulator:
     name: iOS Simulator UI test
@@ -534,6 +572,7 @@ jobs:
       - go_native_windows
       - go_native_macos
       - swift
+      - android_unit
       - android_lint
       - lint_go
       - lint_swift
@@ -541,6 +580,7 @@ jobs:
       - actionlint
       - android_build
       - ios_simulator
+      - ios_production
     runs-on: ubuntu-24.04
     steps:
       - name: Require every full CI job
@@ -551,6 +591,7 @@ jobs:
           GO_NATIVE_WINDOWS_RESULT: ${{ needs.go_native_windows.result }}
           GO_NATIVE_MACOS_RESULT: ${{ needs.go_native_macos.result }}
           SWIFT_RESULT: ${{ needs.swift.result }}
+          ANDROID_UNIT_RESULT: ${{ needs.android_unit.result }}
           ANDROID_LINT_RESULT: ${{ needs.android_lint.result }}
           LINT_GO_RESULT: ${{ needs.lint_go.result }}
           LINT_SWIFT_RESULT: ${{ needs.lint_swift.result }}
@@ -558,6 +599,7 @@ jobs:
           ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
           ANDROID_BUILD_RESULT: ${{ needs.android_build.result }}
           IOS_SIMULATOR_RESULT: ${{ needs.ios_simulator.result }}
+          IOS_PRODUCTION_RESULT: ${{ needs.ios_production.result }}
         run: |
           set -euo pipefail
           for result in \
@@ -567,13 +609,15 @@ jobs:
             "$GO_NATIVE_WINDOWS_RESULT" \
             "$GO_NATIVE_MACOS_RESULT" \
             "$SWIFT_RESULT" \
+            "$ANDROID_UNIT_RESULT" \
             "$ANDROID_LINT_RESULT" \
             "$LINT_GO_RESULT" \
             "$LINT_SWIFT_RESULT" \
             "$SECURITY_RESULT" \
             "$ACTIONLINT_RESULT" \
             "$ANDROID_BUILD_RESULT" \
-            "$IOS_SIMULATOR_RESULT"; do
+            "$IOS_SIMULATOR_RESULT" \
+            "$IOS_PRODUCTION_RESULT"; do
             test "$result" = success
           done
           echo "Complete CI passed"

@@ -121,6 +121,8 @@ class SubscriptionFixture:
         self.fail_next_gets = 0
         self.hold_gets = False
         self.release_permits = 0
+        self.failed_once_urls: set[str] = set()
+        self.failure_path = "/subscription-fail-once/" + uuid.uuid4().hex
 
     def start(self) -> str:
         self.directory.mkdir(parents=True, exist_ok=False)
@@ -146,7 +148,7 @@ class SubscriptionFixture:
                 if path == fixture.control_path:
                     fixture._serve_control(self)
                     return
-                if path != "/subscription":
+                if path not in {"/subscription", fixture.failure_path}:
                     self.send_error(404)
                     return
                 fixture._serve_subscription(self)
@@ -218,6 +220,12 @@ class SubscriptionFixture:
         return self.url
 
     @property
+    def failure_url(self) -> str:
+        if not self.url:
+            raise RuntimeError("subscription fixture is not running")
+        return f"https://127.0.0.1:{self.port}{self.failure_path}"
+
+    @property
     def control_url(self) -> str:
         if not self.url:
             raise RuntimeError("subscription fixture is not running")
@@ -237,6 +245,9 @@ class SubscriptionFixture:
             failed = self.fail_next_gets > 0
             if failed:
                 self.fail_next_gets -= 1
+            if urlsplit(request.path).path == self.failure_path and request.path not in self.failed_once_urls:
+                self.failed_once_urls.add(request.path)
+                failed = True
         try:
             if failed:
                 request.send_error(503, "Synthetic subscription failure")

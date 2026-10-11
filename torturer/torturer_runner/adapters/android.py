@@ -61,6 +61,7 @@ from .cli import (
     _parse_external_ip,
     _profile_file,
 )
+from ..native_cases import ANDROID_PERFORMANCE_CASE, ANDROID_PRESENTATION_CASES
 
 
 _PACKAGE_NAME = "com.dobby.vpn"
@@ -111,6 +112,25 @@ _CONSENT_N11_MAX_SECONDS = 300.0
 _AUTO_RECOVERY_STOP_MAX_SECONDS = 280.0
 _AUTO_RECOVERY_STOP_DISCONNECT_SECONDS = 45
 _AUTO_RECOVERY_STOP_CASE = "android:auto-recovery-stop"
+_ANDROID_RENDERED_CASE_IDS = {
+    f"android:{case}" for case in ANDROID_PRESENTATION_CASES
+} | {f"android:{ANDROID_PERFORMANCE_CASE}"}
+_ANDROID_RENDERED_CASE_METHODS = {
+    "android:configure-acceptance": "configureAcceptance",
+    "android:profile-selection": "profileSelection",
+    "android:typed-url-coalescing": "typedUrlCoalescing",
+    "android:immediate-source-actions": "immediateSourceActions",
+    "android:stale-permission-target": "stalePermissionTarget",
+    "android:subscription-load-performance": "subscriptionLoadPerformance",
+}
+_ANDROID_RENDERED_CASE_SCREENSHOTS = {
+    "android:configure-acceptance": "accepted-state",
+    "android:profile-selection": "profile-selection-state",
+    "android:typed-url-coalescing": "coalescing-state",
+    "android:immediate-source-actions": "source-actions-state",
+    "android:stale-permission-target": "fresh-consent-state",
+    "android:subscription-load-performance": "performance-summary-state",
+}
 _ANDROID_INTERFACE = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
 _ANDROID_UI_MODES = frozenset({"protocol-matrix", "gui-auto"})
 _ANDROID_PROFILE_TABLES = ("Outline", "Xray", "TrustTunnel")
@@ -380,7 +400,6 @@ class AndroidAdapter:
         self._scratch_files: set[Path] = set()
         self._subscription_fixture = None
         self._process_cold_import_queued = False
-        self._saved_source_restore_preverified = False
         self._diagnostic_collection_sequence = 0
 
     @staticmethod
@@ -602,6 +621,121 @@ class AndroidAdapter:
         if selection is None:
             raise ScenarioExecutionError("ANDROID_CONSENT_N11_OBSERVATION_MISSING")
         return {"passed": True, **dict(selection)}
+
+    def run_rendered_native_case(
+        self, case_id: str, *, deadline: float | None = None
+    ) -> dict[str, object]:
+        """Run one named Compose behavior through its rendered instrumentation case."""
+
+        test_case = f"android:{case_id}"
+        if test_case not in _ANDROID_RENDERED_CASE_IDS:
+            raise ScenarioExecutionError("ANDROID_NATIVE_CASE_UNSUPPORTED")
+        if self.ui_mode != "gui-auto":
+            raise ScenarioExecutionError("ANDROID_RENDERED_CASE_REQUIRES_GUI_AUTO")
+        if self.app_apk is None or self.test_companion_apk is None:
+            raise ScenarioExecutionError("ANDROID_CONSENT_APK_PATHS_REQUIRED")
+
+        started = time.monotonic()
+        run_deadline = started + 300.0
+        if deadline is not None:
+            run_deadline = min(run_deadline, deadline)
+        cleanup_reserve = min(
+            _MAX_CLEANUP_RESERVE_SECONDS,
+            max(_MIN_CLEANUP_RESERVE_SECONDS, 300.0 * _CLEANUP_RESERVE_FRACTION),
+        )
+        work_deadline = run_deadline - cleanup_reserve
+        if work_deadline <= started + 20.0:
+            raise ScenarioExecutionError(
+                "HOSTED_LANE_DEADLINE_EXCEEDED_BEFORE_ANDROID_RENDERED_CASE"
+            )
+
+        scenario = select_scenarios(scenario_ids=["functional.configure"])[0]
+        steps = (ScenarioStep(id="configure", operation="configure", timeout_seconds=240),)
+        self._connections = (ConnectionIdentity(index=0, protocol="AUTO"),)
+        self._selected_connection = self._connections[0]
+        self._progress_scenario_id = test_case
+        device_files: list[str] = []
+        primary_error: BaseException | None = None
+        try:
+            # Android permission survives instrumentation. Start each behavior
+            # from a fresh install of this exact candidate so consent checks
+            # cannot pass through a grant left by an earlier case.
+            self._install_fresh_apk_pair(work_deadline)
+            native_case_facts: dict[str, object] = {}
+            observation = self._execute_phase(
+                scenario,
+                steps,
+                work_deadline,
+                device_files,
+                test_case=test_case,
+                native_case_facts=native_case_facts,
+            )
+            self._validate_observation_identity(observation)
+            self._validate_gui_observation(scenario, observation, steps=steps)
+            if not (
+                observation.configured
+                and not observation.connected
+                and observation.gui_auto_verified
+                and observation.disconnect_clean
+                and observation.final_disconnect_clean
+                and observation.cleanup_verified
+            ):
+                raise ScenarioExecutionError(
+                    "ANDROID_RENDERED_CASE_LIFECYCLE_OBSERVATION_INVALID"
+                )
+            self._last_observation = observation
+            return {
+                "case_id": case_id,
+                "test_case": test_case,
+                "passed": True,
+                "checks": native_case_facts["checks"],
+                "screenshot": native_case_facts["screenshot_path"],
+                **(
+                    {"measurements": native_case_facts["measurements"]}
+                    if test_case == f"android:{ANDROID_PERFORMANCE_CASE}"
+                    else {}
+                ),
+            }
+        except BaseException as error:
+            primary_error = error
+            self._collect_functional_failure_diagnostics(
+                error, test_case, run_deadline
+            )
+            raise
+        finally:
+            cleanup_error = self._cleanup_device(tuple(device_files), run_deadline)
+            scratch_error = self._cleanup_local_scratch()
+            fixture_error: BaseException | None = None
+            if self._subscription_fixture is not None:
+                try:
+                    self._subscription_fixture.close()
+                except BaseException as error:
+                    fixture_error = error
+                finally:
+                    self._subscription_fixture = None
+            self._active_controls = ()
+            self._progress_scenario_id = None
+            self._selected_connection = None
+            self._connections = ()
+            cleanup_failures = tuple(
+                error for error in (cleanup_error, scratch_error, fixture_error)
+                if error is not None
+            )
+            if primary_error is not None:
+                for index, error in enumerate(cleanup_failures, start=1):
+                    add_exception_notes(
+                        primary_error, f"android_rendered_case_cleanup_{index}", error
+                    )
+            elif cleanup_failures:
+                cleanup_failure = cleanup_failures[0]
+                for index, error in enumerate(cleanup_failures[1:], start=2):
+                    add_exception_notes(
+                        cleanup_failure, f"android_rendered_case_cleanup_{index}", error
+                    )
+                self._collect_functional_failure_diagnostics(
+                    cleanup_failure, test_case, run_deadline
+                )
+                raise cleanup_failure
 
     def run_auto_recovery_stop(
         self, *, deadline: float | None = None
@@ -1049,48 +1183,12 @@ class AndroidAdapter:
         preserve_active: bool = False,
         test_case: str | None = None,
         native_case_facts: dict[str, object] | None = None,
-        saved_source_restore_only: bool = False,
-        saved_source_restore_preverified: bool = False,
     ) -> AndroidProfileObservation:
-        configure_step = next(
-            (step for step in steps if step.operation == "configure"), None
-        )
-        saved_source_restore_preverified = saved_source_restore_preverified or (
-            configure_step is not None
-            and getattr(self, "_saved_source_restore_preverified", False)
-        )
-        run_saved_source_restore_phase = (
-            self.ui_mode == "gui-auto"
-            and test_case is None
-            and not preserve_active
-            and not saved_source_restore_only
-            and not saved_source_restore_preverified
-            and not getattr(self, "_process_cold_import_queued", False)
-            and configure_step is not None
-        )
-        if run_saved_source_restore_phase:
-            restored = self._execute_phase(
-                scenario,
-                (configure_step,),
-                deadline,
-                device_files,
-                saved_source_restore_only=True,
-            )
-            self._validate_observation_identity(restored)
-            self._validate_gui_observation(scenario, restored, steps=(configure_step,))
-            if not restored.configured or restored.connected or not restored.gui_auto_verified:
-                raise ScenarioExecutionError(
-                    "ANDROID_SAVED_SOURCE_RESTORE_PREPHASE_INVALID"
-                )
-            self._saved_source_restore_preverified = True
-            saved_source_restore_preverified = True
         command_file, profile_name, output_name = self._write_command(
             scenario,
             steps=steps,
             preserve_active=preserve_active,
             test_case=test_case,
-            saved_source_restore_only=saved_source_restore_only,
-            saved_source_restore_preverified=saved_source_restore_preverified,
         )
         progress_name = self._progress_name(command_file)
         device_files.extend(
@@ -1134,6 +1232,7 @@ class AndroidAdapter:
             preserve_active=preserve_active,
             output_name=output_name,
             progress_name=progress_name,
+            test_case=test_case,
             process_cold_import_url=(
                 self._subscription_fixture.url
                 if self.ui_mode == "gui-auto"
@@ -1168,11 +1267,11 @@ class AndroidAdapter:
         try:
             value = json.loads(output.stdout.decode("utf-8"))
             if test_case is not None:
-                if test_case != _AUTO_RECOVERY_STOP_CASE:
+                if test_case != _AUTO_RECOVERY_STOP_CASE and test_case not in _ANDROID_RENDERED_CASE_IDS:
                     raise ScenarioExecutionError("ANDROID_NATIVE_CASE_UNSUPPORTED")
                 if not isinstance(value, Mapping) or value.get("test_case") != test_case:
                     raise ScenarioExecutionError(
-                        "ANDROID_AUTO_RECOVERY_STOP_FACTS_MISSING"
+                        "ANDROID_NATIVE_CASE_FACTS_MISSING"
                     )
             observation = AndroidProfileObservation.from_mapping(
                 value, expected_source_sha=self.source_sha
@@ -1182,14 +1281,20 @@ class AndroidAdapter:
             if test_case is not None:
                 if native_case_facts is None:
                     raise ScenarioExecutionError(
-                        "ANDROID_AUTO_RECOVERY_STOP_FACTS_UNAVAILABLE"
+                        "ANDROID_NATIVE_CASE_FACTS_UNAVAILABLE"
                     )
-                native_case_facts.update(
-                    self._validated_auto_recovery_stop_facts(
+                if test_case == _AUTO_RECOVERY_STOP_CASE:
+                    facts = self._validated_auto_recovery_stop_facts(
                         value.get("native_case_facts"),
                         command_file.name,
                     )
-                )
+                else:
+                    facts = self._validated_rendered_case_facts(
+                        value.get("native_case_facts"),
+                        command_file.name,
+                        test_case=test_case,
+                    )
+                native_case_facts.update(facts)
         except UnicodeDecodeError as error:
             raise ScenarioExecutionError("ANDROID_OBSERVATION_ENCODING_INVALID") from error
         except json.JSONDecodeError as error:
@@ -1315,6 +1420,107 @@ class AndroidAdapter:
         }
         return facts
 
+    def _validated_rendered_case_facts(
+        self,
+        value: object,
+        command_name: str,
+        *,
+        test_case: str,
+    ) -> dict[str, object]:
+        if not isinstance(value, Mapping) or value.get("case_id") != test_case:
+            raise ScenarioExecutionError("ANDROID_RENDERED_CASE_FACTS_INVALID")
+        if value.get("passed") is not True:
+            raise ScenarioExecutionError("ANDROID_RENDERED_CASE_NOT_PASSED")
+        checks = value.get("checks")
+        if (
+            not isinstance(checks, Mapping)
+            or not checks
+            or any(item is not True for item in checks.values())
+        ):
+            raise ScenarioExecutionError("ANDROID_RENDERED_CASE_ASSERTIONS_INVALID")
+        label = value.get("screenshot_label")
+        stage = _ANDROID_RENDERED_CASE_SCREENSHOTS[test_case]
+        operation = test_case.replace(":", "_").replace("-", "_")
+        if (
+            not isinstance(label, str)
+            or re.fullmatch(
+                rf"[0-9]{{4}}-{re.escape(operation)}-{re.escape(stage)}\.png",
+                label,
+            ) is None
+        ):
+            raise ScenarioExecutionError("ANDROID_RENDERED_CASE_SCREENSHOT_INVALID")
+        raw_directory = getattr(self.runner, "raw_directory", None)
+        if not isinstance(raw_directory, Path):
+            raise ScenarioExecutionError("ANDROID_SCRATCH_UNAVAILABLE")
+        command_id = Path(command_name).name.removesuffix(".command.json")
+        screenshot_path = raw_directory / "screenshots" / "android" / command_id / label
+        if not screenshot_path.is_file():
+            raise AndroidScreenshotCollectionError(
+                "ANDROID_UI_SCREENSHOT_COLLECTION_FAILED: selected rendered case frame was not retained"
+            )
+        facts = dict(value)
+        facts["screenshot_path"] = str(screenshot_path)
+        if test_case == f"android:{ANDROID_PERFORMANCE_CASE}":
+            self._validate_subscription_load_measurements(value.get("measurements"))
+        return facts
+
+    @staticmethod
+    def _validate_subscription_load_measurements(value: object) -> None:
+        """Check report-only timing evidence without turning it into a gate."""
+
+        if not isinstance(value, Mapping):
+            raise ScenarioExecutionError("ANDROID_PERFORMANCE_MEASUREMENTS_INVALID")
+        if (
+            value.get("action") != "paste"
+            or type(value.get("warmup_count")) is not int
+            or value.get("warmup_count") != 5
+            or type(value.get("sample_count")) is not int
+            or value.get("sample_count") != 30
+            or type(value.get("reference_ms")) is not int
+            or value.get("reference_ms") != 350
+            or value.get("blocking_gate") is not False
+        ):
+            raise ScenarioExecutionError("ANDROID_PERFORMANCE_MEASUREMENTS_INVALID")
+        sample_bounds: list[int] = []
+        for name, count in (("warmups", 5), ("samples", 30)):
+            entries = value.get(name)
+            if not isinstance(entries, list) or len(entries) != count:
+                raise ScenarioExecutionError("ANDROID_PERFORMANCE_MEASUREMENTS_INVALID")
+            for index, item in enumerate(entries):
+                if not isinstance(item, Mapping):
+                    raise ScenarioExecutionError("ANDROID_PERFORMANCE_MEASUREMENTS_INVALID")
+                if item.get("action") != "paste" or item.get("index") != index:
+                    raise ScenarioExecutionError("ANDROID_PERFORMANCE_MEASUREMENTS_INVALID")
+                for key in (
+                    "request_start_upper_bound_ms",
+                    "fixture_clock_rtt_ms",
+                ):
+                    number = item.get(key)
+                    if (
+                        not isinstance(number, int)
+                        or isinstance(number, bool)
+                    ):
+                        raise ScenarioExecutionError(
+                            "ANDROID_PERFORMANCE_MEASUREMENTS_INVALID"
+                        )
+                if name == "samples":
+                    sample_bounds.append(item["request_start_upper_bound_ms"])
+        summary = value.get("summary")
+        sorted_bounds = sorted(sample_bounds)
+        median_sum = sorted_bounds[14] + sorted_bounds[15]
+        expected_summary = {
+            "median_upper_bound_ms": (
+                abs(median_sum) // 2 * (-1 if median_sum < 0 else 1)
+            ),
+            "p95_upper_bound_ms": sorted_bounds[28],
+            "max_upper_bound_ms": sorted_bounds[29],
+        }
+        if (
+            not isinstance(summary, Mapping)
+            or dict(summary) != expected_summary
+        ):
+            raise ScenarioExecutionError("ANDROID_PERFORMANCE_MEASUREMENTS_INVALID")
+
     @staticmethod
     def _observations(
         observation: AndroidProfileObservation,
@@ -1390,6 +1596,7 @@ class AndroidAdapter:
         preserve_active: bool = False,
         output_name: str | None = None,
         progress_name: str | None = None,
+        test_case: str | None = None,
         process_cold_import_url: str | None = None,
     ) -> CommandResult:
         controls = self._active_controls
@@ -1461,12 +1668,23 @@ class AndroidAdapter:
                 failure = ScenarioExecutionError("ANDROID_APP_START_FAILED")
                 _append_command_result_notes(failure, start)
                 raise failure
+        test_method = (
+            _ANDROID_RENDERED_CASE_METHODS.get(test_case)
+            if test_case is not None else None
+        )
+        if test_case == _AUTO_RECOVERY_STOP_CASE:
+            test_method = "autoRecoveryStop"
+        elif test_case is not None and test_method is None:
+            raise ScenarioExecutionError("ANDROID_NATIVE_CASE_UNSUPPORTED")
+        test_selector = _INSTRUMENTATION_CLASS + (
+            "#" + test_method if test_method is not None else "#runHostedCommand"
+        )
         arguments = (
             "shell", "am", "instrument", "-w", "-r",
             *(("--no-restart",) if preserve_active or process_cold_import_url is not None else ()),
             "-e", "dobby.real_profile", "1",
             "-e", "dobby.hosted_command_file", command_name, "-e", "class",
-            _INSTRUMENTATION_CLASS, _INSTRUMENTATION_COMPONENT,
+            test_selector, _INSTRUMENTATION_COMPONENT,
         )
         if not observe_live:
             return self._adb(
@@ -2756,26 +2974,12 @@ class AndroidAdapter:
         steps: tuple[ScenarioStep, ...] | None = None,
         preserve_active: bool = False,
         test_case: str | None = None,
-        saved_source_restore_only: bool = False,
-        saved_source_restore_preverified: bool = False,
     ) -> tuple[Path, str, str]:
         if test_case is not None and (
-            test_case != _AUTO_RECOVERY_STOP_CASE or self.ui_mode != "gui-auto"
+            test_case not in _ANDROID_RENDERED_CASE_IDS | {_AUTO_RECOVERY_STOP_CASE}
+            or self.ui_mode != "gui-auto"
         ):
             raise ScenarioExecutionError("ANDROID_NATIVE_CASE_UNSUPPORTED")
-        if saved_source_restore_only and (
-            self.ui_mode != "gui-auto"
-            or test_case is not None
-            or saved_source_restore_preverified
-            or steps is None
-            or len(steps) != 1
-            or steps[0].operation != "configure"
-        ):
-            raise ScenarioExecutionError("ANDROID_SAVED_SOURCE_RESTORE_PHASE_INVALID")
-        if saved_source_restore_preverified and (
-            self.ui_mode != "gui-auto" or test_case is not None
-        ):
-            raise ScenarioExecutionError("ANDROID_SAVED_SOURCE_RESTORE_PHASE_INVALID")
         self._active_controls = ()
         raw_directory = getattr(self.runner, "raw_directory", None)
         if not isinstance(raw_directory, Path):
@@ -2865,14 +3069,9 @@ class AndroidAdapter:
             )
         if test_case is not None:
             command["test_case"] = test_case
-        if saved_source_restore_only:
-            command["saved_source_restore_only"] = True
-        if saved_source_restore_preverified:
-            command["saved_source_restore_preverified"] = True
         process_cold_import = (
             self.ui_mode == "gui-auto"
             and test_case is None
-            and not saved_source_restore_only
             and not self._process_cold_import_queued
             and configure_requested
         )

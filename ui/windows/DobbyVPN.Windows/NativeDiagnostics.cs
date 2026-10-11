@@ -20,7 +20,9 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOBBY_LOG_PATH"))
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DobbyVPN", "Logs", "backend.jsonl")
             : Environment.GetEnvironmentVariable("DOBBY_LOG_PATH")!,
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "Logs", "ui_diagnostics.jsonl"));
+        string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOBBY_UI_LOG_PATH"))
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "Logs", "ui_diagnostics.jsonl")
+            : Environment.GetEnvironmentVariable("DOBBY_UI_LOG_PATH")!);
     private readonly object _gate = new();
     private readonly string[] _paths = [backendPath, backendPath + ".stderr", uiPath];
     private readonly Dictionary<string, string> _lastErrors = new();

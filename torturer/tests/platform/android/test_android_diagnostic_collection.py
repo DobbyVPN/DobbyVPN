@@ -375,11 +375,12 @@ class AndroidScreenshotCollectionTests(unittest.TestCase):
                 ),
             ):
                 with self.assertRaises(type(primary)) as caught:
-                    local_vm_android.run_ui(
+                    local_vm_android._run_legacy_ui(
                         root,
                         {"adb": "adb", "serial": "emulator-5554"},
                         logs,
                         timeout=30,
+                        selected_cases=(),
                     )
 
             self.assertIs(caught.exception, primary)

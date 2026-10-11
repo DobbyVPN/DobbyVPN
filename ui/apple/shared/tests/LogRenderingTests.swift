@@ -18,6 +18,11 @@ final class LogRenderingTests: XCTestCase {
         ]
 
         let rendered = logText(entries, expanded: ["capture", "error"])
+        let errorDetailsRange = (rendered.string as NSString).range(of: "Hide details")
+        XCTAssertNotEqual(errorDetailsRange.location, NSNotFound)
+        let errorDetailsURL = try XCTUnwrap(rendered.attribute(.link, at: errorDetailsRange.location, effectiveRange: nil) as? URL)
+        XCTAssertEqual(errorDetailsURL, logDetailsURL(entries[0]))
+        XCTAssertEqual(errorDetailsURL.absoluteString, "dobbylog://record/capture")
         XCTAssertTrue(rendered.string.contains("10:00:00 · INFO · Tunnel stderr · tunnel\nStderr capture initialized\nHide details\n"))
         XCTAssertTrue(rendered.string.contains(rawCapture), "The capture Details action must preserve its original record")
         XCTAssertTrue(rendered.string.contains("10:00:01 · DEBUG · Tunnel\ntrace line\nDetails\n"))
@@ -76,7 +81,7 @@ final class LogRenderingTests: XCTestCase {
     }
 
     @MainActor
-    func testMacLogDetailsInteractionExpandsAndCollapsesOriginalRecord() {
+    func testMacLogDetailsInteractionExpandsAndCollapsesOriginalRecord() throws {
         let raw = #"{"schema":"dobby.log/v1","timestamp":"2026-10-04T10:00:04Z","level":"ERROR","source":"transport","message":"failed","detail":"socket closed"}"#
         let entry = entry(id: "error", timestamp: "10:00:04", level: "ERROR", source: "Backend · transport", message: "failed", raw: raw)
         let logView = DobbyLogView(entries: [entry], following: .constant(true), clear: 0)
@@ -85,10 +90,13 @@ final class LogRenderingTests: XCTestCase {
         let textView = NSTextView(frame: .zero)
         configureLogTextView(textView)
 
-        XCTAssertTrue(coordinator.textView(textView, clickedOnLink: URL(string: "dobbylog://record/0")!, at: 0))
+        let detailsURL = try XCTUnwrap(logDetailsURL(entry))
+        XCTAssertEqual(logDetailsRecordID(detailsURL), "error")
+        XCTAssertEqual(detailsURL.absoluteString, "dobbylog://record/error")
+        XCTAssertTrue(coordinator.textView(textView, clickedOnLink: detailsURL, at: 0))
         XCTAssertTrue(textView.string.contains(raw), "Details should reveal the complete source record")
         XCTAssertTrue(coordinator.expanded.contains("error"))
-        XCTAssertTrue(coordinator.textView(textView, clickedOnLink: URL(string: "dobbylog://record/0")!, at: 0))
+        XCTAssertTrue(coordinator.textView(textView, clickedOnLink: detailsURL, at: 0))
         XCTAssertFalse(textView.string.contains(raw), "Hide details should collapse the source record")
         XCTAssertFalse(coordinator.expanded.contains("error"))
     }
@@ -107,6 +115,24 @@ final class LogRenderingTests: XCTestCase {
         XCTAssertFalse(shouldFollowLogUpdates(viewportBottom: 500, contentHeight: 1_000))
         XCTAssertTrue(shouldFollowLogUpdates(viewportBottom: 976, contentHeight: 1_000))
         XCTAssertTrue(shouldFollowLogUpdates(viewportBottom: 100, contentHeight: 110))
+    }
+
+    func testFollowStateFreezesUntilTheUserSettlesAtTheBottom() {
+        var state = DobbyLogFollowingState()
+        XCTAssertTrue(state.isFollowing)
+
+        XCTAssertFalse(state.update(atBottom: false, gestureActive: true))
+        XCTAssertFalse(state.isFollowing)
+        XCTAssertFalse(state.update(atBottom: true, gestureActive: true),
+                       "Touching the bottom during a drag should wait for gesture completion")
+        XCTAssertFalse(state.isFollowing)
+        XCTAssertTrue(state.update(atBottom: true, gestureActive: false),
+                      "Ending the gesture at the bottom should resume following")
+        XCTAssertTrue(state.isFollowing)
+
+        XCTAssertFalse(state.update(atBottom: false, gestureActive: true))
+        state.resetForClear()
+        XCTAssertTrue(state.isFollowing, "Clear should reset the follow state")
     }
 
     private func entry(id: String, timestamp: String, level: String, source: String, message: String, raw: String) -> DiagnosticFiles.Entry {

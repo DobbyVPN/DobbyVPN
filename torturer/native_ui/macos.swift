@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Foundation
 
 // Test-only accessibility process. Python bounds its lifetime if an OS call stalls.
@@ -93,7 +94,7 @@ func visibleCharacterRange(_ element: AXUIElement) throws -> (range: CFRange, ch
     )
 }
 
-func elements(_ window: AXUIElement, settingsContent: Bool = false) throws -> [AXUIElement] {
+func elements(_ window: AXUIElement, settingsContent: Bool = false, includeTextAreaChildren: Bool = false) throws -> [AXUIElement] {
     var queue = [window]
     var index = 0
     while index < queue.count {
@@ -102,7 +103,7 @@ func elements(_ window: AXUIElement, settingsContent: Bool = false) throws -> [A
         index += 1
         // Log details change during refresh; controls live outside the text view.
         let role = try label(element, kAXRoleAttribute)
-        if role == kAXTextAreaRole || (settingsContent && role == "AXToolbar") { continue }
+        if (role == kAXTextAreaRole && !includeTextAreaChildren) || (settingsContent && role == "AXToolbar") { continue }
         let children = try attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
         if settingsContent && role == "AXSplitGroup" {
             let splitters = try attribute(element, "AXSplitters") as? [AXUIElement] ?? []
@@ -203,14 +204,6 @@ func names(_ element: AXUIElement) throws -> [String] {
     return values
 }
 
-func linkURLs(_ nodes: [AXUIElement]) throws -> [String] {
-    try nodes.compactMap { element in
-        guard try label(element, kAXRoleAttribute) == "AXLink",
-              let value = try attribute(element, kAXURLAttribute) else { return nil }
-        if let url = value as? URL { return url.absoluteString }
-        return value as? String
-    }
-}
 
 func find(_ nodes: [AXUIElement], _ name: String, editor: Bool = false) throws -> AXUIElement {
     var matches = try nodes.filter { node in
@@ -262,115 +255,6 @@ func rectangle(_ bounds: CGRect) -> [String: Double] {
      "width": Double(bounds.width), "height": Double(bounds.height)]
 }
 
-func diagnosticJSONValue(_ value: CFTypeRef?) -> Any {
-    guard let value else { return NSNull() }
-    if CFGetTypeID(value) == CFBooleanGetTypeID() {
-        return (value as? NSNumber)?.boolValue ?? false
-    }
-    if let string = value as? String { return string }
-    if let number = value as? NSNumber { return number }
-    return String(describing: value)
-}
-
-func connectionActionDetails(_ nodes: [AXUIElement]) -> [String: Any] {
-    func summary(_ element: AXUIElement) -> [String: Any] {
-        var attributes = [String: Any]()
-        var unavailable = [String]()
-        var errors = [String: String]()
-        for (key, attributeName) in [
-            ("AXRole", kAXRoleAttribute), ("AXIdentifier", kAXIdentifierAttribute),
-            ("AXTitle", kAXTitleAttribute), ("AXValue", kAXValueAttribute),
-            ("AXEnabled", kAXEnabledAttribute),
-        ] {
-            do {
-                let value = try attribute(element, attributeName)
-                attributes[key] = diagnosticJSONValue(value)
-                if value == nil { unavailable.append(key) }
-            } catch {
-                attributes[key] = NSNull()
-                errors[key] = String(describing: error)
-            }
-        }
-
-        var actionNames: CFArray?
-        let actionStatus = AXUIElementCopyActionNames(element, &actionNames)
-        if actionStatus == .success {
-            attributes["AXActionNames"] = (actionNames as? [String]) ?? []
-        } else {
-            attributes["AXActionNames"] = NSNull()
-            errors["AXActionNames"] = "AX action-name read failed: \(actionStatus.rawValue)"
-        }
-
-        var result: [String: Any] = [
-            "attributes": attributes,
-            "unavailable_attributes": unavailable,
-            "errors": errors,
-        ]
-        do {
-            result["frame"] = rectangle(try bounds(element))
-        } catch {
-            result["frame"] = NSNull()
-            result["frame_error"] = String(describing: error)
-        }
-        return result
-    }
-
-    var matches = [[String: Any]]()
-    var selectionErrors = [[String: Any]]()
-    for (index, element) in nodes.enumerated() {
-        var matchedBy = [String]()
-        do {
-            if try label(element, kAXIdentifierAttribute) == "VPN connection action" {
-                matchedBy.append("identifier")
-            }
-        } catch {
-            selectionErrors.append(["node_index": index, "field": "AXIdentifier", "error": String(describing: error)])
-        }
-        do {
-            if try names(element).contains("Stop") { matchedBy.append("name") }
-        } catch {
-            selectionErrors.append(["node_index": index, "field": "name", "error": String(describing: error)])
-        }
-        guard !matchedBy.isEmpty else { continue }
-
-        var item: [String: Any] = ["matched_by": matchedBy, "node": summary(element)]
-        do {
-            if let parent = try axElement(element, kAXParentAttribute) {
-                item["nearest_parent"] = summary(parent)
-            } else {
-                item["nearest_parent"] = NSNull()
-            }
-        } catch {
-            item["nearest_parent"] = NSNull()
-            item["nearest_parent_error"] = String(describing: error)
-        }
-        do {
-            if let children = try attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
-                let limit = 24
-                item["direct_child_count"] = children.count
-                item["direct_children_omitted"] = max(0, children.count - limit)
-                item["direct_children"] = children.prefix(limit).map(summary)
-            } else {
-                item["direct_child_count"] = 0
-                item["direct_children_omitted"] = 0
-                item["direct_children"] = []
-                item["direct_children_unavailable"] = true
-            }
-        } catch {
-            item["direct_children"] = []
-            item["direct_children_error"] = String(describing: error)
-        }
-        matches.append(item)
-    }
-
-    return [
-        "ready": true,
-        "match_count": matches.count,
-        "matches": matches,
-        "selection_error_count": selectionErrors.count,
-        "selection_errors": selectionErrors,
-    ]
-}
 
 func contained(_ child: CGRect, by parent: CGRect, tolerance: CGFloat = 1) -> Bool {
     child.minX >= parent.minX - tolerance && child.minY >= parent.minY - tolerance &&
@@ -455,20 +339,28 @@ func profileScrollPercent(_ profileView: AXUIElement) throws -> Double? {
     return min(100, max(0, (range.value - range.minimum) / (range.maximum - range.minimum) * 100))
 }
 
+func profileControlParts(_ identifier: String) -> (digest: String, index: Int, role: String)? {
+    guard identifier.hasPrefix("profile.") else { return nil }
+    let values = identifier.dropFirst("profile.".count).split(separator: ".", omittingEmptySubsequences: false)
+    guard values.count == 3, !values[0].isEmpty,
+          let index = Int(values[1]), index >= 0,
+          ["description", "protocol", "action"].contains(String(values[2])) else { return nil }
+    return (String(values[0]), index, String(values[2]))
+}
+
 func profileRowDetails(_ nodes: [AXUIElement]) throws -> [[String: Any]] {
-    func number(in identifier: String, suffix: String) -> Int? {
-        let prefix = "Profile "
-        guard identifier.hasPrefix(prefix), identifier.hasSuffix(suffix) else { return nil }
-        return Int(identifier.dropFirst(prefix.count).dropLast(suffix.count))
-    }
 
     var descriptions = [Int: String]()
     var descriptionOrder = [Int]()
     var protocols = [Int: String]()
     var actions = [Int: String]()
+    var inventoryDigests = Set<String>()
     for element in nodes {
         let id = try identifier(element)
-        if let index = number(in: id, suffix: " description") {
+        guard let parts = profileControlParts(id) else { continue }
+        let index = parts.index
+        inventoryDigests.insert(parts.digest)
+        if parts.role == "description" {
             let role = try label(element, kAXRoleAttribute)
             try require(role == kAXStaticTextRole,
                         "Profile \(index) description identifier is not native text")
@@ -478,7 +370,7 @@ func profileRowDetails(_ nodes: [AXUIElement]) throws -> [[String: Any]] {
             try require(descriptions[index] == nil, "Profile \(index) has duplicate native description labels")
             descriptions[index] = description
             descriptionOrder.append(index)
-        } else if let index = number(in: id, suffix: " protocol") {
+        } else if parts.role == "protocol" {
             let role = try label(element, kAXRoleAttribute)
             try require(role == kAXStaticTextRole,
                         "Profile \(index) protocol identifier is not native text")
@@ -494,7 +386,7 @@ func profileRowDetails(_ nodes: [AXUIElement]) throws -> [[String: Any]] {
             }
             try require(protocols[index] == nil, "Profile \(index) has duplicate native protocol labels")
             protocols[index] = protocolName
-        } else if let index = number(in: id, suffix: " action") {
+        } else if parts.role == "action" {
             let role = try label(element, kAXRoleAttribute)
             try require(role == kAXButtonRole,
                         "Profile \(index) action identifier is not a native button")
@@ -515,11 +407,24 @@ func profileRowDetails(_ nodes: [AXUIElement]) throws -> [[String: Any]] {
                 "Rendered profile descriptions and protocols did not have matching identifiers")
     try require(descriptionIndices == actionIndices,
                 "Rendered profile descriptions and actions did not have matching identifiers")
+    try require(inventoryDigests.count <= 1,
+                "Rendered profile controls refer to different accepted inventory digests")
+    let profileDigest = inventoryDigests.first ?? ""
     return try descriptionOrder.map { index in
         guard let name = descriptions[index], let protocolName = protocols[index], let action = actions[index] else {
             throw HelperError("Profile \(index) is missing rendered description, protocol, or action metadata")
         }
-        return ["index": index, "name": name, "protocol": protocolName, "action": action]
+        return [
+            "index": index + 1,
+            "profile_index": index,
+            "profile_digest": profileDigest,
+            "name": name,
+            "protocol": protocolName,
+            "action": action,
+            "description_automation_id": "profile.\(profileDigest).\(index).description",
+            "protocol_automation_id": "profile.\(profileDigest).\(index).protocol",
+            "action_automation_id": "profile.\(profileDigest).\(index).action",
+        ]
     }
 }
 
@@ -551,12 +456,11 @@ func profileListLayout(_ nodes: [AXUIElement]) throws -> [String: Any] {
     let logsBounds = try bounds(logViewport)
     let visibleActions = try nodes.compactMap { element -> (Int, String)? in
         let id = try identifier(element)
-        guard id.hasPrefix("Profile "), id.hasSuffix(" action"),
-              try label(element, kAXRoleAttribute) == kAXButtonRole,
-              let index = Int(id.dropFirst("Profile ".count).dropLast(" action".count)) else {
+        guard let parts = profileControlParts(id), parts.role == "action",
+              try label(element, kAXRoleAttribute) == kAXButtonRole else {
             return nil
         }
-        return contained(try bounds(element), by: profileBounds) ? (index, id) : nil
+        return contained(try bounds(element), by: profileBounds) ? (parts.index, id) : nil
     }.sorted { $0.0 < $1.0 }.map { $0.1 }
     let scrollPosition: Any
     if let percent = try profileScrollPercent(profileView) {
@@ -577,7 +481,7 @@ func profileListLayout(_ nodes: [AXUIElement]) throws -> [String: Any] {
     ]
 }
 
-func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [String: Any] {
+func scrollProfileList(_ nodes: [AXUIElement], position: String, targetActionID: String?) throws -> [String: Any] {
     let targetPercent: Double
     if position == "top" { targetPercent = 0 }
     else if position == "bottom" { targetPercent = 100 }
@@ -592,7 +496,7 @@ func scrollProfileList(_ nodes: [AXUIElement], position: String) throws -> [Stri
     guard let scrollbar = profileParts.scrollbar else {
         throw HelperError("Profile list viewport has no native vertical scrollbar")
     }
-    let targetID = position == "top" ? "Profile 1 action" : position == "bottom" ? "Profile 24 action" : nil
+    let targetID = targetActionID
     func currentLayout() throws -> [String: Any] {
         try retryTransientAccessibilityReads(
             context: "reading native profile-list geometry",
@@ -731,6 +635,10 @@ func key(_ code: CGKeyCode, command: Bool = true) throws {
 
 func paste(_ editor: AXUIElement, source: String) throws {
     let value = try String(contentsOfFile: source, encoding: .utf8)
+    try pasteValue(editor, value: value)
+}
+
+func pasteValue(_ editor: AXUIElement, value: String) throws {
     let board = NSPasteboard.general
     let previous = (board.pasteboardItems ?? []).map { original in
         let copy = NSPasteboardItem()
@@ -777,9 +685,19 @@ func paste(_ editor: AXUIElement, source: String) throws {
 }
 
 func pasteWithNativeControl(
-    _ app: NSRunningApplication, window: AXUIElement, source: String, expectedSource: String? = nil
+    _ app: NSRunningApplication, window: AXUIElement, source: String, expectedSource: String? = nil,
+    onInvocation: (() -> Void)? = nil
 ) throws -> Int64 {
     let value = try String(contentsOfFile: source, encoding: .utf8)
+    return try pasteValueWithNativeControl(
+        app, window: window, value: value, expectedSource: expectedSource, onInvocation: onInvocation
+    )
+}
+
+func pasteValueWithNativeControl(
+    _ app: NSRunningApplication, window: AXUIElement, value: String, expectedSource: String? = nil,
+    onInvocation: (() -> Void)? = nil
+) throws -> Int64 {
     let expectedValue = expectedSource ?? value
     let initialNodes = try retryTransientAccessibilityReads(
         context: "Paste initial tree discovery",
@@ -855,6 +773,7 @@ func pasteWithNativeControl(
         let currentEditor = availability.editor
         guard let pasteButton = availability.button else { throw HelperError("Native Paste button was not available for a text clipboard") }
         let pasteInvokedAtUnixMs = Int64(Date().timeIntervalSince1970 * 1_000)
+        onInvocation?()
         try press(pasteButton)
         let deadline = Date().addingTimeInterval(5)
         var observed = ""
@@ -1353,551 +1272,2472 @@ func inspectMacOSTextSize(
     throw HelperError("Text Size inspection returned no result")
 }
 
+struct MacOSProcessIdentity {
+    let executablePath: String
+    let started: String
+    let startedUTC: String
+}
+
+struct MacOSProcessMissing: Error {}
+
+func macOSProcessIdentity(_ pid: pid_t) throws -> MacOSProcessIdentity {
+    var info = proc_bsdinfo()
+    let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+    let receivedSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, expectedSize)
+    guard receivedSize == expectedSize else {
+        if kill(pid, 0) != 0 && errno == ESRCH { throw MacOSProcessMissing() }
+        throw HelperError("Could not read OS process start identity for pid \(pid): bytes=\(receivedSize), errno=\(errno)")
+    }
+    try require(Int(info.pbi_pid) == Int(pid) && info.pbi_start_tvsec > 0,
+                "OS process identity was incomplete for pid \(pid)")
+
+    var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+    let pathBytes = pathBuffer.withUnsafeMutableBufferPointer { buffer in
+        proc_pidpath(pid, buffer.baseAddress, UInt32(buffer.count))
+    }
+    guard pathBytes > 0 else {
+        if kill(pid, 0) != 0 && errno == ESRCH { throw MacOSProcessMissing() }
+        throw HelperError("Could not read OS executable path for pid \(pid): bytes=\(pathBytes), errno=\(errno)")
+    }
+    let executablePath = URL(fileURLWithPath: String(cString: pathBuffer)).resolvingSymlinksInPath().path
+    let seconds = Double(info.pbi_start_tvsec)
+    let microseconds = Double(info.pbi_start_tvusec)
+    let started = "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)"
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let startedUTC = formatter.string(from: Date(timeIntervalSince1970: seconds + microseconds / 1_000_000))
+    return MacOSProcessIdentity(executablePath: executablePath, started: started, startedUTC: startedUTC)
+}
+
+struct MacOSLogsCaseDeadline {
+    let start: TimeInterval
+    let duration: TimeInterval
+
+    init(_ seconds: TimeInterval) {
+        start = ProcessInfo.processInfo.systemUptime
+        duration = seconds
+    }
+
+    var elapsed: TimeInterval { ProcessInfo.processInfo.systemUptime - start }
+    var remaining: TimeInterval { max(0, duration - elapsed) }
+
+    func check(_ stage: String) throws {
+        try require(remaining > 0,
+                    "macOS \(stage) exceeded the single \(String(format: "%.3f", duration)) second native-case deadline")
+    }
+}
+
+final class MacOSOwnedLogsApp {
+    let application: NSRunningApplication
+    let pid: pid_t
+    let executablePath: String
+    private(set) var identity: String?
+    var result: [String: Any]
+
+    init(application: NSRunningApplication, executablePath: String) {
+        self.application = application
+        pid = application.processIdentifier
+        self.executablePath = executablePath
+        identity = nil
+        result = [
+            "pid": Int(application.processIdentifier),
+            "identity": NSNull(),
+            "process_start_utc": NSNull(),
+            "executable": executablePath,
+        ]
+    }
+
+    func accept(_ process: MacOSProcessIdentity) {
+        identity = process.started
+        result["identity"] = process.started
+        result["process_start_utc"] = process.startedUTC
+        result["executable"] = process.executablePath
+    }
+}
+
+struct MacOSLogsFixture {
+    let backend: URL
+    let ui: URL
+
+    var paths: [URL] { [backend, URL(fileURLWithPath: backend.path + ".stderr"), ui] }
+    var boundary: URL { ui.appendingPathExtension("view") }
+
+    func entries() throws -> [DiagnosticFiles.Entry] {
+        let read = DiagnosticFiles.entries(paths: paths, boundary: boundary)
+        try require(read.error.isEmpty, "Production diagnostic reader failed: \(read.error)")
+        return read.entries
+    }
+
+    func entry(message: String) throws -> DiagnosticFiles.Entry {
+        guard let value = try entries().first(where: { $0.message == message }) else {
+            throw HelperError("Production diagnostic reader did not return fixture record: \(message)")
+        }
+        return value
+    }
+
+    func append(_ marker: String) throws {
+        try DiagnosticFiles.append(marker, event: "torturer.fixture", level: "INFO",
+                                   source: "macos-test-fixture", to: backend)
+    }
+}
+
+struct MacOSConfigureResponseObservation {
+    let diagnosticID: String
+    let monotonicUptime: TimeInterval
+}
+
+func waitMacOSConfigureResponse(
+    fixture: MacOSLogsFixture, source: String, deadline: MacOSLogsCaseDeadline
+) throws -> MacOSConfigureResponseObservation {
+    while deadline.remaining > 0 {
+        for entry in try fixture.entries() {
+            guard let record = try? JSONSerialization.jsonObject(with: Data(entry.raw.utf8)) as? [String: Any],
+                  record["event"] as? String == "subscription.configure-pipe-response-read",
+                  let fields = record["fields"] as? [String: Any],
+                  let parameters = fields["parameters"] as? [String: Any],
+                  parameters["source"] as? String == source else { continue }
+            try require(fields["succeeded"] as? Bool == true,
+                        "Configure did not return a response for performance URL (source)")
+            guard let uptime = fields["response_read_monotonic_uptime"] as? NSNumber,
+                  CFGetTypeID(uptime) != CFBooleanGetTypeID(), uptime.doubleValue.isFinite,
+                  uptime.doubleValue > 0 else {
+                throw HelperError("Configure response diagnostic omitted its monotonic response timestamp")
+            }
+            return MacOSConfigureResponseObservation(
+                diagnosticID: entry.id, monotonicUptime: uptime.doubleValue
+            )
+        }
+        Thread.sleep(forTimeInterval: min(0.05, max(0.001, deadline.remaining)))
+    }
+    throw HelperError("Configure did not return a response for performance URL (source) before the case deadline")
+}
+
+func writeMacOSLogsCase(_ result: [String: Any], to path: String) throws {
+    let destination = URL(fileURLWithPath: path)
+    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let data = try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys])
+    var newline = data
+    newline.append(0x0A)
+    try newline.write(to: destination, options: .atomic)
+}
+
+func macOSLogsAssertion(_ assertions: inout [[String: Any]], id: String, expected: Any, actual: Any) throws {
+    let expectedData = try JSONSerialization.data(withJSONObject: [expected], options: [.sortedKeys])
+    let actualData = try JSONSerialization.data(withJSONObject: [actual], options: [.sortedKeys])
+    let passed = expectedData == actualData
+    assertions.append(["id": id, "outcome": passed ? "passed" : "failed", "expected": expected, "actual": actual])
+    try require(passed,
+                "macOS logs-case assertion \(id) failed: expected=\(String(data: expectedData, encoding: .utf8) ?? "?") actual=\(String(data: actualData, encoding: .utf8) ?? "?")")
+}
+
+func macOSNativeAssertion(_ assertions: inout [[String: Any]], id: String, expected: Any, actual: Any) throws {
+    let expectedData = try JSONSerialization.data(withJSONObject: [expected], options: [.sortedKeys])
+    let actualData = try JSONSerialization.data(withJSONObject: [actual], options: [.sortedKeys])
+    let passed = expectedData == actualData
+    assertions.append(["id": id, "outcome": passed ? "passed" : "failed", "expected": expected, "actual": actual])
+    try require(passed,
+                "macOS native-case assertion \(id) failed: expected=\(String(data: expectedData, encoding: .utf8) ?? "?") actual=\(String(data: actualData, encoding: .utf8) ?? "?")")
+}
+
+typealias MacOSNativeObserver = (_ operation: String, _ timeoutSeconds: Double, _ phase: String?) throws -> [String: Any]
+
+func macOSNativeObserverCall(
+    _ operation: String, timeoutSeconds: Double, deadline: MacOSLogsCaseDeadline, phase: String? = nil
+) throws -> [String: Any] {
+    try deadline.check("native observer \(operation)")
+    var message: [String: Any] = [
+        "operation": operation,
+        "timeout_seconds": max(0.1, min(timeoutSeconds, deadline.remaining)),
+    ]
+    if let phase { message["phase"] = phase }
+    let payload = try JSONSerialization.data(withJSONObject: message, options: [.sortedKeys])
+    var line = Data("DOBBY_NATIVE_OBSERVE ".utf8)
+    line.append(payload)
+    line.append(0x0A)
+    FileHandle.standardOutput.write(line)
+    guard let replyLine = readLine(strippingNewline: true),
+          let replyData = replyLine.data(using: .utf8),
+          let reply = try JSONSerialization.jsonObject(with: replyData) as? [String: Any] else {
+        throw HelperError("Native observer \(operation) returned no valid JSON line")
+    }
+    guard reply["ok"] as? Bool == true else {
+        throw HelperError("Native observer \(operation) failed: \(reply["error"] as? String ?? "unknown observer error")")
+    }
+    guard let value = reply["value"] as? [String: Any] else {
+        throw HelperError("Native observer \(operation) returned a non-object value")
+    }
+    return value
+}
+
+func macOSNativeSnapshotValue(_ snapshot: [String: Any], _ name: String) -> String? {
+    snapshot[name] as? String
+}
+
+func macOSNativeSnapshotInteger(_ snapshot: [String: Any], _ name: String) -> Int? {
+    guard let value = snapshot[name] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
+    return value.intValue
+}
+
+func macOSNativeSnapshotBoolean(_ snapshot: [String: Any], _ name: String) -> Bool? {
+    guard let value = snapshot[name] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+    return value.boolValue
+}
+
+func macOSNativeSnapshotHasNoValue(_ snapshot: [String: Any], _ name: String) -> Bool {
+    guard let value = snapshot[name] else { return true }
+    return value is NSNull
+}
+
+func waitMacOSNativeSnapshot(
+    deadline: MacOSLogsCaseDeadline, stage: String, observer: MacOSNativeObserver,
+    predicate: ([String: Any]) -> Bool
+) throws -> [String: Any] {
+    var last: [String: Any] = [:]
+    while deadline.remaining > 0 {
+        last = try observer("snapshot", min(30, deadline.remaining), nil)
+        if predicate(last) { return last }
+        if macOSNativeSnapshotValue(last, "state") == "FAILED" {
+            throw HelperError("Go observer reported FAILED during \(stage): \(last)")
+        }
+        Thread.sleep(forTimeInterval: min(0.1, max(0.001, deadline.remaining)))
+    }
+    throw HelperError("Go observer did not reach \(stage) before the native-case deadline; last=\(last)")
+}
+
+func macOSNativeAssertTraffic(
+    _ observations: [String: Any], phase: String, assertions: inout [[String: Any]]
+) throws {
+    for name in ["tunnel_interface", "routing_verified", "stability_verified", "throughput_positive"] {
+        try macOSNativeAssertion(&assertions, id: "\(phase)-\(name)", expected: true,
+                                 actual: observations[name] ?? NSNull())
+    }
+}
+
+func macOSNativeProfileActions(_ nodes: [AXUIElement]) throws -> [(identifier: String, enabled: Bool, title: String)] {
+    try nodes.compactMap { node in
+        let id = try identifier(node)
+        guard let parts = profileControlParts(id), parts.role == "action" else { return nil }
+        return (id, try attribute(node, kAXEnabledAttribute) as? Bool ?? false,
+                try names(node).first(where: { $0 != id }) ?? "")
+    }
+}
+
+func macOSNativePressButton(_ nodes: [AXUIElement], identifier expected: String) throws {
+    let action = try find(nodes, expected)
+    try require(try label(action, kAXRoleAttribute) == kAXButtonRole,
+                "Native control \(expected) is not a button")
+    try require(try attribute(action, kAXEnabledAttribute) as? Bool == true,
+                "Native control \(expected) is disabled")
+    try press(action)
+}
+
+func macOSNativeWaitForStatus(
+    _ owned: MacOSOwnedLogsApp, expected: String, deadline: MacOSLogsCaseDeadline
+) throws -> [AXUIElement] {
+    try waitMacOSLogsCase(deadline, stage: "rendered \(expected) status") {
+        let nodes = try macOSLogsAXNodes(owned)
+        guard !nodes.isEmpty,
+              try macOSRenderedText(find(nodes, "connection.status"), identifier: "connection.status") == expected else {
+            return nil
+        }
+        return nodes
+    }
+}
+
+func macOSNativeUniqueAttemptURL(_ source: String) throws -> String {
+    guard var components = URLComponents(string: source), components.scheme?.lowercased() == "https" else {
+        throw HelperError("Subscription failure URL is not an absolute HTTPS URL")
+    }
+    var queryItems = components.queryItems ?? []
+    queryItems.append(URLQueryItem(name: "attempt", value: UUID().uuidString.lowercased()))
+    components.queryItems = queryItems
+    guard let result = components.string else { throw HelperError("Could not create a unique fail-once subscription URL") }
+    return result
+}
+
+func macOSNativeWaitForSubscription(
+    _ request: [String: Any], deadline: MacOSLogsCaseDeadline, count: Int64
+) throws -> MacOSSubscriptionFixtureObservation {
+    try waitMacOSSubscriptionRequest(request: request, deadline: deadline, count: count)
+}
+
+func macOSNativeWaitForNoAdditionalGet(
+    _ request: [String: Any], deadline: MacOSLogsCaseDeadline, count: Int64
+) throws -> MacOSSubscriptionFixtureObservation {
+    try waitMacOSForNoAdditionalSubscriptionGet(request: request, deadline: deadline,
+                                                expectedCount: count, quietMilliseconds: 1_500)
+}
+
+func macOSNativeIsActiveGeneration(_ current: [String: Any], sameAs previous: [String: Any]) -> Bool {
+    macOSNativeSnapshotValue(current, "state") == "CONNECTED" &&
+        macOSNativeSnapshotInteger(current, "generation") == macOSNativeSnapshotInteger(previous, "generation") &&
+        macOSNativeSnapshotValue(current, "active_digest") == macOSNativeSnapshotValue(previous, "active_digest") &&
+        macOSNativeSnapshotValue(current, "active_mode") == macOSNativeSnapshotValue(previous, "active_mode") &&
+        macOSNativeSnapshotInteger(current, "active_index") == macOSNativeSnapshotInteger(previous, "active_index")
+}
+
+func macOSNativeActiveProfileMatches(_ current: [String: Any], previous: [String: Any]) throws -> Bool {
+    guard macOSNativeIsActiveGeneration(current, sameAs: previous),
+          let currentProfile = current["active_profile"],
+          let previousProfile = previous["active_profile"] else { return false }
+    let currentData = try JSONSerialization.data(withJSONObject: currentProfile, options: [.sortedKeys])
+    let previousData = try JSONSerialization.data(withJSONObject: previousProfile, options: [.sortedKeys])
+    return currentData == previousData
+}
+
+func macOSNativeProfileTransitionMatches(_ state: [String: Any], index: Int) -> Bool {
+    if let pending = state["pending_target"] as? [String: Any] {
+        return pending["mode"] as? String == "PROFILE_INDEX" &&
+            (pending["index"] as? Int) == index &&
+            pending["digest"] as? String == state["digest"] as? String
+    }
+    return ["PROBING", "PREPARING"].contains(macOSNativeSnapshotValue(state, "state") ?? "") &&
+        macOSNativeSnapshotValue(state, "active_mode") == "PROFILE_INDEX" &&
+        macOSNativeSnapshotInteger(state, "active_index") == index &&
+        macOSNativeSnapshotValue(state, "active_digest") == macOSNativeSnapshotValue(state, "digest")
+}
+
+func macOSNativeRenderedProfileTransition(
+    _ owned: MacOSOwnedLogsApp, digest: String, index: Int, competingIndex: Int
+) throws -> Bool {
+    let nodes = try macOSLogsAXNodes(owned)
+    guard !nodes.isEmpty else { return false }
+    let actions = try macOSNativeProfileActions(nodes)
+    let target = "profile.\(digest).\(index).action"
+    let competing = "profile.\(digest).\(competingIndex).action"
+    guard let targetAction = actions.first(where: { $0.identifier == target }),
+          targetAction.enabled, targetAction.title == "Stop" else { return false }
+    if let other = actions.first(where: { $0.identifier == competing }), other.enabled {
+        throw HelperError("Profile selection exposed competing Connect action \(competing)")
+    }
+    return true
+}
+
+func waitMacOSLogsCase<T>(
+    _ deadline: MacOSLogsCaseDeadline, stage: String, condition: () throws -> T?
+) throws -> T {
+    var lastError = "not ready"
+    while deadline.remaining > 0 {
+        do {
+            if let value = try condition() { return value }
+            lastError = "condition was false"
+        } catch is MacOSProcessMissing {
+            throw HelperError("macOS \(stage) process disappeared before readiness")
+        } catch {
+            lastError = String(reflecting: error)
+        }
+        Thread.sleep(forTimeInterval: min(0.05, max(0.001, deadline.remaining)))
+    }
+    throw HelperError("macOS \(stage) exceeded the native-case deadline; last observation: \(lastError)")
+}
+
+func macOSLogsAXNodes(_ owned: MacOSOwnedLogsApp, includeTextAreaChildren: Bool = false) throws -> [AXUIElement] {
+    let root = AXUIElementCreateApplication(owned.pid)
+    AXUIElementSetMessagingTimeout(root, 0.3)
+    guard let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
+          let window = windows.first else { return [] }
+    AXUIElementSetMessagingTimeout(window, 0.3)
+    return try elements(window, includeTextAreaChildren: includeTextAreaChildren)
+}
+
+func macOSLogsView(_ owned: MacOSOwnedLogsApp) throws -> (nodes: [AXUIElement], view: AXUIElement, text: String) {
+    let nodes = try macOSLogsAXNodes(owned)
+    guard !nodes.isEmpty else { throw HelperError("Candidate app has no native window") }
+    let view = try find(nodes, "Connection logs", editor: true)
+    return (nodes, view, try label(view, kAXValueAttribute))
+}
+
+func macOSLogDetailsURL(_ entry: DiagnosticFiles.Entry) -> URL {
+    var components = URLComponents()
+    components.scheme = "dobbylog"
+    components.host = "record"
+    components.path = "/\(entry.id)"
+    return components.url!
+}
+
+func macOSLogDetailsIdentifier(_ url: URL) -> String? {
+    guard url.scheme == "dobbylog", url.host == "record" else { return nil }
+    let identity = url.lastPathComponent
+    return identity.isEmpty ? nil : "log.details.\(identity)"
+}
+
+func macOSLogDetailsLink(_ nodes: [AXUIElement], entry: DiagnosticFiles.Entry) throws -> AXUIElement {
+    let expectedURL = macOSLogDetailsURL(entry).absoluteString
+    var matches = [AXUIElement]()
+    for element in nodes {
+        guard try label(element, kAXRoleAttribute) == "AXLink" else { continue }
+        guard let rawURL = try attribute(element, kAXURLAttribute) else { continue }
+        let actualURL = (rawURL as? URL)?.absoluteString ?? rawURL as? String
+        if actualURL == expectedURL { matches.append(element) }
+    }
+    try require(matches.count == 1,
+                "Expected one native Details link for \(entry.id), found \(matches.count); expected URL=\(expectedURL)")
+    return matches[0]
+}
+
+func macOSLogsWindowIsReady(_ owned: MacOSOwnedLogsApp) throws -> Bool {
+    let nodes = try macOSLogsAXNodes(owned)
+    guard !nodes.isEmpty else { return false }
+    _ = try find(nodes, "Connection logs", editor: true)
+    return true
+}
+
+func activateMacOSLogsApp(_ owned: MacOSOwnedLogsApp, deadline: MacOSLogsCaseDeadline) throws {
+    try verifyMacOSLogsApp(owned)
+    try require(owned.application.activate(options: [.activateAllWindows]), "Could not activate candidate app")
+    _ = try waitMacOSLogsCase(deadline, stage: "app foreground activation") { () throws -> Bool? in
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == owned.pid ? true : nil
+    }
+}
+
+func verifyMacOSLogsApp(_ owned: MacOSOwnedLogsApp) throws {
+    guard let identity = owned.identity else {
+        throw HelperError("Refusing UI action without a valid OS process start identity for pid \(owned.pid)")
+    }
+    let current = try macOSProcessIdentity(owned.pid)
+    try require(current.executablePath == owned.executablePath && current.started == identity,
+                "Refusing UI action for a process whose OS executable/start identity changed: pid=\(owned.pid)")
+}
+
+func startMacOSLogsApp(
+    executablePath: String, fixture: MacOSLogsFixture, deadline: MacOSLogsCaseDeadline,
+    launches: inout [MacOSOwnedLogsApp], opening urls: [URL] = []
+) throws -> MacOSOwnedLogsApp {
+    try deadline.check("candidate app launch")
+    for candidate in NSWorkspace.shared.runningApplications where !candidate.isTerminated {
+        if candidate.executableURL?.resolvingSymlinksInPath().path == executablePath {
+            throw HelperError("macOS native-case requires a cold launch; exact candidate process \(candidate.processIdentifier) is already running")
+        }
+    }
+    var appURL = URL(fileURLWithPath: executablePath).deletingLastPathComponent()
+    while appURL.pathExtension.lowercased() != "app" {
+        let parent = appURL.deletingLastPathComponent()
+        try require(parent.path != appURL.path, "Candidate executable is not inside an app bundle")
+        appURL = parent
+    }
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    configuration.environment = [
+        "DOBBY_LOG_PATH": fixture.backend.path,
+        "DOBBY_UI_LOG_PATH": fixture.ui.path,
+    ]
+    var completed = false
+    var launched: NSRunningApplication?
+    var launchError: Error?
+    if urls.isEmpty {
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { application, error in
+            launched = application
+            launchError = error
+            completed = true
+        }
+    } else {
+        NSWorkspace.shared.open(urls, withApplicationAt: appURL, configuration: configuration) { application, error in
+            launched = application
+            launchError = error
+            completed = true
+        }
+    }
+    while !completed && deadline.remaining > 0 {
+        _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: min(0.05, max(0.001, deadline.remaining))))
+    }
+    try require(completed, "Candidate app launch did not return before the native-case deadline")
+    if let launchError { throw HelperError("Candidate app launch failed: \(launchError)") }
+    guard let launched, !launched.isTerminated else { throw HelperError("Candidate app launch returned no live process") }
+    try require(launched.executableURL?.resolvingSymlinksInPath().path == executablePath,
+                "Workspace returned a different executable than requested: \(launched.executableURL?.path ?? "unknown")")
+    let owned = MacOSOwnedLogsApp(application: launched, executablePath: executablePath)
+    launches.append(owned)
+    let pid = launched.processIdentifier
+    let process = try waitMacOSLogsCase(deadline, stage: "candidate OS process identity") { () -> MacOSProcessIdentity? in
+        try macOSProcessIdentity(pid)
+    }
+    try require(process.executablePath == executablePath,
+                "Candidate app process executable differs from the requested installed path: \(process.executablePath)")
+    owned.accept(process)
+    try activateMacOSLogsApp(owned, deadline: deadline)
+    _ = try waitMacOSLogsCase(deadline, stage: "native application window readiness") { () throws -> Bool? in
+        try macOSLogsWindowIsReady(owned) ? true : nil
+    }
+    return owned
+}
+
+func openMacOSProtocolURL(
+    _ url: URL, executablePath: String, deadline: MacOSLogsCaseDeadline
+) throws -> NSRunningApplication {
+    try deadline.check("protocol URL activation")
+    var appURL = URL(fileURLWithPath: executablePath).deletingLastPathComponent()
+    while appURL.pathExtension.lowercased() != "app" {
+        let parent = appURL.deletingLastPathComponent()
+        try require(parent.path != appURL.path, "Candidate executable is not inside an app bundle")
+        appURL = parent
+    }
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    var completed = false
+    var openedApplication: NSRunningApplication?
+    var openError: Error?
+    NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { application, error in
+        openedApplication = application
+        openError = error
+        completed = true
+    }
+    while !completed && deadline.remaining > 0 {
+        _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: min(0.05, max(0.001, deadline.remaining))))
+    }
+    try require(completed, "Protocol URL activation did not return before the native-case deadline")
+    if let openError { throw HelperError("Candidate app protocol URL activation failed: \(openError)") }
+    guard let application = openedApplication, !application.isTerminated,
+          application.executableURL?.resolvingSymlinksInPath().path == executablePath else {
+        throw HelperError("Protocol URL activation returned no live candidate app process")
+    }
+    return application
+}
+
+func closeMacOSLogsApp(_ owned: MacOSOwnedLogsApp, deadline: MacOSLogsCaseDeadline) throws {
+    if let identity = owned.identity {
+        do {
+            let current = try macOSProcessIdentity(owned.pid)
+            try require(current.executablePath == owned.executablePath && current.started == identity,
+                        "Refusing to close a process whose OS executable/start identity changed: pid=\(owned.pid)")
+        } catch is MacOSProcessMissing {
+            owned.result["alive_after_case"] = false
+            return
+        }
+    } else if owned.application.executableURL?.resolvingSymlinksInPath().path != owned.executablePath {
+        throw HelperError("Refusing to clean up an unidentified process whose executable path changed")
+    }
+    if !owned.application.isTerminated {
+        try require(owned.application.terminate(), "Candidate app quit request failed")
+    }
+    do {
+        _ = try waitMacOSLogsCase(deadline, stage: "owned app close") { () throws -> Bool? in
+            guard let identity = owned.identity else {
+                return owned.application.isTerminated ? true : nil
+            }
+            do {
+                let current = try macOSProcessIdentity(owned.pid)
+                try require(current.executablePath == owned.executablePath && current.started == identity,
+                            "Candidate process identity changed while closing")
+                return nil
+            } catch is MacOSProcessMissing {
+                return true
+            }
+        }
+    } catch {
+        if let identity = owned.identity {
+            let current = try macOSProcessIdentity(owned.pid)
+            try require(current.executablePath == owned.executablePath && current.started == identity,
+                        "Refusing to force-terminate a process whose OS executable/start identity changed")
+        } else if owned.application.executableURL?.resolvingSymlinksInPath().path != owned.executablePath {
+            throw HelperError("Refusing to force-terminate an unidentified process whose executable path changed")
+        }
+        try require(owned.application.forceTerminate(), "Could not terminate owned candidate process")
+        _ = try waitMacOSLogsCase(deadline, stage: "owned app termination") { () throws -> Bool? in
+            if owned.identity == nil { return owned.application.isTerminated ? true : nil }
+            do { _ = try macOSProcessIdentity(owned.pid); return nil }
+            catch is MacOSProcessMissing { return true }
+        }
+    }
+    owned.result["alive_after_case"] = false
+}
+
+func macOSLogsCaseScreenshot(
+    _ owned: MacOSOwnedLogsApp, name: String, directory: String,
+    deadline: MacOSLogsCaseDeadline, screenshots: inout [String]
+) throws {
+    try deadline.check("screenshot capture")
+    try verifyMacOSLogsApp(owned)
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    let path = URL(fileURLWithPath: directory).appendingPathComponent(name + ".png").path
+    try capture(owned.pid, path: path)
+    screenshots.append(path)
+}
+
+func postMacOSLogsScroll(
+    _ owned: MacOSOwnedLogsApp, position: String, deadline: MacOSLogsCaseDeadline
+) throws -> (start: Int, end: Int, count: Int) {
+    try require(position == "top" || position == "bottom", "Log scroll position must be top or bottom")
+    try verifyMacOSLogsApp(owned)
+    let first = try macOSLogsView(owned)
+    var parent: AXUIElement? = first.view
+    var scrollArea: AXUIElement?
+    for _ in 0..<8 {
+        guard let element = parent, let next = try axElement(element, kAXParentAttribute) else { break }
+        if try label(next, kAXRoleAttribute) == kAXScrollAreaRole { scrollArea = next; break }
+        parent = next
+    }
+    guard let area = scrollArea, let window = first.nodes.first else {
+        throw HelperError("Native log viewer has no visible scroll area")
+    }
+    let target = try bounds(first.view).intersection(bounds(area)).intersection(bounds(window))
+    try require(!target.isNull && target.width > 0 && target.height > 0,
+                "Native log viewer is outside its scroll viewport")
+    let point = CGPoint(x: target.midX, y: target.midY)
+    var sample = try visibleCharacterRange(first.view)
+    func distance(_ range: CFRange, count: Int) -> Int {
+        position == "top" ? range.location : count - range.location - range.length
+    }
+    let initialDistance = distance(sample.range, count: sample.characterCount)
+    if initialDistance <= 1 {
+        return (sample.range.location, sample.range.location + sample.range.length, sample.characterCount)
+    }
+    guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                              mouseCursorPosition: point, mouseButton: .left) else {
+        throw HelperError("Could not position the pointer over native logs")
+    }
+    moved.post(tap: .cghidEventTap)
+    var totalEvents = 0
+    var reached = false
+    for delta in [240, -240] {
+        var unchanged = 0
+        while totalEvents < 72 && deadline.remaining > 0 {
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                      wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0) else {
+                throw HelperError("Could not create native log scroll event")
+            }
+            event.location = point
+            let phase: CGScrollPhase = totalEvents == 0 ? .began : .changed
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            event.post(tap: .cghidEventTap)
+            totalEvents += 1
+            Thread.sleep(forTimeInterval: min(0.05, max(0.001, deadline.remaining)))
+            let current = try macOSLogsView(owned)
+            sample = try visibleCharacterRange(current.view)
+            let currentDistance = distance(sample.range, count: sample.characterCount)
+            if currentDistance <= 1 { reached = true; break }
+            if currentDistance < initialDistance { unchanged = 0 }
+            else { unchanged += 1 }
+            if unchanged >= 3 { break }
+        }
+        if reached { break }
+    }
+    if totalEvents > 0, let ended = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                            wheelCount: 1, wheel1: 0, wheel2: 0, wheel3: 0) {
+        ended.location = point
+        ended.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(CGScrollPhase.ended.rawValue))
+        ended.post(tap: .cghidEventTap)
+    }
+    try require(reached, "Native log viewer did not scroll to \(position)")
+    return (sample.range.location, sample.range.location + sample.range.length, sample.characterCount)
+}
+
+struct MacOSSubscriptionFixtureObservation {
+    let stats: [String: Any]
+    let requestFinishedUnixMs: Int64
+    let roundTripMilliseconds: Int64
+}
+
+func requiredMacOSSubscriptionURL(_ request: [String: Any]) throws -> String {
+    guard let value = request["subscription_url"] as? String,
+          let components = URLComponents(string: value),
+          components.scheme?.lowercased() == "https", !(components.host ?? "").isEmpty else {
+        throw HelperError("macOS native case requires an absolute HTTPS subscription_url")
+    }
+    return value
+}
+
+func macOSImportURL(_ subscription: String) throws -> URL {
+    var components = URLComponents()
+    components.scheme = "dobbyvpn"
+    components.host = "import"
+    components.queryItems = [URLQueryItem(name: "url", value: subscription)]
+    guard let url = components.url else { throw HelperError("Could not construct the native subscription import URL") }
+    return url
+}
+
+func macOSURLAppendingQuery(_ source: String, name: String, value: String) throws -> String {
+    guard var components = URLComponents(string: source),
+          components.scheme?.lowercased() == "https", !(components.host ?? "").isEmpty else {
+        throw HelperError("Cannot add (name) to a non-HTTPS subscription URL")
+    }
+    var items = components.queryItems ?? []
+    items.append(URLQueryItem(name: name, value: value))
+    components.queryItems = items
+    guard let result = components.string else {
+        throw HelperError("Could not create subscription URL with (name)")
+    }
+    return result
+}
+
+func macOSSubscriptionFixtureObservation(
+    request: [String: Any], deadline: MacOSLogsCaseDeadline
+) throws -> MacOSSubscriptionFixtureObservation {
+    guard let rawURL = request["subscription_control_url"] as? String,
+          let url = URL(string: rawURL), url.scheme?.lowercased() == "https",
+          let key = request["subscription_control_key"] as? String, !key.isEmpty else {
+        throw HelperError("macOS subscription case requires subscription_control_url and subscription_control_key")
+    }
+    try deadline.check("subscription fixture control read")
+    var controlRequest = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
+                                    timeoutInterval: min(5, max(0.1, deadline.remaining)))
+    controlRequest.httpMethod = "GET"
+    controlRequest.setValue(key, forHTTPHeaderField: "X-DobbyVPN-Torturer-Key")
+    let start = ProcessInfo.processInfo.systemUptime
+    var responseData: Data?
+    var responseError: Error?
+    let completed = DispatchSemaphore(value: 0)
+    let task = URLSession.shared.dataTask(with: controlRequest) { data, response, error in
+        responseData = data
+        if let error { responseError = error }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            responseError = HelperError("Subscription fixture control returned HTTP \(http.statusCode)")
+        }
+        completed.signal()
+    }
+    task.resume()
+    let wait = completed.wait(timeout: .now() + min(5, max(0.1, deadline.remaining)))
+    let end = ProcessInfo.processInfo.systemUptime
+    let endUnixMs = Int64(Date().timeIntervalSince1970 * 1_000)
+    if wait == .timedOut {
+        task.cancel()
+        throw HelperError("Subscription fixture control did not return before its deadline")
+    }
+    if let responseError { throw HelperError("Subscription fixture control failed: \(responseError)") }
+    guard let responseData,
+          let stats = try JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
+        throw HelperError("Subscription fixture control returned invalid JSON")
+    }
+    for name in ["subscription_gets", "last_subscription_get_started_at_unix_ms", "in_flight_gets",
+                 "max_in_flight_gets", "server_now_unix_ms"] {
+        guard let value = stats[name] as? NSNumber else {
+            throw HelperError("Subscription fixture control omitted integer field \(name)")
+        }
+        try require(CFGetTypeID(value) != CFBooleanGetTypeID(),
+                    "Subscription fixture control field \(name) was not an integer")
+    }
+    return MacOSSubscriptionFixtureObservation(
+        stats: stats, requestFinishedUnixMs: endUnixMs,
+        roundTripMilliseconds: Int64(max(0, (end - start) * 1_000))
+    )
+}
+
+func macOSReplaceSubscriptionFixtureProfile(
+    request: [String: Any], content: Data, deadline: MacOSLogsCaseDeadline
+) throws {
+    guard let rawURL = request["subscription_control_url"] as? String,
+          let url = URL(string: rawURL), url.scheme?.lowercased() == "https",
+          let key = request["subscription_control_key"] as? String, !key.isEmpty,
+          !content.isEmpty, content.count <= 1 << 20 else {
+        throw HelperError("macOS layout case requires the fixture control endpoint and a profile from 1 byte through 1 MiB")
+    }
+    try deadline.check("subscription fixture profile update")
+    var controlRequest = URLRequest(url: url.appendingPathComponent("profile"),
+                                    cachePolicy: .reloadIgnoringLocalCacheData,
+                                    timeoutInterval: min(5, max(0.1, deadline.remaining)))
+    controlRequest.httpMethod = "POST"
+    controlRequest.setValue(key, forHTTPHeaderField: "X-DobbyVPN-Torturer-Key")
+    controlRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+    controlRequest.httpBody = content
+    var responseError: Error?
+    let completed = DispatchSemaphore(value: 0)
+    let task = URLSession.shared.dataTask(with: controlRequest) { _, response, error in
+        if let error { responseError = error }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            responseError = HelperError("Subscription fixture profile update returned HTTP \(http.statusCode)")
+        }
+        if response == nil && responseError == nil {
+            responseError = HelperError("Subscription fixture profile update returned no HTTP response")
+        }
+        completed.signal()
+    }
+    task.resume()
+    if completed.wait(timeout: .now() + min(5, max(0.1, deadline.remaining))) == .timedOut {
+        task.cancel()
+        throw HelperError("Subscription fixture profile update did not return before the case deadline")
+    }
+    if let responseError { throw HelperError("Subscription fixture profile update failed: \(responseError)") }
+}
+
+func macOSSubscriptionStatsInteger(_ observation: MacOSSubscriptionFixtureObservation, _ name: String) throws -> Int64 {
+    guard let value = observation.stats[name] as? NSNumber else {
+        throw HelperError("Subscription fixture observation omitted \(name)")
+    }
+    return value.int64Value
+}
+
+func waitMacOSSubscriptionRequest(
+    request: [String: Any], deadline: MacOSLogsCaseDeadline, count: Int64
+) throws -> MacOSSubscriptionFixtureObservation {
+    var last: MacOSSubscriptionFixtureObservation?
+    while deadline.remaining > 0 {
+        let current = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+        last = current
+        let observedCount = try macOSSubscriptionStatsInteger(current, "subscription_gets")
+        try require(observedCount <= count,
+                    "Subscription fixture observed duplicate native Configure requests: expected=\(count), actual=\(observedCount)")
+        if observedCount == count,
+           try macOSSubscriptionStatsInteger(current, "in_flight_gets") == 0 {
+            return current
+        }
+        Thread.sleep(forTimeInterval: min(0.05, max(0.001, deadline.remaining)))
+    }
+    throw HelperError("Subscription fixture did not complete exactly \(count) GETs before the case deadline; last=\(String(describing: last?.stats))")
+}
+
+func waitMacOSForAcceptedInventory(
+    _ owned: MacOSOwnedLogsApp, source: String, minimumRows: Int, deadline: MacOSLogsCaseDeadline
+) throws -> (nodes: [AXUIElement], layout: [String: Any], rows: [[String: Any]]) {
+    try waitMacOSLogsCase(deadline, stage: "accepted profile inventory rendering") {
+        let nodes = try macOSLogsAXNodes(owned)
+        guard !nodes.isEmpty,
+              try label(find(nodes, "Connection configuration", editor: true), kAXValueAttribute) == source else {
+            return nil
+        }
+        let rows = try profileRowDetails(nodes)
+        let digests = Set(rows.compactMap { $0["profile_digest"] as? String })
+        guard rows.count >= minimumRows, digests.count == 1, !(digests.first ?? "").isEmpty else { return nil }
+        return (nodes, try profileListLayout(nodes), rows)
+    }
+}
+
+func macOSRenderedText(_ element: AXUIElement, identifier expected: String) throws -> String {
+    let value = try attribute(element, kAXValueAttribute) as? String ?? ""
+    if !value.isEmpty { return value }
+    let title = try attribute(element, kAXTitleAttribute) as? String ?? ""
+    if !title.isEmpty { return title }
+    return try names(element).first(where: { $0 != expected }) ?? ""
+}
+
+func macOSProfileSemanticIDsAreConsistent(_ rows: [[String: Any]]) -> Bool {
+    guard !rows.isEmpty else { return false }
+    return rows.enumerated().allSatisfy { offset, row in
+        guard let index = row["profile_index"] as? Int,
+              let digest = row["profile_digest"] as? String,
+              !digest.isEmpty else { return false }
+        return index == offset &&
+            row["description_automation_id"] as? String == "profile.\(digest).\(index).description" &&
+            row["protocol_automation_id"] as? String == "profile.\(digest).\(index).protocol" &&
+            row["action_automation_id"] as? String == "profile.\(digest).\(index).action"
+    }
+}
+
+func macOSProfileActionIsEnabled(_ nodes: [AXUIElement], automationID: String) throws -> Bool {
+    let matches = try nodes.filter { try identifier($0) == automationID }
+    guard matches.count == 1, try label(matches[0], kAXRoleAttribute) == kAXButtonRole,
+          let enabled = try attribute(matches[0], kAXEnabledAttribute) as? Bool else { return false }
+    return enabled
+}
+
+func waitMacOSForEnabledProfileAction(
+    _ owned: MacOSOwnedLogsApp, source: String, automationID: String,
+    deadline: MacOSLogsCaseDeadline
+) throws {
+    _ = try waitMacOSLogsCase(deadline, stage: "enabled digest-scoped profile action") { () throws -> Bool? in
+        let nodes = try macOSLogsAXNodes(owned)
+        guard !nodes.isEmpty,
+              try label(find(nodes, "Connection configuration", editor: true), kAXValueAttribute) == source,
+              try macOSProfileActionIsEnabled(nodes, automationID: automationID) else { return nil }
+        return true
+    }
+}
+
+func macOSRectHasArea(_ value: Any?) -> Bool {
+    guard let value = value as? [String: Any],
+          let width = value["width"] as? NSNumber,
+          let height = value["height"] as? NSNumber else { return false }
+    return width.doubleValue.isFinite && height.doubleValue.isFinite &&
+        width.doubleValue > 0 && height.doubleValue > 0
+}
+
+func macOSRect(_ value: Any?) -> CGRect? {
+    guard let value = value as? [String: Any],
+          let x = value["x"] as? NSNumber,
+          let y = value["y"] as? NSNumber,
+          let width = value["width"] as? NSNumber,
+          let height = value["height"] as? NSNumber,
+          [x, y, width, height].allSatisfy({ $0.doubleValue.isFinite }),
+          width.doubleValue > 0, height.doubleValue > 0 else { return nil }
+    return CGRect(x: CGFloat(x.doubleValue), y: CGFloat(y.doubleValue),
+                  width: CGFloat(width.doubleValue), height: CGFloat(height.doubleValue))
+}
+
+func macOSProfileLayoutGeometryIsUsable(_ layout: [String: Any]) -> Bool {
+    guard let window = macOSRect(layout["window"]),
+          let controls = macOSRect(layout["controls"]),
+          let profile = macOSRect(layout["profile_viewport"]),
+          let action = macOSRect(layout["connection_action"]),
+          let logs = macOSRect(layout["logs"]) else { return false }
+    return contained(controls, by: window) && contained(profile, by: window) &&
+        contained(action, by: window) && contained(logs, by: window) &&
+        contained(profile, by: controls) && contained(action, by: controls) &&
+        logs.width >= 160 && logs.height >= 120 &&
+        !profile.intersects(action) && !profile.intersects(logs) && !action.intersects(logs)
+}
+
+func macOSProfileActionIsUsable(
+    _ nodes: [AXUIElement], layout: [String: Any], automationID: String,
+    requireEnabled: Bool = true
+) throws -> Bool {
+    guard (layout["visible_profile_actions"] as? [String])?.contains(automationID) == true,
+          let viewport = macOSRect(layout["profile_viewport"]) else { return false }
+    let actions = try nodes.filter { try identifier($0) == automationID }
+    guard actions.count == 1, try label(actions[0], kAXRoleAttribute) == kAXButtonRole else { return false }
+    if requireEnabled {
+        let enabled = try macOSProfileActionIsEnabled(nodes, automationID: automationID)
+        if !enabled { return false }
+    }
+    return contained(try bounds(actions[0]), by: viewport)
+}
+
+func macOSMergeRenderedProfileRows(
+    _ rows: [[String: Any]], digest: String, into accumulated: inout [Int: [String: Any]]
+) throws {
+    for row in rows {
+        guard let index = row["profile_index"] as? Int,
+              row["index"] as? Int == index + 1,
+              row["profile_digest"] as? String == digest,
+              row["name"] as? String == (index == 0 ? "Profile 1" : "Layout profile \(index + 1)"),
+              row["protocol"] as? String == "OUTLINE",
+              row["action"] as? String == "Connect",
+              row["description_automation_id"] as? String == "profile.\(digest).\(index).description",
+              row["protocol_automation_id"] as? String == "profile.\(digest).\(index).protocol",
+              row["action_automation_id"] as? String == "profile.\(digest).\(index).action" else {
+            throw HelperError("A progressively rendered profile row did not match the accepted 24-row inventory")
+        }
+        if let previous = accumulated[index] {
+            let oldBytes = try JSONSerialization.data(withJSONObject: previous, options: [.sortedKeys])
+            let newBytes = try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
+            try require(oldBytes == newBytes,
+                        "Rendered profile \(index) changed metadata while scrolling")
+        } else {
+            if let last = accumulated.keys.max() {
+                try require(index > last, "Profile \(index) was realized after a later source row")
+            }
+            accumulated[index] = row
+        }
+    }
+}
+
+func macOSVerifyTwentyFourProfileLayout(
+    _ owned: MacOSOwnedLogsApp, digest: String, caseID: String,
+    requireEnabledActions: Bool,
+    deadline: MacOSLogsCaseDeadline, screenshotDirectory: String,
+    assertions: inout [[String: Any]], screenshots: inout [String]
+) throws -> [String: Any] {
+    let firstAction = "profile.\(digest).0.action"
+    let lastAction = "profile.\(digest).23.action"
+    var realized = [Int: [String: Any]]()
+    var realizedTargets = [Int]()
+    var usableActions = [Int]()
+    var geometryValid = true
+
+    _ = try scrollProfileList(try macOSLogsAXNodes(owned), position: "top", targetActionID: firstAction)
+    let topNodes = try macOSLogsAXNodes(owned)
+    let top = try profileListLayout(topNodes)
+    guard let topPosition = top["scroll_position"] as? Double,
+          abs(topPosition) <= 1,
+          let topRows = top["profile_rows"] as? [[String: Any]], !topRows.isEmpty else {
+        throw HelperError("Profile list did not expose its first realized rows at the top")
+    }
+    realizedTargets.append(0)
+    geometryValid = geometryValid && macOSProfileLayoutGeometryIsUsable(top)
+    try macOSMergeRenderedProfileRows(topRows, digest: digest, into: &realized)
+    let firstActionUsable = try macOSProfileActionIsUsable(
+        topNodes, layout: top, automationID: firstAction, requireEnabled: requireEnabledActions
+    )
+    if firstActionUsable { usableActions.append(0) }
+    try macOSNativeAssertion(&assertions, id: "first-profile-action-is-reachable-at-list-top",
+                             expected: true, actual: firstActionUsable)
+    try macOSLogsCaseScreenshot(owned, name: caseID + "-top", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    for index in 1..<23 {
+        let actionID = "profile.\(digest).\(index).action"
+        let targetPercent = Int((Double(index) * 100 / 23).rounded())
+        _ = try scrollProfileList(try macOSLogsAXNodes(owned), position: String(targetPercent),
+                                  targetActionID: actionID)
+        let nodes = try macOSLogsAXNodes(owned)
+        let layout = try profileListLayout(nodes)
+        guard let rows = layout["profile_rows"] as? [[String: Any]],
+              rows.contains(where: { $0["profile_index"] as? Int == index }),
+              (layout["visible_profile_actions"] as? [String])?.contains(actionID) == true else {
+            throw HelperError("Profile list did not realize and expose profile \(index) within its viewport")
+        }
+        realizedTargets.append(index)
+        geometryValid = geometryValid && macOSProfileLayoutGeometryIsUsable(layout)
+        try macOSMergeRenderedProfileRows(rows, digest: digest, into: &realized)
+        try require(try macOSProfileActionIsUsable(
+            nodes, layout: layout, automationID: actionID, requireEnabled: requireEnabledActions
+        ), "Profile action \(index) was not reachable within its native list viewport")
+        usableActions.append(index)
+    }
+
+    _ = try scrollProfileList(try macOSLogsAXNodes(owned), position: "bottom", targetActionID: lastAction)
+    let bottomNodes = try macOSLogsAXNodes(owned)
+    let bottom = try profileListLayout(bottomNodes)
+    guard let bottomPosition = bottom["scroll_position"] as? Double,
+          bottomPosition >= 99,
+          let bottomRows = bottom["profile_rows"] as? [[String: Any]], !bottomRows.isEmpty else {
+        throw HelperError("Profile list did not expose its last realized rows at the bottom")
+    }
+    realizedTargets.append(23)
+    geometryValid = geometryValid && macOSProfileLayoutGeometryIsUsable(bottom)
+    try macOSMergeRenderedProfileRows(bottomRows, digest: digest, into: &realized)
+    let lastActionUsable = try macOSProfileActionIsUsable(
+        bottomNodes, layout: bottom, automationID: lastAction, requireEnabled: requireEnabledActions
+    )
+    if lastActionUsable { usableActions.append(23) }
+    try macOSNativeAssertion(&assertions, id: "last-profile-action-is-reachable-at-list-bottom",
+                             expected: true, actual: lastActionUsable)
+    try macOSNativeAssertion(&assertions, id: "progressive-scroll-realizes-all-24-source-ordered-profile-rows",
+                             expected: Array(0..<24), actual: realizedTargets)
+    try macOSNativeAssertion(&assertions, id: requireEnabledActions
+                                ? "all-24-profile-actions-remain-enabled-and-reachable"
+                                : "all-24-profile-actions-remain-reachable-while-connected",
+                             expected: Array(0..<24), actual: usableActions)
+    try macOSNativeAssertion(&assertions, id: "empty-description-renders-profile-one-label",
+                             expected: "Profile 1", actual: realized[0]?["name"] as? String ?? "")
+    try macOSNativeAssertion(&assertions, id: "profile-controls-use-accepted-digest-and-index-ids",
+                             expected: true,
+                             actual: macOSProfileSemanticIDsAreConsistent(
+                                realized.keys.sorted().compactMap { realized[$0] }
+                             ))
+    try macOSNativeAssertion(&assertions, id: "profile-layout-bounds-remain-usable-through-scroll",
+                             expected: true, actual: geometryValid)
+    try macOSNativeAssertion(&assertions, id: "profile-layout-begins-at-top-and-reaches-bottom",
+                             expected: [0, 100],
+                             actual: [Int(topPosition.rounded()), Int(bottomPosition.rounded())])
+    try macOSNativeAssertion(&assertions, id: "profile-digest-stays-stable-through-scroll",
+                             expected: [digest],
+                             actual: Set(realized.values.compactMap { $0["profile_digest"] as? String }).sorted())
+    try macOSLogsCaseScreenshot(owned, name: caseID + "-bottom", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+    return ["digest": digest, "realized_profile_indices": realizedTargets,
+            "usable_profile_actions": usableActions, "geometry_valid": geometryValid]
+}
+
+func macOSDisconnectedStatus(_ nodes: [AXUIElement]) throws -> String {
+    let status = try find(nodes, "connection.status")
+    return try macOSRenderedText(status, identifier: "connection.status")
+}
+
+func waitMacOSForNoAdditionalSubscriptionGet(
+    request: [String: Any], deadline: MacOSLogsCaseDeadline, expectedCount: Int64,
+    quietMilliseconds: Int64 = 800
+) throws -> MacOSSubscriptionFixtureObservation {
+    let quietUntil = ProcessInfo.processInfo.systemUptime + Double(quietMilliseconds) / 1_000
+    var last: MacOSSubscriptionFixtureObservation?
+    repeat {
+        let current = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+        last = current
+        try require(try macOSSubscriptionStatsInteger(current, "subscription_gets") == expectedCount,
+                    "Protocol re-import unexpectedly fetched the accepted subscription again")
+        try require(try macOSSubscriptionStatsInteger(current, "in_flight_gets") == 0,
+                    "Subscription fixture still had an in-flight GET after acceptance")
+        if ProcessInfo.processInfo.systemUptime < quietUntil && deadline.remaining > 0 {
+            Thread.sleep(forTimeInterval: min(0.05, max(0.001, deadline.remaining)))
+        }
+    } while ProcessInfo.processInfo.systemUptime < quietUntil && deadline.remaining > 0
+    guard let last else { throw HelperError("Could not observe subscription fixture after protocol activation") }
+    return last
+}
+
+func macOSPerformanceURL(_ source: String, group: String, index: Int) throws -> String {
+    guard var components = URLComponents(string: source), components.scheme?.lowercased() == "https" else {
+        throw HelperError("Performance subscription URL is invalid")
+    }
+    var queryItems = components.queryItems ?? []
+    queryItems.append(URLQueryItem(
+        name: "dobby-macos-performance",
+        value: "\(group)-\(index)-\(UUID().uuidString.lowercased())"
+    ))
+    components.queryItems = queryItems
+    guard let url = components.string else { throw HelperError("Could not construct a unique performance subscription URL") }
+    return url
+}
+
+func macOSSubscriptionPerformanceMeasurements(
+    _ owned: MacOSOwnedLogsApp, source: String, request: [String: Any], fixture: MacOSLogsFixture,
+    deadline: MacOSLogsCaseDeadline
+) throws -> [String: Any] {
+    let warmupCount = 5
+    let sampleCount = 30
+    var warmups = [[String: Any]]()
+    var samples = [[String: Any]]()
+    var sampleDurations = [Double]()
+    var maximumFixtureControlRoundTripMilliseconds: Int64 = 0
+    let initial = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+    var expectedCount = try macOSSubscriptionStatsInteger(initial, "subscription_gets")
+    maximumFixtureControlRoundTripMilliseconds = initial.roundTripMilliseconds
+
+    for overallIndex in 0..<(warmupCount + sampleCount) {
+        try deadline.check("subscription performance sample")
+        let isWarmup = overallIndex < warmupCount
+        let index = isWarmup ? overallIndex : overallIndex - warmupCount
+        let group = isWarmup ? "warmup" : "sample"
+        let sampleURL = try macOSPerformanceURL(source, group: group, index: index)
+        let anchor = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+        maximumFixtureControlRoundTripMilliseconds = max(
+            maximumFixtureControlRoundTripMilliseconds, anchor.roundTripMilliseconds
+        )
+        let countBefore = try macOSSubscriptionStatsInteger(anchor, "subscription_gets")
+        try require(countBefore == expectedCount,
+                    "Subscription fixture request count changed outside the serial Paste samples")
+        let appView = try macOSLogsView(owned)
+        var invokedAtMonotonicUptime: TimeInterval?
+        _ = try pasteValueWithNativeControl(
+            owned.application, window: appView.nodes[0], value: sampleURL, expectedSource: sampleURL,
+            onInvocation: { invokedAtMonotonicUptime = ProcessInfo.processInfo.systemUptime }
+        )
+        guard let invokedAtMonotonicUptime else {
+            throw HelperError("Performance sample did not capture the native Paste invocation")
+        }
+        let configureResponse = try waitMacOSConfigureResponse(
+            fixture: fixture, source: sampleURL, deadline: deadline
+        )
+        let accepted = try waitMacOSForAcceptedInventory(owned, source: sampleURL, minimumRows: 1, deadline: deadline)
+        guard let actionID = accepted.rows.first?["action_automation_id"] as? String,
+              !actionID.isEmpty else {
+            throw HelperError("Accepted performance inventory omitted its digest-scoped profile action ID")
+        }
+        try waitMacOSForEnabledProfileAction(
+            owned, source: sampleURL, automationID: actionID, deadline: deadline
+        )
+        let completedAtMonotonicUptime = ProcessInfo.processInfo.systemUptime
+        try require(configureResponse.monotonicUptime >= invokedAtMonotonicUptime &&
+                    configureResponse.monotonicUptime <= completedAtMonotonicUptime,
+                    "Configure response and rendered-action timestamps did not follow the Paste invocation")
+        let elapsedMilliseconds = (completedAtMonotonicUptime - invokedAtMonotonicUptime) * 1_000
+        let responseToEnabledActionMilliseconds =
+            (completedAtMonotonicUptime - configureResponse.monotonicUptime) * 1_000
+        let completed = try waitMacOSSubscriptionRequest(request: request, deadline: deadline, count: countBefore + 1)
+        maximumFixtureControlRoundTripMilliseconds = max(
+            maximumFixtureControlRoundTripMilliseconds, completed.roundTripMilliseconds
+        )
+        expectedCount = countBefore + 1
+        let rowIDsValid = macOSProfileSemanticIDsAreConsistent(accepted.rows)
+        try require(rowIDsValid, "Accepted profile rows did not retain digest-scoped semantic IDs")
+        let status = try macOSDisconnectedStatus(accepted.nodes)
+        try require(status == "Disconnected", "Paste performance changed the session state: \(status)")
+
+        let timing: [String: Any] = [
+            "index": index,
+            "action": "paste",
+            "elapsed_milliseconds": elapsedMilliseconds,
+            "configure_response_to_enabled_action_milliseconds": responseToEnabledActionMilliseconds,
+            "paste_invoked_monotonic_uptime": invokedAtMonotonicUptime,
+            "configure_response_monotonic_uptime": configureResponse.monotonicUptime,
+            "enabled_action_observed_monotonic_uptime": completedAtMonotonicUptime,
+            "configure_response_diagnostic_id": configureResponse.diagnosticID,
+            "enabled_profile_action_automation_id": actionID,
+            "fixture_control_round_trip_ms_before": anchor.roundTripMilliseconds,
+            "fixture_control_round_trip_ms_after": completed.roundTripMilliseconds,
+        ]
+        if isWarmup { warmups.append(timing) }
+        else {
+            samples.append(timing)
+            sampleDurations.append(elapsedMilliseconds)
+        }
+    }
+    try require(warmups.count == warmupCount && samples.count == sampleCount && sampleDurations.count == sampleCount,
+                "Performance report did not retain the fixed warmup and sample sets")
+    let sortedDurations = sampleDurations.sorted()
+    let median = (sortedDurations[14] + sortedDurations[15]) / 2
+    let summary: [String: Any] = [
+        "median_milliseconds": median,
+        "p95_milliseconds": sortedDurations[28],
+        "maximum_milliseconds": sortedDurations[29],
+    ]
+    return [
+        "action": "paste", "warmup_count": warmupCount, "sample_count": sampleCount,
+        "measurement_boundary": "Rendered Paste invocation to successful Configure response and enabled digest-scoped profile action",
+        "monotonic_clock": "ProcessInfo.systemUptime shared by the app and native helper",
+        "fixture_clock_uncertainty": "Fixture wall-clock timestamps are not used in the measured interval; no cross-host clock synchronization is assumed",
+        "maximum_fixture_control_round_trip_ms": maximumFixtureControlRoundTripMilliseconds,
+        "reference_ms": 1_500, "blocking_gate": false,
+        "summary": summary, "warmups": warmups, "samples": samples,
+    ]
+}
+
+func macOSFixtureMarkers(caseID: String) -> [String] {
+    guard caseID.hasPrefix("logs-") else { return [] }
+    let prefix = "dobby-macos-\(caseID)-\(UUID().uuidString.lowercased())"
+    if caseID == "logs-freeze-resume" {
+        return (0..<120).map { "\(prefix)-row-\(String(format: "%03d", $0))-\(String(repeating: "x", count: 72))" }
+    }
+    return ["\(prefix)-before-clear"]
+}
+
+func assertMacOSFixtureBytes(_ fixture: MacOSLogsFixture, original: Data,
+                             expectedRecords: [DiagnosticFiles.Entry],
+                             assertions: inout [[String: Any]]) throws {
+    let current = try Data(contentsOf: fixture.backend)
+    let prefixMatches = current.count >= original.count && current.prefix(original.count).elementsEqual(original)
+    try macOSLogsAssertion(&assertions, id: "clear-preserves-original-fixture-bytes", expected: true, actual: prefixMatches)
+    for entry in expectedRecords {
+        let exactRecordExists = current.range(of: Data(entry.raw.utf8)) != nil
+        try macOSLogsAssertion(&assertions, id: "fixture-retains-record-\(entry.id)", expected: true, actual: exactRecordExists)
+    }
+}
+
+func runMacOSConnectedSessionCase(
+    request: [String: Any], executable: String, fixture: MacOSLogsFixture,
+    subscriptionURL: String, deadline: MacOSLogsCaseDeadline, screenshotDirectory: String,
+    activeApp: inout MacOSOwnedLogsApp?, launches: inout [MacOSOwnedLogsApp],
+    assertions: inout [[String: Any]], screenshots: inout [String]
+) throws -> [String: Any] {
+    try require(request["observer_enabled"] as? Bool == true,
+                "connected-session requires the duplex Go observer")
+    guard let failureSource = request["subscription_failure_url"] as? String, !failureSource.isEmpty else {
+        throw HelperError("connected-session requires subscription_failure_url")
+    }
+    let failureURL = try macOSNativeUniqueAttemptURL(failureSource)
+    let executablePath = URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
+    let observer: MacOSNativeObserver = { operation, timeoutSeconds, phase in
+        try macOSNativeObserverCall(operation, timeoutSeconds: timeoutSeconds, deadline: deadline, phase: phase)
+    }
+    let initialFixture = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+    let initialCount = try macOSSubscriptionStatsInteger(initialFixture, "subscription_gets")
+    try macOSNativeAssertion(&assertions, id: "connected-session-fixture-starts-empty", expected: 0,
+                             actual: initialCount)
+    try require(initialCount == 0, "Connected-session fixture must start with zero GETs")
+
+    let firstView = try macOSLogsView(activeApp!)
+    _ = try pasteValueWithNativeControl(activeApp!.application, window: firstView.nodes[0],
+                                        value: subscriptionURL, expectedSource: subscriptionURL)
+    let firstInventory = try waitMacOSForAcceptedInventory(
+        activeApp!, source: subscriptionURL, minimumRows: 2, deadline: deadline
+    )
+    _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: initialCount + 1)
+    let configured = try observer("snapshot", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "connected-session-native-paste-accepts-inventory",
+                             expected: true,
+                             actual: firstInventory.rows.count >= 2 &&
+                                macOSProfileSemanticIDsAreConsistent(firstInventory.rows) &&
+                                macOSNativeSnapshotValue(configured, "source_url") == subscriptionURL)
+    try macOSNativeAssertion(&assertions, id: "connected-session-status-starts-disconnected",
+                             expected: "Disconnected", actual: try macOSDisconnectedStatus(firstInventory.nodes))
+    try macOSLogsCaseScreenshot(activeApp!, name: "connected-configured", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    let prepared = try observer("prepare-connect", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "connected-session-observer-prepares-native-connect",
+                             expected: true, actual: prepared["prepared"] ?? NSNull())
+    try macOSNativePressButton(firstInventory.nodes, identifier: "VPN connection action")
+    let auto = try waitMacOSNativeSnapshot(deadline: deadline, stage: "native Auto connection",
+                                           observer: observer) {
+        macOSNativeSnapshotValue($0, "state") == "CONNECTED" &&
+            macOSNativeSnapshotValue($0, "active_mode") == "AUTO_SELECT" &&
+            ($0["active_profile"] as? [String: Any]) != nil
+    }
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Connected", deadline: deadline)
+    let autoObservations = try observer("observe", min(90, deadline.remaining), "initial-auto")
+    try macOSNativeAssertTraffic(autoObservations, phase: "initial-auto", assertions: &assertions)
+    try macOSLogsCaseScreenshot(activeApp!, name: "connected-auto", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    guard let active = auto["active_profile"] as? [String: Any],
+          let activeIndex = active["index"] as? Int,
+          let digest = macOSNativeSnapshotValue(auto, "digest"), !digest.isEmpty,
+          firstInventory.rows.count >= 2,
+          firstInventory.rows.allSatisfy({ $0["profile_digest"] as? String == digest }) else {
+        throw HelperError("Auto connection did not match the accepted digest-scoped profile inventory")
+    }
+    let cancelIndex = activeIndex == 1 ? 0 : 1
+    let cancelID = "profile.\(digest).\(cancelIndex).action"
+    let initialGeneration = macOSNativeSnapshotInteger(auto, "generation") ?? -1
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: cancelID)
+    var renderedCancel = false
+    while deadline.remaining > 0 {
+        let state = try observer("snapshot", min(30, deadline.remaining), "profile-switch-cancel")
+        if macOSNativeProfileTransitionMatches(state, index: cancelIndex),
+           try macOSNativeRenderedProfileTransition(activeApp!, digest: digest, index: cancelIndex,
+                                                    competingIndex: 1 - cancelIndex) {
+            renderedCancel = true
+            try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: cancelID)
+            break
+        }
+        if macOSNativeSnapshotValue(state, "state") == "CONNECTED",
+           (macOSNativeSnapshotInteger(state, "generation") ?? initialGeneration) > initialGeneration {
+            throw HelperError("Selected profile connected before the rendered cancellation action was observed")
+        }
+        Thread.sleep(forTimeInterval: min(0.08, max(0.001, deadline.remaining)))
+    }
+    try macOSNativeAssertion(&assertions, id: "profile-switch-cancel-exposes-rendered-stop-without-competing-action",
+                             expected: true, actual: renderedCancel)
+    try require(renderedCancel, "Profile switch did not expose its enabled digest-scoped Stop action")
+    let canceled = try waitMacOSNativeSnapshot(deadline: deadline, stage: "profile switch cancellation",
+                                                observer: observer) {
+        ["IDLE", "CONFIGURED"].contains(macOSNativeSnapshotValue($0, "state") ?? "") &&
+            macOSNativeSnapshotHasNoValue($0, "pending_target") &&
+            macOSNativeSnapshotHasNoValue($0, "active_profile")
+    }
+    try macOSNativeAssertion(&assertions, id: "profile-switch-cancel-clears-pending-and-active-profile",
+                             expected: true,
+                             actual: macOSNativeSnapshotHasNoValue(canceled, "pending_target") &&
+                                macOSNativeSnapshotHasNoValue(canceled, "active_profile"))
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Disconnected", deadline: deadline)
+    try macOSLogsCaseScreenshot(activeApp!, name: "profile-switch-cancelled", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "profile.\(digest).1.action")
+    var profileTwoStopSeen = false
+    var profileTwo: [String: Any]?
+    while deadline.remaining > 0 {
+        let state = try observer("snapshot", min(30, deadline.remaining), "profile-two-connect")
+        if macOSNativeProfileTransitionMatches(state, index: 1),
+           try macOSNativeRenderedProfileTransition(activeApp!, digest: digest, index: 1, competingIndex: 0) {
+            profileTwoStopSeen = true
+        }
+        if macOSNativeSnapshotValue(state, "state") == "CONNECTED",
+           (macOSNativeSnapshotInteger(state, "generation") ?? -1) >
+                (macOSNativeSnapshotInteger(canceled, "generation") ?? -1),
+           macOSNativeSnapshotValue(state, "active_mode") == "PROFILE_INDEX",
+           macOSNativeSnapshotInteger(state, "active_index") == 1,
+           (state["active_profile"] as? [String: Any])?["index"] as? Int == 1 {
+            profileTwo = state
+            break
+        }
+        if macOSNativeSnapshotValue(state, "state") == "FAILED" {
+            throw HelperError("Profile 2 native selection failed: \(state)")
+        }
+        Thread.sleep(forTimeInterval: min(0.08, max(0.001, deadline.remaining)))
+    }
+    guard let profileTwo else { throw HelperError("Profile 2 did not establish a new connected generation") }
+    try macOSNativeAssertion(&assertions, id: "profile-two-selection-renders-stop-before-connected",
+                             expected: true, actual: profileTwoStopSeen)
+    try require(profileTwoStopSeen, "Profile 2 connected without an enabled rendered Stop transition")
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Connected", deadline: deadline)
+    try macOSLogsCaseScreenshot(activeApp!, name: "profile-two-connected", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    let beforeFailure = try macOSSubscriptionStatsInteger(
+        macOSSubscriptionFixtureObservation(request: request, deadline: deadline), "subscription_gets")
+    try pasteValue(try macOSLogsView(activeApp!).view, value: failureURL)
+    _ = try waitMacOSLogsCase(deadline, stage: "visible failed-load Retry control") { () throws -> Bool? in
+        let nodes = try macOSLogsAXNodes(activeApp!)
+        guard let retry = try? find(nodes, "subscription.retry"),
+              try attribute(retry, kAXEnabledAttribute) as? Bool == true else { return nil }
+        return true
+    }
+    _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: beforeFailure + 1)
+    let failedState = try observer("snapshot", min(30, deadline.remaining), nil)
+    let failedNodes = try macOSLogsAXNodes(activeApp!)
+    let failedActions = try macOSNativeProfileActions(failedNodes)
+    try macOSNativeAssertion(&assertions, id: "failed-load-retains-profile-two-active-generation",
+                             expected: true,
+                             actual: macOSNativeIsActiveGeneration(failedState, sameAs: profileTwo) &&
+                                (failedState["active_profile"] as? [String: Any])?["index"] as? Int == 1)
+    try macOSNativeAssertion(&assertions, id: "failed-load-keeps-retry-visible-and-session-connected",
+                             expected: true,
+                             actual: try macOSRenderedText(find(failedNodes, "connection.status"),
+                                                           identifier: "connection.status") == "Connected" &&
+                                failedActions.contains(where: { $0.enabled && $0.title == "Disconnect" }))
+    let failedStats = try macOSNativeWaitForNoAdditionalGet(request, deadline: deadline, count: beforeFailure + 1)
+    try macOSNativeAssertion(&assertions, id: "failed-load-does-not-automatically-retry",
+                             expected: beforeFailure + 1,
+                             actual: try macOSSubscriptionStatsInteger(failedStats, "subscription_gets"))
+    try macOSLogsCaseScreenshot(activeApp!, name: "failed-load-retry-visible", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "subscription.retry")
+    let retryCount = beforeFailure + 2
+    _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: retryCount)
+    let retriedInventory = try waitMacOSForAcceptedInventory(activeApp!, source: failureURL,
+                                                              minimumRows: 2, deadline: deadline)
+    let retried = try waitMacOSNativeSnapshot(deadline: deadline, stage: "successful same-URL Retry",
+                                              observer: observer) {
+        macOSNativeSnapshotValue($0, "source_url") == failureURL &&
+            macOSNativeIsActiveGeneration($0, sameAs: profileTwo)
+    }
+    try macOSNativeAssertion(&assertions, id: "retry-reuses-failed-url-and-retains-active-generation",
+                             expected: true,
+                             actual: try label(find(retriedInventory.nodes, "Connection configuration", editor: true),
+                                               kAXValueAttribute) == failureURL &&
+                                macOSNativeIsActiveGeneration(retried, sameAs: profileTwo))
+    let afterRetryQuiet = try macOSNativeWaitForNoAdditionalGet(request, deadline: deadline, count: retryCount)
+    try macOSNativeAssertion(&assertions, id: "retry-makes-exactly-one-additional-request",
+                             expected: retryCount,
+                             actual: try macOSSubscriptionStatsInteger(afterRetryQuiet, "subscription_gets"))
+
+    let warmURL = try macOSPerformanceURL(subscriptionURL, group: "connected-warm-import", index: 1)
+    let beforeWarm = retryCount
+    let warmApp = try openMacOSProtocolURL(try macOSImportURL(warmURL), executablePath: executablePath,
+                                            deadline: deadline)
+    try macOSNativeAssertion(&assertions, id: "warm-os-link-reuses-current-app-process",
+                             expected: Int(activeApp!.pid), actual: Int(warmApp.processIdentifier))
+    _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: beforeWarm + 1)
+    let warmedInventory = try waitMacOSForAcceptedInventory(activeApp!, source: warmURL,
+                                                            minimumRows: 2, deadline: deadline)
+    let warmed = try waitMacOSNativeSnapshot(deadline: deadline, stage: "warm OS protocol import",
+                                             observer: observer) {
+        macOSNativeSnapshotValue($0, "source_url") == warmURL &&
+            macOSNativeIsActiveGeneration($0, sameAs: profileTwo)
+    }
+    try macOSNativeAssertion(&assertions, id: "warm-os-link-preserves-active-generation-and-digest",
+                             expected: true,
+                             actual: macOSNativeIsActiveGeneration(warmed, sameAs: profileTwo) &&
+                                macOSNativeSnapshotValue(warmed, "digest") == digest &&
+                                macOSProfileSemanticIDsAreConsistent(warmedInventory.rows))
+    let warmQuiet = try macOSNativeWaitForNoAdditionalGet(request, deadline: deadline, count: beforeWarm + 1)
+    try macOSNativeAssertion(&assertions, id: "warm-os-link-performs-one-get",
+                             expected: beforeWarm + 1,
+                             actual: try macOSSubscriptionStatsInteger(warmQuiet, "subscription_gets"))
+    try macOSLogsCaseScreenshot(activeApp!, name: "warm-import-connected", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "VPN connection action")
+    let disconnected = try waitMacOSNativeSnapshot(deadline: deadline, stage: "native Disconnect cleanup",
+                                                    observer: observer) {
+        ["IDLE", "CONFIGURED"].contains(macOSNativeSnapshotValue($0, "state") ?? "") &&
+            macOSNativeSnapshotHasNoValue($0, "pending_target") &&
+            macOSNativeSnapshotHasNoValue($0, "active_profile")
+    }
+    let cleanup = try observer("cleanup", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "native-disconnect-leaves-no-tunnel-and-verifies-cleanup",
+                             expected: ["connected": false, "cleanup_verified": true],
+                             actual: ["connected": cleanup["connected"] ?? NSNull(),
+                                      "cleanup_verified": cleanup["cleanup_verified"] ?? NSNull()])
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Disconnected", deadline: deadline)
+    try macOSNativeAssertion(&assertions, id: "native-disconnect-clears-active-selection",
+                             expected: true,
+                             actual: macOSNativeSnapshotHasNoValue(disconnected, "active_profile") &&
+                                macOSNativeSnapshotHasNoValue(disconnected, "pending_target"))
+    try macOSLogsCaseScreenshot(activeApp!, name: "disconnected-cleanup", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    guard let savedSource = macOSNativeSnapshotValue(warmed, "source_url"), !savedSource.isEmpty else {
+        throw HelperError("Connected-session did not retain a saved subscription URL")
+    }
+    let countBeforeRestore = beforeWarm + 1
+    try closeMacOSLogsApp(activeApp!, deadline: MacOSLogsCaseDeadline(min(10, deadline.remaining)))
+    activeApp = nil
+    let restart = try observer("restart-service", min(60, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "service-restart-verifies-process-loss",
+                             expected: true, actual: restart["process_loss_verified"] ?? NSNull())
+    let emptyInventory = try observer("snapshot", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "service-restart-keeps-saved-url-with-empty-inventory",
+                             expected: true,
+                             actual: macOSNativeSnapshotBoolean(emptyInventory, "configured") == false &&
+                                ((emptyInventory["profiles"] as? [Any])?.isEmpty == true) &&
+                                macOSNativeSnapshotValue(emptyInventory, "source_url") == savedSource)
+    activeApp = try startMacOSLogsApp(executablePath: executablePath, fixture: fixture, deadline: deadline,
+                                      launches: &launches)
+    _ = try waitMacOSForAcceptedInventory(activeApp!, source: savedSource, minimumRows: 2, deadline: deadline)
+    _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: countBeforeRestore + 1)
+    let restored = try waitMacOSNativeSnapshot(deadline: deadline, stage: "saved URL inventory restoration",
+                                               observer: observer) {
+        macOSNativeSnapshotBoolean($0, "configured") == true &&
+            macOSNativeSnapshotValue($0, "source_url") == savedSource &&
+            macOSNativeSnapshotHasNoValue($0, "active_profile") &&
+            macOSNativeSnapshotHasNoValue($0, "pending_target") &&
+            ["IDLE", "CONFIGURED"].contains(macOSNativeSnapshotValue($0, "state") ?? "")
+    }
+    try macOSNativeAssertion(&assertions, id: "reopen-restores-saved-inventory-while-idle",
+                             expected: true,
+                             actual: macOSNativeSnapshotBoolean(restored, "configured") == true &&
+                                macOSNativeSnapshotHasNoValue(restored, "active_profile"))
+    let restoreQuiet = try macOSNativeWaitForNoAdditionalGet(request, deadline: deadline,
+                                                              count: countBeforeRestore + 1)
+    try macOSNativeAssertion(&assertions, id: "saved-url-restoration-fetches-once",
+                             expected: countBeforeRestore + 1,
+                             actual: try macOSSubscriptionStatsInteger(restoreQuiet, "subscription_gets"))
+    try macOSNativeAssertion(&assertions, id: "saved-url-restoration-renders-disconnected",
+                             expected: "Disconnected",
+                             actual: try macOSDisconnectedStatus(try macOSLogsAXNodes(activeApp!)))
+
+    _ = try observer("prepare-connect", min(30, deadline.remaining), nil)
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "VPN connection action")
+    let reconnected = try waitMacOSNativeSnapshot(deadline: deadline, stage: "native reconnect after inventory restore",
+                                                   observer: observer) {
+        macOSNativeSnapshotValue($0, "state") == "CONNECTED" &&
+            macOSNativeSnapshotValue($0, "active_mode") == "AUTO_SELECT" &&
+            ($0["active_profile"] as? [String: Any]) != nil
+    }
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Connected", deadline: deadline)
+    let reconnectObservations = try observer("observe", min(90, deadline.remaining), "restored-inventory-reconnect")
+    try macOSNativeAssertTraffic(reconnectObservations, phase: "restored-inventory-reconnect", assertions: &assertions)
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "About")
+    let about = try waitMacOSLogsCase(deadline, stage: "About metadata") { () -> (String, String)? in
+        let nodes = try macOSLogsAXNodes(activeApp!)
+        guard let version = try? macOSRenderedText(find(nodes, "About version metadata"), identifier: "About version metadata"),
+              let sourceCommit = try? macOSRenderedText(find(nodes, "About source commit metadata"), identifier: "About source commit metadata"),
+              version.hasPrefix("Version: "), sourceCommit.hasPrefix("Source commit: ") else { return nil }
+        return (version, sourceCommit)
+    }
+    try macOSNativeAssertion(&assertions, id: "connected-session-about-version-and-source-commit-render",
+                             expected: true,
+                             actual: about.0.dropFirst("Version: ".count).count > 0 &&
+                                about.1.dropFirst("Source commit: ".count).count > 0)
+    if let sourceSHA = request["source_sha"] as? String, !sourceSHA.isEmpty {
+        try macOSNativeAssertion(&assertions, id: "connected-session-about-source-matches-selected-revision",
+                                 expected: "Source commit: \(sourceSHA)", actual: about.1)
+    }
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "Done")
+    try macOSLogsCaseScreenshot(activeApp!, name: "about-metadata", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    let coldURL = try macOSPerformanceURL(subscriptionURL, group: "connected-cold-import", index: 1)
+    let beforeCold = countBeforeRestore + 1
+    let connectedBeforeCold = try observer("snapshot", min(30, deadline.remaining), nil)
+    try closeMacOSLogsApp(activeApp!, deadline: MacOSLogsCaseDeadline(min(10, deadline.remaining)))
+    activeApp = nil
+    activeApp = try startMacOSLogsApp(executablePath: executablePath, fixture: fixture, deadline: deadline,
+                                      launches: &launches, opening: [try macOSImportURL(coldURL)])
+    _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: beforeCold + 1)
+    let coldInventory = try waitMacOSForAcceptedInventory(activeApp!, source: coldURL, minimumRows: 2,
+                                                           deadline: deadline)
+    let coldConnected = try waitMacOSNativeSnapshot(deadline: deadline, stage: "cold OS import while connected",
+                                                     observer: observer) {
+        macOSNativeSnapshotValue($0, "source_url") == coldURL &&
+            macOSNativeIsActiveGeneration($0, sameAs: connectedBeforeCold)
+    }
+    let coldQuiet = try macOSNativeWaitForNoAdditionalGet(request, deadline: deadline, count: beforeCold + 1)
+    try macOSNativeAssertion(&assertions, id: "cold-os-link-reopens-and-imports-in-one-get",
+                             expected: beforeCold + 1,
+                             actual: try macOSSubscriptionStatsInteger(coldQuiet, "subscription_gets"))
+    try macOSNativeAssertion(&assertions, id: "cold-os-link-preserves-connected-generation",
+                             expected: true,
+                             actual: macOSNativeIsActiveGeneration(coldConnected, sameAs: connectedBeforeCold) &&
+                                macOSProfileSemanticIDsAreConsistent(coldInventory.rows))
+    try macOSLogsCaseScreenshot(activeApp!, name: "cold-import-connected", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    try closeMacOSLogsApp(activeApp!, deadline: MacOSLogsCaseDeadline(min(10, deadline.remaining)))
+    activeApp = nil
+    activeApp = try startMacOSLogsApp(executablePath: executablePath, fixture: fixture, deadline: deadline,
+                                      launches: &launches)
+    _ = try waitMacOSForAcceptedInventory(activeApp!, source: coldURL, minimumRows: 2, deadline: deadline)
+    let reused = try waitMacOSNativeSnapshot(deadline: deadline, stage: "reopened accepted inventory reuse",
+                                              observer: observer) {
+        macOSNativeSnapshotValue($0, "source_url") == coldURL &&
+            macOSNativeSnapshotValue($0, "digest") == macOSNativeSnapshotValue(coldConnected, "digest") &&
+            macOSNativeIsActiveGeneration($0, sameAs: coldConnected)
+    }
+    let reusedQuiet = try macOSNativeWaitForNoAdditionalGet(request, deadline: deadline, count: beforeCold + 1)
+    try macOSNativeAssertion(&assertions, id: "reopened-connected-inventory-does-not-refetch",
+                             expected: beforeCold + 1,
+                             actual: try macOSSubscriptionStatsInteger(reusedQuiet, "subscription_gets"))
+    try macOSNativeAssertion(&assertions, id: "reopened-inventory-retains-active-generation-and-digest",
+                             expected: true, actual: macOSNativeIsActiveGeneration(reused, sameAs: coldConnected))
+    try macOSLogsCaseScreenshot(activeApp!, name: "reopened-inventory-reused", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    let loss = try observer("restart-service", min(60, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "connected-session-process-loss-is-verified",
+                             expected: true, actual: loss["process_loss_verified"] ?? NSNull())
+    _ = try observer("prepare-connect", min(30, deadline.remaining), nil)
+    let beforeRecoveryConfigure = beforeCold + 1
+    let recoveryView = try macOSLogsView(activeApp!)
+    _ = try pasteValueWithNativeControl(activeApp!.application, window: recoveryView.nodes[0],
+                                        value: subscriptionURL, expectedSource: subscriptionURL)
+    _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: beforeRecoveryConfigure + 1)
+    _ = try waitMacOSForAcceptedInventory(activeApp!, source: subscriptionURL, minimumRows: 2,
+                                          deadline: deadline)
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "VPN connection action")
+    let recovered = try waitMacOSNativeSnapshot(deadline: deadline, stage: "native UI process-loss reconnect",
+                                                 observer: observer) {
+        macOSNativeSnapshotValue($0, "state") == "CONNECTED" &&
+            macOSNativeSnapshotValue($0, "active_mode") == "AUTO_SELECT" &&
+            ($0["active_profile"] as? [String: Any]) != nil
+    }
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Connected", deadline: deadline)
+    let recoveryObservations = try observer("observe", min(90, deadline.remaining), "process-loss-reconnect")
+    try macOSNativeAssertTraffic(recoveryObservations, phase: "process-loss-reconnect", assertions: &assertions)
+    try macOSNativeAssertion(&assertions, id: "process-loss-reconnect-establishes-new-auto-generation",
+                             expected: "AUTO_SELECT", actual: macOSNativeSnapshotValue(recovered, "active_mode") ?? "")
+    try macOSLogsCaseScreenshot(activeApp!, name: "process-loss-reconnected", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "VPN connection action")
+    _ = try waitMacOSNativeSnapshot(deadline: deadline, stage: "final native Disconnect cleanup", observer: observer) {
+        ["IDLE", "CONFIGURED"].contains(macOSNativeSnapshotValue($0, "state") ?? "") &&
+            macOSNativeSnapshotHasNoValue($0, "active_profile") &&
+            macOSNativeSnapshotHasNoValue($0, "pending_target")
+    }
+    let finalCleanup = try observer("cleanup", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "final-disconnect-clears-tunnel-and-verifies-cleanup",
+                             expected: ["connected": false, "cleanup_verified": true],
+                             actual: ["connected": finalCleanup["connected"] ?? NSNull(),
+                                      "cleanup_verified": finalCleanup["cleanup_verified"] ?? NSNull()])
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Disconnected", deadline: deadline)
+    try macOSLogsCaseScreenshot(activeApp!, name: "final-disconnected", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+    return ["initial_generation": initialGeneration,
+            "profile_two_generation": macOSNativeSnapshotInteger(profileTwo, "generation") ?? -1,
+            "restored_reconnect_generation": macOSNativeSnapshotInteger(reconnected, "generation") ?? -1,
+            "process_loss_reconnect_generation": macOSNativeSnapshotInteger(recovered, "generation") ?? -1,
+            "subscription_gets": try macOSSubscriptionStatsInteger(
+                macOSSubscriptionFixtureObservation(request: request, deadline: deadline), "subscription_gets")]
+}
+
+func macOSSyntheticLayoutInventory() -> Data {
+    let profiles = (0..<24).map { index in
+        let description = index == 0 ? "" : "Layout profile \(index + 1)"
+        return "[[Outline]]\nDescription = \"\(description)\"\nServer = \"127.0.0.1\"\nPort = 9\nPassword = \"never-connect-layout-\(index + 1)\""
+    }
+    return Data(profiles.joined(separator: "\n\n").utf8)
+}
+
+func runMacOSConnectedLayoutCase(
+    request: [String: Any], subscriptionURL: String, deadline: MacOSLogsCaseDeadline,
+    screenshotDirectory: String, activeApp: inout MacOSOwnedLogsApp?,
+    assertions: inout [[String: Any]], screenshots: inout [String]
+) throws -> [String: Any] {
+    try require(request["observer_enabled"] as? Bool == true,
+                "connected-layout requires the duplex Go observer")
+    guard let profilePath = request["subscription_profile_path"] as? String, !profilePath.isEmpty else {
+        throw HelperError("connected-layout requires the source profile path for exact inventory restoration")
+    }
+    let originalBytes = try Data(contentsOf: URL(fileURLWithPath: profilePath))
+    try require(!originalBytes.isEmpty && originalBytes.count <= 1 << 20,
+                "connected-layout source profile must contain 1 byte through 1 MiB")
+    let observer: MacOSNativeObserver = { operation, timeoutSeconds, phase in
+        try macOSNativeObserverCall(operation, timeoutSeconds: timeoutSeconds, deadline: deadline, phase: phase)
+    }
+    let initialStats = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+    let initialCount = try macOSSubscriptionStatsInteger(initialStats, "subscription_gets")
+    try macOSNativeAssertion(&assertions, id: "connected-layout-fixture-starts-empty",
+                             expected: 0, actual: initialCount)
+    try require(initialCount == 0, "Connected-layout fixture must start with zero GETs")
+
+    let input = try macOSLogsView(activeApp!)
+    _ = try pasteValueWithNativeControl(activeApp!.application, window: input.nodes[0],
+                                        value: subscriptionURL, expectedSource: subscriptionURL)
+    let originalInventory = try waitMacOSForAcceptedInventory(
+        activeApp!, source: subscriptionURL, minimumRows: 1, deadline: deadline
+    )
+    _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: initialCount + 1)
+    let originalSnapshot = try observer("snapshot", min(30, deadline.remaining), nil)
+    guard let originalDigest = originalInventory.rows.first?["profile_digest"] as? String,
+          !originalDigest.isEmpty,
+          let originalProfiles = originalSnapshot["profiles"] as? [[String: Any]],
+          !originalProfiles.isEmpty else {
+        throw HelperError("Connected-layout Configure did not expose its accepted real profile inventory")
+    }
+    try require(originalProfiles.count == 2 && originalInventory.rows.count == 2,
+                "Connected-layout requires the original two-profile inventory used for restoration")
+    try macOSNativeAssertion(&assertions, id: "connected-layout-source-inventory-is-accepted",
+                             expected: ["source_url": subscriptionURL,
+                                        "digest": originalDigest,
+                                        "profile_count": originalProfiles.count],
+                             actual: ["source_url": macOSNativeSnapshotValue(originalSnapshot, "source_url") ?? "",
+                                      "digest": macOSNativeSnapshotValue(originalSnapshot, "digest") ?? "",
+                                      "profile_count": originalProfiles.count])
+    try require(macOSNativeSnapshotValue(originalSnapshot, "source_url") == subscriptionURL &&
+                macOSNativeSnapshotValue(originalSnapshot, "digest") == originalDigest,
+                "Go snapshot and rendered native profile inventory did not agree before connecting")
+    try macOSNativeAssertion(&assertions, id: "connected-layout-source-profile-controls-use-accepted-digest",
+                             expected: true, actual: macOSProfileSemanticIDsAreConsistent(originalInventory.rows))
+    try macOSLogsCaseScreenshot(activeApp!, name: "connected-layout-original-inventory",
+                                directory: screenshotDirectory, deadline: deadline, screenshots: &screenshots)
+
+    let prepared = try observer("prepare-connect", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "connected-layout-observer-prepares-native-connect",
+                             expected: true, actual: prepared["prepared"] ?? NSNull())
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "VPN connection action")
+    let connected = try waitMacOSNativeSnapshot(deadline: deadline, stage: "connected layout Auto session",
+                                                 observer: observer) {
+        macOSNativeSnapshotValue($0, "state") == "CONNECTED" &&
+            macOSNativeSnapshotValue($0, "active_mode") == "AUTO_SELECT" &&
+            ($0["active_profile"] as? [String: Any]) != nil &&
+            macOSNativeSnapshotValue($0, "digest") == originalDigest
+    }
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Connected", deadline: deadline)
+    let traffic = try observer("observe", min(90, deadline.remaining), "connected-layout-before-inventory-change")
+    try macOSNativeAssertTraffic(traffic, phase: "connected-layout-before-inventory-change", assertions: &assertions)
+    let originalGeneration = macOSNativeSnapshotInteger(connected, "generation") ?? -1
+    try macOSLogsCaseScreenshot(activeApp!, name: "connected-layout-before-replacement",
+                                directory: screenshotDirectory, deadline: deadline, screenshots: &screenshots)
+
+    let synthetic = macOSSyntheticLayoutInventory()
+    try macOSReplaceSubscriptionFixtureProfile(request: request, content: synthetic, deadline: deadline)
+    let layoutURL = try macOSURLAppendingQuery(subscriptionURL, name: "connected-layout", value: "24")
+    let beforeLayout = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+    let beforeLayoutCount = try macOSSubscriptionStatsInteger(beforeLayout, "subscription_gets")
+    let layoutOpen = try openMacOSProtocolURL(macOSImportURL(layoutURL),
+        executablePath: activeApp!.executablePath, deadline: deadline)
+    try macOSNativeAssertion(&assertions, id: "connected-layout-import-reuses-owned-native-process",
+                             expected: Int(activeApp!.pid), actual: Int(layoutOpen.processIdentifier))
+    let largeInventory = try waitMacOSForAcceptedInventory(
+        activeApp!, source: layoutURL, minimumRows: 1, deadline: deadline
+    )
+    let largeRequest = try macOSNativeWaitForSubscription(request, deadline: deadline,
+                                                         count: beforeLayoutCount + 1)
+    let largeSnapshot = try waitMacOSNativeSnapshot(deadline: deadline, stage: "connected 24-profile inventory",
+                                                     observer: observer) {
+        macOSNativeSnapshotValue($0, "source_url") == layoutURL &&
+            macOSNativeSnapshotValue($0, "state") == "CONNECTED" &&
+            macOSNativeSnapshotValue($0, "digest") != originalDigest
+    }
+    guard let layoutDigest = largeInventory.rows.first?["profile_digest"] as? String,
+          !layoutDigest.isEmpty,
+          let layoutProfiles = largeSnapshot["profiles"] as? [[String: Any]] else {
+        throw HelperError("Connected 24-profile inventory omitted its digest or Go profile inventory")
+    }
+    try macOSNativeAssertion(&assertions, id: "connected-layout-import-loads-all-24-source-profiles-once",
+                             expected: ["profile_count": 24, "subscription_gets": beforeLayoutCount + 1],
+                             actual: ["profile_count": layoutProfiles.count,
+                                      "subscription_gets": try macOSSubscriptionStatsInteger(largeRequest, "subscription_gets")])
+    try require(layoutProfiles.count == 24 && largeInventory.rows.count >= 1 &&
+                macOSProfileSemanticIDsAreConsistent(largeInventory.rows),
+                "Connected layout import did not expose the new 24-profile inventory and scoped IDs")
+    let activeDigest = macOSNativeSnapshotValue(largeSnapshot, "active_digest") ?? ""
+    try macOSNativeAssertion(&assertions, id: "connected-layout-inventory-digest-differs-from-active-digest",
+                             expected: true, actual: !activeDigest.isEmpty && layoutDigest != activeDigest)
+    try require(!activeDigest.isEmpty && layoutDigest != activeDigest,
+                "Accepted replacement inventory must differ from the still-active profile digest")
+    try macOSNativeAssertion(&assertions, id: "connected-layout-replacement-preserves-active-profile-and-generation",
+                             expected: true, actual: try macOSNativeActiveProfileMatches(largeSnapshot, previous: connected))
+    try require(try macOSNativeActiveProfileMatches(largeSnapshot, previous: connected),
+                "Loading the long profile inventory changed the live active profile or generation")
+    try macOSNativeAssertion(&assertions, id: "connected-layout-replacement-keeps-session-rendered-connected",
+                             expected: "Connected",
+                             actual: try macOSDisconnectedStatus(try macOSLogsAXNodes(activeApp!)))
+    try require(try macOSDisconnectedStatus(try macOSLogsAXNodes(activeApp!)) == "Connected",
+                "Connected 24-profile inventory did not preserve the rendered connection status")
+    let layoutChecks = try macOSVerifyTwentyFourProfileLayout(
+        activeApp!, digest: layoutDigest, caseID: "connected-layout", requireEnabledActions: true,
+        deadline: deadline,
+        screenshotDirectory: screenshotDirectory, assertions: &assertions, screenshots: &screenshots
+    )
+
+    try macOSReplaceSubscriptionFixtureProfile(request: request, content: originalBytes, deadline: deadline)
+    let restoreURL = try macOSURLAppendingQuery(subscriptionURL, name: "connected-layout", value: "restore")
+    let beforeRestore = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+    let beforeRestoreCount = try macOSSubscriptionStatsInteger(beforeRestore, "subscription_gets")
+    let restoreOpen = try openMacOSProtocolURL(macOSImportURL(restoreURL),
+        executablePath: activeApp!.executablePath, deadline: deadline)
+    try macOSNativeAssertion(&assertions, id: "connected-layout-restore-reuses-owned-native-process",
+                             expected: Int(activeApp!.pid), actual: Int(restoreOpen.processIdentifier))
+    let restoredInventory = try waitMacOSForAcceptedInventory(
+        activeApp!, source: restoreURL, minimumRows: 1, deadline: deadline
+    )
+    let restoredRequest = try macOSNativeWaitForSubscription(request, deadline: deadline,
+                                                             count: beforeRestoreCount + 1)
+    let restored = try waitMacOSNativeSnapshot(deadline: deadline, stage: "restored connected real inventory",
+                                                observer: observer) {
+        macOSNativeSnapshotValue($0, "source_url") == restoreURL &&
+            macOSNativeSnapshotValue($0, "state") == "CONNECTED" &&
+            macOSNativeSnapshotValue($0, "digest") == originalDigest
+    }
+    let restoredProfiles = restored["profiles"] as? [[String: Any]] ?? []
+    try macOSNativeAssertion(&assertions, id: "connected-layout-restores-original-inventory-with-one-get",
+                             expected: ["digest": originalDigest, "profile_count": originalProfiles.count,
+                                        "subscription_gets": beforeRestoreCount + 1],
+                             actual: ["digest": macOSNativeSnapshotValue(restored, "digest") ?? "",
+                                      "profile_count": restoredProfiles.count,
+                                      "subscription_gets": try macOSSubscriptionStatsInteger(restoredRequest, "subscription_gets")])
+    try macOSNativeAssertion(&assertions, id: "connected-layout-restore-preserves-active-profile-and-generation",
+                             expected: true, actual: try macOSNativeActiveProfileMatches(restored, previous: connected))
+    try macOSNativeAssertion(&assertions, id: "connected-layout-restore-renders-original-profile-controls",
+                             expected: true,
+                             actual: restoredProfiles.count == originalProfiles.count &&
+                                restoredInventory.rows.first?["profile_digest"] as? String == originalDigest &&
+                                macOSProfileSemanticIDsAreConsistent(restoredInventory.rows))
+    try macOSNativeAssertion(&assertions, id: "connected-layout-restore-remains-connected-in-native-window",
+                             expected: "Connected",
+                             actual: try macOSDisconnectedStatus(try macOSLogsAXNodes(activeApp!)))
+    try macOSLogsCaseScreenshot(activeApp!, name: "connected-layout-restored-inventory",
+                                directory: screenshotDirectory, deadline: deadline, screenshots: &screenshots)
+
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "VPN connection action")
+    let disconnected = try waitMacOSNativeSnapshot(deadline: deadline, stage: "connected-layout Disconnect cleanup",
+                                                    observer: observer) {
+        ["IDLE", "CONFIGURED"].contains(macOSNativeSnapshotValue($0, "state") ?? "") &&
+            macOSNativeSnapshotHasNoValue($0, "active_profile") &&
+            macOSNativeSnapshotHasNoValue($0, "pending_target")
+    }
+    let cleanup = try observer("cleanup", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "connected-layout-final-disconnect-verifies-tunnel-cleanup",
+                             expected: ["connected": false, "cleanup_verified": true],
+                             actual: ["connected": cleanup["connected"] ?? NSNull(),
+                                      "cleanup_verified": cleanup["cleanup_verified"] ?? NSNull()])
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Disconnected", deadline: deadline)
+    try macOSLogsCaseScreenshot(activeApp!, name: "connected-layout-disconnected",
+                                directory: screenshotDirectory, deadline: deadline, screenshots: &screenshots)
+    return ["initial_generation": originalGeneration,
+            "layout_generation": macOSNativeSnapshotInteger(largeSnapshot, "generation") ?? -1,
+            "restored_generation": macOSNativeSnapshotInteger(restored, "generation") ?? -1,
+            "final_generation": macOSNativeSnapshotInteger(disconnected, "generation") ?? -1,
+            "original_digest": originalDigest, "layout_digest": layoutDigest,
+            "layout_checks": layoutChecks,
+            "subscription_gets": try macOSSubscriptionStatsInteger(
+                macOSSubscriptionFixtureObservation(request: request, deadline: deadline), "subscription_gets")]
+}
+
+func runMacOSAutoRecoveryStopCase(
+    request: [String: Any], subscriptionURL: String, deadline: MacOSLogsCaseDeadline,
+    screenshotDirectory: String, activeApp: inout MacOSOwnedLogsApp?,
+    assertions: inout [[String: Any]], screenshots: inout [String]
+) throws -> [String: Any] {
+    try require(request["observer_enabled"] as? Bool == true,
+                "auto-recovery-stop requires the duplex Go observer")
+    guard let marker = request["auto_recovery_marker"] as? String, !marker.isEmpty else {
+        throw HelperError("auto-recovery-stop requires auto_recovery_marker")
+    }
+    try require(!FileManager.default.fileExists(atPath: marker),
+                "Auto-recovery marker already exists before verified route and traffic")
+    let observer: MacOSNativeObserver = { operation, timeoutSeconds, phase in
+        try macOSNativeObserverCall(operation, timeoutSeconds: timeoutSeconds, deadline: deadline, phase: phase)
+    }
+    let startView = try macOSLogsView(activeApp!)
+    _ = try pasteValueWithNativeControl(activeApp!.application, window: startView.nodes[0],
+                                        value: subscriptionURL, expectedSource: subscriptionURL)
+    _ = try waitMacOSForAcceptedInventory(activeApp!, source: subscriptionURL, minimumRows: 2,
+                                          deadline: deadline)
+    let configuredCount = try macOSSubscriptionStatsInteger(
+        macOSSubscriptionFixtureObservation(request: request, deadline: deadline), "subscription_gets")
+    try macOSNativeAssertion(&assertions, id: "recovery-stop-configure-makes-one-request",
+                             expected: 1, actual: configuredCount)
+    try require(configuredCount == 1, "Auto-recovery fixture was not loaded exactly once")
+    let prepared = try observer("prepare-connect", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "recovery-stop-observer-prepares-native-connect",
+                             expected: true, actual: prepared["prepared"] ?? NSNull())
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "VPN connection action")
+    let initial = try waitMacOSNativeSnapshot(deadline: deadline, stage: "Auto connected before recovery marker",
+                                               observer: observer) {
+        macOSNativeSnapshotValue($0, "state") == "CONNECTED" &&
+            macOSNativeSnapshotValue($0, "active_mode") == "AUTO_SELECT" &&
+            ($0["active_profile"] as? [String: Any]) != nil
+    }
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Connected", deadline: deadline)
+    let traffic = try observer("observe", min(90, deadline.remaining), "auto-before-recovery-marker")
+    try macOSNativeAssertTraffic(traffic, phase: "auto-before-recovery-marker", assertions: &assertions)
+    try macOSLogsCaseScreenshot(activeApp!, name: "auto-recovery-connected", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+
+    try FileManager.default.createDirectory(at: URL(fileURLWithPath: marker).deletingLastPathComponent(),
+                                            withIntermediateDirectories: true)
+    try Data("armed after real route and traffic\n".utf8)
+        .write(to: URL(fileURLWithPath: marker), options: .withoutOverwriting)
+    let initialGeneration = macOSNativeSnapshotInteger(initial, "generation") ?? -1
+    let recovering = try waitMacOSNativeSnapshot(deadline: deadline, stage: "subsequent Auto recovery generation",
+                                                  observer: observer) {
+        macOSNativeSnapshotBoolean($0, "recovering") == true &&
+            (macOSNativeSnapshotInteger($0, "generation") ?? initialGeneration) > initialGeneration
+    }
+    let recoveryGeneration = macOSNativeSnapshotInteger(recovering, "generation") ?? -1
+    var stopRendered = false
+    _ = try waitMacOSLogsCase(deadline, stage: "Auto recovery enabled Stop and disabled profile actions") { () throws -> Bool? in
+        let nodes = try macOSLogsAXNodes(activeApp!)
+        let main = try verifiedConnectionAction(nodes, identifier: "VPN connection action")
+        let mainIsStop = try names(main).contains("Stop")
+        let profileActions = try macOSNativeProfileActions(nodes)
+        guard mainIsStop && profileActions.allSatisfy({ !$0.enabled }) else { return nil }
+        stopRendered = true
+        return true
+    }
+    try macOSNativeAssertion(&assertions, id: "auto-recovery-renders-enabled-stop-with-no-competing-profile-actions",
+                             expected: true, actual: stopRendered)
+    try macOSLogsCaseScreenshot(activeApp!, name: "auto-recovery-stop", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+    try macOSNativePressButton(try macOSLogsAXNodes(activeApp!), identifier: "VPN connection action")
+    let stopped = try waitMacOSNativeSnapshot(deadline: deadline, stage: "recovery Stop settles and cleans up",
+                                               observer: observer) {
+        ["IDLE", "CONFIGURED"].contains(macOSNativeSnapshotValue($0, "state") ?? "") &&
+            macOSNativeSnapshotBoolean($0, "cleanup_complete") == true &&
+            macOSNativeSnapshotBoolean($0, "recovering") == false &&
+            macOSNativeSnapshotHasNoValue($0, "pending_target") &&
+            macOSNativeSnapshotHasNoValue($0, "active_profile")
+    }
+    _ = try macOSNativeWaitForStatus(activeApp!, expected: "Disconnected", deadline: deadline)
+    let cleanup = try observer("cleanup", min(30, deadline.remaining), nil)
+    try macOSNativeAssertion(&assertions, id: "auto-recovery-stop-verifies-no-tunnel-and-cleanup",
+                             expected: ["connected": false, "cleanup_verified": true],
+                             actual: ["connected": cleanup["connected"] ?? NSNull(),
+                                      "cleanup_verified": cleanup["cleanup_verified"] ?? NSNull()])
+    let stoppedGeneration = macOSNativeSnapshotInteger(stopped, "generation") ?? -1
+    let stableUntil = ProcessInfo.processInfo.systemUptime + 3
+    var stable = true
+    while ProcessInfo.processInfo.systemUptime < stableUntil {
+        let current = try observer("snapshot", min(10, max(0.1, stableUntil - ProcessInfo.processInfo.systemUptime)),
+                                   "recovery-stop-stability")
+        if macOSNativeSnapshotInteger(current, "generation") != stoppedGeneration ||
+            macOSNativeSnapshotBoolean(current, "recovering") != false ||
+            !macOSNativeSnapshotHasNoValue(current, "pending_target") ||
+            !macOSNativeSnapshotHasNoValue(current, "active_profile") ||
+            !["IDLE", "CONFIGURED"].contains(macOSNativeSnapshotValue(current, "state") ?? "") ||
+            macOSNativeSnapshotBoolean(current, "cleanup_complete") != true {
+            stable = false
+            break
+        }
+        Thread.sleep(forTimeInterval: min(0.1, max(0.001, stableUntil - ProcessInfo.processInfo.systemUptime)))
+    }
+    try macOSNativeAssertion(&assertions, id: "no-recovery-generation-resumes-after-stop", expected: true,
+                             actual: stable)
+    try require(stable, "Auto connection resumed after rendered recovery Stop")
+    try macOSLogsCaseScreenshot(activeApp!, name: "auto-recovery-stopped", directory: screenshotDirectory,
+                                deadline: deadline, screenshots: &screenshots)
+    return ["initial_generation": initialGeneration, "recovery_generation": recoveryGeneration,
+            "stopped_generation": stoppedGeneration]
+}
+
+func runMacOSNativeCase(_ request: [String: Any]) throws -> [String: Any] {
+    guard let resultPath = request["result_path"] as? String, !resultPath.isEmpty else {
+        throw HelperError("native-case request is missing result_path")
+    }
+    let caseID = request["case"] as? String ?? "unknown"
+    var assertions = [[String: Any]]()
+    var screenshots = [String]()
+    var diagnosticErrors = [String]()
+    var cleanupErrors = [String]()
+    var launches = [MacOSOwnedLogsApp]()
+    var activeApp: MacOSOwnedLogsApp?
+    var result: [String: Any] = [
+        "case_id": caseID, "outcome": "not-run", "assertions": [],
+        "elapsed_seconds": 0.0, "setup_seconds": 0.0, "cleanup_seconds": 0.0,
+        "cleanup_errors": [], "error": NSNull(), "screenshots": [],
+        "diagnostic_errors": [], "app_processes": [],
+    ]
+
+    let overallStart = ProcessInfo.processInfo.systemUptime
+    var setupComplete = false
+    var originalFailure: String?
+    var screenshotDirectory = ""
+    var caseDeadline: MacOSLogsCaseDeadline?
+    var fixtureEntries = [DiagnosticFiles.Entry]()
+    var originalFixtureBytes = Data()
+    var markers = [String]()
+    var subscriptionURL = ""
+    var fixtureStatsBefore: MacOSSubscriptionFixtureObservation?
+    var performanceMeasurements: [String: Any]?
+    do {
+        guard let executable = request["executable"] as? String, !executable.isEmpty,
+              let fixturePath = request["fixture_log"] as? String, !fixturePath.isEmpty,
+              let requestedDirectory = request["screenshot_directory"] as? String, !requestedDirectory.isEmpty,
+              let rawTimeout = request["timeout_seconds"] as? NSNumber else {
+            throw HelperError("native-case request is missing executable, fixture_log, screenshot_directory, or timeout_seconds")
+        }
+        let timeout = rawTimeout.doubleValue
+        try require(timeout.isFinite && timeout > 0 && timeout <= 600,
+                    "macOS native-case timeout must be finite and between zero and 600 seconds")
+        let deadline = MacOSLogsCaseDeadline(timeout)
+        caseDeadline = deadline
+        let supportedCases: Set<String> = [
+            "logs-details", "logs-freeze-resume", "logs-clear", "logs-reopen-clear-boundary",
+            "configure-acceptance", "paste-input", "imports-cold", "imports-warm",
+            "profiles-layout", "about", "text-size-eligibility", "subscription-load-performance",
+            "connected-session", "connected-layout", "auto-recovery-stop",
+        ]
+        try require(supportedCases.contains(caseID), "Unsupported macOS native-case: \(caseID)")
+        try require(FileManager.default.fileExists(atPath: executable), "Candidate .app executable does not exist: \(executable)")
+        try require(AXIsProcessTrusted(), "Accessibility permission unavailable for macOS native-case")
+        try require(CGPreflightScreenCaptureAccess(), "Screen recording permission unavailable for macOS native-case")
+
+        let subscriptionCases: Set<String> = [
+            "configure-acceptance", "paste-input", "imports-cold", "imports-warm",
+            "profiles-layout", "subscription-load-performance", "connected-session", "connected-layout",
+            "auto-recovery-stop",
+        ]
+        if subscriptionCases.contains(caseID) {
+            subscriptionURL = try requiredMacOSSubscriptionURL(request)
+            fixtureStatsBefore = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+            try require(try macOSSubscriptionStatsInteger(fixtureStatsBefore!, "subscription_gets") == 0,
+                        "macOS native subscription fixture must start with zero GETs")
+        }
+
+        let backend = URL(fileURLWithPath: fixturePath).standardizedFileURL
+        let ui = URL(fileURLWithPath: fixturePath + ".ui.jsonl").standardizedFileURL
+        let configuredFixture = MacOSLogsFixture(backend: backend, ui: ui)
+        screenshotDirectory = URL(fileURLWithPath: requestedDirectory).standardizedFileURL.path
+        for candidate in configuredFixture.paths + [configuredFixture.boundary] {
+            for path in [candidate, URL(fileURLWithPath: candidate.path + ".previous"), URL(fileURLWithPath: candidate.path + ".lock")] {
+                try require(!FileManager.default.fileExists(atPath: path.path),
+                            "macOS native-case requires fresh fixture paths; existing path: \(path.path)")
+            }
+        }
+        try FileManager.default.createDirectory(at: backend.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: screenshotDirectory, withIntermediateDirectories: true)
+        markers = macOSFixtureMarkers(caseID: caseID)
+        if !markers.isEmpty {
+            if caseID == "logs-freeze-resume" {
+                for marker in markers { try configuredFixture.append(marker) }
+            }
+            else { try configuredFixture.append(markers[0]) }
+            fixtureEntries = try markers.map { try configuredFixture.entry(message: $0) }
+        } else {
+            try require(FileManager.default.createFile(atPath: backend.path, contents: Data()),
+                        "Could not create empty backend log fixture")
+            try require(FileManager.default.createFile(atPath: ui.path, contents: Data()),
+                        "Could not create empty UI log fixture")
+        }
+        originalFixtureBytes = try Data(contentsOf: backend)
+        let openingURLs = caseID == "imports-cold" ? [try macOSImportURL(subscriptionURL)] : []
+        activeApp = try startMacOSLogsApp(executablePath: URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+                                         fixture: configuredFixture, deadline: deadline, launches: &launches,
+                                         opening: openingURLs)
+        if !markers.isEmpty {
+            _ = try waitMacOSLogsCase(deadline, stage: "initial diagnostic fixture rendering") {
+                let observed = try macOSLogsView(activeApp!)
+                return markers.allSatisfy { observed.text.contains($0) } ? observed : nil
+            }
+        } else {
+            _ = try waitMacOSLogsCase(deadline, stage: "initial native window rendering") { () throws -> Bool? in
+                try macOSLogsWindowIsReady(activeApp!) ? true : nil
+            }
+        }
+        result["setup_seconds"] = ProcessInfo.processInfo.systemUptime - overallStart
+        result["fixture_log"] = backend.path
+        result["fixture_ui_log"] = ui.path
+        result["screenshot_directory"] = screenshotDirectory
+        setupComplete = true
+
+        switch caseID {
+        case "connected-session":
+            result["case_context"] = try runMacOSConnectedSessionCase(
+                request: request, executable: executable, fixture: configuredFixture,
+                subscriptionURL: subscriptionURL, deadline: deadline, screenshotDirectory: screenshotDirectory,
+                activeApp: &activeApp, launches: &launches, assertions: &assertions, screenshots: &screenshots
+            )
+
+        case "connected-layout":
+            result["case_context"] = try runMacOSConnectedLayoutCase(
+                request: request, subscriptionURL: subscriptionURL, deadline: deadline,
+                screenshotDirectory: screenshotDirectory, activeApp: &activeApp,
+                assertions: &assertions, screenshots: &screenshots
+            )
+
+        case "auto-recovery-stop":
+            result["case_context"] = try runMacOSAutoRecoveryStopCase(
+                request: request, subscriptionURL: subscriptionURL, deadline: deadline,
+                screenshotDirectory: screenshotDirectory, activeApp: &activeApp,
+                assertions: &assertions, screenshots: &screenshots
+            )
+
+        case "logs-details":
+            let entry = fixtureEntries[0]
+            let details = try waitMacOSLogsCase(deadline, stage: "stable Details link discovery") { () -> (AXUIElement, URL)? in
+                let nodes = try macOSLogsAXNodes(activeApp!, includeTextAreaChildren: true)
+                let link = try macOSLogDetailsLink(nodes, entry: entry)
+                let raw = try attribute(link, kAXURLAttribute)
+                let url = (raw as? URL) ?? ((raw as? String).flatMap(URL.init(string:)))
+                return url.map { (link, $0) }
+            }
+            let controlID = macOSLogDetailsIdentifier(details.1) ?? ""
+            try macOSLogsAssertion(&assertions, id: "details-link-stable-entry-identifier",
+                                  expected: "log.details.\(entry.id)", actual: controlID)
+            let accessibleName = try names(details.0).first(where: { $0 != details.1.absoluteString }) ?? ""
+            try macOSLogsAssertion(&assertions, id: "details-link-accessible-name", expected: "Details", actual: accessibleName)
+            let pressCode = AXUIElementPerformAction(details.0, kAXPressAction as CFString)
+            try require(pressCode == .success, "Native Details link AXPress failed: \(pressCode.rawValue)")
+            let expandedText = try waitMacOSLogsCase(deadline, stage: "original record Details expansion") {
+                let value = try macOSLogsView(activeApp!).text
+                return value.contains(entry.raw) ? value : nil
+            }
+            let rawRange = (expandedText as NSString).range(of: entry.raw)
+            let displayedRaw: Any = rawRange.location == NSNotFound
+                ? NSNull() : (expandedText as NSString).substring(with: rawRange)
+            try macOSLogsAssertion(&assertions, id: "details-expands-original-json-record", expected: entry.raw, actual: displayedRaw)
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-expanded", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+
+        case "logs-freeze-resume":
+            let initial = try macOSLogsView(activeApp!)
+            let initialRange = try visibleCharacterRange(initial.view)
+            try macOSLogsAssertion(&assertions, id: "initial-view-follows-tail", expected: true,
+                                  actual: initialRange.range.location + initialRange.range.length >= initialRange.characterCount - 2)
+            let frozenRange = try postMacOSLogsScroll(activeApp!, position: "top", deadline: deadline)
+            try require(frozenRange.end < frozenRange.count, "Fixture did not overflow the native log viewport")
+            let refreshInterval = 0.8
+            try require(deadline.remaining > refreshInterval,
+                        "Case deadline expired before a production log refresh could observe the frozen view")
+            Thread.sleep(forTimeInterval: refreshInterval)
+            let anchor = try macOSLogsView(activeApp!)
+            let appendPrefix = markers[0].components(separatedBy: "-row-")[0]
+            let appendedMarkers = ["\(appendPrefix)-append-a", "\(appendPrefix)-append-b"]
+            for marker in appendedMarkers { try configuredFixture.append(marker) }
+            let appended = try appendedMarkers.map { try configuredFixture.entry(message: $0) }
+            try macOSLogsAssertion(&assertions, id: "scroll-pauses-live-log-view", expected: false,
+                                  actual: appendedMarkers.contains { anchor.text.contains($0) })
+            _ = try waitMacOSLogsCase(deadline, stage: "controlled app-side log polling") { () throws -> Bool? in
+                if try configuredFixture.entries().contains(where: { $0.id == appended[1].id }) { return true }
+                return nil
+            }
+            let frozen = try macOSLogsView(activeApp!)
+            let frozenPosition = try visibleCharacterRange(frozen.view)
+            try macOSLogsAssertion(&assertions, id: "frozen-view-holds-new-records", expected: false,
+                                  actual: appendedMarkers.contains { frozen.text.contains($0) })
+            try macOSLogsAssertion(&assertions, id: "frozen-reading-position-does-not-advance",
+                                  expected: frozenRange.start, actual: frozenPosition.range.location)
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-frozen", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+            let afterEventBytes = try Data(contentsOf: configuredFixture.backend)
+            try require(afterEventBytes.count >= originalFixtureBytes.count &&
+                        afterEventBytes.prefix(originalFixtureBytes.count).elementsEqual(originalFixtureBytes),
+                        "Controlled producer changed original fixture bytes")
+            let resumedRange = try postMacOSLogsScroll(activeApp!, position: "bottom", deadline: deadline)
+            let resumed = try waitMacOSLogsCase(deadline, stage: "live log follow resume") {
+                let value = try macOSLogsView(activeApp!).text
+                return appendedMarkers.allSatisfy { value.contains($0) } ? value : nil
+            }
+            try macOSLogsAssertion(&assertions, id: "resumed-view-shows-concurrent-appends", expected: true,
+                                  actual: appendedMarkers.allSatisfy(resumed.contains))
+            try macOSLogsAssertion(&assertions, id: "resumed-view-follows-tail", expected: true,
+                                  actual: resumedRange.end >= resumedRange.count - 2)
+            try assertMacOSFixtureBytes(configuredFixture, original: originalFixtureBytes,
+                                        expectedRecords: fixtureEntries + appended, assertions: &assertions)
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-resumed", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+
+        case "logs-clear", "logs-reopen-clear-boundary":
+            let before = fixtureEntries[0]
+            let clearMarker = try macOSLogsView(activeApp!)
+            try macOSLogsAssertion(&assertions, id: "pre-clear-record-is-rendered", expected: true,
+                                  actual: clearMarker.text.contains(before.message))
+            try activateMacOSLogsApp(activeApp!, deadline: deadline)
+            let clearNodes = try macOSLogsAXNodes(activeApp!)
+            let clear = try find(clearNodes, "logs.clear")
+            try macOSLogsAssertion(&assertions, id: "clear-control-accessible-name", expected: "Clear",
+                                  actual: try names(clear).first(where: { $0 != "logs.clear" }) ?? "")
+            try press(clear)
+            _ = try waitMacOSLogsCase(deadline, stage: "production Clear boundary") {
+                let observed = try macOSLogsView(activeApp!)
+                return observed.text.contains(before.message) ? nil : observed
+            }
+            let clearedEntries = try configuredFixture.entries()
+            try macOSLogsAssertion(&assertions, id: "clear-hides-pre-clear-entry-by-production-identity",
+                                  expected: false, actual: clearedEntries.contains(where: { $0.id == before.id }))
+            let afterMarker = markers[0].replacingOccurrences(of: "-before-clear", with: "-after-clear")
+            try configuredFixture.append(afterMarker)
+            let after = try configuredFixture.entry(message: afterMarker)
+            _ = try waitMacOSLogsCase(deadline, stage: "post-Clear record rendering") {
+                let observed = try macOSLogsView(activeApp!)
+                return observed.text.contains(after.message) ? observed : nil
+            }
+            let afterNodes = try macOSLogsAXNodes(activeApp!, includeTextAreaChildren: true)
+            let afterLink = try macOSLogDetailsLink(afterNodes, entry: after)
+            let afterURLValue = try attribute(afterLink, kAXURLAttribute)
+            let afterURL = (afterURLValue as? URL) ?? ((afterURLValue as? String).flatMap(URL.init(string:)))
+            try macOSLogsAssertion(&assertions, id: "post-clear-details-control-is-entry-scoped",
+                                  expected: "log.details.\(after.id)",
+                                  actual: afterURL.flatMap(macOSLogDetailsIdentifier) ?? "")
+
+            if caseID == "logs-reopen-clear-boundary" {
+                let previousPID = activeApp!.pid
+                let previousIdentity = activeApp!.identity
+                try closeMacOSLogsApp(activeApp!, deadline: deadline)
+                activeApp = try startMacOSLogsApp(executablePath: URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+                                                  fixture: configuredFixture, deadline: deadline, launches: &launches)
+                let reopened = try waitMacOSLogsCase(deadline, stage: "reopened clear-boundary rendering") {
+                    let observed = try macOSLogsView(activeApp!)
+                    return observed.text.contains(after.message) && !observed.text.contains(before.message) ? observed : nil
+                }
+                try macOSLogsAssertion(&assertions, id: "reopen-starts-new-os-process",
+                                      expected: true,
+                                      actual: activeApp!.pid != previousPID && activeApp!.identity != previousIdentity)
+                try macOSLogsAssertion(&assertions, id: "pre-clear-record-stays-hidden-after-reopen",
+                                      expected: false, actual: reopened.text.contains(before.message))
+                try macOSLogsAssertion(&assertions, id: "post-clear-record-survives-reopen",
+                                      expected: true, actual: reopened.text.contains(after.message))
+            }
+            try assertMacOSFixtureBytes(configuredFixture, original: originalFixtureBytes,
+                                        expectedRecords: [before, after], assertions: &assertions)
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + (caseID == "logs-clear" ? "-post-append" : "-reopened"),
+                                        directory: screenshotDirectory, deadline: deadline, screenshots: &screenshots)
+
+        case "configure-acceptance", "paste-input":
+            let before = fixtureStatsBefore!
+            let beforeCount = try macOSSubscriptionStatsInteger(before, "subscription_gets")
+            let appView = try macOSLogsView(activeApp!)
+            let invokedAt: Int64?
+            if caseID == "paste-input" {
+                invokedAt = try pasteValueWithNativeControl(
+                    activeApp!.application, window: appView.nodes[0], value: subscriptionURL,
+                    expectedSource: subscriptionURL
+                )
+            } else {
+                try pasteValue(find(appView.nodes, "Connection configuration", editor: true), value: subscriptionURL)
+                invokedAt = nil
+            }
+            let accepted = try waitMacOSForAcceptedInventory(
+                activeApp!, source: subscriptionURL, minimumRows: 1, deadline: deadline
+            )
+            let after = try waitMacOSSubscriptionRequest(
+                request: request, deadline: deadline, count: beforeCount + 1
+            )
+            let acceptedCount = accepted.rows.count
+            try macOSNativeAssertion(&assertions, id: "subscription-field-renders-requested-url",
+                                     expected: subscriptionURL,
+                                     actual: try label(find(accepted.nodes, "Connection configuration", editor: true), kAXValueAttribute))
+            try macOSNativeAssertion(&assertions, id: "accepted-profile-inventory-is-nonempty",
+                                     expected: true, actual: acceptedCount > 0)
+            try macOSNativeAssertion(&assertions, id: "profile-controls-use-accepted-inventory-digest",
+                                     expected: true, actual: macOSProfileSemanticIDsAreConsistent(accepted.rows))
+            try macOSNativeAssertion(&assertions, id: "subscription-action-makes-one-profile-request",
+                                     expected: beforeCount + 1,
+                                     actual: try macOSSubscriptionStatsInteger(after, "subscription_gets"))
+            try macOSNativeAssertion(&assertions, id: "accepted-inventory-keeps-session-disconnected",
+                                     expected: "Disconnected", actual: try macOSDisconnectedStatus(accepted.nodes))
+            if let invokedAt {
+                try macOSNativeAssertion(&assertions, id: "paste-action-records-native-invocation-time",
+                                         expected: true, actual: invokedAt > 0)
+            }
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-accepted", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+
+        case "imports-cold":
+            let before = fixtureStatsBefore!
+            let beforeCount = try macOSSubscriptionStatsInteger(before, "subscription_gets")
+            let accepted = try waitMacOSForAcceptedInventory(
+                activeApp!, source: subscriptionURL, minimumRows: 1, deadline: deadline
+            )
+            let after = try waitMacOSSubscriptionRequest(
+                request: request, deadline: deadline, count: beforeCount + 1
+            )
+            try macOSNativeAssertion(&assertions, id: "cold-protocol-import-populates-subscription-field",
+                                     expected: subscriptionURL,
+                                     actual: try label(find(accepted.nodes, "Connection configuration", editor: true), kAXValueAttribute))
+            try macOSNativeAssertion(&assertions, id: "cold-protocol-import-accepts-inventory",
+                                     expected: true, actual: !accepted.rows.isEmpty)
+            try macOSNativeAssertion(&assertions, id: "cold-protocol-import-uses-digest-scoped-profile-controls",
+                                     expected: true, actual: macOSProfileSemanticIDsAreConsistent(accepted.rows))
+            try macOSNativeAssertion(&assertions, id: "cold-protocol-import-makes-one-profile-request",
+                                     expected: beforeCount + 1,
+                                     actual: try macOSSubscriptionStatsInteger(after, "subscription_gets"))
+            try macOSNativeAssertion(&assertions, id: "cold-protocol-import-keeps-session-disconnected",
+                                     expected: "Disconnected", actual: try macOSDisconnectedStatus(accepted.nodes))
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-accepted", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+
+        case "imports-warm":
+            let before = fixtureStatsBefore!
+            let beforeCount = try macOSSubscriptionStatsInteger(before, "subscription_gets")
+            let appView = try macOSLogsView(activeApp!)
+            try pasteValue(find(appView.nodes, "Connection configuration", editor: true), value: subscriptionURL)
+            let configured = try waitMacOSForAcceptedInventory(
+                activeApp!, source: subscriptionURL, minimumRows: 1, deadline: deadline
+            )
+            _ = try waitMacOSSubscriptionRequest(request: request, deadline: deadline, count: beforeCount + 1)
+            let previousPID = activeApp!.pid
+            let opened = try openMacOSProtocolURL(
+                macOSImportURL(subscriptionURL),
+                executablePath: URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+                deadline: deadline
+            )
+            try require(opened.processIdentifier == previousPID,
+                        "Warm protocol import did not reuse the existing candidate process")
+            let reimported = try waitMacOSForAcceptedInventory(
+                activeApp!, source: subscriptionURL, minimumRows: configured.rows.count, deadline: deadline
+            )
+            let after = try waitMacOSForNoAdditionalSubscriptionGet(
+                request: request, deadline: deadline, expectedCount: beforeCount + 1
+            )
+            try macOSNativeAssertion(&assertions, id: "warm-protocol-import-reuses-one-candidate-process",
+                                     expected: true,
+                                     actual: opened.processIdentifier == previousPID && activeApp!.pid == previousPID)
+            try macOSNativeAssertion(&assertions, id: "warm-protocol-import-preserves-accepted-profile-digest",
+                                     expected: configured.rows[0]["profile_digest"] as? String ?? "",
+                                     actual: reimported.rows[0]["profile_digest"] as? String ?? "")
+            try macOSNativeAssertion(&assertions, id: "warm-protocol-import-does-not-refetch",
+                                     expected: beforeCount + 1,
+                                     actual: try macOSSubscriptionStatsInteger(after, "subscription_gets"))
+            try macOSNativeAssertion(&assertions, id: "warm-protocol-import-retains-semantic-control-ids",
+                                     expected: true, actual: macOSProfileSemanticIDsAreConsistent(reimported.rows))
+            try macOSNativeAssertion(&assertions, id: "warm-protocol-import-keeps-session-disconnected",
+                                     expected: "Disconnected", actual: try macOSDisconnectedStatus(reimported.nodes))
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-accepted", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+
+        case "profiles-layout":
+            let before = fixtureStatsBefore!
+            let beforeCount = try macOSSubscriptionStatsInteger(before, "subscription_gets")
+            let appView = try macOSLogsView(activeApp!)
+            try pasteValue(find(appView.nodes, "Connection configuration", editor: true), value: subscriptionURL)
+            let accepted = try waitMacOSForAcceptedInventory(
+                activeApp!, source: subscriptionURL, minimumRows: 1, deadline: deadline
+            )
+            let after = try waitMacOSSubscriptionRequest(
+                request: request, deadline: deadline, count: beforeCount + 1
+            )
+            guard let digest = accepted.rows.first?["profile_digest"] as? String, !digest.isEmpty else {
+                throw HelperError("Accepted 24-row layout inventory omitted its authoritative digest")
+            }
+            try macOSNativeAssertion(&assertions, id: "layout-subscription-makes-one-profile-request",
+                                     expected: beforeCount + 1,
+                                     actual: try macOSSubscriptionStatsInteger(after, "subscription_gets"))
+            try macOSNativeAssertion(&assertions, id: "profile-layout-keeps-session-disconnected",
+                                     expected: "Disconnected", actual: try macOSDisconnectedStatus(accepted.nodes))
+
+            result["case_context"] = try macOSVerifyTwentyFourProfileLayout(
+                activeApp!, digest: digest, caseID: caseID, requireEnabledActions: true, deadline: deadline,
+                screenshotDirectory: screenshotDirectory, assertions: &assertions,
+                screenshots: &screenshots
+            )
+
+        case "about":
+            let initialNodes = try macOSLogsAXNodes(activeApp!)
+            try press(find(initialNodes, "About"))
+            let about = try waitMacOSLogsCase(deadline, stage: "About sheet metadata rendering") { () -> [String: Any]? in
+                let nodes = try macOSLogsAXNodes(activeApp!)
+                guard let version = try? macOSRenderedText(find(nodes, "About version metadata"),
+                                                           identifier: "About version metadata"),
+                      let sourceCommit = try? macOSRenderedText(find(nodes, "About source commit metadata"),
+                                                               identifier: "About source commit metadata"),
+                      version.hasPrefix("Version: "), sourceCommit.hasPrefix("Source commit: ") else { return nil }
+                return ["nodes": nodes, "version": version, "source_commit": sourceCommit]
+            }
+            try macOSNativeAssertion(&assertions, id: "about-version-metadata-is-rendered",
+                                     expected: true, actual: !(about["version"] as? String ?? "").dropFirst("Version: ".count).isEmpty)
+            let sourceCommit = about["source_commit"] as? String ?? ""
+            if let sourceSHA = request["source_sha"] as? String, !sourceSHA.isEmpty {
+                try macOSNativeAssertion(&assertions, id: "about-source-commit-matches-selected-source",
+                                         expected: "Source commit: \(sourceSHA)", actual: sourceCommit)
+            } else {
+                try macOSNativeAssertion(&assertions, id: "about-source-commit-is-rendered",
+                                         expected: true, actual: sourceCommit.count > "Source commit: ".count)
+            }
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-metadata", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+
+        case "text-size-eligibility":
+            guard let processIdentity = activeApp!.identity else {
+                throw HelperError("Installed app has no verified process identity for Text Size inspection")
+            }
+            let details = try inspectMacOSTextSize(
+                executablePath: URL(fileURLWithPath: executable).resolvingSymlinksInPath().path,
+                candidateApp: activeApp!.application, candidatePID: activeApp!.pid,
+                candidateIdentity: processIdentity,
+                reactivateCandidate: { try activateMacOSLogsApp(activeApp!, deadline: deadline) }
+            )
+            try macOSNativeAssertion(&assertions, id: "text-size-settings-inventory-is-complete",
+                                     expected: true, actual: details["available"] as? Bool == true &&
+                                        details["rows_complete"] as? Bool == true)
+            try macOSNativeAssertion(&assertions, id: "installed-app-text-size-eligibility-is-established",
+                                     expected: false, actual: details["eligible"] as? Bool ?? true)
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-observed", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+
+        case "subscription-load-performance":
+            let measurements = try macOSSubscriptionPerformanceMeasurements(
+                activeApp!, source: subscriptionURL, request: request,
+                fixture: configuredFixture, deadline: deadline
+            )
+            performanceMeasurements = measurements
+            try macOSNativeAssertion(&assertions, id: "performance-warmup-and-sample-counts",
+                                     expected: ["warmup_count": 5, "sample_count": 30],
+                                     actual: ["warmup_count": measurements["warmup_count"] as? Int ?? 0,
+                                              "sample_count": measurements["sample_count"] as? Int ?? 0])
+            try macOSNativeAssertion(&assertions, id: "performance-reports-1500ms-reference-without-a-gate",
+                                     expected: ["reference_ms": 1_500, "blocking_gate": false],
+                                     actual: ["reference_ms": measurements["reference_ms"] as? Int ?? 0,
+                                              "blocking_gate": measurements["blocking_gate"] as? Bool ?? true])
+            try macOSNativeAssertion(
+                &assertions, id: "performance-measures-paste-through-response-and-enabled-semantic-action",
+                expected: "Rendered Paste invocation to successful Configure response and enabled digest-scoped profile action",
+                actual: measurements["measurement_boundary"] as? String ?? ""
+            )
+            try macOSNativeAssertion(
+                &assertions, id: "performance-does-not-assume-fixture-clock-synchronization",
+                expected: "Fixture wall-clock timestamps are not used in the measured interval; no cross-host clock synchronization is assumed",
+                actual: measurements["fixture_clock_uncertainty"] as? String ?? ""
+            )
+            let finalStats = try macOSSubscriptionFixtureObservation(request: request, deadline: deadline)
+            let finalCount = try macOSSubscriptionStatsInteger(finalStats, "subscription_gets")
+            try macOSNativeAssertion(&assertions, id: "performance-issues-exactly-35-serial-paste-requests",
+                                     expected: 35, actual: finalCount)
+            try macOSNativeAssertion(&assertions, id: "performance-has-no-concurrent-subscription-requests",
+                                     expected: 1,
+                                     actual: try macOSSubscriptionStatsInteger(finalStats, "max_in_flight_gets"))
+            try macOSNativeAssertion(&assertions, id: "performance-finishes-with-no-in-flight-request",
+                                     expected: 0,
+                                     actual: try macOSSubscriptionStatsInteger(finalStats, "in_flight_gets"))
+            try macOSLogsCaseScreenshot(activeApp!, name: caseID + "-summary", directory: screenshotDirectory,
+                                        deadline: deadline, screenshots: &screenshots)
+
+        default:
+            throw HelperError("Unsupported macOS native-case: \(caseID)")
+        }
+        try require(!assertions.isEmpty && assertions.allSatisfy { $0["outcome"] as? String == "passed" },
+                    "macOS native-case completed without all required assertions passing")
+        result["outcome"] = "passed"
+    } catch {
+        originalFailure = String(reflecting: error)
+        if !setupComplete { result["setup_seconds"] = ProcessInfo.processInfo.systemUptime - overallStart }
+        result["outcome"] = "failed"
+        result["error"] = originalFailure ?? "unknown case failure"
+        if let activeApp, !screenshotDirectory.isEmpty,
+           let deadline = caseDeadline, deadline.remaining > 0 {
+            do {
+                try macOSLogsCaseScreenshot(activeApp, name: caseID + "-failure", directory: screenshotDirectory,
+                                            deadline: deadline, screenshots: &screenshots)
+            } catch { diagnosticErrors.append("Failure screenshot: \(String(reflecting: error))") }
+        }
+    }
+
+    let cleanupStart = ProcessInfo.processInfo.systemUptime
+    let cleanupDeadline = MacOSLogsCaseDeadline(10)
+    for owned in launches.reversed() {
+        do { try closeMacOSLogsApp(owned, deadline: cleanupDeadline) }
+        catch { cleanupErrors.append(String(reflecting: error)); owned.result["alive_after_case"] = true }
+    }
+    result["cleanup_seconds"] = ProcessInfo.processInfo.systemUptime - cleanupStart
+    result["elapsed_seconds"] = ProcessInfo.processInfo.systemUptime - overallStart
+    result["assertions"] = assertions
+    result["screenshots"] = screenshots
+    result["diagnostic_errors"] = diagnosticErrors
+    result["cleanup_errors"] = cleanupErrors
+    result["app_processes"] = launches.map(\.result)
+    if let performanceMeasurements { result["measurements"] = performanceMeasurements }
+    if !cleanupErrors.isEmpty {
+        let cleanupFailure = "macOS native-case cleanup failed: \(cleanupErrors.joined(separator: "; "))"
+        result["outcome"] = "failed"
+        result["error"] = [originalFailure, cleanupFailure].compactMap { $0 }.joined(separator: "\n")
+    }
+    if (result["outcome"] as? String) == "passed" && (assertions.isEmpty || assertions.contains(where: { $0["outcome"] as? String != "passed" })) {
+        result["outcome"] = "failed"
+        result["error"] = "macOS native-case result has no passing assertions"
+    }
+    try writeMacOSLogsCase(result, to: resultPath)
+    if (result["outcome"] as? String) != "passed" {
+        FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]))
+        FileHandle.standardOutput.write(Data([0x0A]))
+        try require(false, "macOS native-case failed: \(result["error"] as? String ?? caseID)")
+    }
+    return result
+}
+
 func run() throws -> [String: Any] {
-    let data = FileHandle.standardInput.readDataToEndOfFile()
-    guard let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let operation = request["operation"] as? String,
-          let executable = request["executable"] as? String else { throw HelperError("Invalid helper request") }
+    guard let requestLine = readLine(strippingNewline: true),
+          let data = requestLine.data(using: .utf8),
+          let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let operation = request["operation"] as? String else {
+        throw HelperError("Missing or invalid helper request line")
+    }
     if operation == "preflight" {
         let helper = CommandLine.arguments[0]
         try require(AXIsProcessTrusted(), "Accessibility permission unavailable for native helper \(helper)")
         try require(CGPreflightScreenCaptureAccess(), "Screen recording permission unavailable for native helper \(helper)")
         return ["ready": true]
     }
+    if operation == "native-case" { return try runMacOSNativeCase(request) }
+    try require(["probe", "close", "kill"].contains(operation), "Unknown native helper operation: \(operation)")
+    guard let executable = request["executable"] as? String, !executable.isEmpty else {
+        throw HelperError("Native process operation is missing its executable path")
+    }
     let expected = URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
     let requestedPID = request["pid"] as? Int
-    let matchesRequestedApplication: (NSRunningApplication) -> Bool = { app in
+    let matches = NSWorkspace.shared.runningApplications.filter { app in
         app.executableURL?.resolvingSymlinksInPath().path == expected &&
-        (requestedPID == nil || Int(app.processIdentifier) == requestedPID)
+            (requestedPID == nil || Int(app.processIdentifier) == requestedPID)
     }
-    let matches = NSWorkspace.shared.runningApplications.filter(matchesRequestedApplication)
     if matches.isEmpty { return ["ready": false, "alive": false] }
     try require(matches.count == 1, "UI executable has \(matches.count) matching processes")
     let app = matches[0]
     if operation == "probe", app.isTerminated {
         return ["ready": false, "alive": false]
     }
-    guard let launched = app.launchDate else {
-        if operation == "probe" {
-            // The process can disappear while NSWorkspace is returning its
-            // application record. Only report it absent after a fresh check
-            // finds no matching live process; a live, unidentifiable process
-            // keeps the original error unless this is a PID-and-identity-bound
-            // liveness poll. That poll cannot authorize work, and its caller
-            // already owns the prior launch identity, so defer to its bounded
-            // close poll without returning a replacement identity.
-            let stillRunning = NSWorkspace.shared.runningApplications.contains {
-                matchesRequestedApplication($0) && !$0.isTerminated
-            }
-            if !stillRunning { return ["ready": false, "alive": false] }
-            if let requestedPID, let requestedIdentity = request["identity"] as? String,
-               !requestedIdentity.isEmpty {
-                FileHandle.standardError.write(Data((
-                    "UI process creation time unavailable during bound probe; " +
-                        "pid=\(requestedPID) identity=\(requestedIdentity); " +
-                        "matching process remains listed and is not terminated; " +
-                        "preserving existing identity\n"
-                ).utf8))
-                return ["ready": false, "alive": true]
-            }
-        }
-        throw HelperError("UI process creation time unavailable")
-    }
-    let identity = String(launched.timeIntervalSince1970)
-    if let prior = request["identity"] as? String { try require(prior == identity, "UI process creation time changed") }
     let pid = app.processIdentifier
+    let process: MacOSProcessIdentity
+    do {
+        process = try macOSProcessIdentity(pid)
+    } catch is MacOSProcessMissing {
+        if operation == "probe" { return ["ready": false, "alive": false] }
+        throw HelperError("UI process disappeared before its OS start identity could be read")
+    }
+    try require(process.executablePath == expected,
+                "UI process executable path changed: expected=\(expected), actual=\(process.executablePath)")
+    let identity = process.started
+    if let prior = request["identity"] as? String {
+        try require(prior == identity, "UI process creation time changed")
+    }
     if operation == "probe" { return ["alive": true, "pid": Int(pid), "identity": identity] }
     if operation == "close" {
         try require(app.terminate(), "Native application quit request failed")
         return ["alive": true]
     }
-    if operation == "kill" {
-        try require(app.forceTerminate(), "Could not terminate owned UI process")
-        return [:]
-    }
-    try require(AXIsProcessTrusted(), "Accessibility permission unavailable")
-    func activate() throws {
-        try require(app.activate(options: [.activateAllWindows]), "Could not activate native app")
-        let deadline = Date().addingTimeInterval(2)
-        while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        try require(NSWorkspace.shared.frontmostApplication?.processIdentifier == pid, "Native app did not become foreground")
-    }
-    if operation == "scroll-logs" || operation == "scroll-profile-list" { try activate() }
-    if operation == "inspect-macos-text-size" {
-        return try inspectMacOSTextSize(
-            executablePath: expected,
-            candidateApp: app,
-            candidatePID: pid,
-            candidateIdentity: identity,
-            reactivateCandidate: activate
-        )
-    }
-    let root = AXUIElementCreateApplication(pid)
-    AXUIElementSetMessagingTimeout(root, 1)
-    if operation == "click", let target = request["target"] as? String,
-       target == "VPN connection action" {
-        try activate()
-        let element = try retryTransientAccessibilityReads(
-            context: "native connection action discovery",
-            deadline: Date().addingTimeInterval(0.5)
-        ) { () -> AXUIElement? in
-            guard let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
-                  let window = windows.first else { return nil }
-            return try verifiedConnectionAction(elements(window), identifier: target)
-        }
-        guard let element else { return ["ready": false, "pid": Int(pid), "identity": identity] }
-        try press(element)
-        return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity, "labels": []]
-    }
-    let nodes: [AXUIElement]
-    do {
-        guard let windows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
-              let window = windows.first else {
-            return ["ready": false, "pid": Int(pid), "identity": identity]
-        }
-        nodes = try elements(window)
-        if operation == "tree" {
-            let labels = try nodes.flatMap(names)
-            var enabledNodes = [AXUIElement]()
-            for (index, node) in nodes.enumerated() {
-                do {
-                    if (try attribute(node, kAXEnabledAttribute)) as? Bool == true {
-                        enabledNodes.append(node)
-                    }
-                } catch let originalError {
-                    let timestamp = ISO8601DateFormatter().string(from: Date())
-                    func diagnosticValue(_ attributeName: String) -> String {
-                        do {
-                            guard let value = try attribute(node, attributeName) else { return "<no value>" }
-                            if let string = value as? String { return String(reflecting: string) }
-                            return String(describing: value)
-                        } catch {
-                            return "<error: \(error)>"
-                        }
-                    }
-                    let originalDescription = String(describing: originalError)
-                    FileHandle.standardError.write(Data((
-                        "AXEnabled read failure timestamp=\(timestamp) nodeIndex=\(index) nodeCount=\(nodes.count) " +
-                            "AXRole=\(diagnosticValue(kAXRoleAttribute)) " +
-                            "AXIdentifier=\(diagnosticValue(kAXIdentifierAttribute)) " +
-                            "AXTitle=\(diagnosticValue(kAXTitleAttribute)) original=\(originalDescription)\n"
-                    ).utf8))
-
-                    let reread: String
-                    do {
-                        if let value = try attribute(node, kAXEnabledAttribute) {
-                            if let number = value as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() {
-                                reread = String(number.boolValue)
-                            } else {
-                                reread = String(describing: value)
-                            }
-                        } else {
-                            reread = "<no value>"
-                        }
-                    } catch {
-                        reread = "<error: \(error)>"
-                    }
-                    FileHandle.standardError.write(Data((
-                        "AXEnabled diagnostic reread timestamp=\(ISO8601DateFormatter().string(from: Date())) " +
-                            "nodeIndex=\(index) nodeCount=\(nodes.count) result=\(reread) " +
-                            "original=\(originalDescription)\n"
-                    ).utf8))
-                    throw originalError
-                }
-            }
-            let enabled = try enabledNodes.flatMap(names)
-            var sourceText: Any = NSNull()
-            var sourceTextError: String?
-            do {
-                sourceText = try label(find(nodes, "Connection configuration", editor: true), kAXValueAttribute)
-            } catch {
-                sourceTextError = String(describing: error)
-            }
-            var tree: [String: Any] = [
-                "ready": true, "alive": true, "pid": Int(pid), "identity": identity,
-                "window_count": windows.count, "window_id": try identifier(window),
-                "labels": labels, "enabled_controls": enabled, "link_urls": try linkURLs(nodes),
-                "source_text": sourceText,
-            ]
-            if let sourceTextError { tree["source_text_error"] = sourceTextError }
-            return tree
-        }
-        if operation == "connection-action-details" {
-            return connectionActionDetails(nodes)
-        }
-        if operation == "resize-window" {
-            guard let requestedWidth = request["width"] as? NSNumber,
-                  let requestedHeight = request["height"] as? NSNumber else {
-                throw HelperError("Missing requested native window dimensions")
-            }
-            let width = requestedWidth.doubleValue
-            let height = requestedHeight.doubleValue
-            try require(width >= 560 && height >= 460, "Requested native window is below its supported minimum")
-            guard let originalValue = try axValue(window, kAXSizeAttribute) else {
-                throw HelperError("Native window size is unavailable before resize")
-            }
-            var originalSize = CGSize.zero
-            try require(AXValueGetValue(originalValue, .cgSize, &originalSize), "Could not read original native window size")
-            var requestedSize = CGSize(width: width, height: height)
-            guard let requestedValue = AXValueCreate(.cgSize, &requestedSize) else {
-                throw HelperError("Could not create requested native window size")
-            }
-            try activate()
-            let setResult = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, requestedValue)
-            try require(setResult == .success, "Native window rejected resize: \(setResult.rawValue)")
-            var resizedSize = CGSize.zero
-            let deadline = Date().addingTimeInterval(3)
-            repeat {
-                if let value = try axValue(window, kAXSizeAttribute) {
-                    try require(AXValueGetValue(value, .cgSize, &resizedSize), "Could not read resized native window size")
-                    if abs(resizedSize.width - width) <= 20 && abs(resizedSize.height - height) <= 20 { break }
-                }
-                Thread.sleep(forTimeInterval: 0.05)
-            } while Date() < deadline
-            try require(abs(resizedSize.width - width) <= 20 && abs(resizedSize.height - height) <= 20,
-                        "Native window did not settle at the requested \(Int(width))x\(Int(height)) size")
-            return ["ready": true, "width": originalSize.width, "height": originalSize.height,
-                    "resized_width": resizedSize.width, "resized_height": resizedSize.height]
-        }
-    } catch {
-        if operation == "tree", let readError = error as? AccessibilityReadError,
-           isTransientAccessibilityRead(readError) ||
-                (readError.code == .illegalArgument && readError.attribute == kAXChildrenAttribute) {
-            // SwiftUI can invalidate an AX node during children enumeration or
-            // later role reads when loading/error controls change. Rediscover
-            // the read-only tree within Python's existing action deadline.
-            FileHandle.standardError.write(Data("\(readError) during tree discovery; retrying\n".utf8))
-            return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity]
-        }
-        if operation == "connection-action-details" {
-            return ["ready": false, "alive": true, "pid": Int(pid), "identity": identity,
-                    "match_count": 0, "matches": [], "tree_error": String(describing: error)]
-        }
-        throw error
-    }
-    if operation == "logs" {
-        let view = try find(nodes, "Connection logs", editor: true)
-        return ["ready": true, "text": try label(view, kAXValueAttribute)]
-    }
-    if operation == "profile-list-layout" {
-        return try profileListLayout(nodes)
-    }
-    if operation == "scroll-profile-list" {
-        guard let position = request["position"] as? String else {
-            throw HelperError("Missing profile-list scroll position")
-        }
-        return try scrollProfileList(nodes, position: position)
-    }
-    if operation == "log-position" {
-        let view = try find(nodes, "Connection logs", editor: true)
-        let sample = try visibleCharacterRange(view)
-        var parent: AXUIElement? = view
-        var scrollArea: AXUIElement?
-        for _ in 0..<8 {
-            guard let current = parent,
-                  let next = try axElement(current, kAXParentAttribute) else { break }
-            if try label(next, kAXRoleAttribute) == kAXScrollAreaRole {
-                scrollArea = next
-                break
-            }
-            parent = next
-        }
-        guard let area = scrollArea,
-              let scrollbar = try axElement(area, kAXVerticalScrollBarAttribute),
-              let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
-            throw HelperError("Native log viewer has no readable vertical position")
-        }
-        return ["ready": true, "visible_range_start": sample.range.location,
-                "visible_range_end": sample.range.location + sample.range.length,
-                "character_count": sample.characterCount, "scrollbar_position": value.doubleValue]
-    }
-    if operation == "select-log-text" {
-        let view = try find(nodes, "Connection logs", editor: true)
-        let visible = try visibleCharacterRange(view)
-        guard visible.characterCount > 0, visible.range.length > 0 else {
-            throw HelperError("Native log viewer has no selectable text")
-        }
-        var range = visible.range
-        guard let selectedRange = AXValueCreate(.cfRange, &range) else {
-            throw HelperError("Could not create native selected text range")
-        }
-        try require(AXUIElementSetAttributeValue(view, kAXSelectedTextRangeAttribute as CFString, selectedRange) == .success,
-                    "Native log viewer rejected text selection")
-        let selected = try label(view, kAXSelectedTextAttribute)
-        try require(!selected.isEmpty, "Native log viewer returned no selected text")
-        return ["ready": true, "selected": selected]
-    }
-    if operation == "scroll-logs" {
-        guard let position = request["position"] as? String, position == "top" || position == "bottom" else {
-            throw HelperError("Log scroll position must be top or bottom")
-        }
-        let view = try find(nodes, "Connection logs", editor: true)
-        func bounds(_ element: AXUIElement, name: String) throws -> CGRect {
-            guard let positionValue = try axValue(element, kAXPositionAttribute),
-                  let sizeValue = try axValue(element, kAXSizeAttribute) else {
-                throw HelperError("Native \(name) has no accessible bounds")
-            }
-            var origin = CGPoint.zero
-            var size = CGSize.zero
-            try require(AXValueGetValue(positionValue, .cgPoint, &origin), "Could not read native \(name) position")
-            try require(AXValueGetValue(sizeValue, .cgSize, &size), "Could not read native \(name) size")
-            let rect = CGRect(origin: origin, size: size)
-            try require(origin.x.isFinite && origin.y.isFinite && size.width.isFinite && size.height.isFinite &&
-                            size.width > 0 && size.height > 0,
-                        "Native \(name) has invalid bounds: \(rect)")
-            return rect
-        }
-        func pointDescription(_ point: CGPoint) -> String {
-            String(format: "(x=%.1f,y=%.1f)", point.x, point.y)
-        }
-        func rectDescription(_ rect: CGRect) -> String {
-            if rect.isNull { return "(null)" }
-            return String(format: "(x=%.1f,y=%.1f,width=%.1f,height=%.1f)",
-                          rect.origin.x, rect.origin.y, rect.width, rect.height)
-        }
-        let viewBounds = try bounds(view, name: "log text view")
-
-        var parent: AXUIElement? = view
-        var scrollArea: AXUIElement?
-        for _ in 0..<8 {
-            guard let current = parent,
-                  let next = try axElement(current, kAXParentAttribute) else { break }
-            if try label(next, kAXRoleAttribute) == kAXScrollAreaRole {
-                scrollArea = next
-                break
-            }
-            parent = next
-        }
-        guard let area = scrollArea,
-              let scrollbar = try axElement(area, kAXVerticalScrollBarAttribute) else {
-            throw HelperError("Native log viewer does not expose a vertical scrollbar")
-        }
-        guard let window = nodes.first else {
-            throw HelperError("Native application window is unavailable for log scrolling")
-        }
-        let scrollAreaBounds = try bounds(area, name: "log scroll area")
-        let windowBounds = try bounds(window, name: "main window")
-        let originalTextCenter = CGPoint(x: viewBounds.midX, y: viewBounds.midY)
-        // AXPosition and AXUIElementCopyElementAtPosition share screen coordinates.
-        // Clip the document view to its scroll viewport and window before aiming input.
-        let visibleBounds = viewBounds.intersection(scrollAreaBounds).intersection(windowBounds)
-        let chosenPoint = !visibleBounds.isNull && visibleBounds.width > 0 && visibleBounds.height > 0
-            ? CGPoint(x: visibleBounds.midX, y: visibleBounds.midY) : nil
-        FileHandle.standardError.write(Data((
-            "scroll-logs geometry textview=\(rectDescription(viewBounds)) " +
-                "scrollarea=\(rectDescription(scrollAreaBounds)) window=\(rectDescription(windowBounds)) " +
-                "visible=\(rectDescription(visibleBounds)) textview-center=\(pointDescription(originalTextCenter)) " +
-                "chosen-point=\(chosenPoint.map(pointDescription) ?? "(none)")\n"
-        ).utf8))
-        guard let chosenPoint else {
-            throw HelperError("Native log text view does not intersect its visible scroll area and window")
-        }
-        var hitElement: AXUIElement?
-        let hitTestResult = AXUIElementCopyElementAtPosition(root, Float(chosenPoint.x), Float(chosenPoint.y), &hitElement)
-        guard hitTestResult == .success, let hit = hitElement else {
-            FileHandle.standardError.write(Data((
-                "scroll-logs AX hit-test point=\(pointDescription(chosenPoint)) " +
-                    "result=\(hitTestResult.rawValue) hit=none\n"
-            ).utf8))
-            throw HelperError(
-                "AX hit-test failed for visible log point \(pointDescription(chosenPoint)); " +
-                    "AXError=\(hitTestResult.rawValue)"
-            )
-        }
-        let hitRole = try label(hit, kAXRoleAttribute)
-        let hitIdentifier = try identifier(hit)
-        func belongsToLogView(_ element: AXUIElement) throws -> (matches: Bool, depth: Int) {
-            var current: AXUIElement? = element
-            for depth in 0..<16 {
-                guard let node = current else { return (false, depth) }
-                if CFEqual(node, view) || CFEqual(node, area) { return (true, depth) }
-                current = try axElement(node, kAXParentAttribute)
-            }
-            return (false, 16)
-        }
-        let ancestry = try belongsToLogView(hit)
-        FileHandle.standardError.write(Data((
-            "scroll-logs AX hit-test point=\(pointDescription(chosenPoint)) result=0 " +
-                "hit-role=\(hitRole) hit-id=\(hitIdentifier.isEmpty ? "(none)" : hitIdentifier) " +
-                "belongs-to-log-view=\(ancestry.matches) ancestor-depth=\(ancestry.depth)\n"
-        ).utf8))
-        try require(ancestry.matches,
-                    "AX hit-test point did not resolve within the log view/scroll area: " +
-                        "role=\(hitRole) identifier=\(hitIdentifier) ancestor-depth=\(ancestry.depth)")
-        var sample = try visibleCharacterRange(view)
-        var characterCount = sample.characterCount
-        try require(characterCount > 0, "Native log viewer has no content to scroll")
-        func checkedVisibleRange() throws -> CFRange {
-            sample = try visibleCharacterRange(view)
-            characterCount = sample.characterCount
-            return sample.range
-        }
-        func distanceFromTarget(_ range: CFRange) -> Int {
-            position == "top" ? range.location : characterCount - range.location - range.length
-        }
-        func isAtTarget(_ range: CFRange) -> Bool {
-            distanceFromTarget(range) <= 1
-        }
-        func rangeDescription(_ range: CFRange) -> String {
-            "\(range.location)..<\(range.location + range.length)"
-        }
-        func scrollbarValueDescription() -> String {
-            do {
-                guard let value = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
-                    return "unavailable"
-                }
-                return value.stringValue
-            } catch {
-                return "read-error: \(error)"
-            }
-        }
-        var range = sample.range
-        try require(range.length < characterCount, "Native log viewer does not overflow its viewport; freeze/resume cannot be tested")
-        if !isAtTarget(range) {
-            FileHandle.standardError.write(Data((
-                "scroll-logs native-phaseful-gesture target=\(position) start-range=\(rangeDescription(range)) " +
-                    "characters=\(characterCount) scrollbar=\(scrollbarValueDescription())\n"
-            ).utf8))
-            guard let moved = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                                      mouseCursorPosition: chosenPoint, mouseButton: .left) else {
-                throw HelperError("Could not position the pointer over native logs")
-            }
-            moved.post(tap: .cghidEventTap)
-            FileHandle.standardError.write(Data((
-                "scroll-logs CGEvent mouseMoved post-called point=\(pointDescription(chosenPoint))\n"
-            ).utf8))
-            func postScrollEvent(_ delta: Int32, phase: CGScrollPhase) throws {
-                guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
-                                          wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else {
-                    throw HelperError("Could not create native log scroll event")
-                }
-                event.location = chosenPoint
-                event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-                let continuous = event.getIntegerValueField(.scrollWheelEventIsContinuous)
-                let emittedPhase = event.getIntegerValueField(.scrollWheelEventScrollPhase)
-                event.post(tap: .cghidEventTap)
-                FileHandle.standardError.write(Data((
-                    "scroll-logs CGEvent scroll post-called delta=\(delta) requested-phase=\(phase.rawValue) " +
-                        "field-phase=\(emittedPhase) continuous=\(continuous) " +
-                        "point=\(pointDescription(event.location))\n"
-                ).utf8))
-            }
-            var reached = false
-            let maximumScrollEvents = 72
-            var totalScrollEvents = 0
-            for delta in [240, -240] {
-                var unchanged = 0
-                var directionEventCount = 0
-                var madeProgress = false
-                var stopReason = "event-cap"
-                while totalScrollEvents < maximumScrollEvents {
-                    var batchEvents = 0
-                    while batchEvents < 16 && totalScrollEvents < maximumScrollEvents {
-                        let phase: CGScrollPhase = totalScrollEvents == 0 ? .began : .changed
-                        try postScrollEvent(Int32(delta), phase: phase)
-                        directionEventCount += 1
-                        totalScrollEvents += 1
-                        batchEvents += 1
-                        Thread.sleep(forTimeInterval: 0.05)
-                        let updated = try checkedVisibleRange()
-                        if isAtTarget(updated) {
-                            reached = true
-                            range = updated
-                            stopReason = "target"
-                            break
-                        }
-                        let previousDistance = distanceFromTarget(range)
-                        let updatedDistance = distanceFromTarget(updated)
-                        if updatedDistance > previousDistance {
-                            range = updated
-                            stopReason = "moved-away"
-                            break
-                        }
-                        if updatedDistance < previousDistance {
-                            madeProgress = true
-                            unchanged = 0
-                        } else {
-                            unchanged += 1
-                        }
-                        range = updated
-                        if unchanged >= 2 {
-                            stopReason = "stalled"
-                            break
-                        }
-                    }
-                    if reached || stopReason == "moved-away" || stopReason == "stalled" {
-                        break
-                    }
-                    if totalScrollEvents >= maximumScrollEvents {
-                        stopReason = "event-cap"
-                        break
-                    }
-                }
-                FileHandle.standardError.write(Data((
-                    "scroll-logs delta=\(delta) events=\(directionEventCount) total=\(totalScrollEvents) " +
-                        "progress=\(madeProgress) stop=\(stopReason) reached=\(reached) " +
-                        "range=\(rangeDescription(range)) " +
-                        "characters=\(characterCount) scrollbar=\(scrollbarValueDescription())\n"
-                ).utf8))
-                // Continue a helpful direction across batches. Try its opposite only
-                // after observed movement away or repeated samples with no movement.
-                if reached || stopReason == "event-cap" { break }
-            }
-            if totalScrollEvents > 0 {
-                try postScrollEvent(0, phase: .ended)
-            }
-            try require(reached,
-                        "Native log viewer did not scroll to \(position); " +
-                            "visible range=\(rangeDescription(range)), characters=\(characterCount)")
-        }
-        guard let rawScrollbarPosition = try attribute(scrollbar, kAXValueAttribute) as? NSNumber else {
-            throw HelperError("Native log viewer scrollbar has no value")
-        }
-        let scrollbarPosition = rawScrollbarPosition.doubleValue
-        return ["ready": true, "position": scrollbarPosition, "requested_position": position,
-                "visible_range_start": range.location,
-                "visible_range_end": range.location + range.length,
-                "character_count": characterCount]
-    }
-    switch operation {
-    case "focus": try activate()
-    case "click":
-        guard let target = request["target"] as? String else { throw HelperError("Missing control name") }
-        try activate()
-        // SwiftUI toolbar containers can inherit the button's label and identifier.
-        let buttons = try nodes.filter { try label($0, kAXRoleAttribute) == kAXButtonRole }
-        try press(find(buttons, target))
-    case "type":
-        guard let source = request["source"] as? String else { throw HelperError("Missing source path") }
-        try activate()
-        try paste(find(nodes, "Connection configuration", editor: true), source: source)
-    case "paste":
-        guard let source = request["source"] as? String else { throw HelperError("Missing source path") }
-        let expectedSource: String?
-        if let rawExpectedSource = request["expectedSource"] {
-            guard let value = rawExpectedSource as? String else { throw HelperError("Expected Paste source must be a string") }
-            expectedSource = value
-        } else {
-            expectedSource = nil
-        }
-        try activate()
-        guard let currentWindows = try attribute(root, kAXWindowsAttribute) as? [AXUIElement],
-              let currentWindow = currentWindows.first else {
-            throw HelperError("Native application has no window for Paste")
-        }
-        let pasteInvokedAtUnixMs = try pasteWithNativeControl(
-            app, window: currentWindow, source: source, expectedSource: expectedSource
-        )
-        return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity,
-                "paste_invoked_at_unix_ms": pasteInvokedAtUnixMs, "labels": []]
-    case "capture":
-        guard let path = request["path"] as? String else { throw HelperError("Missing screenshot path") }
-        try capture(pid, path: path)
-    default: throw HelperError("Unknown helper operation: \(operation)")
-    }
-    return ["ready": true, "alive": true, "pid": Int(pid), "identity": identity, "labels": []]
+    try require(app.forceTerminate(), "Could not terminate owned UI process")
+    return [:]
 }
 
 do {

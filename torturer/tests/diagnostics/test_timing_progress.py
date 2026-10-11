@@ -148,13 +148,32 @@ class TimingProgressTests(unittest.TestCase):
         }
 
         class Runner:
+            def __init__(self) -> None:
+                self.commands: list[list[str]] = []
+
             def run(self, command, *, cwd=None, timeout_seconds=None):
                 del cwd, timeout_seconds
                 arguments = list(command)
+                self.commands.append(arguments)
                 if arguments[:4] == ["xcrun", "simctl", "list", "devices"]:
                     return ios_simulator_app.CommandResult(0, json.dumps(inventory), "")
                 if arguments[:3] == ["xcrun", "--sdk", "iphonesimulator"]:
                     return ios_simulator_app.CommandResult(0, "17.5", "")
+                if arguments[:5] == ["xcrun", "xcresulttool", "get", "test-results", "tests"]:
+                    test_nodes = [
+                        {
+                            "nodeType": "Test Case Run",
+                            "name": test.rsplit("/", 1)[-1],
+                            "nodeIdentifier": test,
+                            "result": "Passed",
+                        }
+                        for test in ios_simulator_app.required_ui_test_cases(
+                            [IOS_LOGS_FREEZE_RESUME_CASE]
+                        )
+                    ]
+                    return ios_simulator_app.CommandResult(
+                        0, json.dumps({"testNodes": test_nodes}), ""
+                    )
                 if arguments[0] == "xcodebuild":
                     result_bundle = Path(
                         arguments[arguments.index("-resultBundlePath") + 1]
@@ -163,6 +182,7 @@ class TimingProgressTests(unittest.TestCase):
                 return ios_simulator_app.CommandResult(0, "", "")
 
         contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
+        runner = Runner()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             work_dir = root / "work"
@@ -192,11 +212,13 @@ class TimingProgressTests(unittest.TestCase):
                 evidence = ios_simulator_app.run_ios_simulator_app_contract(
                     candidate_root=root / "candidate",
                     work_dir=work_dir,
-                    runner=Runner(),
+                    runner=runner,
                     native_cases=[IOS_LOGS_FREEZE_RESUME_CASE],
                 )
 
         self.assertIsNone(evidence.native_log)
+        self.assertEqual(evidence.xctest_results["result"], "Passed")
+        self.assertEqual(len(evidence.xctest_results["required_tests"]), 3)
         self.assertEqual(
             evidence.native_log_collection_error,
             "app_logs.txt was absent; no native app log bytes were produced",
@@ -208,7 +230,6 @@ class TimingProgressTests(unittest.TestCase):
             [
                 "simctl-boot",
                 "simctl-bootstatus",
-                "open-simulator",
                 "boot",
                 "install",
                 "xctest",
@@ -220,6 +241,160 @@ class TimingProgressTests(unittest.TestCase):
         for event in finish_events:
             self.assertGreaterEqual(event["duration_seconds"], 0)
             self.assertEqual(event["status"], "succeeded")
+        command_arguments = runner.commands
+        self.assertTrue(any(arguments[:3] == ["xcrun", "simctl", "install"]
+                            for arguments in command_arguments))
+        self.assertFalse(any(arguments[:3] == ["/usr/bin/open", "-a", "Simulator"]
+                             for arguments in command_arguments))
+        self.assertFalse(any(arguments[:1] == ["/usr/bin/osascript"]
+                             for arguments in command_arguments))
+
+    def test_ios_simulator_gui_is_only_opened_for_enabled_per_device_keyboard(self) -> None:
+        udid = "01234567-89ab-cdef-0123-456789abcdef"
+        inventory = {
+            "devices": {
+                "com.apple.CoreSimulator.SimRuntime.iOS-17-5": [{
+                    "isAvailable": True,
+                    "name": "iPhone 15",
+                    "state": "Shutdown",
+                    "udid": udid,
+                }],
+            },
+        }
+        contract = ios_simulator_app.PUBLIC_IOS_SIMULATOR_APP_CONTRACT
+
+        class Runner:
+            def __init__(self, connected: list[bool | None]) -> None:
+                self.connected = connected
+                self.commands: list[list[str]] = []
+
+            def run(self, command, *, cwd=None, timeout_seconds=None):
+                del cwd, timeout_seconds
+                arguments = list(command)
+                self.commands.append(arguments)
+                if arguments[:4] == ["xcrun", "simctl", "list", "devices"]:
+                    return ios_simulator_app.CommandResult(0, json.dumps(inventory), "")
+                if arguments[:3] == ["xcrun", "--sdk", "iphonesimulator"]:
+                    return ios_simulator_app.CommandResult(0, "17.5", "")
+                if arguments[:1] == ["/usr/bin/defaults"]:
+                    if arguments[1] == "read":
+                        return ios_simulator_app.CommandResult(
+                            1, "", "The domain/default pair does not exist\n"
+                        )
+                    return ios_simulator_app.CommandResult(0, "", "")
+                if arguments[:1] == ["/usr/bin/osascript"]:
+                    if self.connected[0] is None:
+                        raise AssertionError("global keyboard preference must not use GUI shortcut")
+                    self.connected[0] = not self.connected[0]
+                    return ios_simulator_app.CommandResult(0, "", "")
+                if arguments[:1] == ["xcodebuild"]:
+                    result_bundle = Path(
+                        arguments[arguments.index("-resultBundlePath") + 1]
+                    )
+                    result_bundle.mkdir()
+                    return ios_simulator_app.CommandResult(0, "", "")
+                if arguments[:5] == [
+                    "xcrun", "xcresulttool", "get", "test-results", "tests"
+                ]:
+                    test_nodes = [
+                        {
+                            "nodeType": "Test Case Run",
+                            "name": test.rsplit("/", 1)[-1],
+                            "nodeIdentifier": test,
+                            "result": "Passed",
+                        }
+                        for test in ios_simulator_app.required_ui_test_cases(
+                            [IOS_LOGS_FREEZE_RESUME_CASE]
+                        )
+                    ]
+                    return ios_simulator_app.CommandResult(
+                        0, json.dumps({"testNodes": test_nodes}), ""
+                    )
+                return ios_simulator_app.CommandResult(0, "", "")
+
+        for initial_override in (None, False, True):
+            with self.subTest(initial_override=initial_override):
+                connected: list[bool | None] = [initial_override]
+                runner = Runner(connected)
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    work_dir = root / "work"
+                    contract.app_path(work_dir).mkdir(parents=True)
+                    (root / "candidate" / "ui" / "apple" / "ios" / "iosApp.xcodeproj").mkdir(
+                        parents=True
+                    )
+                    with (
+                        mock.patch.object(
+                            ios_simulator_app,
+                            "_read_simulator_hardware_keyboard_override",
+                            side_effect=lambda _udid: connected[0],
+                        ),
+                        mock.patch.object(
+                            ios_simulator_app,
+                            "_retain_xctest_screenshots",
+                            return_value=root / "screenshots",
+                        ),
+                        mock.patch.object(
+                            ios_simulator_app,
+                            "_collect_ios_native_log",
+                            return_value=None,
+                        ),
+                        redirect_stdout(StringIO()),
+                    ):
+                        evidence = ios_simulator_app.run_ios_simulator_app_contract(
+                            candidate_root=root / "candidate",
+                            work_dir=work_dir,
+                            runner=runner,
+                            native_cases=[IOS_LOGS_FREEZE_RESUME_CASE],
+                        )
+
+                self.assertEqual(evidence.xctest_results["result"], "Passed")
+                install_index = next(
+                    index
+                    for index, arguments in enumerate(runner.commands)
+                    if arguments[:3] == ["xcrun", "simctl", "install"]
+                )
+                xcodebuild_index = next(
+                    index
+                    for index, arguments in enumerate(runner.commands)
+                    if arguments[:1] == ["xcodebuild"]
+                )
+                self.assertLess(install_index, xcodebuild_index)
+                open_indices = [
+                    index for index, arguments in enumerate(runner.commands)
+                    if arguments[:3] == ["/usr/bin/open", "-a", "Simulator"]
+                ]
+                shortcut_indices = [
+                    index for index, arguments in enumerate(runner.commands)
+                    if arguments[:1] == ["/usr/bin/osascript"]
+                ]
+                if initial_override is True:
+                    self.assertEqual(len(open_indices), 2)
+                    self.assertEqual(len(shortcut_indices), 2)
+                    self.assertLess(open_indices[0], shortcut_indices[0])
+                    self.assertLess(shortcut_indices[0], install_index)
+                    self.assertLess(install_index, open_indices[1])
+                    self.assertLess(open_indices[1], shortcut_indices[1])
+                    self.assertIs(connected[0], True)
+                else:
+                    self.assertFalse(open_indices)
+                    self.assertFalse(shortcut_indices)
+                if initial_override is None:
+                    defaults_commands = [
+                        arguments for arguments in runner.commands
+                        if arguments[:1] == ["/usr/bin/defaults"]
+                    ]
+                    self.assertEqual(
+                        [arguments[1] for arguments in defaults_commands],
+                        ["read", "write", "delete"],
+                    )
+                else:
+                    self.assertFalse(
+                        any(
+                            arguments[:1] == ["/usr/bin/defaults"]
+                            for arguments in runner.commands
+                        )
+                    )
 
     def test_lane_progress_events_have_utc_timestamps(self) -> None:
         output = StringIO()

@@ -452,9 +452,11 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         filters = [argument for argument in command if argument.startswith("-only-testing:")]
         self.assertEqual(filters, [
             "-only-testing:iosAppUITests/NativeUIInteractionTests/"
-            "testLogsFreezeAndResumeAtBottom",
+            "testFrozenLogsKeepTheirReadingPositionDuringConfigurationAndAbout",
             "-only-testing:iosAppUITests/NativeUIInteractionTests/"
-            "testNativeConnectionAboutAndLogs",
+            "testFrozenLogPositionSurvivesRotation",
+            "-only-testing:iosAppUITests/NativeUIInteractionTests/"
+            "testFollowingResumesWhenReaderReturnsToBottom",
         ])
         severity = ios_simulator_app.xcodebuild_ui_test_without_building_command(
             udid,
@@ -518,9 +520,6 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                     return ios_simulator_app.CommandResult(0, "15360\tDobby-Vpn-Simulator.app\n", "")
                 if arguments[:3] == ["xcrun", "--sdk", "iphonesimulator"]:
                     return ios_simulator_app.CommandResult(0, "17.5", "")
-                if arguments == open_command:
-                    self.open_simulator_timeout = timeout_seconds
-                    return ios_simulator_app.CommandResult(0, "", "")
                 if arguments[:3] == ["xcrun", "simctl", "install"]:
                     self.install_timeout = timeout_seconds
                     self.clock[0] += (timeout_seconds or 0) + ios_simulator_app.COMMAND_TERMINATION_RESERVE_SECONDS
@@ -685,7 +684,6 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                 ):
                     self.assertIn(expected, notes)
                 self.assertEqual(runner.install_timeout, expected_install_timeout)
-                self.assertEqual(runner.open_simulator_timeout, 30)
 
                 command_arguments = [arguments for arguments, _ in commands]
                 def index(prefix):
@@ -693,7 +691,11 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                         i for i, arguments in enumerate(command_arguments)
                         if arguments[:len(prefix)] == prefix
                     )
-                self.assertLess(index(open_command), index(["/bin/df", "-Pk"]))
+                self.assertNotIn(open_command, command_arguments)
+                self.assertLess(
+                    index(["xcrun", "simctl", "bootstatus"]),
+                    index(["/bin/df", "-Pk"]),
+                )
                 self.assertLess(index(["/bin/df", "-Pk"]), index(["/usr/bin/du", "-sk"]))
                 self.assertLess(index(["/usr/bin/du", "-sk"]), index(["xcrun", "simctl", "list", "devices", "-j"]))
                 self.assertLess(index(["xcrun", "simctl", "list", "devices", "-j"]), index(["xcrun", "simctl", "install"]))

@@ -38,6 +38,8 @@ from torturer_runner.ios_simulator import (
     simctl_get_app_container_command,
     simctl_install_command,
     simctl_terminate_command,
+    expected_subscription_fixture_gets,
+    required_ui_test_cases,
     ui_test_selection,
     xcodebuild_ui_test_without_building_command,
 )
@@ -45,7 +47,6 @@ from torturer_runner.screenshot_artifacts import (
     assert_files_identical,
     png_metadata,
 )
-from torturer_runner.native_cases import IOS_SUBSCRIPTION_FIXTURE_CASE
 
 
 _RUNTIME = re.compile(r"com\.apple\.CoreSimulator\.SimRuntime\.iOS-(\d+(?:-\d+)*)\Z")
@@ -67,7 +68,6 @@ IOS_NATIVE_UI_BUILD_TIMEOUT_SECONDS = 10 * 60
 # lane's functional allowance and leave the cleanup reserve to RunBudget.
 IOS_UI_TEST_TIMEOUT_SECONDS = MAX_RUN_SECONDS - CLEANUP_RESERVE_SECONDS
 COMMAND_TERMINATION_GRACE_SECONDS = 15
-IOS_SUBSCRIPTION_FIXTURE_EXPECTED_GETS = 3
 # A timed-out command can use one grace window to stop its process group, then
 # the remaining reserve to drain inherited pipes and reap the direct child.
 # Keep this outside each operation timeout so RunBudget retains its cleanup
@@ -98,6 +98,7 @@ STAGE_TIMEOUT_SECONDS = {
     # ready. Keep one bounded install attempt inside the lane budget.
     "install": 300,
     "xctest-ui": IOS_UI_TEST_TIMEOUT_SECONDS,
+    "get-xctest-test-results": 60,
     "export-xctest-screenshots": 120,
     "terminate": 60,
     "shutdown": 120,
@@ -460,6 +461,8 @@ class IOSSimulatorAppEvidence:
     native_log: Path | None = None
     native_log_collection_error: str | None = None
     selected_tests: tuple[str, ...] = ()
+    required_test_cases: tuple[str, ...] = ()
+    xctest_results: dict[str, object] | None = None
 
 
 def select_available_iphone(
@@ -593,16 +596,10 @@ def _write_disposable_subscription_profile(work_dir: Path) -> Path:
 
 
 def _subscription_fixture_test_environment(fixture: object) -> dict[str, str]:
-    """Pass the exact XCTest env keys; fixture control credentials stay host-side.
-
-    XCTest receives ``DOBBY_IOS_TEST_SUBSCRIPTION_URL``,
-    ``DOBBY_IOS_TEST_FIXTURE_REQUIRED=1`` and
-    ``DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE=1``. Its app launch forwards only
-    the marker and seed flag, leaving the URL to the rendered Paste/deep-link
-    interaction. The HTTPS fixture's control URL, key and CA never enter XCTest.
-    """
+    """Supply run-owned URLs; control credentials stay host-side."""
     return {
         "DOBBY_IOS_TEST_SUBSCRIPTION_URL": str(getattr(fixture, "url")),
+        "DOBBY_IOS_TEST_SUBSCRIPTION_FAILURE_URL": str(getattr(fixture, "failure_url")),
         "DOBBY_IOS_TEST_FIXTURE_REQUIRED": "1",
         "DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE": "1",
     }
@@ -610,7 +607,7 @@ def _subscription_fixture_test_environment(fixture: object) -> dict[str, str]:
 
 def _requires_subscription_fixture(native_cases: Sequence[str] | None) -> bool:
     """Default XCTest coverage and the fixture case need disposable HTTPS setup."""
-    return native_cases is None or IOS_SUBSCRIPTION_FIXTURE_CASE in native_cases
+    return expected_subscription_fixture_gets(native_cases) > 0
 
 
 def _assert_subscription_fixture_request_count(
@@ -808,6 +805,205 @@ def _retain_xctest_result_bundle(result_bundle: Path, work_dir: Path) -> Path:
     )
 
 
+def _xctest_context_matches(test_case: str, context: Sequence[str]) -> bool:
+    components = test_case.split("/")
+    class_name, method_name = components[-2:]
+    joined = " / ".join(context)
+    method_matches = re.search(
+        rf"(?<![A-Za-z0-9_]){re.escape(method_name)}(?:\(\))?(?![A-Za-z0-9_])",
+        joined,
+    ) is not None
+    class_matches = re.search(
+        rf"(?<![A-Za-z0-9_]){re.escape(class_name)}(?![A-Za-z0-9_])",
+        joined,
+    ) is not None
+    return method_matches and class_matches
+
+
+def _contains_xctest_case_run(node: dict[str, object]) -> bool:
+    children = node.get("children", [])
+    if not isinstance(children, list):
+        raise IOSSimulatorAppContractError(
+            "xcresult test-results node children have an invalid shape"
+        )
+    for child in children:
+        if not isinstance(child, dict):
+            raise IOSSimulatorAppContractError(
+                "xcresult test-results child is not an object"
+            )
+        if child.get("nodeType") == "Test Case Run" or _contains_xctest_case_run(child):
+            return True
+    return False
+
+
+def _xctest_iteration_number(*values: object) -> int | None:
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        match = re.search(
+            r"(?:repetition|iteration|run)\s*(?:#|:)?\s*(\d+)\b",
+            value,
+            re.IGNORECASE,
+        )
+        if match is not None:
+            return int(match.group(1))
+    return None
+
+
+def _write_xctest_test_results(raw_results: str, work_dir: Path) -> Path:
+    """Retain the complete xcresulttool JSON in the normal iOS diagnostic tree."""
+    if not raw_results.strip():
+        raise IOSSimulatorAppContractError(
+            "xcresulttool returned no iOS XCTest test-results JSON"
+        )
+    destination_dir = _ios_diagnostics_directory(work_dir)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    report = destination_dir / "xctest-test-results.json"
+    if report.exists() or report.is_symlink():
+        raise IOSSimulatorAppContractError(
+            f"iOS XCTest test-results report already exists: {report}"
+        )
+    try:
+        with report.open("xb") as stream:
+            stream.write(raw_results.encode("utf-8"))
+        report.chmod(0o600)
+    except OSError as error:
+        raise IOSSimulatorAppContractError(
+            f"could not retain complete iOS XCTest test-results JSON: {report}"
+        ) from error
+    return report
+
+
+def _validate_xctest_test_results(
+    raw_results: str,
+    *,
+    required_tests: Sequence[str],
+    repeat: int,
+) -> dict[str, object]:
+    """Require every selected XCTest method to pass once in each iteration."""
+    if type(repeat) is not int or repeat < 1:
+        raise IOSSimulatorAppContractError("XCTest repeat count must be positive")
+    try:
+        report = json.loads(raw_results)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise IOSSimulatorAppContractError(
+            "xcresulttool returned unreadable iOS XCTest test-results JSON"
+        ) from error
+    if not isinstance(report, dict) or not isinstance(report.get("testNodes"), list):
+        raise IOSSimulatorAppContractError(
+            "xcresulttool test-results JSON has no testNodes array"
+        )
+    expected = tuple(required_tests)
+    if not expected or len(set(expected)) != len(expected):
+        raise IOSSimulatorAppContractError(
+            "selected iOS XCTest methods are empty or duplicated"
+        )
+
+    records: dict[str, list[dict[str, object]]] = {test: [] for test in expected}
+    aggregate_errors: list[str] = []
+
+    def visit(
+        node: object,
+        parents: tuple[str, ...],
+        current_iteration: int | None = None,
+    ) -> None:
+        if not isinstance(node, dict):
+            raise IOSSimulatorAppContractError(
+                "xcresult test-results node is not an object"
+            )
+        node_type = node.get("nodeType")
+        name = node.get("name")
+        identifier = node.get("nodeIdentifier")
+        iteration = current_iteration
+        if node_type == "Repetition":
+            iteration = _xctest_iteration_number(name, identifier)
+        context = parents + tuple(
+            value for value in (identifier, name) if isinstance(value, str)
+        )
+        result = node.get("result")
+        matches: list[str] = []
+        if node_type in {"Test Case", "Test Case Run"}:
+            matches = [test for test in expected if _xctest_context_matches(test, context)]
+            if len(matches) > 1:
+                raise IOSSimulatorAppContractError(
+                    "xcresult contains an ambiguous selected test result: "
+                    f"name={name!r}, nodeIdentifier={identifier!r}, matches={matches!r}"
+                )
+        if (
+            node_type == "Repetition"
+            or (node_type in {"Test Case", "Test Case Run"} and matches)
+        ) and result is not None:
+            if not isinstance(result, str) or result != "Passed":
+                aggregate_errors.append(
+                    f"{node_type} {name or identifier or '<unnamed>'} result={result!r}"
+                )
+
+        children = node.get("children", [])
+        if not isinstance(children, list):
+            raise IOSSimulatorAppContractError(
+                "xcresult test-results node children have an invalid shape"
+            )
+        if matches and (node_type == "Test Case Run" or (
+            node_type == "Test Case" and not _contains_xctest_case_run(node)
+        )):
+            records[matches[0]].append({
+                "result": result if isinstance(result, str) else "unknown",
+                "name": name if isinstance(name, str) else "",
+                "node_identifier": identifier if isinstance(identifier, str) else "",
+                "iteration": iteration if iteration is not None else _xctest_iteration_number(name, identifier),
+            })
+        for child in children:
+            visit(child, context, iteration)
+
+    for node in report["testNodes"]:
+        visit(node, ())
+
+    failures: list[str] = aggregate_errors
+    for test, runs in records.items():
+        if len(runs) != repeat:
+            failures.append(
+                f"{test}: expected {repeat} test results, found {len(runs)}"
+            )
+        indexed = [run["iteration"] for run in runs]
+        if runs and any(index is not None for index in indexed):
+            expected_one_based = list(range(1, repeat + 1))
+            expected_zero_based = list(range(repeat))
+            normalized = sorted(index for index in indexed if isinstance(index, int))
+            if len(normalized) != len(runs) or normalized not in (
+                expected_one_based, expected_zero_based,
+            ):
+                failures.append(
+                    f"{test}: repetition indexes are incomplete or duplicated: {indexed!r}"
+                )
+            else:
+                runs.sort(key=lambda run: int(run["iteration"]))
+        elif repeat > 1:
+            failures.append(
+                f"{test}: XCTest did not identify each of {repeat} repetitions"
+            )
+        elif runs:
+            runs[0]["iteration"] = 1
+        for index, run in enumerate(runs, start=1):
+            if run["result"] != "Passed":
+                iteration = run["iteration"]
+                failures.append(
+                    f"{test} iteration {index if iteration is None else iteration}: "
+                    f"result={run['result']!r}"
+                )
+    if failures:
+        raise IOSSimulatorAppContractError(
+            "iOS XCTest required results did not all pass: " + "; ".join(failures)
+        )
+
+    return {
+        "required_tests": [
+            {"test": test, "iterations": list(records[test])} for test in expected
+        ],
+        "repeat": repeat,
+        "result": "Passed",
+    }
+
+
 def _retain_xctest_screenshots(
     runner: CommandRunner,
     result_bundle: Path,
@@ -865,7 +1061,8 @@ def _retain_xctest_screenshots(
             )
 
         screenshot_dir = manifest_path.parent
-        copied: set[str] = set()
+        copied: dict[str, int] = {}
+        exported_files: set[str] = set()
         for test in manifest:
             attachments = test.get("attachments") if isinstance(test, dict) else None
             if not isinstance(attachments, list):
@@ -903,9 +1100,9 @@ def _retain_xctest_screenshots(
                         f"xcresulttool returned an unsafe iOS UI screenshot entry: {human_name}"
                     )
                 label = label_match.group(1)
-                if label in copied:
+                if exported_name in exported_files:
                     raise IOSSimulatorAppContractError(
-                        f"xcresulttool returned duplicate iOS UI screenshot: {label}"
+                        f"xcresulttool returned a duplicate exported screenshot file: {exported_name}"
                     )
                 source = screenshot_dir / exported_name
                 if source.is_symlink() or not source.is_file():
@@ -915,7 +1112,9 @@ def _retain_xctest_screenshots(
                 diagnostics.mkdir(parents=True, exist_ok=True)
                 destination.mkdir(mode=0o700, exist_ok=True)
                 destination.chmod(0o700)
-                screenshot = destination / f"{label}.png"
+                occurrence = copied.get(label, 0) + 1
+                suffix = "" if occurrence == 1 else f"-{occurrence:02d}"
+                screenshot = destination / f"{label}{suffix}.png"
                 try:
                     shutil.copy2(source, screenshot)
                     screenshot.chmod(0o600)
@@ -925,7 +1124,8 @@ def _retain_xctest_screenshots(
                     raise IOSSimulatorAppContractError(
                         f"could not retain complete iOS UI screenshot: {label}"
                     ) from error
-                copied.add(label)
+                copied[label] = occurrence
+                exported_files.add(exported_name)
 
         if not copied:
             raise IOSSimulatorAppContractError(
@@ -944,7 +1144,7 @@ _IOS_NATIVE_SIMULATOR_LOG_NAMES = {
     "system.log", "mobile_installation.log.0", "AppConduit.log.0",
 }
 _IOS_RETAINED_LOG_NAMES = (
-    {"app-native.log", "runner-failure.txt"}
+    {"app-native.log", "runner-failure.txt", "xctest-test-results.json"}
     | _IOS_NATIVE_SIMULATOR_LOG_NAMES
     | {name + suffix for name in _IOS_LOG_NAMES for suffix in ("", ".previous")}
 )
@@ -1542,6 +1742,7 @@ def run_ios_simulator_app_contract(
     budget: RunBudget | None = None,
     native_cases: Sequence[str] | None = None,
     source_sha: str | None = None,
+    repeat: int = 1,
 ) -> IOSSimulatorAppEvidence:
     """Run the native SwiftUI Simulator mini contract.
 
@@ -1551,6 +1752,9 @@ def run_ios_simulator_app_contract(
     """
     budget = budget or RunBudget()
     selected_tests = ui_test_selection(native_cases)
+    required_test_cases = required_ui_test_cases(native_cases)
+    if type(repeat) is not int or repeat < 1:
+        raise IOSSimulatorAppContractError("repeat count must be positive")
     work_dir.mkdir(parents=True, exist_ok=True)
     simulator: AvailableSimulator | None = None
     app_installed = False
@@ -1565,6 +1769,7 @@ def run_ios_simulator_app_contract(
     retained_result_bundle: Path | None = None
     retained_native_log: Path | None = None
     native_log_collection_error: str | None = None
+    xctest_results: dict[str, object] | None = None
     subscription_fixture = None
     subscription_fixture_directory = work_dir / "native-subscription-fixture"
     requires_subscription_fixture = _requires_subscription_fixture(native_cases)
@@ -1680,10 +1885,11 @@ def run_ios_simulator_app_contract(
                     )
                 _retain_bootstatus_native_logs(simulator.udid, work_dir, error)
                 raise
-            _timed_stage(
-                "open-simulator",
-                lambda: _open_simulator(runner, simulator.udid, budget=budget),
-            )
+            if keyboard_state is not None and keyboard_state.was_connected:
+                _timed_stage(
+                    "open-simulator",
+                    lambda: _open_simulator(runner, simulator.udid, budget=budget),
+                )
 
         _timed_stage("boot", boot_simulator)
         if keyboard_state is not None:
@@ -1840,7 +2046,6 @@ def run_ios_simulator_app_contract(
             # start() records Simulator trust before installing it, so the
             # common finally cleanup can handle partial setup failures too.
             subscription_fixture.start()
-            subscription_fixture.fail_next_response()
             test_environment = _subscription_fixture_test_environment(subscription_fixture)
         project = candidate_root / _PROJECT_PATH
         if not project.is_dir():
@@ -1878,6 +2083,7 @@ def run_ios_simulator_app_contract(
                     architecture=contract.architecture,
                     native_cases=native_cases,
                     test_environment=test_environment,
+                    repeat=repeat,
                 ),
                 "xctest-ui",
                 cwd=candidate_root,
@@ -1885,10 +2091,26 @@ def run_ios_simulator_app_contract(
                 timeout_seconds=STAGE_TIMEOUT_SECONDS["xctest-ui"],
             ),
         )
+        test_results = _require_success(
+            runner,
+            [
+                "xcrun", "xcresulttool", "get", "test-results", "tests",
+                "--path", str(result_bundle),
+            ],
+            "get-xctest-test-results",
+            budget=budget,
+            timeout_seconds=STAGE_TIMEOUT_SECONDS["get-xctest-test-results"],
+        )
+        _write_xctest_test_results(test_results.stdout, work_dir)
+        xctest_results = _validate_xctest_test_results(
+            test_results.stdout,
+            required_tests=required_test_cases,
+            repeat=repeat,
+        )
         if subscription_fixture is not None:
             _assert_subscription_fixture_request_count(
                 subscription_fixture,
-                expected_gets=IOS_SUBSCRIPTION_FIXTURE_EXPECTED_GETS,
+                expected_gets=expected_subscription_fixture_gets(native_cases) * repeat,
             )
 
     except BaseException as error:
@@ -2027,6 +2249,8 @@ def run_ios_simulator_app_contract(
         native_log=retained_native_log,
         native_log_collection_error=native_log_collection_error,
         selected_tests=selected_tests,
+        required_test_cases=required_test_cases,
+        xctest_results=xctest_results,
     )
 
 

@@ -14,7 +14,10 @@ public enum DiagnosticFiles {
         init(_ message: String) { description = message }
     }
 
-    public static func append(_ message: String, event: String, level: String, source: String, to path: URL) throws {
+    public static func append(
+        _ message: String, event: String, level: String, source: String, to path: URL,
+        fields: [String: Any] = [:]
+    ) throws {
         processLock.lock()
         defer { processLock.unlock() }
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -37,7 +40,9 @@ public enum DiagnosticFiles {
                           "commit": Bundle.main.infoDictionary?["DobbySourceCommit"] as? String ?? "N/A",
                           "configuration": configuration, "platform": ProcessInfo.processInfo.operatingSystemVersionString],
             ]
-            var data = try JSONSerialization.data(withJSONObject: record)
+            var recordWithFields = record
+            if !fields.isEmpty { recordWithFields["fields"] = fields }
+            var data = try JSONSerialization.data(withJSONObject: recordWithFields)
             data.append(0x0A)
             if try size(path) >= threshold { try rotate(path) }
             try withFile(try open(path, flags: O_WRONLY | O_CREAT | O_APPEND)) { try $0.write(contentsOf: data) }

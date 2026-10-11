@@ -17,11 +17,61 @@ final class UnixControlSocketTests: XCTestCase {
                 let reply = #"{"ok":true,"result":{"primary_action":"START"}}"# + "\n"
                 reply.withCString { XCTAssertEqual(send(client, $0, strlen($0), 0), reply.utf8.count) }
             }
-            let client = MacDesktopSessionClient(environment: ["DOBBYVPN_CONTROL_SOCKET": path, "DOBBY_LOG_PATH": path + ".log"])
+            let client = MacDesktopSessionClient(environment: [
+                "DOBBYVPN_CONTROL_SOCKET": path,
+                "DOBBY_LOG_PATH": path + ".log",
+                "DOBBY_UI_LOG_PATH": path + ".ui.jsonl",
+            ])
             XCTAssertEqual(client.diagnosticPaths.prefix(2).map(\.path), [path + ".log", path + ".log.stderr"])
+            XCTAssertEqual(client.uiDiagnosticPath.path, path + ".ui.jsonl")
+            XCTAssertEqual(client.diagnosticPaths.last?.path, path + ".ui.jsonl")
             let result = client.call("Snapshot", parameters: [:])
             XCTAssertTrue(result.contains(#""primary_action":"START""#), result)
             wait(for: [finished], timeout: 2)
+        }
+    }
+
+    func testConfigureResponseDiagnosticCorrelatesSourceAndMonotonicReceipt() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = "https://example.invalid/subscription?sample=one"
+
+        try withServer { path, descriptor in
+            let finished = expectation(description: "server finished")
+            DispatchQueue.global().async {
+                defer { finished.fulfill() }
+                let connection = accept(descriptor, nil, nil)
+                guard connection >= 0 else { return XCTFail("accept errno=\(errno)") }
+                defer { _ = close(connection) }
+                var bytes = [UInt8](repeating: 0, count: 4096)
+                XCTAssertGreaterThan(recv(connection, &bytes, bytes.count, 0), 0)
+                let reply = #"{"ok":true,"result":{"sequence":2}}"# + "\n"
+                reply.withCString { XCTAssertEqual(send(connection, $0, strlen($0), 0), reply.utf8.count) }
+            }
+
+            let uiLog = directory.appendingPathComponent("ui.jsonl")
+            let client = MacDesktopSessionClient(environment: [
+                "DOBBYVPN_CONTROL_SOCKET": path,
+                "DOBBY_LOG_PATH": directory.appendingPathComponent("backend.jsonl").path,
+                "DOBBY_UI_LOG_PATH": uiLog.path,
+            ])
+            let response = client.call("Configure", parameters: ["source": source])
+            XCTAssertTrue(response.contains(#""sequence":2"#), response)
+            wait(for: [finished], timeout: 2)
+
+            let data = try Data(contentsOf: uiLog)
+            let lines = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline)
+            XCTAssertEqual(lines.count, 1)
+            let record = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(lines[0].utf8)) as? [String: Any]
+            )
+            XCTAssertEqual(record["event"] as? String, "subscription.configure-pipe-response-read")
+            let fields = try XCTUnwrap(record["fields"] as? [String: Any])
+            let parameters = try XCTUnwrap(fields["parameters"] as? [String: Any])
+            XCTAssertEqual(parameters["source"] as? String, source)
+            XCTAssertEqual(fields["succeeded"] as? Bool, true)
+            XCTAssertGreaterThan(fields["response_read_monotonic_uptime"] as? Double ?? 0, 0)
         }
     }
 

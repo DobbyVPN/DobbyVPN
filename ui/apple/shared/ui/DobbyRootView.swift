@@ -7,7 +7,6 @@ import AppKit
 
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
-    private let onLogScrollDiagnostic: ((String) -> Void)?
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var configurationFocused: Bool
     @State private var showingAbout = false
@@ -17,12 +16,8 @@ public struct DobbyRootView: View {
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
 
-    public init(
-        model: DobbySessionViewModel,
-        onLogScrollDiagnostic: ((String) -> Void)? = nil
-    ) {
+    public init(model: DobbySessionViewModel) {
         self.model = model
-        self.onLogScrollDiagnostic = onLogScrollDiagnostic
     }
 
     public var body: some View {
@@ -109,19 +104,17 @@ public struct DobbyRootView: View {
                                     HStack {
                                         VStack(alignment: .leading) {
                                             Text(profile.name)
-#if os(macOS)
-                                                .accessibilityIdentifier("Profile \(profile.index + 1) description")
-#endif
+                                                .accessibilityIdentifier(profileIdentifier(profile, role: "description"))
                                             Text(profile.protocolName)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
-                                                .accessibilityIdentifier("Profile \(profile.index + 1) protocol")
+                                                .accessibilityIdentifier(profileIdentifier(profile, role: "protocol"))
                                                 .accessibilityLabel("Profile \(profile.index + 1) protocol · \(profile.protocolName)")
                                         }
                                         Spacer()
                                         Button(model.actionTitle(profile.index)) { model.performPrimaryAction(profile.index) }
                                             .disabled(!model.canAct(profile.index))
-                                            .accessibilityIdentifier("Profile \(profile.index + 1) action")
+                                            .accessibilityIdentifier(profileIdentifier(profile, role: "action"))
                                     }
                                 }
                             }
@@ -162,6 +155,7 @@ public struct DobbyRootView: View {
             if !model.loadError.isEmpty {
                 Text(model.loadError).font(.caption).foregroundStyle(.red).textSelection(.enabled)
                 Button("Retry") { model.retryLoad() }
+                    .accessibilityIdentifier("subscription.retry")
             }
         }
     }
@@ -197,7 +191,7 @@ public struct DobbyRootView: View {
 
     private var connectionSummary: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(model.status).font(.headline).accessibilityIdentifier(model.status)
+            Text(model.status).font(.headline).accessibilityIdentifier("connection.status")
             if let profile = model.snapshot.activeProfile {
                 Text([profile.protocolName, profile.description].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.subheadline)
@@ -241,6 +235,10 @@ public struct DobbyRootView: View {
         .keyboardShortcut(.return, modifiers: .command)
     }
 
+    private func profileIdentifier(_ profile: DobbyProfile, role: String) -> String {
+        "profile.\(model.snapshot.digest).\(profile.index).\(role)"
+    }
+
     private var logs: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -250,6 +248,7 @@ public struct DobbyRootView: View {
                     followingLogs = true
                     model.clearLogs()
                 }
+                .accessibilityIdentifier("logs.clear")
                 Button {
                     model.prepareLogsExport { url in
                         exportedLogsURL = url
@@ -267,11 +266,7 @@ public struct DobbyRootView: View {
 #if os(iOS)
             Text("Recent logs. Shared diagnostics include both retained generations.")
                 .font(.caption).foregroundStyle(.secondary)
-            DobbyLogView(
-                entries: model.logEntries,
-                clear: model.clearRevision,
-                onScrollDiagnostic: onLogScrollDiagnostic
-            )
+            DobbyLogView(entries: model.logEntries, clear: model.clearRevision)
                 .accessibilityIdentifier("Connection logs")
 #else
             DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)

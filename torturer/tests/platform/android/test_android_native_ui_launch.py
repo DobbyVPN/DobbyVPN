@@ -22,6 +22,7 @@ from torturer_runner.adapters.android import (
     _MAIN_ACTIVITY,
     _PACKAGE_NAME,
 )
+from torturer_runner.native_cases import ANDROID_PERFORMANCE_CASE, ANDROID_PRESENTATION_CASES
 
 
 FIXTURE_CA_PEM = "synthetic run-owned fixture CA\n"
@@ -65,7 +66,6 @@ def phase_adapter(root: Path) -> AndroidAdapter:
     adapter.download_url = None
     adapter.upload_url = None
     adapter._process_cold_import_queued = False
-    adapter._saved_source_restore_preverified = False
     adapter.profile = root / "owner-profile.toml"
     adapter.profile.write_bytes(b"immutable owner profile bytes")
     adapter._subscription_fixture = fixture_stub(
@@ -220,6 +220,182 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertEqual(fixture.profile_bytes, synthetic_profile)
             self.assertEqual(fixture.replacement_calls, [owner_profile, owner_profile])
 
+    def test_named_rendered_case_keeps_the_canonical_configure_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = phase_adapter(root)
+            configure = SimpleNamespace(
+                id="configure", operation="configure", timeout_seconds=90
+            )
+
+            command_file, _, _ = adapter._write_command(
+                SimpleNamespace(),
+                steps=(configure,),
+                test_case="android:typed-url-coalescing",
+            )
+
+            command = json.loads(command_file.read_text(encoding="utf-8"))
+            self.assertEqual(command["test_case"], "android:typed-url-coalescing")
+            self.assertEqual(
+                [step["operation"] for step in command["operations"]], ["configure"]
+            )
+            self.assertEqual(
+                command["subscription_control_ca_pem"], FIXTURE_CA_PEM
+            )
+            self.assertNotIn("saved_source_restore_only", command)
+            self.assertNotIn("saved_source_restore_preverified", command)
+
+    def test_instrumentation_selects_only_the_named_rendered_method(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = phase_adapter(root)
+            commands: list[tuple[str, ...]] = []
+            adapter._progress_sink = None
+
+            def adb(arguments, *_args, **_kwargs):
+                commands.append(tuple(arguments))
+                return SimpleNamespace(
+                    returncode=0, stdout=b"", stderr=b"", stdout_text=""
+                )
+
+            adapter._adb = mock.Mock(side_effect=adb)
+            adapter._run_instrumentation(
+                "one.command.json",
+                time.monotonic() + 30,
+                test_case="android:profile-selection",
+            )
+
+            instrumentation = commands[-1]
+            class_index = instrumentation.index("class")
+            self.assertEqual(
+                instrumentation[class_index + 1],
+                "com.dobby.NativeUiHostedProfileTest#profileSelection",
+            )
+
+    def test_performance_case_selects_its_report_only_method(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = phase_adapter(root)
+            commands: list[tuple[str, ...]] = []
+            adapter._progress_sink = None
+
+            def adb(arguments, *_args, **_kwargs):
+                commands.append(tuple(arguments))
+                return SimpleNamespace(
+                    returncode=0, stdout=b"", stderr=b"", stdout_text=""
+                )
+
+            adapter._adb = mock.Mock(side_effect=adb)
+            adapter._run_instrumentation(
+                "one.command.json",
+                time.monotonic() + 30,
+                test_case=f"android:{ANDROID_PERFORMANCE_CASE}",
+            )
+
+            instrumentation = commands[-1]
+            class_index = instrumentation.index("class")
+            self.assertEqual(
+                instrumentation[class_index + 1],
+                "com.dobby.NativeUiHostedProfileTest#subscriptionLoadPerformance",
+            )
+
+    def test_rendered_case_pass_requires_its_assertions_and_retained_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            label = "0004-android_profile_selection-profile-selection-state.png"
+            screenshot = (
+                root / "screenshots" / "android" / "android-hosted-token" / label
+            )
+            screenshot.parent.mkdir(parents=True)
+            screenshot.write_bytes(b"PNG fixture")
+            adapter = phase_adapter(root)
+            facts = {
+                "case_id": "android:profile-selection",
+                "passed": True,
+                "screenshot_label": label,
+                "checks": {"profile_identity": True, "consent": True},
+            }
+
+            retained = adapter._validated_rendered_case_facts(
+                facts,
+                "android-hosted-token.command.json",
+                test_case="android:profile-selection",
+            )
+
+            self.assertEqual(retained["screenshot_path"], str(screenshot))
+            with self.assertRaisesRegex(
+                ScenarioExecutionError, "ANDROID_RENDERED_CASE_ASSERTIONS_INVALID"
+            ):
+                adapter._validated_rendered_case_facts(
+                    {**facts, "checks": {"profile_identity": False}},
+                    "android-hosted-token.command.json",
+                    test_case="android:profile-selection",
+                )
+
+    def test_performance_case_retains_fixed_raw_samples_without_a_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            label = "0004-android_subscription_load_performance-performance-summary-state.png"
+            screenshot = (
+                root / "screenshots" / "android" / "android-hosted-token" / label
+            )
+            screenshot.parent.mkdir(parents=True)
+            screenshot.write_bytes(b"PNG fixture")
+            adapter = phase_adapter(root)
+            timings = {
+                "request_start_upper_bound_ms": 410,
+                "fixture_clock_rtt_ms": 8,
+            }
+            measurements = {
+                "action": "paste",
+                "warmup_count": 5,
+                "sample_count": 30,
+                "reference_ms": 350,
+                "blocking_gate": False,
+                "summary": {
+                    "median_upper_bound_ms": 410,
+                    "p95_upper_bound_ms": 410,
+                    "max_upper_bound_ms": 410,
+                },
+                "warmups": [
+                    {**timings, "action": "paste", "index": index}
+                    for index in range(5)
+                ],
+                "samples": [
+                    {**timings, "action": "paste", "index": index}
+                    for index in range(30)
+                ],
+            }
+            facts = {
+                "case_id": f"android:{ANDROID_PERFORMANCE_CASE}",
+                "passed": True,
+                "screenshot_label": label,
+                "checks": {"report_only": True},
+                "measurements": measurements,
+            }
+
+            retained = adapter._validated_rendered_case_facts(
+                facts,
+                "android-hosted-token.command.json",
+                test_case=f"android:{ANDROID_PERFORMANCE_CASE}",
+            )
+
+            self.assertEqual(retained["measurements"], measurements)
+            with self.assertRaisesRegex(
+                ScenarioExecutionError, "ANDROID_PERFORMANCE_MEASUREMENTS_INVALID"
+            ):
+                adapter._validated_rendered_case_facts(
+                    {
+                        **facts,
+                        "measurements": {
+                            **measurements,
+                            "blocking_gate": True,
+                        },
+                    },
+                    "android-hosted-token.command.json",
+                    test_case=f"android:{ANDROID_PERFORMANCE_CASE}",
+                )
+
     def test_consent_n11_command_dispatches_rendered_selection_after_configure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -257,169 +433,6 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
             self.assertTrue(command["process_cold_import"])
             self.assertEqual(command["subscription_request_count_before_launch"], 0)
             self.assertEqual(command["subscription_control_ca_pem"], FIXTURE_CA_PEM)
-
-    def test_saved_source_phase_precedes_n11_and_full_lane_imports(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            adapter = phase_adapter(root)
-            adapter.app_apk = root / "app.apk"
-            adapter.test_companion_apk = root / "test.apk"
-            fixture_stats = {"subscription_gets": 0}
-            adapter._subscription_fixture.control_stats = lambda: dict(fixture_stats)
-            commands: list[dict[str, object]] = []
-            configure = SimpleNamespace(
-                id="configure", operation="configure", timeout_seconds=90
-            )
-            consent_selection = SimpleNamespace(
-                id="consent-grant-selection",
-                operation="consent_grant_selection",
-                timeout_seconds=120,
-            )
-
-            def instrument(command_name: str, _deadline: float, **_kwargs: object):
-                command = json.loads((root / command_name).read_text(encoding="utf-8"))
-                commands.append(command)
-                if command.get("saved_source_restore_only"):
-                    self.assertEqual(
-                        command["subscription_request_count_before_launch"], 0
-                    )
-                    fixture_stats["subscription_gets"] = 2
-                elif command.get("process_cold_import"):
-                    self.assertEqual(
-                        command["subscription_request_count_before_launch"],
-                        fixture_stats["subscription_gets"],
-                    )
-                    fixture_stats["subscription_gets"] += 1
-                elif _kwargs.get("preserve_active"):
-                    self.assertEqual(
-                        command["subscription_request_count_before_launch"],
-                        fixture_stats["subscription_gets"],
-                    )
-                    self.assertNotIn("process_cold_import", command)
-                    # The preserved Activity is started by the host before
-                    # instrumentation; restoring its saved source consumes a
-                    # GET after the command baseline has been captured.
-                    fixture_stats["subscription_gets"] += 1
-                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"", timed_out=False)
-
-            adapter._run_instrumentation = mock.Mock(side_effect=instrument)
-            adapter._stage_private_file = mock.Mock()
-            adapter._adb = mock.Mock(side_effect=lambda *_args, **_kwargs: output_result())
-            scenario = select_scenarios(scenario_ids=["functional.configure"])[0]
-            with mock.patch(
-                "torturer_runner.adapters.android._instrumentation_succeeded",
-                return_value=True,
-            ):
-                observation = adapter._execute_phase(
-                    scenario,
-                    (configure, consent_selection),
-                    time.monotonic() + 120,
-                    [],
-                )
-
-            self.assertTrue(observation.configured)
-            self.assertFalse(observation.connected)
-            self.assertEqual(len(commands), 2)
-            self.assertTrue(commands[0]["saved_source_restore_only"])
-            self.assertNotIn("process_cold_import", commands[0])
-            self.assertTrue(commands[1]["saved_source_restore_preverified"])
-            self.assertTrue(commands[1]["process_cold_import"])
-            self.assertEqual(commands[1]["subscription_request_count_before_launch"], 2)
-
-            # N11's exact APK reinstall invalidates its first-process import
-            # queue. Keep only the successful restore observation so the full
-            # lane runs its own cold import without repeating that restore.
-            def install_result(arguments, *_args, **_kwargs):
-                return SimpleNamespace(
-                    stdout_text=(
-                        "package:/data/app/com.dobby.vpn/base.apk"
-                        if arguments[:3] == ("shell", "pm", "path")
-                        else ""
-                    )
-                )
-
-            adapter._process_cold_import_queued = True
-            adapter._adb = mock.Mock(side_effect=install_result)
-            adapter._install_fresh_apk_pair(time.monotonic() + 120)
-            self.assertFalse(adapter._process_cold_import_queued)
-            adapter._adb = mock.Mock(side_effect=lambda *_args, **_kwargs: output_result())
-            with mock.patch(
-                "torturer_runner.adapters.android._instrumentation_succeeded",
-                return_value=True,
-            ):
-                observation = adapter._execute_phase(
-                    scenario,
-                    scenario.steps,
-                    time.monotonic() + 120,
-                    [],
-                )
-
-            self.assertTrue(observation.configured)
-            self.assertEqual(len(commands), 3)
-            self.assertTrue(commands[2]["saved_source_restore_preverified"])
-            self.assertTrue(commands[2]["process_cold_import"])
-            self.assertEqual(commands[2]["subscription_request_count_before_launch"], 3)
-            self.assertEqual(fixture_stats["subscription_gets"], 4)
-
-            process_loss = select_scenarios(
-                scenario_ids=["functional.product-process-loss"]
-            )[0]
-            with mock.patch(
-                "torturer_runner.adapters.android._instrumentation_succeeded",
-                return_value=True,
-            ):
-                observation = adapter._execute_phase(
-                    process_loss,
-                    (configure,),
-                    time.monotonic() + 120,
-                    [],
-                    preserve_active=True,
-                )
-            self.assertTrue(observation.configured)
-            self.assertEqual(len(commands), 4)
-            self.assertEqual(
-                commands[3]["subscription_request_count_before_launch"], 4
-            )
-            self.assertTrue(commands[3]["saved_source_restore_preverified"])
-            self.assertNotIn("process_cold_import", commands[3])
-            self.assertEqual(fixture_stats["subscription_gets"], 5)
-
-    def test_failed_saved_source_phase_blocks_process_cold_command(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            adapter = phase_adapter(root)
-            commands: list[dict[str, object]] = []
-
-            def instrument(command_name: str, _deadline: float, **_kwargs: object):
-                commands.append(json.loads((root / command_name).read_text(encoding="utf-8")))
-                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"", timed_out=False)
-
-            adapter._run_instrumentation = mock.Mock(side_effect=instrument)
-            adapter._stage_private_file = mock.Mock()
-            adapter._adb = mock.Mock(
-                side_effect=lambda *_args, **_kwargs: output_result(connected=True)
-            )
-            scenario = select_scenarios(scenario_ids=["functional.configure"])[0]
-            with (
-                mock.patch(
-                    "torturer_runner.adapters.android._instrumentation_succeeded",
-                    return_value=True,
-                ),
-                self.assertRaisesRegex(
-                    ScenarioExecutionError,
-                    "ANDROID_SAVED_SOURCE_RESTORE_PREPHASE_INVALID",
-                ),
-            ):
-                adapter._execute_phase(
-                    scenario,
-                    scenario.steps,
-                    time.monotonic() + 120,
-                    [],
-                )
-
-            self.assertEqual(len(commands), 1)
-            self.assertTrue(commands[0]["saved_source_restore_only"])
-            self.assertNotIn("process_cold_import", commands[0])
 
     def test_consent_n11_reinstalls_exact_apk_pair_around_rendered_case(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -615,12 +628,12 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                 mock.patch.object(local_vm_android, "_collect_android_diagnostics", return_value=[]),
             ):
                 try:
-                    result = local_vm_android.run_ui(
+                    result = local_vm_android._run_legacy_ui(
                         root,
                         {"adb": "adb", "serial": "emulator-5554"},
                         logs,
                         timeout=30,
-                        native_cases=native_cases,
+                        selected_cases=tuple(native_cases or ()),
                     )
                 except Exception as error:
                     return None, error, calls, parsed_inputs
@@ -755,6 +768,134 @@ class AndroidNativeUiColdLaunchTests(unittest.TestCase):
                         "android-native-ui-cold-bare-link-start",
                     ],
                 )
+
+
+class AndroidNativeCaseDispatchTests(unittest.TestCase):
+    def _run_dispatch(
+        self,
+        native_cases: list[str] | None,
+        repeat: int = 1,
+        *,
+        failures: set[tuple[str, int]] = frozenset(),
+    ) -> tuple[subprocess.CompletedProcess[bytes], list[tuple[str, int]], bytes, bool]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logs = root / "logs"
+            calls: list[tuple[str, int]] = []
+
+            def run_case(_run_dir, _runtime, attempt_logs, _timeout, case_id):
+                attempt = int(attempt_logs.name.removeprefix("attempt-"))
+                calls.append((case_id, attempt))
+                output = json.dumps({"case_id": case_id, "attempt": attempt}).encode()
+                return subprocess.CompletedProcess(
+                    [case_id],
+                    1 if (case_id, attempt) in failures else 0,
+                    output,
+                    b"first attempt diagnostic\n" if (case_id, attempt) in failures else b"",
+                )
+
+            with (
+                mock.patch.dict(os.environ, {"ADB_SERVER_SOCKET": "tcp:localhost:5037"}),
+                mock.patch.object(
+                    local_vm_android, "_run_rendered_native_case", side_effect=run_case
+                ),
+            ):
+                result = local_vm_android.run_ui(
+                    root,
+                    {
+                        "adb": "adb",
+                        "serial": "emulator-5554",
+                        "app_apk": "app.apk",
+                        "test_companion_apk": "test.apk",
+                    },
+                    logs,
+                    timeout=30,
+                    native_cases=native_cases,
+                    repeat=repeat,
+                )
+            first_stderr = (
+                logs / "android-native-cases" / "android_configure-acceptance"
+                / "attempt-0001" / "stderr.bin"
+            )
+            second_stderr = (
+                logs / "android-native-cases" / "android_configure-acceptance"
+                / "attempt-0002" / "stderr.bin"
+            )
+            return (
+                result,
+                calls,
+                first_stderr.read_bytes() if first_stderr.is_file() else b"",
+                second_stderr.is_file(),
+            )
+
+    def test_selected_android_cases_repeat_in_order_and_keep_first_failure(self) -> None:
+        selected = ["configure-acceptance", "profile-selection"]
+        result, calls, first_stderr, second_has_stderr = self._run_dispatch(
+            selected,
+            repeat=2,
+            failures={("configure-acceptance", 1)},
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                ("configure-acceptance", 1),
+                ("configure-acceptance", 2),
+                ("profile-selection", 1),
+                ("profile-selection", 2),
+            ],
+        )
+        self.assertEqual(result.returncode, 1)
+        summary = json.loads(result.stdout)
+        self.assertEqual(
+            [entry["status"] for entry in summary["attempts"]],
+            ["failed", "passed", "passed", "passed"],
+        )
+        self.assertEqual(first_stderr, b"first attempt diagnostic\n")
+        self.assertFalse(second_has_stderr)
+
+    def test_android_mini_runs_base_ui_then_each_presentation_case(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logs = root / "logs"
+            events: list[str] = []
+
+            def base(_run_dir, _runtime, _logs, _timeout, *, selected_cases):
+                events.append("base-ui")
+                self.assertEqual(selected_cases, ())
+                return subprocess.CompletedProcess(["base"], 0, b"base passed", b"")
+
+            def case(_run_dir, _runtime, _logs, _timeout, case_id):
+                events.append(case_id)
+                return subprocess.CompletedProcess([case_id], 0, b"{}", b"")
+
+            with (
+                mock.patch.dict(os.environ, {"ADB_SERVER_SOCKET": "tcp:localhost:5037"}),
+                mock.patch.object(local_vm_android, "_run_legacy_ui", side_effect=base),
+                mock.patch.object(local_vm_android, "_run_rendered_native_case", side_effect=case),
+            ):
+                result = local_vm_android.run_ui(
+                    root,
+                    {
+                        "adb": "adb",
+                        "serial": "emulator-5554",
+                        "app_apk": "app.apk",
+                        "test_companion_apk": "test.apk",
+                    },
+                    logs,
+                    timeout=30,
+                )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(events, ["base-ui", *ANDROID_PRESENTATION_CASES])
+
+    def test_android_performance_case_is_selectable_but_not_part_of_mini_default(self) -> None:
+        result, calls, _first_stderr, _second_has_stderr = self._run_dispatch(
+            [ANDROID_PERFORMANCE_CASE],
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(calls, [(ANDROID_PERFORMANCE_CASE, 1)])
 
 
 if __name__ == "__main__":

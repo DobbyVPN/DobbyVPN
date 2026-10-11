@@ -7,6 +7,20 @@ private struct RenderedLogAnchor {
     let element: XCUIElement
 }
 
+private struct ScrollableLogFixture {
+    let configuration: XCUIElement
+    let paste: XCUIElement
+    let logs: XCUIElement
+    let validationError: String
+    let errorCount: Int
+}
+
+private struct FrozenRenderedLog {
+    let anchor: RenderedLogAnchor
+    let text: String
+    let offset: CGFloat
+}
+
 private final class StableFrameTracker {
     private var previousFrames: [CGRect]?
     private var consecutiveStableSamples = 0
@@ -45,6 +59,7 @@ final class NativeUIInteractionTests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        if app.state != .notRunning { app.terminate() }
         app.launch()
     }
 
@@ -53,42 +68,33 @@ final class NativeUIInteractionTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testNativeConnectionAboutAndLogs() throws {
-        app.terminate()
-        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
-        app.launch()
-
+    func testUnsupportedTypedURLKeepsControlsUsable() {
         let configuration = app.textFields["Connection configuration"]
         XCTAssertTrue(configuration.waitForExistence(timeout: 30))
         assertLogLayout()
-        attachScreenshot("startup")
 
         configuration.tap()
         configuration.typeText("invalidprofile")
         assertLogLayout()
         XCTAssertTrue(app.buttons["Clear"].isHittable, "The log controls should remain reachable with the keyboard open")
         XCTAssertTrue(app.buttons["Share logs"].isHittable, "Log export should remain reachable with the keyboard open")
-        attachScreenshot("keyboard")
         dismissConfigurationKeyboard()
-        openAbout()
-        app.buttons["Done"].tap()
-        XCTAssertEqual(configuration.value as? String, "invalidprofile")
         XCTAssertFalse(app.buttons["VPN connection action"].isEnabled)
         XCTAssertTrue(
-            app.staticTexts["Disconnected"].waitForExistence(timeout: 10),
+            app.staticTexts["connection.status"].waitForExistence(timeout: 10),
             "An unsupported typed URL should remain disconnected without starting a fetch or connection"
         )
-        attachScreenshot("invalid-source")
+        XCTAssertEqual(app.staticTexts["connection.status"].label, "Disconnected")
         XCTAssertEqual(configuration.value as? String, "invalidprofile")
+    }
 
+    func testAboutShowsSelectedProductRevision() throws {
+        let configuration = app.textFields["Connection configuration"]
+        XCTAssertTrue(configuration.waitForExistence(timeout: 30))
         configuration.tap()
-        configuration.typeText("2")
-        let editedConfiguration = try XCTUnwrap(configuration.value as? String)
-        if editedConfiguration != "2" {
-            XCTAssertEqual(editedConfiguration.count, "invalidprofile".count + 1)
-            XCTAssertEqual(editedConfiguration.filter { $0 != "2" }, "invalidprofile")
-        }
+        configuration.typeText("invalidprofile")
         dismissConfigurationKeyboard()
+        let editedConfiguration = try XCTUnwrap(configuration.value as? String)
 
         let version = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Version:")).firstMatch
         openAbout()
@@ -119,6 +125,12 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Logs"].exists)
         XCTAssertTrue(app.buttons["Share logs"].exists)
         XCTAssertTrue(app.buttons["Clear"].exists)
+    }
+
+    func testClearRemovesEarlierRenderedRecordsAndRetainsLaterRecord() throws {
+        let configuration = app.textFields["Connection configuration"]
+        XCTAssertTrue(configuration.waitForExistence(timeout: 30))
+        assertLogLayout()
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
         let populated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", ""), object: logs)
@@ -203,8 +215,30 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertFalse((reopenedLogs.value as? String ?? "").contains(clearAnchor.record),
                        "A specific rendered pre-Clear record must stay absent after relaunch")
         attachScreenshot("reopened")
-        try verifyColdAndWarmImports()
+    }
 
+    func testColdImportKeepsItsValidSource() throws {
+        guard #available(iOS 16.4, *) else { throw XCTSkip("URL activation checks require iOS 16.4 or newer") }
+        app.terminate()
+        app.open(try subscriptionImportLink("https://example.invalid/cold?a=%2F"))
+        assertImportedSource("https://example.invalid/cold?a=%2F")
+    }
+
+    func testWarmAndInvalidImportsKeepTheLatestValidSource() throws {
+        guard #available(iOS 16.4, *) else { throw XCTSkip("URL activation checks require iOS 16.4 or newer") }
+        let warm = "https://example.invalid/warm"
+        XCUIDevice.shared.system.open(try subscriptionImportLink(warm))
+        assertImportedSource(warm)
+        XCUIDevice.shared.system.open(try subscriptionImportLink(warm))
+        assertImportedSource(warm)
+        XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://")))
+        assertImportedSource(warm)
+        XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid&url=duplicate")))
+        assertImportedSource(warm)
+        let guidance = app.staticTexts["Deep link import guidance"]
+        XCTAssertTrue(guidance.waitForExistence(timeout: 10),
+                      "An invalid deep link should keep actionable import guidance visible despite connection errors")
+        XCTAssertTrue(guidance.label.contains("Use dobbyvpn://import?url="))
     }
 
     func testLargeTextKeepsLogsAndControlsVisible() {
@@ -339,14 +373,157 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertFalse(app.buttons["VPN connection action"].isEnabled)
     }
 
-    func testLogsFreezeAndResumeAtBottom() throws {
+    func testLogDetailsRevealAndCollapseTheOriginalRecord() throws {
+        capturesLogFreezeScreenshot = true
+        let fixture = try prepareScrollableLogFixture()
+        let logs = fixture.logs
+
+        let latestLogText = try XCTUnwrap(logs.value as? String)
+        XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
+        let detailElements = logs.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
+        let targetRecord = try XCTUnwrap(
+            renderedLogRecord(containing: fixture.validationError, in: latestLogText),
+            "The latest Paste validation record should remain in the rendered log view"
+        )
+        let renderedErrorLines = targetRecord.record.components(separatedBy: "\n")
+        XCTAssertTrue(renderedErrorLines.first?.hasSuffix(" · ERROR · App · native-ui") == true)
+        XCTAssertTrue(renderedErrorLines.contains(fixture.validationError))
+        let details = detailElements.element(boundBy: targetRecord.detailIndex)
+        XCTAssertTrue(details.waitForExistence(timeout: 10))
+        XCTAssertEqual(details.label, "Details")
+        for _ in 0..<8 {
+            if details.isHittable { break }
+            let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.30))
+            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+            start.press(forDuration: 0.1, thenDragTo: end)
+        }
+        XCTAssertTrue(details.isHittable, "The selected record's Details control should be reachable by scrolling")
+        details.tap()
+        let expanded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Hide details"), object: details)
+        XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 10), .completed)
+        let originalRecord = XCTNSPredicateExpectation(
+            predicate: NSPredicate(
+                format: "value CONTAINS %@ OR value CONTAINS %@",
+                "\"schema\":\"dobby.log/v1\"", "\"schema\":\"dobby.log\\/v1\""
+            ),
+            object: logs
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [originalRecord], timeout: 10), .completed)
+        let expandedText = try XCTUnwrap(logs.value as? String)
+        XCTAssertTrue(expandedText.contains("\"message\":\"\(fixture.validationError)\""))
+        XCTAssertTrue(expandedText.contains("\"event\":\"ui.failure\""))
+        XCTAssertTrue(expandedText.contains("\"source\":\"native-ui\""))
+
+        details.tap()
+        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Details"), object: details)
+        XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 10), .completed)
+        let frozen = try freezeRecentLogRecord(fixture, diagnosticPrefix: "logs-details")
+        XCTAssertEqual(logs.value as? String, frozen.text, "Scrolling should preserve the rendered entries")
+        assertFrozenLogTextIsSelectable(in: logs, frozenText: frozen.text, message: fixture.validationError)
+    }
+
+    func testFrozenLogsKeepTheirReadingPositionDuringConfigurationAndAbout() throws {
+        capturesLogFreezeScreenshot = true
+        let fixture = try prepareScrollableLogFixture()
+        let frozen = try freezeRecentLogRecord(fixture, diagnosticPrefix: "logs-freeze")
+        let logs = fixture.logs
+        let configuration = fixture.configuration
+        configuration.tap()
+        configuration.typeText("x")
+        dismissConfigurationKeyboard()
+        XCTAssertEqual(logs.value as? String, frozen.text)
+        XCTAssertTrue(elementIsVisible(frozen.anchor.element, in: logs))
+        XCTAssertEqual(
+            frozen.anchor.element.frame.minY - logs.frame.minY,
+            frozen.offset,
+            accuracy: 2,
+            "Showing and dismissing the configuration keyboard should preserve the frozen reading position"
+        )
+        openAbout()
+        app.buttons["Done"].tap()
+        XCTAssertEqual(logs.value as? String, frozen.text)
+        XCTAssertTrue(elementIsVisible(frozen.anchor.element, in: logs))
+        XCTAssertEqual(frozen.anchor.element.frame.minY - logs.frame.minY, frozen.offset, accuracy: 2)
+    }
+
+    func testFrozenLogPositionSurvivesRotation() throws {
         capturesLogFreezeScreenshot = true
         defer { XCUIDevice.shared.orientation = .portrait }
+        let fixture = try prepareScrollableLogFixture()
+        let frozen = try freezeRecentLogRecord(fixture, diagnosticPrefix: "logs-rotation")
+        let logs = fixture.logs
+
+        let readingAnchor = try XCTUnwrap(topmostVisibleLogAnchor(in: logs))
+        let readingOffset = readingAnchor.element.frame.minY - logs.frame.minY
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let landscape = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.app.frame.width > self.app.frame.height }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [landscape], timeout: 15), .completed)
+        XCTAssertEqual(logs.value as? String, frozen.text)
+        let frameTracker = StableFrameTracker()
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard self.app.frame.width > self.app.frame.height,
+                  let anchor = self.detailElement(for: readingAnchor, in: logs), anchor.exists else {
+                frameTracker.reset()
+                return false
+            }
+            return frameTracker.observe([self.app.frame, logs.frame, anchor.frame])
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 12), .completed,
+                       "The log pane and rendered row should settle after rotation")
+        let landscapeAnchor = try XCTUnwrap(detailElement(for: readingAnchor, in: logs))
+        XCTAssertTrue(elementIsVisible(landscapeAnchor, in: logs))
+        let maximumVisibleOffset = max(0, logs.frame.height - landscapeAnchor.frame.height)
+        XCTAssertEqual(
+            landscapeAnchor.frame.minY - logs.frame.minY,
+            min(max(readingOffset, 0), maximumVisibleOffset),
+            accuracy: 2
+        )
+        attachScreenshot("logs-freeze-landscape")
+
+        XCUIDevice.shared.orientation = .portrait
+        let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.app.frame.height > self.app.frame.width }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [portrait], timeout: 15), .completed)
+        XCTAssertEqual(logs.value as? String, frozen.text)
+        let portraitAnchor = try XCTUnwrap(detailElement(for: readingAnchor, in: logs))
+        XCTAssertTrue(elementIsVisible(portraitAnchor, in: logs))
+        XCTAssertEqual(portraitAnchor.frame.minY - logs.frame.minY, readingOffset, accuracy: 2)
+    }
+
+    func testFollowingResumesWhenReaderReturnsToBottom() throws {
+        capturesLogFreezeScreenshot = true
+        let fixture = try prepareScrollableLogFixture()
+        let frozen = try freezeRecentLogRecord(fixture, diagnosticPrefix: "logs-follow")
+        let logs = fixture.logs
+        let errorsBeforeUpdate = fixture.errorCount
+
+        fixture.configuration.tap()
+        fixture.configuration.typeText("x")
+        dismissConfigurationKeyboard()
+        fixture.paste.tap()
+        waitForForegroundLogRefresh()
+        XCTAssertEqual(logs.value as? String, frozen.text)
+
+        for _ in 0..<8 { logs.swipeUp() }
+        let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
+            guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
+            return self.occurrences(of: fixture.validationError, in: text) > errorsBeforeUpdate
+        }, object: logs)
+        XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 10), .completed,
+                       "Returning to the bottom should display the newest log entry")
+    }
+
+    private func waitForForegroundLogRefresh() {
+        let refreshOpportunity = expectation(description: "The foreground log poll refreshes entries")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { refreshOpportunity.fulfill() }
+        wait(for: [refreshOpportunity], timeout: 2.0)
+    }
+
+    private func prepareScrollableLogFixture() throws -> ScrollableLogFixture {
         let clipboard = "http://example.invalid/repeat-error"
         let validationError = "Paste an HTTPS subscription URL with a host"
         app.terminate()
         UIPasteboard.general.string = clipboard
-        app.launchEnvironment = ["DOBBY_IOS_TEST_LOG_SCROLL_TRACE": "1"]
         app.launch()
 
         let configuration = app.textFields["Connection configuration"]
@@ -355,292 +532,77 @@ final class NativeUIInteractionTests: XCTestCase {
         XCTAssertTrue(paste.waitForExistence(timeout: 10))
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
-        let scrollTrace = app.descendants(matching: .any)
-            .matching(identifier: "Log scroll diagnostics").firstMatch
-        XCTAssertTrue(scrollTrace.waitForExistence(timeout: 10))
-        let controls = app.descendants(matching: .any)
-            .matching(identifier: "Connection controls").firstMatch
-        let errorStatus = app.staticTexts["Error"]
-        var expectedErrorCount = occurrences(of: validationError, in: logs.value as? String ?? "")
+        let status = app.staticTexts["connection.status"]
+        var expectedCount = occurrences(of: validationError, in: logs.value as? String ?? "")
         paste.tap()
-        XCTAssertTrue(errorStatus.waitForExistence(timeout: 10))
-        expectedErrorCount += 1
-        XCTAssertTrue(waitForLogOccurrences(
-            validationError, atLeast: expectedErrorCount, in: logs, timeout: 20
-        ))
+        let errorStatus = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "Error"), object: status
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [errorStatus], timeout: 10), .completed)
+        expectedCount += 1
+        XCTAssertTrue(waitForLogOccurrences(validationError, atLeast: expectedCount, in: logs, timeout: 20))
 
-        // The compact Simulator viewport needs enough records to produce a real scroll range.
         for _ in 0..<7 {
             configuration.tap()
             configuration.typeText("x")
             dismissConfigurationKeyboard()
             paste.tap()
-            XCTAssertTrue(errorStatus.waitForExistence(timeout: 5))
-            expectedErrorCount += 1
-            XCTAssertTrue(waitForLogOccurrences(
-                validationError, atLeast: expectedErrorCount, in: logs, timeout: 20
-            ))
+            expectedCount += 1
+            XCTAssertTrue(waitForLogOccurrences(validationError, atLeast: expectedCount, in: logs, timeout: 20))
         }
-
         let enoughEntries = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
             guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
             return self.occurrences(of: validationError, in: text) >= 8
         }, object: logs)
         XCTAssertEqual(XCTWaiter.wait(for: [enoughEntries], timeout: 15), .completed)
-        let beforeScroll = try XCTUnwrap(logs.value as? String)
-        let errorsBeforeScroll = occurrences(of: validationError, in: beforeScroll)
-        XCTAssertGreaterThanOrEqual(errorsBeforeScroll, 8)
-
-        let latestLogText = try XCTUnwrap(logs.value as? String)
-        XCTAssertTrue(latestLogText.hasSuffix("Details\n"), "The latest structured record should expose its Details link")
-        let detailElements = logs.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@ OR label == %@", "Details", "Hide details"))
-        let targetRecord = try XCTUnwrap(
-            renderedLogRecord(containing: validationError, in: latestLogText),
-            "The latest Paste validation record should remain in the frozen log view"
+        XCTAssertGreaterThanOrEqual(expectedCount, 8)
+        return ScrollableLogFixture(
+            configuration: configuration,
+            paste: paste,
+            logs: logs,
+            validationError: validationError,
+            errorCount: expectedCount
         )
-        let targetDetailIndex = targetRecord.detailIndex
-        let renderedErrorLines = targetRecord.record.components(separatedBy: "\n")
-        XCTAssertTrue(renderedErrorLines.first?.hasSuffix(" · ERROR · App · native-ui") == true,
-                      "The selected validation message should follow its timestamp, severity, and source header; got: \(targetRecord.record)")
-        XCTAssertTrue(renderedErrorLines.contains(validationError),
-                      "The Details link should belong to the selected standalone validation message")
-        let details = detailElements.element(boundBy: targetDetailIndex)
-        XCTAssertTrue(details.waitForExistence(timeout: 10),
-                      "The Paste validation record's Details control should be exposed by the log text view")
-        XCTAssertEqual(details.label, "Details", "The Paste validation record should be collapsed before tapping")
-        for _ in 0..<8 {
-            if details.isHittable { break }
-            let start = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.30))
-            let end = logs.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
-            start.press(forDuration: 0.1, thenDragTo: end)
-        }
-        XCTAssertTrue(details.isHittable,
-                      "The selected Paste validation Details control should be reachable after scrolling its row into view")
-        details.tap()
-        let detailsExpanded = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@", "Hide details"),
-            object: details
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [detailsExpanded], timeout: 10), .completed,
-                       "Tapping the Paste validation Details control should expand that record")
-        let expandedRecord = XCTNSPredicateExpectation(
-            predicate: NSPredicate(
-                format: "value CONTAINS %@ OR value CONTAINS %@",
-                "\"schema\":\"dobby.log/v1\"",
-                "\"schema\":\"dobby.log\\/v1\""
-            ),
-            object: logs
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [expandedRecord], timeout: 10), .completed,
-                       "Expanding a log entry should show its original structured record")
-        let expandedText = try XCTUnwrap(logs.value as? String)
-        XCTAssertTrue(
-            expandedText.contains("\"message\":\"\(validationError)\""),
-            "The expanded original record must belong to the selected Paste validation message"
-        )
-        XCTAssertTrue(expandedText.contains("\"event\":\"ui.failure\""))
-        XCTAssertTrue(expandedText.contains("\"source\":\"native-ui\""))
-
-        let detailsCollapsed = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "label == %@", "Details"), object: details
-        )
-        details.tap()
-        XCTAssertEqual(XCTWaiter.wait(for: [detailsCollapsed], timeout: 10), .completed,
-                       "The original record should collapse before checking the reading position")
-        attachScreenshot("logs-freeze-ready")
-        let renderedBeforeFreeze = try XCTUnwrap(logs.value as? String)
-        XCTAssertTrue(elementIsVisible(details, in: logs),
-                      "The selected Paste record's Details link should remain in the rendered log viewport after collapsing")
-        let positionAnchor = try XCTUnwrap(
-            visibleLogAnchor(in: logs),
-            "A recent collapsed record should remain visible above the bottom of the log viewport"
-        )
-        XCTAssertTrue(renderedBeforeFreeze.contains(positionAnchor.record),
-                      "The anchor should identify a specific rendered log record")
-        let anchorOffsetBeforeScroll = positionAnchor.element.frame.minY - logs.frame.minY
-        let anchorOffsetAfterScroll = scrollLogsAwayFromBottom(
-            logs,
-            anchor: positionAnchor,
-            diagnosticPrefix: "logs-freeze",
-            dragEndY: 0.95
-        )
-        XCTAssertGreaterThan(anchorOffsetAfterScroll, anchorOffsetBeforeScroll + 24,
-                             "The gesture should move the identifiable record away from the bottom")
-        attachScreenshot("logs-freeze-scrolled")
-        XCTAssertEqual(logs.value as? String, renderedBeforeFreeze,
-                       "Scrolling should preserve the rendered log entries")
-        let frozen = try XCTUnwrap(logs.value as? String)
-        assertFrozenLogTextIsSelectable(in: logs, frozenText: frozen, message: validationError)
-
-        let anchorOffsetBeforeConfiguration = positionAnchor.element.frame.minY - logs.frame.minY
-        configuration.tap()
-        configuration.typeText("x")
-        dismissConfigurationKeyboard()
-        XCTAssertEqual(logs.value as? String, frozen,
-                       "Editing the configuration should not move the frozen log view")
-        XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
-                      "The same log record should remain visible after dismissing the configuration keyboard")
-        XCTAssertEqual(
-            positionAnchor.element.frame.minY - logs.frame.minY,
-            anchorOffsetBeforeConfiguration,
-            accuracy: 2,
-            "Showing and dismissing the configuration keyboard must preserve the frozen reading position"
-        )
-        let anchorOffsetBeforeRefresh = positionAnchor.element.frame.minY - logs.frame.minY
-        paste.tap()
-        let refreshOpportunity = expectation(description: "A foreground log refresh elapses while scrolled up")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { refreshOpportunity.fulfill() }
-        wait(for: [refreshOpportunity], timeout: 2.0)
-        attachScreenshot("logs-freeze-after-refresh")
-        XCTAssertEqual(logs.value as? String, frozen,
-                       "The refreshed log source should stay frozen while the reader is away from the bottom")
-        XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
-                      "The same rendered record should remain visible after a refresh while scrolled up")
-        XCTAssertEqual(
-            positionAnchor.element.frame.minY - logs.frame.minY,
-            anchorOffsetBeforeRefresh,
-            accuracy: 2,
-            "A log refresh must preserve the visible reading position"
-        )
-
-        openAbout()
-        app.buttons["Done"].tap()
-        XCTAssertEqual(logs.value as? String, frozen,
-                       "Opening and dismissing About must not change the frozen log entries")
-        XCTAssertTrue(elementIsVisible(positionAnchor.element, in: logs),
-                      "The same rendered record should remain visible after About is dismissed")
-        XCTAssertEqual(
-            positionAnchor.element.frame.minY - logs.frame.minY,
-            anchorOffsetBeforeRefresh,
-            accuracy: 2,
-            "About should preserve the visible reading position"
-        )
-
-        let readingAnchor = try XCTUnwrap(
-            topmostVisibleLogAnchor(in: logs),
-            "The current reading row should be identifiable before rotation"
-        )
-        let readingAnchorOffsetBeforeRotation = readingAnchor.element.frame.minY - logs.frame.minY
-        XCUIDevice.shared.orientation = .landscapeLeft
-        let landscape = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            self.app.frame.width > self.app.frame.height
-        }, object: app)
-        XCTAssertEqual(XCTWaiter.wait(for: [landscape], timeout: 15), .completed)
-        XCTAssertEqual(logs.value as? String, frozen,
-                       "A live rotation must not replace frozen log entries")
-        XCTAssertTrue(frozen.contains(readingAnchor.record))
-        XCTAssertTrue(frozen.contains(positionAnchor.record))
-        let landscapeFrameTracker = StableFrameTracker()
-        let landscapeLayout = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            guard self.app.frame.width > self.app.frame.height,
-                  let anchor = self.detailElement(for: readingAnchor, in: logs), anchor.exists else {
-                landscapeFrameTracker.reset()
-                return false
-            }
-            return landscapeFrameTracker.observe([self.app.frame, logs.frame, anchor.frame])
-        }, object: app)
-        let landscapeLayoutResult = XCTWaiter.wait(for: [landscapeLayout], timeout: 12)
-        let landscapeAnchor = detailElement(for: readingAnchor, in: logs)
-        let landscapeVisible = landscapeAnchor.map { elementIsVisible($0, in: logs) } ?? false
-        let landscapeGeometry = """
-        stableFrames=\(landscapeLayoutResult == .completed)
-        appFrame=\(app.frame)
-        controlsFrame=\(controls.frame)
-        textViewFrame=\(logs.frame)
-        logHeaderFrame=\(app.staticTexts["Logs"].frame)
-        preScrollDetailIndex=\(positionAnchor.detailIndex)
-        readingAnchorDetailIndex=\(readingAnchor.detailIndex)
-        anchorFrame=\(String(describing: landscapeAnchor?.frame))
-        anchorVisible=\(landscapeVisible)
-        """
-        let geometryAttachment = XCTAttachment(string: landscapeGeometry)
-        geometryAttachment.name = "log-freeze-landscape-geometry"
-        geometryAttachment.lifetime = .keepAlways
-        add(geometryAttachment)
-        attachScreenshot("logs-freeze-landscape")
-        XCTAssertEqual(landscapeLayoutResult, .completed,
-                       "The log pane and rendered row should settle after rotation. Geometry: \(landscapeGeometry)")
-        XCTAssertTrue(landscapeVisible,
-                      "The current reading record should stay visible in landscape. Geometry: \(landscapeGeometry)")
-        if let landscapeAnchor {
-            let maximumVisibleOffset = max(0, logs.frame.height - landscapeAnchor.frame.height)
-            XCTAssertEqual(
-                landscapeAnchor.frame.minY - logs.frame.minY,
-                min(max(readingAnchorOffsetBeforeRotation, 0), maximumVisibleOffset),
-                accuracy: 2,
-                "Landscape should preserve the current reading row's viewport position"
-            )
-        }
-        XCUIDevice.shared.orientation = .portrait
-        let portrait = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            self.app.frame.height > self.app.frame.width
-        }, object: app)
-        XCTAssertEqual(XCTWaiter.wait(for: [portrait], timeout: 15), .completed)
-        XCTAssertEqual(logs.value as? String, frozen,
-                       "Returning to portrait must keep the frozen log entries")
-        XCTAssertTrue(frozen.contains(readingAnchor.record))
-        attachScreenshot("logs-freeze-returned-to-portrait")
-        let portraitAnchor = try XCTUnwrap(detailElement(for: readingAnchor, in: logs))
-        XCTAssertTrue(elementIsVisible(portraitAnchor, in: logs),
-                      "The current reading record should stay visible after returning to portrait")
-        XCTAssertEqual(
-            portraitAnchor.frame.minY - logs.frame.minY,
-            readingAnchorOffsetBeforeRotation,
-            accuracy: 2,
-            "Returning to portrait should restore the current reading row's viewport position"
-        )
-
-        for _ in 0..<8 { logs.swipeUp() }
-        let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
-            guard let logs = element as? XCUIElement, let text = logs.value as? String else { return false }
-            return self.occurrences(of: validationError, in: text) > errorsBeforeScroll
-        }, object: logs)
-        XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 10), .completed, "Returning to the bottom should resume new log entries")
-
-        let traceAttachment = XCTAttachment(string: scrollTrace.value as? String ?? "<empty UIKit scroll trace>")
-        traceAttachment.name = "dobbyvpn-ui-uikit-scroll-trace"
-        traceAttachment.lifetime = .keepAlways
-        add(traceAttachment)
     }
 
-    private func verifyColdAndWarmImports() throws {
-        guard #available(iOS 16.4, *) else { XCTFail("URL activation checks require iOS 16.4 or newer"); return }
-        let cold = "https://example.invalid/cold?a=%2F"
-        let warm = "https://example.invalid/warm"
-        func link(_ source: String) throws -> URL {
-            var components = URLComponents()
-            components.scheme = "dobbyvpn"
-            components.host = "import"
-            components.queryItems = [URLQueryItem(name: "url", value: source)]
-            return try XCTUnwrap(components.url)
-        }
-        func expectSource(_ value: String) {
-            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15),
-                          "Import should leave the DobbyVPN app in the foreground")
-            let field = app.textFields["Connection configuration"]
-            XCTAssertTrue(field.waitForExistence(timeout: 15))
-            let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "value == %@", value), object: field
-            )], timeout: 15)
-            XCTAssertEqual(result, .completed)
-            XCTAssertFalse(app.buttons["VPN connection action"].isEnabled)
-        }
-        app.terminate()
-        app.open(try link(cold))
-        expectSource(cold)
-        XCUIDevice.shared.system.open(try link(warm))
-        expectSource(warm)
-        XCUIDevice.shared.system.open(try link(warm))
-        expectSource(warm)
-        XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://")))
-        expectSource(warm)
-        XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid&url=duplicate")))
-        expectSource(warm)
-        let invalidImportFeedback = app.staticTexts["Deep link import guidance"]
-        XCTAssertTrue(invalidImportFeedback.waitForExistence(timeout: 10),
-                      "An invalid deep link should keep actionable import guidance visible despite connection errors")
-        XCTAssertTrue(invalidImportFeedback.label.contains("Use dobbyvpn://import?url="))
+    private func freezeRecentLogRecord(
+        _ fixture: ScrollableLogFixture,
+        diagnosticPrefix: String
+    ) throws -> FrozenRenderedLog {
+        let text = try XCTUnwrap(fixture.logs.value as? String)
+        let anchor = try XCTUnwrap(visibleLogAnchor(in: fixture.logs))
+        XCTAssertTrue(text.contains(anchor.record))
+        let offset = anchor.element.frame.minY - fixture.logs.frame.minY
+        let settledOffset = scrollLogsAwayFromBottom(
+            fixture.logs,
+            anchor: anchor,
+            diagnosticPrefix: diagnosticPrefix,
+            dragEndY: 0.95,
+            screenshotName: "\(diagnosticPrefix)-scroll"
+        )
+        XCTAssertGreaterThan(settledOffset, offset + 24)
+        XCTAssertEqual(fixture.logs.value as? String, text)
+        return FrozenRenderedLog(anchor: anchor, text: text, offset: anchor.element.frame.minY - fixture.logs.frame.minY)
+    }
+
+    private func subscriptionImportLink(_ source: String) throws -> URL {
+        var components = URLComponents()
+        components.scheme = "dobbyvpn"
+        components.host = "import"
+        components.queryItems = [URLQueryItem(name: "url", value: source)]
+        return try XCTUnwrap(components.url)
+    }
+
+    private func assertImportedSource(_ value: String) {
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15),
+                      "Import should leave the DobbyVPN app in the foreground")
+        let field = app.textFields["Connection configuration"]
+        XCTAssertTrue(field.waitForExistence(timeout: 15))
+        let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", value), object: field
+        )], timeout: 15)
+        XCTAssertEqual(result, .completed)
+        XCTAssertFalse(app.buttons["VPN connection action"].isEnabled)
     }
 
     private func assertLogLayout() {
@@ -897,11 +859,6 @@ final class NativeUIInteractionTests: XCTestCase {
         let visibleFrames = visibleDetailsFrames.isEmpty
             ? "<no visible Details or Hide details descendants>"
             : visibleDetailsFrames.joined(separator: "\n")
-        let scrollTrace = app.descendants(matching: .any)
-            .matching(identifier: "Log scroll diagnostics").firstMatch
-        let nativeScrollTrace = scrollTrace.exists
-            ? scrollTrace.value as? String ?? "<empty UIKit scroll trace>"
-            : "<UIKit scroll trace disabled>"
         let diagnosticText = """
         Case: \(attachmentName)
         Failed condition: \(failureCondition)
@@ -921,9 +878,6 @@ final class NativeUIInteractionTests: XCTestCase {
 
         Visible Details / Hide details descendant frames:
         \(visibleFrames)
-
-        UIKit scroll trace:
-        \(nativeScrollTrace)
 
         Rendered log text:
         \(renderedLogText)

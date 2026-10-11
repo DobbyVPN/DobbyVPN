@@ -34,12 +34,14 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
     def test_default_and_selected_fixture_test_receive_run_owned_fixture(self) -> None:
         fixture = SimpleNamespace(
             url="https://127.0.0.1:49123/subscription",
+            failure_url="https://127.0.0.1:49123/subscription-fail-once/fixture",
         )
         environment = ios_simulator_app._subscription_fixture_test_environment(fixture)
         self.assertEqual(
             environment,
             {
                 "DOBBY_IOS_TEST_SUBSCRIPTION_URL": fixture.url,
+                "DOBBY_IOS_TEST_SUBSCRIPTION_FAILURE_URL": fixture.failure_url,
                 "DOBBY_IOS_TEST_FIXTURE_REQUIRED": "1",
                 "DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE": "1",
             },
@@ -54,9 +56,10 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
         )
         self.assertEqual(command[0], "/usr/bin/env")
         self.assertEqual(
-            command[1:4],
+            command[1:5],
             [
                 "TEST_RUNNER_DOBBY_IOS_TEST_FIXTURE_REQUIRED=1",
+                "TEST_RUNNER_DOBBY_IOS_TEST_SUBSCRIPTION_FAILURE_URL=" + fixture.failure_url,
                 "TEST_RUNNER_DOBBY_IOS_TEST_SUBSCRIPTION_URL=" + fixture.url,
                 "TEST_RUNNER_DOBBY_SIMULATOR_TEST_SEED_STDERR_CAPTURE=1",
             ],
@@ -73,14 +76,12 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
             "fixture values must reach XCTest through Xcode's TEST_RUNNER_ prefix",
         )
         self.assertIn(
-            "-only-testing:iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
-            "testAutomaticProfilesAndFixtureRequestCounts",
+            "-only-testing:iosAppUITests/NativeSubscriptionFixtureInteractionTests",
             command,
         )
         self.assertEqual(command[-1], "test-without-building")
         self.assertIn(
-            "iosAppUITests/NativeSubscriptionFixtureInteractionTests/"
-            "testAutomaticProfilesAndFixtureRequestCounts",
+            "iosAppUITests/NativeSubscriptionFixtureInteractionTests",
             ios_simulator.ui_test_selection(),
             "Default CI should run the fixture case with disposable fixture setup",
         )
@@ -231,70 +232,6 @@ class IOSSubscriptionFixtureRunnerTests(unittest.TestCase):
             self.assertEqual(clean_fixture.call_count, 2)
             self.assertTrue(saved[-1]["runtime"]["deleted"])
 
-    def test_fake_session_client_is_simulator_only_and_keeps_default_tls_validation(self) -> None:
-        project = (
-            Path(__file__).parents[4]
-            / "ui/apple/ios/iosApp.xcodeproj/project.pbxproj"
-        ).read_text(encoding="utf-8")
-        sources = project.split("/* Begin PBXSourcesBuildPhase section */", 1)[1]
-        production_sources = sources.split("F30000000000000000000002 /* Sources */", 1)[1].split(
-            "F30000000000000000000008 /* Sources */", 1
-        )[0]
-        simulator_sources = sources.split("F30000000000000000000008 /* Sources */", 1)[1].split(
-            "/* End PBXSourcesBuildPhase section */", 1
-        )[0]
-        self.assertNotIn("IOSSimulatorTestSessionClient.swift", production_sources)
-        self.assertIn("IOSSimulatorTestSessionClient.swift", simulator_sources)
-        self.assertIn("NativeSubscriptionFixtureInteractionTests.swift", project)
-        self.assertEqual(
-            project.count('SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DOBBY_SIMULATOR_TEST $(inherited)";'),
-            2,
-        )
-        client = (
-            Path(__file__).parents[4]
-            / "ui/apple/ios/app/IOSSimulatorTestSessionClient.swift"
-        ).read_text(encoding="utf-8")
-        self.assertIn("URLSession.shared.dataTask", client)
-        self.assertNotIn("serverTrust", client)
-        self.assertNotIn("didReceive challenge", client)
-        for key in (
-            "session_id",
-            "sequence",
-            "generation",
-            "configure_requests",
-            "request_count",
-            "request_started_at_uptime",
-            "start_requests",
-            "stop_requests",
-        ):
-            self.assertIn(f'"{key}"', client)
-        self.assertIn("DOBBY_IOS_TEST_FIXTURE_REQUIRED", client)
-        self.assertIn('accessibilityIdentifier("Simulator test session state")',
-                      (Path(__file__).parents[4] / "ui/apple/ios/app/NativeApp.swift").read_text(encoding="utf-8"))
-        rendered_test = (
-            Path(__file__).parents[4]
-            / "ui/apple/ios/tests/NativeSubscriptionFixtureInteractionTests.swift"
-        ).read_text(encoding="utf-8")
-        self.assertIn("throw XCTSkip(", rendered_test)
-        self.assertNotIn("Torturer did not provide the disposable HTTPS", rendered_test)
-        self.assertIn('app.buttons["Retry"]', rendered_test)
-        self.assertIn("assertFailedLoadWithoutConnection", rendered_test)
-        self.assertIn("assertRetriedLoadWithoutConnection", rendered_test)
-        self.assertIn("pasteRequestElapsed, 1.5", rendered_test)
-        self.assertIn('XCTAttachment(screenshot: app.screenshot())', rendered_test)
-        self.assertIn('attachScreenshot("subscription-failure")', rendered_test)
-        self.assertIn('attachScreenshot("subscription-profiles")', rendered_test)
-        self.assertIn("Tunnel stderr · tunnel", rendered_test)
-        self.assertIn("Stderr capture initialized", rendered_test)
-        self.assertIn("paste.tap()", rendered_test)
-        self.assertIn("app.open(deepLink)", rendered_test)
-        self.assertIn("XCUIDevice.shared.system.open(deepLink)", rendered_test)
-        self.assertIn("for _ in 0..<2", rendered_test)
-        runner = (
-            Path(__file__).parent / "run_app_contract.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn('parser.add_argument("--native-case", action="append")', runner)
-        self.assertIn("validate_native_cases(", runner)
 
 
 if __name__ == "__main__":

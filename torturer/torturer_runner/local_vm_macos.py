@@ -39,7 +39,7 @@ _MACOS_ACCESSIBILITY_PROBE = '''tell application "System Events"
 end tell'''
 
 # Keep the final macOS command boundary defensive even when called directly by
-# a test or another local worker.  PATH is needed for the smoke driver's
+# a test or another local worker.  PATH is needed for the native UI runner's
 # ``osascript``, ``pgrep`` and clipboard helpers; HOME is needed by the Go
 # desktop UI/CLI user stores.  PYTHONPATH contains the prepared Pillow decoder
 # for screenshot validation, and the socket is the runtime value needed by the

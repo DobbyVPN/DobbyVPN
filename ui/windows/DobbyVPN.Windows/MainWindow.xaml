@@ -19,7 +19,7 @@
         </StackPanel>
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="16">
           <StackPanel Spacing="4">
-            <TextBlock x:Name="StatusText" Text="Disconnected" AutomationProperties.AutomationId="Disconnected" AutomationProperties.LiveSetting="Polite" />
+            <TextBlock x:Name="StatusText" Text="Disconnected" AutomationProperties.AutomationId="connection.status" AutomationProperties.LiveSetting="Polite" />
             <TextBlock x:Name="ProfileText" TextWrapping="WrapWholeWords" />
             <TextBlock x:Name="FailureText" TextWrapping="WrapWholeWords" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
             <TextBlock x:Name="ErrorText" TextWrapping="WrapWholeWords" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
@@ -41,7 +41,7 @@
       <Grid x:Name="LogsHeader" ColumnDefinitions="*,Auto">
         <TextBlock Text="Logs" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-          <Button Content="Clear" Click="ClearLogs_Click" AutomationProperties.AutomationId="Clear" />
+          <Button Content="Clear" Click="ClearLogs_Click" AutomationProperties.AutomationId="logs.clear" />
           <Button Content="Save logs…" Click="SaveLogs_Click" AutomationProperties.AutomationId="Save logs" />
         </StackPanel>
       </Grid>

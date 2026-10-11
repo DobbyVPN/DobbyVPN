@@ -1,14 +1,13 @@
 using System.Reflection;
 using System.IO;
+using System.Diagnostics;
 using Windows.ApplicationModel.DataTransfer;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.IO.Pipes;
-using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml.Automation;
-using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -21,47 +20,11 @@ namespace DobbyVPN.Windows;
 public sealed partial class MainWindow : Window
 {
     private const string PipeName = "DobbyVPN.Control";
-    private const string ContentRootPeersPathVariable = "DOBBYVPN_NATIVE_UI_CONTENT_ROOT_PEERS_PATH";
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool ClientToScreen(IntPtr window, ref ScreenPoint point);
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ScreenPoint { public int X; public int Y; }
-
-    private static ScreenPoint GetPhysicalClientOrigin(IntPtr window)
-    {
-        var previousContext = SetThreadDpiAwarenessContext(new IntPtr(-4)); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
-        if (previousContext == IntPtr.Zero)
-            throw new System.ComponentModel.Win32Exception(
-                Marshal.GetLastWin32Error(), "Could not enter the physical-pixel DPI context");
-
-        var point = new ScreenPoint();
-        Exception? failure = null;
-        try
-        {
-            if (!ClientToScreen(window, ref point))
-                failure = new System.ComponentModel.Win32Exception(
-                    Marshal.GetLastWin32Error(), "Could not map the HWND client origin to screen coordinates");
-        }
-        catch (Exception error)
-        {
-            failure = error;
-        }
-
-        if (SetThreadDpiAwarenessContext(previousContext) == IntPtr.Zero)
-        {
-            var restoreFailure = new System.ComponentModel.Win32Exception(
-                Marshal.GetLastWin32Error(), "Could not restore the UI thread DPI context");
-            failure = failure is null ? restoreFailure : new AggregateException(failure, restoreFailure);
-        }
-        if (failure is not null) throw failure;
-        return point;
-    }
     private readonly PeriodicTimer _pollTimer = new(TimeSpan.FromMilliseconds(750));
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly long _loadClockOrigin = Stopwatch.GetTimestamp();
+    private readonly SubscriptionLoadState _subscriptionLoad = new();
     private Snapshot? _snapshot;
-    private bool _sourceDirty;
     private bool _updatingSource;
     // TextBox may report a programmatic Text assignment after SetSourceText returns.
     private string? _programmaticSourceText;
@@ -71,17 +34,13 @@ public sealed partial class MainWindow : Window
     private string? _acceptedInThisWindow;
     private string? _renderedSource;
     private bool _sourceInitialized;
-    private long _loadRevision;
     private long _acceptedSequence;
-    private bool _loading;
     private string _actionsKey = "";
-    private string? _pendingLoad;
     private string _loadError = "";
     private string _restoredLoad = "";
     private CancellationTokenSource? _debounce;
     private long _logRevision;
     private bool _clearingLogs;
-    private bool _followingLogs = true;
     private bool _updatingLogs;
     private ScrollViewer? _logScroll;
     private long _logRenderGeneration;
@@ -92,8 +51,7 @@ public sealed partial class MainWindow : Window
     private bool _logScrollbarPointerDown;
     private bool _pendingLogUpwardIntent;
     private bool _logTailChangeViewPending;
-    private List<NativeDiagnostics.Entry> _latestLogs = [];
-    private readonly HashSet<string> _expandedLogs = [];
+    private readonly LogPresentationState _logPresentation = new();
     private readonly Dictionary<LogRowKey, RenderedLogRow> _logRowCache = [];
     private List<RenderedLogRow> _renderedLogRows = [];
     private readonly string _version;
@@ -107,8 +65,6 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ContentRootPeersPathVariable)))
-            Root.Loaded += (_, _) => WriteContentRootPeerDiagnostic();
         Root.LayoutUpdated += (_, _) => UpdateContentLayout();
         foreach (var details in new[] { LoadStatus, ProfileText, FailureText, ErrorText, LogsErrorText })
         {
@@ -120,6 +76,7 @@ public sealed partial class MainWindow : Window
             });
         }
         SetConnectionAction("Connect");
+        SetConnectionStatus("Disconnected");
         ConnectionButton.IsEnabled = false;
         var assembly = Assembly.GetExecutingAssembly();
         _version = assembly.GetName().Version?.ToString(3) ?? "Unknown";
@@ -168,124 +125,6 @@ public sealed partial class MainWindow : Window
             ProfilesScroll.MaxHeight = profileHeight;
     }
 
-    private void WriteContentRootPeerDiagnostic()
-    {
-        var path = Environment.GetEnvironmentVariable(ContentRootPeersPathVariable);
-        if (string.IsNullOrWhiteSpace(path)) return;
-
-        object diagnostic;
-        var hasDispatcherAccess = DispatcherQueue.HasThreadAccess;
-        var content = Content;
-        AutomationPeer? rootPeer = null;
-        try
-        {
-            if (!hasDispatcherAccess)
-                throw new InvalidOperationException("XAML root diagnostic did not run on the window dispatcher");
-
-            rootPeer = FrameworkElementAutomationPeer.CreatePeerForElement(Root);
-            var editorPeer = FrameworkElementAutomationPeer.CreatePeerForElement(SourceEditor)
-                ?? throw new InvalidOperationException("SourceEditor has no automation peer");
-            var editorBounds = SourceEditor.TransformToVisual(Root).TransformBounds(
-                new global::Windows.Foundation.Rect(0, 0, SourceEditor.ActualWidth, SourceEditor.ActualHeight));
-            object? screenGeometry = null;
-            string? screenGeometryError = null;
-            try
-            {
-                var screenBounds = SourceEditor.TransformToVisual(null).TransformBounds(
-                    new global::Windows.Foundation.Rect(0, 0, SourceEditor.ActualWidth, SourceEditor.ActualHeight));
-                var xamlRoot = SourceEditor.XamlRoot
-                    ?? throw new InvalidOperationException("SourceEditor has no XamlRoot for screen geometry");
-                var rasterizationScale = xamlRoot.RasterizationScale;
-                var windowHandle = WinRT.Interop.WindowNative.GetWindowHandle(this);
-                var clientOrigin = GetPhysicalClientOrigin(windowHandle);
-                var left = clientOrigin.X + screenBounds.X * rasterizationScale;
-                var top = clientOrigin.Y + screenBounds.Y * rasterizationScale;
-                var width = screenBounds.Width * rasterizationScale;
-                var height = screenBounds.Height * rasterizationScale;
-                screenGeometry = new
-                {
-                    coordinateSpace = "physical-screen-pixels",
-                    clientOriginDpiContext = "per-monitor-v2",
-                    clientOrigin = new { x = clientOrigin.X, y = clientOrigin.Y },
-                    rasterizationScale,
-                    left,
-                    top,
-                    width,
-                    height,
-                    centerX = checked((int)Math.Round(left + width / 2, MidpointRounding.AwayFromZero)),
-                    centerY = checked((int)Math.Round(top + height / 2, MidpointRounding.AwayFromZero)),
-                };
-            }
-            catch (Exception error)
-            {
-                screenGeometryError = error.ToString();
-            }
-            diagnostic = new
-            {
-                schema = "dobbyvpn.windows-content-root-peers/v2",
-                completed = true,
-                diagnosticOnly = true,
-                dispatcherThreadAccess = hasDispatcherAccess,
-                windowContentIsRoot = ReferenceEquals(content, Root),
-                windowContentType = content?.GetType().FullName,
-                rootType = Root.GetType().FullName,
-                rootPeerCreated = rootPeer is not null,
-                rootPeerType = rootPeer?.GetType().FullName,
-                editor = new
-                {
-                    automationId = editorPeer.GetAutomationId(),
-                    name = editorPeer.GetName(),
-                    controlType = editorPeer.GetAutomationControlType().ToString(),
-                    peerType = editorPeer.GetType().FullName,
-                    isControlElement = editorPeer.IsControlElement(),
-                    isContentElement = editorPeer.IsContentElement(),
-                    isLoaded = SourceEditor.IsLoaded,
-                    isVisible = SourceEditor.Visibility == Visibility.Visible,
-                    isEnabled = SourceEditor.IsEnabled,
-                    geometry = new
-                    {
-                        x = editorBounds.X,
-                        y = editorBounds.Y,
-                        width = editorBounds.Width,
-                        height = editorBounds.Height,
-                    },
-                    screenGeometry,
-                    screenGeometryError,
-                },
-            };
-        }
-        catch (Exception error)
-        {
-            diagnostic = new
-            {
-                schema = "dobbyvpn.windows-content-root-peers/v2",
-                completed = false,
-                diagnosticOnly = true,
-                dispatcherThreadAccess = hasDispatcherAccess,
-                windowContentIsRoot = ReferenceEquals(content, Root),
-                windowContentType = content?.GetType().FullName,
-                rootType = Root.GetType().FullName,
-                rootPeerCreated = rootPeer is not null,
-                rootPeerType = rootPeer?.GetType().FullName,
-                editor = (object?)null,
-                error = error.ToString(),
-            };
-        }
-
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-            var temporaryPath = fullPath + ".tmp";
-            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(diagnostic) + Environment.NewLine);
-            File.Move(temporaryPath, fullPath, overwrite: true);
-        }
-        catch (Exception error)
-        {
-            _diagnostics.Record(error.ToString(), "test.content-root-diagnostic-write-failure");
-        }
-    }
-
     private async Task PollSnapshotsAsync(CancellationToken cancellationToken)
     {
         try
@@ -310,7 +149,7 @@ public sealed partial class MainWindow : Window
             if (result.SessionId == previous?.SessionId && result.Sequence < Math.Max(previous.Sequence, _acceptedSequence)) return;
             var recoveringFromSnapshotError = previous is null || StatusText.Text == "Error";
             if (result.SessionId != previous?.SessionId) _acceptedSequence = 0;
-            else if (_sourceDirty && previous is not null)
+            else if (_subscriptionLoad.SourceDirty && previous is not null)
             {
                 result.Configured = previous.Configured;
                 result.SourceUrl = previous.SourceUrl;
@@ -318,15 +157,14 @@ public sealed partial class MainWindow : Window
                 result.Profiles = previous.Profiles;
             }
             _snapshot = result;
-            StatusText.Text = result.Recovering ? "Reconnecting" : result.State switch
+            SetConnectionStatus(result.Recovering ? "Reconnecting" : result.State switch
             {
                 "CONNECTED" => "Connected",
                 "PROBING" or "PREPARING" => "Connecting",
                 "STOPPING" => "Stopping",
                 "FAILED" => "Failed",
                 _ => "Disconnected"
-            };
-            AutomationProperties.SetAutomationId(StatusText, StatusText.Text);
+            });
             RenderActions();
             var progressing = _busy || _stopInFlight || result.State is "PROBING" or "PREPARING" or "STOPPING";
             ConnectionProgress.IsActive = progressing;
@@ -338,7 +176,7 @@ public sealed partial class MainWindow : Window
                 ? ""
                 : "Connection failed. See logs for details.";
             _diagnostics.Record(result.LastFailure is null ? "" : $"{result.LastFailure.Message} ({result.LastFailure.Code})", "backend.failure");
-            if (!_sourceDirty && SourceEditor.FocusState == FocusState.Unfocused &&
+            if (!_subscriptionLoad.SourceDirty && SourceEditor.FocusState == FocusState.Unfocused &&
                 (!_sourceInitialized || string.Equals(NormalizeSource(SourceEditor.Text), _renderedSource, StringComparison.Ordinal)))
             {
                 string sourceToDisplay;
@@ -356,10 +194,10 @@ public sealed partial class MainWindow : Window
                 _sourceInitialized = true;
             }
             var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (!result.Configured && !_sourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
+            if (!result.Configured && !_subscriptionLoad.SourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
-                SourceChanged(immediate: true);
+                SourceChanged(SubscriptionInputKind.Restore);
             }
             _ = LoadNextAsync();
             if (!string.IsNullOrEmpty(result.SourceError)) ShowError(result.SourceError, "Check the subscription URL or configuration. See logs for details.", "source.failure");
@@ -378,8 +216,7 @@ public sealed partial class MainWindow : Window
         {
             _snapshot = null;
             ShowError(error.ToString(), _snapshot is null ? "VPN service is unavailable. See logs for details." : "Could not complete the request. Check your configuration and logs.");
-            StatusText.Text = "Error";
-            AutomationProperties.SetAutomationId(StatusText, StatusText.Text);
+            SetConnectionStatus("Error");
             SetConnectionAction("Connect");
             ConnectionButton.IsEnabled = false;
         }
@@ -418,9 +255,14 @@ public sealed partial class MainWindow : Window
     private bool CanAct(int? index)
     {
         if (_snapshot is not { } s) return false;
-        if (IsStopTarget(index)) return !_stopInFlight;
-        return !_busy && !_stopInFlight && !_sourceDirty && !_loading && _loadError.Length == 0 &&
-            s.Sequence >= _acceptedSequence && s.Configured && (s.PrimaryAction == "START" || s.CanSwitch);
+        return _subscriptionLoad.CanAct(
+            isStopTarget: IsStopTarget(index),
+            stopInFlight: _stopInFlight,
+            busy: _busy,
+            hasLoadError: _loadError.Length > 0,
+            sequenceCurrent: s.Sequence >= _acceptedSequence,
+            configured: s.Configured,
+            canStartOrSwitch: s.PrimaryAction == "START" || s.CanSwitch);
     }
 
     private string ActionTitle(int? index) => IsStopTarget(index)
@@ -432,7 +274,17 @@ public sealed partial class MainWindow : Window
         SetConnectionAction(ActionTitle(null));
         ConnectionButton.IsEnabled = CanAct(null);
         if (_snapshot is not { } current) return;
-        var actionsKey = JsonSerializer.Serialize(new { current.Sequence, _busy, _stopInFlight, _sourceDirty, _loading, _loadError });
+        var actionsKey = JsonSerializer.Serialize(new
+        {
+            current.Sequence,
+            _busy,
+            _stopInFlight,
+            _subscriptionLoad.SourceDirty,
+            _subscriptionLoad.IsLoading,
+            _subscriptionLoad.Revision,
+            _loadError,
+            current.Digest,
+        });
         if (actionsKey == _actionsKey) return;
         _actionsKey = actionsKey;
         ProfileList.Children.Clear();
@@ -441,20 +293,35 @@ public sealed partial class MainWindow : Window
         ActiveStopButton.IsEnabled = !_stopInFlight;
         foreach (var profile in current.Profiles)
         {
-            var row = new Grid { ColumnSpacing = 12 };
+            var row = new Grid { ColumnSpacing = 0 };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var descriptionText = profile.Description.Length == 0 ? $"Profile {profile.Index + 1}" : profile.Description;
             var description = new TextBlock
             {
-                Text = $"{(profile.Description.Length == 0 ? $"Profile {profile.Index + 1}" : profile.Description)} · {profile.Protocol}",
+                Text = descriptionText,
                 TextWrapping = TextWrapping.Wrap
             };
-            AutomationProperties.SetAutomationId(description, $"Profile {profile.Index + 1} description");
+            AutomationProperties.SetAutomationId(description, ProfileAutomationIds.Create(current.Digest, profile.Index, "description"));
             row.Children.Add(description);
-            var button = new Button { Content = ActionTitle(profile.Index), IsEnabled = CanAct(profile.Index) };
-            AutomationProperties.SetAutomationId(button, $"Profile {profile.Index + 1} action");
+            var separator = new TextBlock { Text = " · " };
+            Grid.SetColumn(separator, 1);
+            row.Children.Add(separator);
+            var protocol = new TextBlock { Text = profile.Protocol, TextWrapping = TextWrapping.Wrap };
+            AutomationProperties.SetAutomationId(protocol, ProfileAutomationIds.Create(current.Digest, profile.Index, "protocol"));
+            Grid.SetColumn(protocol, 2);
+            row.Children.Add(protocol);
+            var button = new Button
+            {
+                Content = ActionTitle(profile.Index),
+                IsEnabled = CanAct(profile.Index),
+                Margin = new Thickness(12, 0, 0, 0)
+            };
+            AutomationProperties.SetAutomationId(button, ProfileAutomationIds.Create(current.Digest, profile.Index, "action"));
             button.Click += async (_, _) => await PerformActionAsync(profile.Index);
-            Grid.SetColumn(button, 1);
+            Grid.SetColumn(button, 3);
             row.Children.Add(button);
             ProfileList.Children.Add(row);
         }
@@ -498,26 +365,26 @@ public sealed partial class MainWindow : Window
 
     private static bool ValidSubscription(string source) => Uri.TryCreate(source, UriKind.Absolute, out var uri) && uri.Scheme == "https" && uri.Host.Length > 0;
 
-    private async void SourceChanged(bool immediate = false)
+    private async void SourceChanged(SubscriptionInputKind kind = SubscriptionInputKind.Typed)
     {
-        _sourceDirty = true;
+        var source = SourceEditor.Text.Trim();
+        var valid = ValidSubscription(source);
+        var revision = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
         _loadError = "";
         ErrorText.Text = "";
         RetryButton.Visibility = Visibility.Collapsed;
-        _loadRevision++;
-        _pendingLoad = null;
         _debounce?.Cancel();
         _debounce?.Dispose();
         _debounce = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
         var cancellation = _debounce.Token;
         RenderActions();
-        var source = SourceEditor.Text.Trim();
-        if (!ValidSubscription(source)) { LoadStatus.Text = "Enter an HTTPS subscription URL"; return; }
+        if (!valid) { LoadStatus.Text = "Enter an HTTPS subscription URL"; return; }
         try
         {
-            if (!immediate) await Task.Delay(400, cancellation);
+            if (kind == SubscriptionInputKind.Typed)
+                await Task.Delay(SubscriptionLoadState.DebounceMilliseconds, cancellation);
             cancellation.ThrowIfCancellationRequested();
-            _pendingLoad = source;
+            if (revision != _subscriptionLoad.Revision) return;
             await LoadNextAsync();
         }
         catch (OperationCanceledException) { }
@@ -536,16 +403,16 @@ public sealed partial class MainWindow : Window
         {
             var pastedText = (await Clipboard.GetContent().GetTextAsync()).Trim();
             _diagnostics.RecordInfo("subscription.paste-clipboard-text-returned", "Clipboard text returned to the Paste handler", new { session_id = _snapshot?.SessionId, text_length = pastedText.Length });
-            ImportSubscription(pastedText);
+            ImportSubscription(pastedText, SubscriptionInputKind.Paste);
         }
         catch (Exception error) { ShowError(error.ToString(), error.Message); }
     }
-    private void ImportSubscription(string source)
+    private void ImportSubscription(string source, SubscriptionInputKind kind)
     {
         if (!ValidSubscription(source)) throw new InvalidOperationException("Enter an HTTPS subscription URL with a host");
-        if (SourceEditor.Text == source && (_loading || !_sourceDirty && _snapshot?.Configured == true)) return;
+        if (SourceEditor.Text == source && (_subscriptionLoad.IsLoading || !_subscriptionLoad.SourceDirty && _snapshot?.Configured == true)) return;
         SetSourceText(source);
-        SourceChanged(immediate: true);
+        SourceChanged(kind);
     }
     public void ImportLink(string value)
     {
@@ -565,24 +432,32 @@ public sealed partial class MainWindow : Window
             var query = uri.Query.TrimStart('?').Split('&');
             var pair = query[0].Split('=', 2);
             if (query.Length != 1 || pair.Length != 2 || pair[0] != "url") throw new FormatException("The import link requires one url parameter");
-            ImportSubscription(Uri.UnescapeDataString(pair[1]));
+            ImportSubscription(Uri.UnescapeDataString(pair[1]), SubscriptionInputKind.Import);
         }
         catch (Exception error) { ShowError(error.ToString(), "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL"); }
     }
 
-    private void Retry_Click(object sender, RoutedEventArgs e) => SourceChanged(immediate: true);
+    private void Retry_Click(object sender, RoutedEventArgs e) => SourceChanged(SubscriptionInputKind.Retry);
+
+    private TimeSpan LoadNow => Stopwatch.GetElapsedTime(_loadClockOrigin);
 
     private async Task LoadNextAsync()
     {
-        if (_loading || _pendingLoad is not { } source || _snapshot is null) return;
-        _pendingLoad = null;
-        _loading = true;
-        var revision = _loadRevision;
+        if (_snapshot is null) return;
+        var request = _subscriptionLoad.BeginReady(LoadNow);
+        if (request is null) return;
+        await ExecuteLoadAsync(request);
+    }
+
+    private async Task ExecuteLoadAsync(SubscriptionLoadState.Request request)
+    {
+        var source = request.Source;
         LoadStatus.Text = "Loading profiles…";
         RenderActions();
         try
         {
-            _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-start", "Started the preflight Snapshot before Configure", new { source, session_id = _snapshot.SessionId });
+            var snapshotBeforeConfigure = _snapshot;
+            _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-start", "Started the preflight Snapshot before Configure", new { source, session_id = snapshotBeforeConfigure?.SessionId });
             var current = await ReadSnapshotAsync();
             _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-end", "Completed the preflight Snapshot before Configure", new { source, session_id = current.SessionId, sequence = current.Sequence });
             _diagnostics.RecordInfo(
@@ -590,11 +465,16 @@ public sealed partial class MainWindow : Window
                 "Submitting a subscription URL to the Go backend",
                 new { source, session_id = current.SessionId, expected_sequence = current.Sequence });
             var configured = await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source });
-            if (revision == _loadRevision) { _acceptedSequence = configured.GetProperty("sequence").GetInt64(); MarkSourceAccepted(source); LoadStatus.Text = ""; }
+            if (_subscriptionLoad.MarkAccepted(request))
+            {
+                _acceptedSequence = configured.GetProperty("sequence").GetInt64();
+                MarkSourceAccepted(source);
+                LoadStatus.Text = "";
+            }
         }
         catch (Exception error)
         {
-            if (revision == _loadRevision)
+            if (_subscriptionLoad.IsCurrent(request))
             {
                 _loadError = error.Message;
                 LoadStatus.Text = _loadError;
@@ -604,9 +484,14 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
-            _loading = false;
-            await RefreshSnapshotAsync();
-            RenderActions();
+            SubscriptionLoadState.Request? next = null;
+            try { await RefreshSnapshotAsync(); }
+            finally
+            {
+                next = _subscriptionLoad.Finish(request, LoadNow);
+                RenderActions();
+            }
+            if (next is not null) await ExecuteLoadAsync(next);
         }
         await LoadNextAsync();
     }
@@ -658,7 +543,6 @@ public sealed partial class MainWindow : Window
     {
         SetSourceText(source);
         _acceptedInThisWindow = source;
-        _sourceDirty = false;
         _renderedSource = source;
     }
 
@@ -702,6 +586,13 @@ public sealed partial class MainWindow : Window
         ErrorText.Text = message;
     }
 
+    private void SetConnectionStatus(string value)
+    {
+        StatusText.Text = value;
+        AutomationProperties.SetAutomationId(StatusText, "connection.status");
+        AutomationProperties.SetName(StatusText, value);
+    }
+
     private static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
     {
         for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
@@ -719,12 +610,12 @@ public sealed partial class MainWindow : Window
         CaptureLogScrollPosition();
         LogsScroll.SizeChanged += (_, _) =>
         {
-            if (!_followingLogs) ClearPendingLogDownScrollIntent();
-            if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
+            if (!_logPresentation.FollowsTail) ClearPendingLogDownScrollIntent();
+            if (_logPresentation.FollowsTail) QueueLogTailChangeView(_logRenderGeneration);
         };
         LogEntries.SizeChanged += (_, _) =>
         {
-            if (_followingLogs && !_clearingLogs)
+            if (_logPresentation.FollowsTail && !_clearingLogs)
                 QueueLogTailChangeView(_logRenderGeneration);
         };
         LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
@@ -765,14 +656,14 @@ public sealed partial class MainWindow : Window
             if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
             ObserveLogScrollPosition();
             _logScrollbarPointerDown = false;
-            if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
+            if (_logPresentation.FollowsTail) QueueLogTailChangeView(_logRenderGeneration);
         }), true);
         LogsScroll.AddHandler(UIElement.PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
             if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
             ObserveLogScrollPosition();
             _logScrollbarPointerDown = false;
-            if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
+            if (_logPresentation.FollowsTail) QueueLogTailChangeView(_logRenderGeneration);
         }), true);
         LogsScroll.DirectManipulationStarted += (_, _) =>
         {
@@ -783,7 +674,7 @@ public sealed partial class MainWindow : Window
         {
             ObserveLogScrollPosition();
             _logDirectManipulation = false;
-            if (_followingLogs) QueueLogTailChangeView(_logRenderGeneration);
+            if (_logPresentation.FollowsTail) QueueLogTailChangeView(_logRenderGeneration);
         };
         LogsScroll.ViewChanged += (_, args) =>
         {
@@ -800,11 +691,11 @@ public sealed partial class MainWindow : Window
         {
             ClearPendingLogDownScrollIntent();
             _pendingLogUpwardIntent = false;
-            _followingLogs = true;
+            _logPresentation.FollowTail();
             if (!_clearingLogs) RenderLogs();
             return;
         }
-        if (_followingLogs) return;
+        if (_logPresentation.FollowsTail) return;
         _pendingLogScrollOffset = _logScroll.VerticalOffset;
         _pendingLogDownScroll = true;
     }
@@ -815,7 +706,7 @@ public sealed partial class MainWindow : Window
         ClearPendingLogDownScrollIntent();
         if (_logScroll.ScrollableHeight > 0.5)
         {
-            _followingLogs = false;
+            _logPresentation.Freeze();
             return;
         }
 
@@ -857,12 +748,12 @@ public sealed partial class MainWindow : Window
             ClearPendingLogDownScrollIntent();
         else
         {
-            _followingLogs = IsLogScrollAtBottom();
+            _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
             if (!isIntermediate) ClearPendingLogDownScrollIntent();
         }
         if (directManipulation || scrollbarInteraction)
-            _followingLogs = IsLogScrollAtBottom();
-        if (!_updatingLogs && _followingLogs) RenderLogs();
+            _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
+        if (!_updatingLogs && _logPresentation.FollowsTail) RenderLogs();
     }
 
     private void ClearPendingLogDownScrollIntent()
@@ -892,9 +783,7 @@ public sealed partial class MainWindow : Window
             _pendingLogUpwardIntent = false;
             _logTailChangeViewPending = false;
             await _diagnostics.ClearViewAsync();
-            _followingLogs = true;
-            _latestLogs = [];
-            _expandedLogs.Clear();
+            _logPresentation.ClearAfterBoundary();
             _logRowCache.Clear();
             _renderedLogRows = [];
             LogEntries.Children.Clear();
@@ -914,16 +803,17 @@ public sealed partial class MainWindow : Window
             var revision = ++_logRevision;
             var preview = await _diagnostics.EntriesAsync();
             if (revision != _logRevision) return;
-            _latestLogs = preview.Entries;
+            _logPresentation.ReplaceEntries(preview.Entries);
             LogsErrorText.Text = preview.Error;
-            if (_followingLogs) RenderLogs();
+            if (_logPresentation.FollowsTail) RenderLogs();
         }
         catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
     }
 
     private void RenderLogs()
     {
-        var keys = _latestLogs.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
+        var entries = _logPresentation.VisibleEntries;
+        var keys = entries.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
         if (_updatingLogs || keys.SequenceEqual(_renderedLogRows.Select(row => row.Key))) return;
 
         var desiredKeys = keys.ToHashSet();
@@ -954,12 +844,11 @@ public sealed partial class MainWindow : Window
             _logRowCache.Remove(row.Key);
         }
 
-        _expandedLogs.IntersectWith(_latestLogs.Select(entry => entry.Id));
-        var nextRows = new List<RenderedLogRow>(_latestLogs.Count);
+        var nextRows = new List<RenderedLogRow>(entries.Count);
         var childIndex = 0;
-        for (var rowIndex = 0; rowIndex < _latestLogs.Count; rowIndex++)
+        for (var rowIndex = 0; rowIndex < entries.Count; rowIndex++)
         {
-            var entry = _latestLogs[rowIndex];
+            var entry = entries[rowIndex];
             var key = keys[rowIndex];
             if (!_logRowCache.TryGetValue(key, out var row))
             {
@@ -982,8 +871,8 @@ public sealed partial class MainWindow : Window
             if (renderGeneration != _logRenderGeneration) return;
             _updatingLogs = false;
             CaptureLogScrollPosition();
-            var latestKeys = _latestLogs.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
-            if (_followingLogs && !latestKeys.SequenceEqual(_renderedLogRows.Select(row => row.Key)))
+            var latestKeys = _logPresentation.LatestEntries.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
+            if (_logPresentation.FollowsTail && !latestKeys.SequenceEqual(_renderedLogRows.Select(row => row.Key)))
             {
                 RenderLogs();
                 return;
@@ -1010,10 +899,12 @@ public sealed partial class MainWindow : Window
         if (entry.Level != "RAW")
         {
             var details = new Expander { Header = "Details", HorizontalAlignment = HorizontalAlignment.Stretch,
-                IsExpanded = _expandedLogs.Contains(entry.Id),
+                IsExpanded = _logPresentation.IsExpanded(entry.Id),
                 Content = new TextBlock { Text = entry.Raw, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } };
-            details.Expanding += (_, _) => _expandedLogs.Add(entry.Id);
-            details.Collapsed += (_, _) => _expandedLogs.Remove(entry.Id);
+            AutomationProperties.SetAutomationId(details, LogPresentationState.DetailsAutomationId(entry));
+            AutomationProperties.SetName(details, LogPresentationState.DetailsAccessibleName(entry));
+            details.Expanding += (_, _) => _logPresentation.SetExpanded(entry.Id, true);
+            details.Collapsed += (_, _) => _logPresentation.SetExpanded(entry.Id, false);
             controls.Add(details);
         }
         return new RenderedLogRow(key, controls.ToArray());
@@ -1035,13 +926,13 @@ public sealed partial class MainWindow : Window
                 if (_logScroll.ScrollableHeight > 0.5)
                 {
                     ClearPendingLogDownScrollIntent();
-                    _followingLogs = false;
+                    _logPresentation.Freeze();
                     return;
                 }
                 ClearPendingLogDownScrollIntent();
-                _followingLogs = true;
+                _logPresentation.FollowTail();
             }
-            if (!_followingLogs) return;
+            if (!_logPresentation.FollowsTail) return;
             var targetOffset = _logScroll.ScrollableHeight;
             _logScroll.ChangeView(null, targetOffset, null, true);
             CaptureLogScrollPosition();

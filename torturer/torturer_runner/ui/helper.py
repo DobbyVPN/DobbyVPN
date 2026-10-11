@@ -1,5 +1,6 @@
 """Build test-only OS accessibility helpers during guest preparation."""
 from pathlib import Path
+import shutil
 
 
 def prepare_helper(platform: str, run_dir: Path, logs: Path, timeout: float) -> Path:
@@ -10,7 +11,10 @@ def prepare_helper(platform: str, run_dir: Path, logs: Path, timeout: float) -> 
     output.mkdir(parents=True, exist_ok=True)
     if platform == "macos":
         helper = output / "native-ui"
-        command = ["xcrun", "swiftc", str(source / "macos.swift"), "-o", str(helper)]
+        main = output / "main.swift"
+        shutil.copyfile(source / "macos.swift", main)
+        diagnostics = run_dir / "source" / "ui" / "apple" / "shared" / "diagnostics" / "DiagnosticFiles.swift"
+        command = ["xcrun", "swiftc", str(main), str(diagnostics), "-lz", "-o", str(helper)]
     elif platform == "windows":
         helper = output / "NativeUI.exe"
         command = [

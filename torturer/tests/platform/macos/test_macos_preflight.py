@@ -13,7 +13,6 @@ from unittest import mock
 from torturer_runner import local_vm, local_vm_macos
 from torturer_runner.adapters.cli import CommandResult
 from torturer_runner.adapters.macos import MacOSAdapter
-from torturer_runner.ui.smoke import NativeUIController, NativeUISmokeError
 
 
 class MacOSPreflightTests(unittest.TestCase):
@@ -46,55 +45,6 @@ class MacOSPreflightTests(unittest.TestCase):
             state = json.loads((run_dir / "platform.json").read_text(encoding="utf-8"))
             self.assertEqual(state["status"], "failed")
             self.assertNotIn("source_checks_attempted", state)
-
-    def test_native_paste_captures_button_invocation_time(self) -> None:
-        controller = object.__new__(NativeUIController)
-        controller.platform = "macos"
-        controller.profile = Path("/tmp/subscription-source")
-        controller._call = mock.Mock(return_value={
-            "ready": True,
-            "paste_invoked_at_unix_ms": 1_800_000_000_000,
-        })
-        controller.snapshot = mock.Mock(return_value={"status": "Disconnected"})
-
-        result = controller.paste_source()
-
-        self.assertEqual(result, {"status": "Disconnected"})
-        self.assertEqual(controller.last_paste_invoked_at_unix_ms, 1_800_000_000_000)
-        controller._call.assert_called_once_with("paste", source="/tmp/subscription-source")
-
-    def test_cold_deep_link_uses_os_scheme_only_when_ui_is_stopped(self) -> None:
-        controller = object.__new__(NativeUIController)
-        controller.platform = "macos"
-        controller.process = None
-        controller.launch_count = 2
-        controller.window_id = "old-window"
-        controller.last_window_readiness = {"old": True}
-        controller._timeout = 10.0
-        controller._deadline = None
-        controller._alive = mock.Mock(return_value=False)
-        controller._call = mock.Mock(return_value={"ready": True})
-        controller._open_link = mock.Mock()
-        controller._wait = mock.Mock(side_effect=lambda predicate, _message: self.assertTrue(predicate()))
-        controller.snapshot = mock.Mock(return_value={"labels": ["Connection configuration"]})
-        controller.wait_status = mock.Mock(return_value={"status": "Connected"})
-
-        result = controller.cold_deep_link("https://example.invalid/subscription?source=one/two")
-
-        self.assertEqual(result, {"status": "Connected"})
-        controller._call.assert_called_once_with("preflight")
-        controller._open_link.assert_called_once_with(
-            "dobbyvpn://import?url=https%3A%2F%2Fexample.invalid%2Fsubscription%3Fsource%3Done%2Ftwo"
-        )
-        self.assertEqual(controller.launch_count, 3)
-        self.assertIsNone(controller.window_id)
-        self.assertIsNone(controller.last_window_readiness)
-
-        controller._alive.return_value = True
-        controller._open_link.reset_mock()
-        with self.assertRaisesRegex(NativeUISmokeError, "must be stopped"):
-            controller.cold_deep_link("https://example.invalid/subscription")
-        controller._open_link.assert_not_called()
 
     def test_native_ui_forwards_prepared_pythonpath_and_filters_other_loader_vars(self) -> None:
         with tempfile.TemporaryDirectory() as name:

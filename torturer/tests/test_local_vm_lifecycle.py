@@ -12,6 +12,11 @@ from torturer_runner import diagnostics, local_vm, local_vm_windows
 
 
 class LocalVMLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.store = mock.patch.object(local_vm, "_desktop_source_store")
+        self.store.start()
+        self.addCleanup(self.store.stop)
+
     def test_windows_second_start_persists_cleanup_owner_before_discovery_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
@@ -116,7 +121,7 @@ class LocalVMLifecycleTests(unittest.TestCase):
             with (
                 mock.patch.object(local_vm, "_run_logged", side_effect=lambda *_args, **_kw:
                                   events.append("preflight")),
-                mock.patch.object(local_vm, "_run_platform_source_checks", side_effect=lambda *_args:
+                mock.patch.object(local_vm, "_run_platform_source_checks", side_effect=lambda *_args, **_kw:
                                   events.append("source-checks")),
                 mock.patch.object(local_vm, "_prepare_candidate", side_effect=lambda *_args, **_kw:
                                   (events.append("build") or {"mode": "local-build"})),
@@ -125,6 +130,31 @@ class LocalVMLifecycleTests(unittest.TestCase):
             self.assertEqual(events, ["preflight", "source-checks", "build"])
             state = json.loads((run_dir / "platform.json").read_text())
             self.assertEqual(state["windows_temp_preflight"], "passed")
+
+    def test_native_helper_compile_failure_precedes_expensive_package_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "source").mkdir()
+            (run_dir / "profile").write_text("synthetic profile")
+            args = local_vm.build_parser().parse_args([
+                "prepare", "--platform", "windows", "--suite", "full",
+                "--run-dir", str(run_dir), "--source-sha", "a" * 40,
+                "--timeout", "90", "--source-checks",
+            ])
+            diagnostic = io.StringIO()
+            with (
+                mock.patch.object(local_vm, "_run_logged"),
+                mock.patch("torturer_runner.ui.helper.prepare_helper", side_effect=
+                           local_vm.LocalVMError("original helper compile failure")),
+                mock.patch.object(local_vm, "_run_platform_source_checks") as checks,
+                mock.patch.object(local_vm, "_prepare_desktop_package") as package,
+                redirect_stderr(diagnostic),
+            ):
+                self.assertEqual(local_vm.prepare(args), 1)
+            checks.assert_not_called()
+            package.assert_not_called()
+            self.assertIn("original helper compile failure", diagnostic.getvalue())
+            self.assertEqual(json.loads((run_dir / "platform.json").read_text())["status"], "failed")
 
     def test_recovery_seams_cannot_replace_qualification_packages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -363,7 +393,7 @@ class LocalVMLifecycleTests(unittest.TestCase):
             })
             args = local_vm.build_parser().parse_args([
                 "run", "--platform", "windows", "--run-dir", str(run_dir),
-                "--timeout", "30", "--suite", "full", "--native-case", "configure-tree",
+                "--timeout", "30", "--suite", "full", "--native-case", "configure-acceptance",
             ])
             runtime = {"pid": 12345, "binary": str(run_dir / "backend.exe"), "environment": {}}
             with (

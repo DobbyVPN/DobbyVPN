@@ -113,50 +113,6 @@ class DiagnosticPreservationTests(unittest.TestCase):
             self.assertNotIn("width", records[0])
             self.assertNotIn("height", records[0])
 
-    def test_native_ui_subprocess_streams_are_forwarded_byte_for_byte(self) -> None:
-        smoke = _load_script(
-            "dobbyvpn_native_ui_smoke_streams",
-            PRODUCT_ROOT / "torturer/torturer_runner/ui/smoke.py",
-        )
-        stdout = b'Password="native-profile-value"\x00\xff\n'
-        stderr = b"token=native-token\n"
-        completed = __import__("subprocess").CompletedProcess(
-            ["native-command"], 7, stdout=stdout, stderr=stderr,
-        )
-        destination = BinaryStderr()
-        label = "native-helper operation=capture path=C:/screenshots/001-startup.png"
-
-        with mock.patch.object(smoke, "run_finite_capture", return_value=completed):
-            with redirect_stderr(destination):
-                result = smoke._native_run(["native-command"], label=label, timeout_seconds=5)
-
-        self.assertIs(result, completed)
-        forwarded = destination.buffer.getvalue()
-        self.assertIn(f"[{label} stdout]\n".encode() + stdout, forwarded)
-        self.assertIn(f"[{label} stderr]\n".encode() + stderr, forwarded)
-
-    def test_native_ui_timeout_forwards_tagged_partial_streams(self) -> None:
-        smoke = _load_script(
-            "dobbyvpn_native_ui_smoke_timeout_streams",
-            PRODUCT_ROOT / "torturer/torturer_runner/ui/smoke.py",
-        )
-        subprocess = __import__("subprocess")
-        stdout = b'{"ready":true}\x00\xff\n'
-        stderr = b"native-ui-phase=capture-physical-start\n"
-        failure = subprocess.TimeoutExpired(("native-command",), 10, output=stdout, stderr=stderr)
-        destination = BinaryStderr()
-        label = "native-helper operation=capture path=C:/screenshots/001-startup.png"
-
-        with mock.patch.object(smoke, "run_finite_capture", side_effect=failure):
-            with redirect_stderr(destination):
-                with self.assertRaises(subprocess.TimeoutExpired) as caught:
-                    smoke._native_run(["native-command"], label=label, timeout_seconds=10)
-
-        self.assertIs(caught.exception, failure)
-        forwarded = destination.buffer.getvalue()
-        self.assertIn(f"[{label} stdout]\n".encode() + stdout, forwarded)
-        self.assertIn(f"[{label} stderr]\n".encode() + stderr, forwarded)
-
     def test_hosted_read_failure_keeps_other_streams_and_original_error(self) -> None:
         collector = _load_script(
             "dobbyvpn_collect_read_failure", PRODUCT_ROOT / ".github/scripts/collect_diagnostics.py",

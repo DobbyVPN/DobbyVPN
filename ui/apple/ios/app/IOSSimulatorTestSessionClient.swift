@@ -85,6 +85,7 @@ final class IOSSimulatorTestSessionClient: DobbySessionClient, @unchecked Sendab
             "generation": generation,
             "configured": !profiles.isEmpty,
             "source_url": sourceURL,
+            "digest": digest,
             "profile_count": profiles.count,
             "configure_requests": configureRequests,
             "request_count": requestCount,

@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import json
 import shlex
 import shutil
 import socket
@@ -27,6 +28,8 @@ from .android_instrumentation import (
 )
 from .native_cases import (
     ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,
+    ANDROID_PERFORMANCE_CASE,
+    ANDROID_PRESENTATION_CASES,
     ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,
     AUTO_RECOVERY_STOP_CASE,
     validate_native_cases,
@@ -295,20 +298,24 @@ def _run_auto_recovery_stop(
                 raise BaseExceptionGroup("Android recovery case cleanup failed", cleanup_errors)
 
 
-def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
-           timeout: float,
-           native_cases: list[str] | None = None) -> subprocess.CompletedProcess[bytes]:
-    """Drive the installed native UI through Android's real input path."""
+def run_ui(
+    run_dir: Path,
+    runtime: dict[str, Any],
+    logs: Path,
+    timeout: float,
+    native_cases: list[str] | None = None,
+    *,
+    repeat: int = 1,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run Android UI coverage and retain one result for every requested attempt."""
     try:
         selected_cases = validate_native_cases("android", "mini", native_cases)
     except ValueError as error:
         raise _error(str(error)) from error
-    if selected_cases and selected_cases not in {
-        (ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,),
-        (ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,),
-        (AUTO_RECOVERY_STOP_CASE,),
-    }:
-        raise _error("unsupported Android native case selection")
+    if type(repeat) is not int or repeat < 1:
+        raise _error("Android native case repeat count must be positive")
+    if native_cases is None and repeat != 1:
+        raise _error("Android repeat requires explicitly selected native cases")
     adb_value = runtime.get("adb")
     serial = runtime.get("serial")
     if not isinstance(adb_value, str) or not isinstance(serial, str):
@@ -318,8 +325,199 @@ def run_ui(run_dir: Path, runtime: dict[str, Any], logs: Path,
     environment = os.environ.copy()
     if not environment.get("ADB_SERVER_SOCKET"):
         raise _error("Android ADB server socket is not configured")
-    if selected_cases == (AUTO_RECOVERY_STOP_CASE,):
-        return _run_auto_recovery_stop(run_dir, runtime, logs, timeout)
+    logs.mkdir(mode=0o700, parents=True, exist_ok=True)
+    attempts: list[dict[str, Any]] = []
+    failures: list[bytes] = []
+
+    def run_attempt(case_id: str, attempt_number: int) -> None:
+        case_logs = _attempt_log_directory(logs, case_id, attempt_number)
+        case_logs.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            if case_id == "android:mini-ui":
+                result = _run_legacy_ui(
+                    run_dir, runtime, case_logs, timeout, selected_cases=()
+                )
+            elif case_id.removeprefix("android:") == AUTO_RECOVERY_STOP_CASE:
+                result = _run_auto_recovery_stop(
+                    run_dir, runtime, case_logs, timeout
+                )
+            elif case_id.removeprefix("android:") in (
+                *ANDROID_PRESENTATION_CASES,
+                ANDROID_PERFORMANCE_CASE,
+            ):
+                result = _run_rendered_native_case(
+                    run_dir,
+                    runtime,
+                    case_logs,
+                    timeout,
+                    case_id.removeprefix("android:"),
+                )
+            else:
+                result = _run_legacy_ui(
+                    run_dir,
+                    runtime,
+                    case_logs,
+                    timeout,
+                    selected_cases=(case_id.removeprefix("android:"),),
+                )
+            passed = result.returncode == 0
+            stdout_path, stderr_path = _retain_attempt_streams(
+                case_logs, result.stdout, result.stderr
+            )
+            entry: dict[str, Any] = {
+                "case_id": case_id,
+                "attempt": attempt_number,
+                "status": "passed" if passed else "failed",
+                "returncode": result.returncode,
+                "log_directory": str(case_logs.relative_to(logs)),
+            }
+            if stdout_path is not None:
+                entry["stdout"] = stdout_path
+            if stderr_path is not None:
+                entry["stderr"] = stderr_path
+            if not passed:
+                failures.append(
+                    f"{case_id} attempt {attempt_number} exited {result.returncode}\n".encode()
+                    + (result.stderr or b"")
+                )
+            attempts.append(entry)
+        except Exception as error:
+            diagnostic = "".join(traceback.format_exception(error)).encode(
+                "utf-8", errors="backslashreplace"
+            )
+            stderr_path = _retain_attempt_streams(case_logs, b"", diagnostic)[1]
+            attempts.append({
+                "case_id": case_id,
+                "attempt": attempt_number,
+                "status": "failed",
+                "returncode": 1,
+                "error": f"{type(error).__name__}: {error}",
+                "log_directory": str(case_logs.relative_to(logs)),
+                **({"stderr": stderr_path} if stderr_path is not None else {}),
+            })
+            failures.append(
+                f"{case_id} attempt {attempt_number} failed\n".encode()
+                + diagnostic
+            )
+
+    if native_cases is None:
+        run_attempt("android:mini-ui", 1)
+        selected_cases = ANDROID_PRESENTATION_CASES
+    for case_id in selected_cases:
+        full_case_id = f"android:{case_id}"
+        for attempt_number in range(1, repeat + 1):
+            run_attempt(full_case_id, attempt_number)
+
+    passed = all(item["status"] == "passed" for item in attempts)
+    summary = {
+        "platform": "android",
+        "passed": passed,
+        "repeat": repeat,
+        "attempts": attempts,
+    }
+    output = (json.dumps(summary, indent=2) + "\n").encode("utf-8")
+    (logs / "android-native-cases.json").write_bytes(output)
+    return subprocess.CompletedProcess(
+        ["android-native-cases"], 0 if passed else 1, output,
+        b"\n".join(failures),
+    )
+
+
+def _attempt_log_directory(logs: Path, case_id: str, attempt: int) -> Path:
+    safe_case = re.sub(r"[^A-Za-z0-9_.-]+", "_", case_id)
+    return logs / "android-native-cases" / safe_case / f"attempt-{attempt:04d}"
+
+
+def _retain_attempt_streams(
+    directory: Path, stdout: bytes, stderr: bytes,
+) -> tuple[str | None, str | None]:
+    stdout_name = "stdout.bin" if stdout else None
+    stderr_name = "stderr.bin" if stderr else None
+    if stdout_name is not None:
+        (directory / stdout_name).write_bytes(stdout)
+    if stderr_name is not None:
+        (directory / stderr_name).write_bytes(stderr)
+    return stdout_name, stderr_name
+
+
+def _run_rendered_native_case(
+    run_dir: Path,
+    runtime: dict[str, Any],
+    logs: Path,
+    timeout: float,
+    case_id: str,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one named presentation behavior using the hosted Android adapter."""
+    from .adapters.cli import SubprocessRunner
+    from .adapters.factory import adapter_for_platform
+    import json
+
+    adapter = adapter_for_platform(
+        "android",
+        profile=run_dir / "profile",
+        runner=SubprocessRunner(logs),
+        adb=Path(runtime["adb"]),
+        source_sha=runtime.get("source_sha"),
+        android_ui_mode="gui-auto",
+        app_apk=Path(runtime["app_apk"]),
+        test_companion_apk=Path(runtime["test_companion_apk"]),
+    )
+    primary: BaseException | None = None
+    try:
+        value = adapter.run_rendered_native_case(
+            case_id, deadline=time.monotonic() + min(timeout, 300)
+        )
+        if value.get("passed") is not True or value.get("case_id") != case_id:
+            raise _error(f"Android rendered case did not pass: {case_id}")
+        output = (json.dumps(value, indent=2) + "\n").encode("utf-8")
+        return subprocess.CompletedProcess([case_id], 0, output, b"")
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        cleanup_errors: list[BaseException] = []
+        for cleanup in (adapter.reset, adapter.finalize):
+            try:
+                cleanup(timeout_seconds=min(timeout, 30))
+            except BaseException as error:
+                cleanup_errors.append(error)
+        if cleanup_errors:
+            if primary is not None:
+                for error in cleanup_errors:
+                    primary.add_note(
+                        "Android rendered case cleanup: "
+                        + "".join(traceback.format_exception(error))
+                    )
+            else:
+                raise BaseExceptionGroup(
+                    "Android rendered case cleanup failed", cleanup_errors
+                )
+
+
+def _run_legacy_ui(
+    run_dir: Path,
+    runtime: dict[str, Any],
+    logs: Path,
+    timeout: float,
+    *,
+    selected_cases: tuple[str, ...],
+) -> subprocess.CompletedProcess[bytes]:
+    """Run existing local Android renderer and diagnostic instrumentation."""
+    if selected_cases not in {
+        (),
+        (ANDROID_SMALL_SCREEN_LOG_VIEWPORT_CASE,),
+        (ANDROID_LOGS_CLEAR_PROCESS_RESTART_CASE,),
+    }:
+        raise _error("unsupported Android legacy native case selection")
+    adb_value = runtime.get("adb")
+    serial = runtime.get("serial")
+    if not isinstance(adb_value, str) or not isinstance(serial, str):
+        raise _error("Android UI runtime is incomplete")
+    if not _SERIAL.fullmatch(serial):
+        raise _error("Android UI serial is invalid")
+    environment = os.environ.copy()
+    if not environment.get("ADB_SERVER_SOCKET"):
+        raise _error("Android ADB server socket is not configured")
     # Android instrumentation normally executes the runner in the target
     # application's process.  Do this cold-start cleanup from the controller,
     # before the runner exists; issuing am force-stop from NativeUiInstrumentedTest

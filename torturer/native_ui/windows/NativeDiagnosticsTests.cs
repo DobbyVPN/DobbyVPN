@@ -229,9 +229,123 @@ internal static class NativeDiagnosticsTests
             await using (var completed = new FileStream(structured, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
                 await completed.WriteAsync(new byte[] { 0xBB, (byte)'\n' });
             Require((await view.EntriesAsync()).Entries.Single().Message == "partial λ", "Completed UTF-8 was lost");
-            Console.WriteLine("Native diagnostics: 64 MiB exact export, bounded preview, persisted history, structured ordering, raw streams, capture classification, same-stream incomplete record/UTF-8 completion, rotation, input protection, and failure cleanup passed");
+            VerifyLogPresentationState();
+            VerifySubscriptionLoadState();
+            VerifyProfileAutomationIds();
+            Console.WriteLine("Native diagnostics: 64 MiB exact export, bounded preview, persisted history, structured ordering, raw streams, capture classification, same-stream incomplete record/UTF-8 completion, rotation, input protection, failure cleanup, production log presentation, subscription load state, and profile automation identifiers passed");
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    private static void VerifyLogPresentationState()
+    {
+        var first = new NativeDiagnostics.Entry(
+            "volume:17:0", "2026-01-01T00:00:01Z", "INFO", "Backend · fixture",
+            "first marker", "{\"message\":\"first marker\"}", DateTimeOffset.Parse("2026-01-01T00:00:01Z"));
+        var second = new NativeDiagnostics.Entry(
+            "volume:17:32", "2026-01-01T00:00:02Z", "WARN", "Backend · fixture",
+            "second marker", "{\"message\":\"second marker\"}", DateTimeOffset.Parse("2026-01-01T00:00:02Z"));
+        var appended = new NativeDiagnostics.Entry(
+            "volume:17:64", "2026-01-01T00:00:03Z", "INFO", "Backend · fixture",
+            "append marker", "{\"message\":\"append marker\"}", DateTimeOffset.Parse("2026-01-01T00:00:03Z"));
+        var state = new LogPresentationState();
+        state.ReplaceEntries([first, second]);
+        state.SetExpanded(first.Id, true);
+        Require(state.FollowsTail && state.VisibleEntries.Select(entry => entry.Id).SequenceEqual(new[] { first.Id, second.Id }) &&
+            state.LatestEntries.Select(entry => entry.Id).SequenceEqual(new[] { first.Id, second.Id }),
+            "initial log presentation did not follow the current entries");
+        var automationId = LogPresentationState.DetailsAutomationId(first);
+        var accessibleName = LogPresentationState.DetailsAccessibleName(first);
+        Require(automationId == "Log details " + first.Id && accessibleName == "Details" && accessibleName != automationId,
+            "log Details identity replaced or omitted its user-facing accessible name");
+
+        state.Freeze();
+        state.ReplaceEntries([first, second, appended]);
+        Require(!state.FollowsTail && state.LatestEntries[^1].Id == appended.Id &&
+            state.VisibleEntries.Select(entry => entry.Id).SequenceEqual(new[] { first.Id, second.Id }) && state.IsExpanded(first.Id),
+            "a controlled append changed the frozen visible snapshot or discarded its expanded row");
+        state.ObserveUserScroll(isAtBottom: true);
+        Require(state.FollowsTail && state.VisibleEntries.Select(entry => entry.Id).SequenceEqual(new[] { first.Id, second.Id, appended.Id }),
+            "resuming at the bottom did not show the latest entries");
+        state.ClearAfterBoundary();
+        Require(state.FollowsTail && state.VisibleEntries.Count == 0 && state.LatestEntries.Count == 0 && !state.IsExpanded(first.Id),
+            "Clear did not reset the production presentation state");
+        state.ReplaceEntries([appended]);
+        Require(state.VisibleEntries.Select(entry => entry.Id).SequenceEqual(new[] { appended.Id }),
+            "the first post-Clear entry was not presented after its boundary");
+    }
+
+    private static void VerifySubscriptionLoadState()
+    {
+        var typed = new SubscriptionLoadState();
+        typed.Edit("https://example.test/first", valid: true, kind: SubscriptionInputKind.Typed, now: TimeSpan.Zero);
+        Require(typed.BeginReady(TimeSpan.FromMilliseconds(399)) is null,
+            "typed URL dispatched before its 400 ms debounce elapsed");
+        var typedRequest = typed.BeginReady(TimeSpan.FromMilliseconds(400));
+        Require(typedRequest?.Source == "https://example.test/first",
+            "typed URL did not dispatch when its 400 ms debounce elapsed");
+        _ = typed.Finish(typedRequest!, TimeSpan.FromMilliseconds(401));
+
+        var reset = new SubscriptionLoadState();
+        reset.Edit("https://example.test/old", valid: true, kind: SubscriptionInputKind.Typed, now: TimeSpan.Zero);
+        reset.Edit("https://example.test/latest", valid: true, kind: SubscriptionInputKind.Typed, now: TimeSpan.FromMilliseconds(200));
+        Require(reset.BeginReady(TimeSpan.FromMilliseconds(599)) is null,
+            "a later typed edit did not reset the debounce deadline");
+        var resetRequest = reset.BeginReady(TimeSpan.FromMilliseconds(600));
+        Require(resetRequest?.Source == "https://example.test/latest",
+            "debounce reset dispatched a stale URL rather than the latest edit");
+        _ = reset.Finish(resetRequest!, TimeSpan.FromMilliseconds(601));
+
+        foreach (var trigger in new[] { SubscriptionInputKind.Paste, SubscriptionInputKind.Import, SubscriptionInputKind.Retry })
+        {
+            var immediate = new SubscriptionLoadState();
+            immediate.Edit("https://example.test/immediate", valid: true, kind: trigger, now: TimeSpan.Zero);
+            Require(immediate.BeginReady(TimeSpan.Zero)?.Source == "https://example.test/immediate",
+                $"{trigger} incorrectly waited for the typed-input debounce");
+        }
+
+        var serialized = new SubscriptionLoadState();
+        serialized.Edit("https://example.test/first", valid: true, kind: SubscriptionInputKind.Paste, now: TimeSpan.Zero);
+        var first = serialized.BeginReady(TimeSpan.Zero)!;
+        serialized.Edit("https://example.test/obsolete", valid: true, kind: SubscriptionInputKind.Typed, now: TimeSpan.FromMilliseconds(10));
+        serialized.Edit("https://example.test/latest", valid: true, kind: SubscriptionInputKind.Import, now: TimeSpan.FromMilliseconds(20));
+        Require(serialized.BeginReady(TimeSpan.FromMilliseconds(20)) is null && serialized.IsLoading,
+            "a new input started a second Configure while an earlier load was held");
+        Require(serialized.CanAct(isStopTarget: true, stopInFlight: false, busy: true, hasLoadError: true,
+                sequenceCurrent: false, configured: false, canStartOrSwitch: false) &&
+            !serialized.CanAct(isStopTarget: false, stopInFlight: false, busy: false, hasLoadError: false,
+                sequenceCurrent: true, configured: true, canStartOrSwitch: true),
+            "Stop became unresponsive or a connection action remained enabled during a pending edit");
+        Require(!serialized.MarkAccepted(first), "a stale completion marked the newest source accepted");
+        var latest = serialized.Finish(first, TimeSpan.FromMilliseconds(30));
+        Require(latest?.Source == "https://example.test/latest" && latest.Revision > first.Revision,
+            "finishing a held load did not dispatch the latest immediate request");
+        Require(serialized.MarkAccepted(latest!) && !serialized.SourceDirty,
+            "the current successful completion did not accept and clear the newest source");
+        _ = serialized.Finish(latest!, TimeSpan.FromMilliseconds(40));
+
+        var heldTyped = new SubscriptionLoadState();
+        heldTyped.Edit("https://example.test/first", valid: true, kind: SubscriptionInputKind.Retry, now: TimeSpan.Zero);
+        var heldFirst = heldTyped.BeginReady(TimeSpan.Zero)!;
+        heldTyped.Edit("https://example.test/latest", valid: true, kind: SubscriptionInputKind.Typed, now: TimeSpan.FromMilliseconds(10));
+        Require(heldTyped.Finish(heldFirst, TimeSpan.FromMilliseconds(409)) is null,
+            "a held Configure ignored the typed input's 400 ms deadline");
+        var heldLatest = heldTyped.BeginReady(TimeSpan.FromMilliseconds(410));
+        Require(heldLatest?.Source == "https://example.test/latest",
+            "the newest typed request was not dispatched when its deadline elapsed after completion");
+    }
+
+    private static void VerifyProfileAutomationIds()
+    {
+        const string digest = "accepted-go-digest";
+        Require(ProfileAutomationIds.Create(digest, 0, "description") == "profile.accepted-go-digest.0.description" &&
+            ProfileAutomationIds.Create(digest, 0, "protocol") == "profile.accepted-go-digest.0.protocol" &&
+            ProfileAutomationIds.Create(digest, 0, "action") == "profile.accepted-go-digest.0.action",
+            "profile role identifiers did not use the accepted digest and zero-based inventory index");
+        Require(ProfileAutomationIds.TryParse("profile.accepted-go-digest.0.action", out var parsedDigest, out var index, out var role) &&
+            parsedDigest == digest && index == 0 && role == "action" &&
+            !ProfileAutomationIds.TryParse("Profile 1 action", out _, out _, out _),
+            "profile automation ID parsing accepted an unstable legacy selector or lost its semantic fields");
     }
 
     private static void Require(bool condition, string message)

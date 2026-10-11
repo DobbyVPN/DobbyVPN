@@ -29,7 +29,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "DobbyVPNMacApp",
-            dependencies: ["DobbyNativeUI"],
+            dependencies: ["DobbyNativeUI", "DobbyDiagnosticFiles"],
             path: "macos/app"
         ),
         .testTarget(

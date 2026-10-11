@@ -26,10 +26,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
@@ -37,6 +39,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
+import com.dobby.presentation.LoadTrigger
+import com.dobby.presentation.LogFollowState
+import com.dobby.presentation.PermissionSnapshot
+import com.dobby.presentation.PermissionTarget
+import com.dobby.presentation.PermissionTargetFence
+import com.dobby.presentation.SubscriptionLoadCoordinator
+import com.dobby.presentation.SubscriptionRequest
 import com.dobby.vpn.BuildConfig
 import org.json.JSONObject
 import java.io.File
@@ -93,7 +102,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
                     DobbyApp(controller)
                 }
             }
@@ -140,7 +149,11 @@ private data class ProfileData(val index: Int, val description: String, val prot
     val name: String get() = description.ifBlank { "Profile ${index + 1}" }
 }
 private data class SelectionData(val digest: String, val mode: String, val index: Int)
-private data class PermissionTarget(val session: SessionData, val index: Int?, val sourceRevision: Int)
+private data class PendingPermissionAction(
+    val session: SessionData,
+    val index: Int?,
+    val fence: PermissionTarget,
+)
 private data class SessionData(
     val sessionId: String = "",
     val sequence: Long = 0,
@@ -161,6 +174,20 @@ private data class SessionData(
     val recovering: Boolean = false,
     val failure: String = "",
     val sourceError: String = "",
+)
+
+private fun SessionData.permissionSnapshot(
+    sourceRevision: Long,
+    sourceDirty: Boolean,
+) = PermissionSnapshot(
+    sessionId = sessionId,
+    digest = digest,
+    generation = generation,
+    sourceRevision = sourceRevision,
+    sourceDirty = sourceDirty,
+    hasPendingTarget = pendingTarget != null,
+    primaryAction = primaryAction,
+    canSwitch = canSwitch,
 )
 
 private data class ScreenState(
@@ -197,14 +224,17 @@ private class SessionController(
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
     @Volatile private var visible = false
     @Volatile private var latest = SessionData()
-    private var permissionTarget: PermissionTarget? = null
+    private var permissionTarget: PendingPermissionAction? = null
     private val loadWorker = Executors.newSingleThreadExecutor()
-    private var loadInFlight = false
-    @Volatile private var loadRevision = 0
-    private var pendingLoad: String? = null
-    private var scheduledSource: String? = null
-    private var inFlightSource: String? = null
-    private var debounce: Runnable? = null
+    private val sourceLoads = SubscriptionLoadCoordinator(
+        schedule = { delayMillis, callback ->
+            val task = Runnable(callback)
+            main.postDelayed(task, delayMillis)
+            ({ main.removeCallbacks(task) })
+        },
+        sessionReady = { latest.sessionId.isNotEmpty() },
+        start = ::startSourceLoad,
+    )
     private var restoredLoad = ""
     private var acceptedSequence = 0L
     private var restoredPendingSource = restoredSourceEditorState
@@ -234,13 +264,15 @@ private class SessionController(
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
     }
 
-    fun sourceChanged(value: String, immediate: Boolean = false) {
+    fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
         restoredPendingSource = null
         val source = value.trim()
         val uri = runCatching { java.net.URI(source) }.getOrNull()
-        val alreadyAccepted = !immediate && uri?.scheme?.lowercase() == "https" &&
-            !uri.host.isNullOrEmpty() && latest.configured && latest.sourceUrl == source &&
-            !loadInFlight && inFlightSource == null
+        val valid = uri?.scheme?.lowercase() == "https" && !uri.host.isNullOrEmpty()
+        val alreadyAccepted = trigger == LoadTrigger.TYPED && valid &&
+            latest.configured && latest.sourceUrl == source &&
+            !sourceLoads.inFlight
+        sourceLoads.change(source, trigger, valid, alreadyAccepted)
         if (alreadyAccepted) {
             if (permissionTarget != null) state = state.copy(busy = false)
             permissionTarget = null
@@ -251,64 +283,43 @@ private class SessionController(
                 loadError = "",
                 error = "",
             )
-            loadRevision++
-            pendingLoad = null
-            scheduledSource = null
-            debounce?.let(main::removeCallbacks)
             return
         }
         if (permissionTarget != null) state = state.copy(busy = false)
         permissionTarget = null
         state = state.copy(source = value, sourceDirty = true, error = "", loadError = "")
-        loadRevision++
-        pendingLoad = null
-        scheduledSource = null
-        debounce?.let(main::removeCallbacks)
-        if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrEmpty()) return
-        val revision = loadRevision
-        scheduledSource = source
-        debounce = Runnable {
-            if (revision == loadRevision) {
-                scheduledSource = null
-                pendingLoad = source
-                loadNext()
-            }
-        }.also { main.postDelayed(it, if (immediate) 0 else 400) }
     }
 
-    fun retryLoad() = sourceChanged(state.source, true)
-
-    private fun loadNext() {
-        if (loadInFlight || latest.sessionId.isEmpty()) return
-        val source = pendingLoad ?: return
-        pendingLoad = null
-        loadInFlight = true
-        inFlightSource = source
+    private fun startSourceLoad(request: SubscriptionRequest) {
         state = state.copy(loading = true)
-        val revision = loadRevision
         loadWorker.execute {
             val outcome = runCatching {
                 val snapshotResponse = JSONObject(NativeGoSession.snapshot(""))
                 requireOK(snapshotResponse)
                 val current = snapshotResponse.getJSONObject("result")
-                val configured = JSONObject(NativeGoSession.configure(current.getString("session_id"), current.getLong("sequence"), source.toByteArray(Charsets.UTF_8)))
+                val configured = JSONObject(NativeGoSession.configure(
+                    current.getString("session_id"),
+                    current.getLong("sequence"),
+                    request.source.toByteArray(Charsets.UTF_8),
+                ))
                 requireOK(configured)
                 configured.getJSONObject("result").getLong("sequence")
             }
             main.post {
-                loadInFlight = false
-                inFlightSource = null
-                state = state.copy(loading = false)
-                if (revision == loadRevision) {
-                    if (outcome.isSuccess) acceptedSequence = outcome.getOrThrow()
-                    state = if (outcome.isSuccess) state.copy(sourceDirty = false, loadError = "")
-                    else state.copy(loadError = outcome.exceptionOrNull()?.message ?: "Subscription could not be loaded")
+                sourceLoads.complete(request) { current ->
+                    state = state.copy(loading = false)
+                    if (current) {
+                        if (outcome.isSuccess) acceptedSequence = outcome.getOrThrow()
+                        state = if (outcome.isSuccess) state.copy(sourceDirty = false, loadError = "")
+                        else state.copy(loadError = outcome.exceptionOrNull()?.message ?: "Subscription could not be loaded")
+                    }
+                    worker.execute { refreshSnapshot() }
                 }
-                worker.execute { refreshSnapshot() }
-                loadNext()
             }
         }
     }
+
+    fun retryLoad() = sourceChanged(state.source, LoadTrigger.RETRY)
 
     fun show(screen: String) { state = state.copy(screen = screen) }
 
@@ -349,7 +360,7 @@ private class SessionController(
             putBoolean(SOURCE_DIRTY, true)
             putString(SOURCE_LOAD_ERROR, state.loadError)
             putBoolean(SOURCE_LOAD_PENDING,
-                state.loadError.isEmpty() && (restoredPendingSource != null || scheduledSource != null || pendingLoad != null || loadInFlight || inFlightSource != null))
+                state.loadError.isEmpty() && (restoredPendingSource != null || sourceLoads.hasWork))
         }
     }
 
@@ -384,7 +395,11 @@ private class SessionController(
         if (isStopTarget(index)) { stop(); return }
         val current = latest
         state = state.copy(busy = true, error = "")
-        permissionTarget = PermissionTarget(current, index, loadRevision)
+        permissionTarget = PendingPermissionAction(
+            current,
+            index,
+            PermissionTarget(current.sessionId, current.digest, current.generation, sourceLoads.revision),
+        )
         worker.execute {
             when (NativeVpnBridge.prepare(activity)) {
                 1 -> main.post { continuePermission(true) }
@@ -432,9 +447,10 @@ private class SessionController(
         val selected = target.session
         val index = target.index
         val current = latest
-        if (state.sourceDirty || loadRevision != target.sourceRevision ||
-            current.sessionId != selected.sessionId || current.digest != selected.digest || current.generation != selected.generation
-        ) {
+        if (!PermissionTargetFence.stillCurrent(
+                target.fence,
+                current.permissionSnapshot(sourceLoads.revision, state.sourceDirty),
+            )) {
             worker.execute { refreshSnapshot(clearBusy = true) }
             return
         }
@@ -453,10 +469,18 @@ private class SessionController(
                 val primaryAction = snapshot.optString("primary_action", "NONE")
                 val canSwitch = snapshot.optBoolean("can_switch")
                 val hasPendingTarget = snapshot.optJSONObject("pending_target") != null
-                if (loadRevision != target.sourceRevision || sessionId != selected.sessionId ||
-                    digest != selected.digest || generation != selected.generation || hasPendingTarget ||
-                    (primaryAction != "START" && !canSwitch)
-                ) {
+                val freshRevision = sourceLoads.revision
+                val freshSnapshot = PermissionSnapshot(
+                    sessionId = sessionId,
+                    digest = digest,
+                    generation = generation,
+                    sourceRevision = freshRevision,
+                    sourceDirty = freshRevision != target.fence.sourceRevision,
+                    hasPendingTarget = hasPendingTarget,
+                    primaryAction = primaryAction,
+                    canSwitch = canSwitch,
+                )
+                if (!PermissionTargetFence.mayStartAfterConsent(target.fence, freshSnapshot)) {
                     null
                 } else {
                     NativeGoSession.startSelection(sessionId, sequence, mode, selectedIndex, selected.digest)
@@ -509,20 +533,20 @@ private class SessionController(
             report("Clipboard item has no text. Copy an HTTPS subscription URL first")
             return
         }
-        importSubscription(value)
+        importSubscription(value, LoadTrigger.PASTE)
     }
 
-    private fun importSubscription(value: String) {
+    private fun importSubscription(value: String, trigger: LoadTrigger) {
         val uri = runCatching { java.net.URI(value) }.getOrNull()
         if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrEmpty()) { report("Paste an HTTPS subscription URL with a host"); return }
         val source = value.trim()
-        if (source == state.source && (scheduledSource == source || pendingLoad == source || inFlightSource == source)) return
-        val noOutstandingLoad = !loadInFlight && scheduledSource == null && pendingLoad == null
+        if (source == state.source && sourceLoads.hasOutstanding(source)) return
+        val noOutstandingLoad = !sourceLoads.hasWork
         if (noOutstandingLoad && state.loadError.isEmpty() && latest.configured && latest.sourceUrl == source) {
             state = state.copy(source = source, sourceDirty = false, loadError = "", error = "")
             return
         }
-        sourceChanged(value, true)
+        sourceChanged(value, trigger)
     }
 
     fun importLink(value: String) {
@@ -534,7 +558,10 @@ private class SessionController(
             require(query.size == 1)
             val pair = query.single().split('=', limit = 2)
             require(pair.size == 2 && pair[0] == "url")
-            importSubscription(java.net.URLDecoder.decode(pair[1].replace("+", "%2B"), "UTF-8"))
+            importSubscription(
+                java.net.URLDecoder.decode(pair[1].replace("+", "%2B"), "UTF-8"),
+                LoadTrigger.IMPORT,
+            )
         } catch (failure: Exception) { report("Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL", failure) }
     }
 
@@ -585,8 +612,7 @@ private class SessionController(
         worker.shutdownNow()
         logWorker.shutdownNow()
         loadWorker.shutdownNow()
-        debounce?.let(main::removeCallbacks)
-        scheduledSource = null
+        sourceLoads.close()
     }
 
     private fun refreshSnapshot(clearBusy: Boolean = false) {
@@ -664,14 +690,14 @@ private class SessionController(
                 )
                 restoredPendingSource?.takeIf { current.sessionId.isNotEmpty() }?.let { source ->
                     restoredPendingSource = null
-                    importSubscription(source)
+                    importSubscription(source, LoadTrigger.RESTORE)
                 }
                 val restoreKey = current.sessionId + "|" + state.source
                 if (!current.configured && !state.sourceDirty && state.source.isNotEmpty() && restoredLoad != restoreKey) {
                     restoredLoad = restoreKey
-                    sourceChanged(state.source, true)
+                    sourceChanged(state.source, LoadTrigger.RESTORE)
                 }
-                loadNext()
+                sourceLoads.sessionBecameReady()
             }
         } catch (failure: Exception) {
             latest = SessionData()
@@ -758,13 +784,15 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
             Column(
                 Modifier.heightIn(max = controlsHeight)
                     .clipToBounds().verticalScroll(rememberScrollState())
+                    .testTag("connection.controls")
                     .semantics { contentDescription = MainActivity.CONNECTION_CONTROLS_DESCRIPTION },
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 OutlinedTextField(
                     value = state.source,
                     onValueChange = { controller.sourceChanged(it) },
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Connection configuration" },
+                    modifier = Modifier.fillMaxWidth().testTag("subscription.url")
+                        .semantics { contentDescription = "Connection configuration" },
                     label = { Text("Subscription URL") },
                     placeholder = { Text("https://…") },
                     singleLine = true,
@@ -774,15 +802,24 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     ),
                     keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                 )
-                if (state.canPaste) TextButton(onClick = controller::paste) { Text("Paste") }
+                if (state.canPaste) TextButton(
+                    onClick = controller::paste,
+                    modifier = Modifier.testTag("subscription.paste"),
+                ) { Text("Paste") }
                 if (state.loading) Text("Loading profiles…")
                 if (state.loadError.isNotEmpty()) {
                     Text(state.loadError, color = MaterialTheme.colorScheme.error)
-                    TextButton(onClick = controller::retryLoad) { Text("Retry") }
+                    TextButton(
+                        onClick = controller::retryLoad,
+                        modifier = Modifier.testTag("subscription.retry"),
+                    ) { Text("Retry") }
                 }
-                Text(status, modifier = Modifier.semantics { contentDescription = status; liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.titleMedium)
+                Text(status, modifier = Modifier.testTag("connection.status")
+                    .semantics { contentDescription = status; liveRegion = LiveRegionMode.Polite },
+                    style = MaterialTheme.typography.titleMedium)
                 if (session.activeProfile.isNotEmpty()) {
-                    Text(session.activeProfile, modifier = Modifier.semantics { contentDescription = "Active profile" })
+                    Text(session.activeProfile, modifier = Modifier.testTag("profile.active")
+                        .semantics { contentDescription = "Active profile" })
                 }
                 if (state.error.isNotEmpty() || session.failure.isNotEmpty()) {
                     Text(
@@ -794,7 +831,7 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                 Button(
                     onClick = { focus.clearFocus(); controller.connectOrDisconnect() },
                     enabled = controller.canAct(),
-                    modifier = Modifier.semantics {
+                    modifier = Modifier.testTag("connection.action").semantics {
                         contentDescription = "VPN connection action"
                     },
                 ) {
@@ -805,13 +842,19 @@ private fun ConnectionScreen(controller: SessionController, modifier: Modifier) 
                     Text(controller.actionTitle())
                 }
                 if (session.primaryAction == "STOP" && !controller.isStopTarget(null) && session.profiles.none { controller.isStopTarget(it.index) }) {
-                    TextButton(onClick = controller::stop, enabled = !state.busy) { Text(if (session.state == "CONNECTED") "Disconnect" else "Stop") }
+                    TextButton(
+                        onClick = controller::stop,
+                        enabled = !state.busy,
+                        modifier = Modifier.testTag("connection.secondary-action"),
+                    ) { Text(if (session.state == "CONNECTED") "Disconnect" else "Stop") }
                 }
                 session.profiles.forEach { profile ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) { Text(profile.name); Text(profile.protocol, style = MaterialTheme.typography.bodySmall) }
                         Button(onClick = { controller.connectOrDisconnect(profile.index) }, enabled = controller.canAct(profile.index),
-                            modifier = Modifier.semantics {
+                            modifier = Modifier.testTag(
+                                "profile.${session.digest}.index.${profile.index}.role.action",
+                            ).semantics {
                                 contentDescription = "Profile ${profile.index + 1} action"
                             }) { Text(controller.actionTitle(profile.index)) }
                     }
@@ -864,8 +907,15 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End,
         ) {
-            TextButton(onClick = controller::clearLogs) { Text("Clear") }
-            TextButton(onClick = controller::exportLogs, enabled = !state.exportingLogs) { Text("Share logs") }
+            TextButton(
+                onClick = controller::clearLogs,
+                modifier = Modifier.testTag("logs.clear"),
+            ) { Text("Clear") }
+            TextButton(
+                onClick = controller::exportLogs,
+                enabled = !state.exportingLogs,
+                modifier = Modifier.testTag("logs.export"),
+            ) { Text("Share logs") }
         }
         if (state.logsError.isNotEmpty()) {
             Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
@@ -873,7 +923,8 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         AndroidView(
             factory = { controller.createLogView(it) },
             modifier = Modifier.fillMaxWidth().weight(1f)
-                .clipToBounds(),
+                .clipToBounds()
+                .testTag("logs.viewport"),
             update = {
                 it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor)
                 controller.restoreRetainedLogView(it)
@@ -889,7 +940,8 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
         movementMethod = android.text.method.LinkMovementMethod.getInstance()
         contentDescription = "Connection logs"
     }
-    private var following = true
+    private val followState = LogFollowState()
+    private val following get() = followState.followsLatest
     private var updating = false
     private var userScrolling = false
     private var lastClear = 0
@@ -908,7 +960,7 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     init { isFillViewport = true; addView(content) }
 
     fun restoreState(state: Bundle) {
-        following = state.getBoolean("following", true)
+        followState.restore(state.getBoolean("following", true))
         restoredScrollY = state.getInt("scroll_y", 0).coerceAtLeast(0)
         expanded.addAll(state.getStringArrayList("expanded_ids").orEmpty())
         awaitingRestoredEntries = !following
@@ -939,7 +991,7 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     }
 
     fun restoreFrozenState(state: FrozenLogViewState) {
-        following = false
+        followState.pause()
         expanded.clear()
         expanded.addAll(state.expandedIds)
         restoredScrollY = state.scrollY.coerceAtLeast(0)
@@ -950,7 +1002,7 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     }
 
     fun resetToLatest() {
-        following = true
+        followState.resume()
         expanded.clear()
         restoredScrollY = null
         awaitingRestoredEntries = false
@@ -966,13 +1018,12 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     override fun onScrollChanged(left: Int, top: Int, oldLeft: Int, oldTop: Int) {
         super.onScrollChanged(left, top, oldLeft, oldTop)
         if (updating || !userScrolling || top == oldTop) return
-        following = !canScrollVertically(1)
-        if (following && latest != rendered) post { render(latest) }
+        if (followState.scrolled(canScrollVertically(1)) && latest != rendered) post { render(latest) }
     }
 
     fun update(entries: List<LogEntry>, clear: Int, normal: Int, muted: Int, warning: Int, error: Int) {
         if (clear != lastClear) {
-            following = true
+            followState.clear()
             lastClear = clear
             expanded.clear()
             awaitingRestoredEntries = false
