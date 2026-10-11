@@ -2475,32 +2475,13 @@ internal static partial class Program
         if (ownerPid != (uint)app.Process.Id)
             throw new InvalidOperationException($"Log wheel input target changed ownership before {operation}");
 
-        var virtualLeft = GetSystemMetrics(SmXVirtualScreen);
-        var virtualTop = GetSystemMetrics(SmYVirtualScreen);
-        var virtualWidth = GetSystemMetrics(SmCxVirtualScreen);
-        var virtualHeight = GetSystemMetrics(SmCyVirtualScreen);
-        if (virtualWidth <= 1 || virtualHeight <= 1 || cursor.X < virtualLeft || cursor.Y < virtualTop ||
-            cursor.X >= (long)virtualLeft + virtualWidth || cursor.Y >= (long)virtualTop + virtualHeight)
-            throw new InvalidOperationException(
-                $"Verified log viewport point ({cursor.X},{cursor.Y}) is outside the virtual desktop " +
-                $"({virtualLeft},{virtualTop},{virtualWidth},{virtualHeight})");
-        static int Normalize(int position, int origin, int extent) => checked((int)Math.Round(
-            (position - (double)origin) * ushort.MaxValue / (extent - 1d), MidpointRounding.AwayFromZero));
-
-        // Keep a non-coalesced pointer move ahead of the wheel in the same input stream.
-        var inputs = new[]
-        {
-            CreateMouseInput(MouseEventMove | MouseEventAbsolute | MouseEventVirtualDesk | MouseEventMoveNoCoalesce,
-                dx: Normalize(cursor.X, virtualLeft, virtualWidth), dy: Normalize(cursor.Y, virtualTop, virtualHeight)),
-            CreateMouseInput(MouseEventWheel, unchecked((uint)(short)wheelDelta)),
-        };
+        var input = CreateMouseInput(MouseEventWheel, unchecked((uint)(short)wheelDelta));
         Marshal.SetLastPInvokeError(0);
-        var inserted = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeInput>());
+        var inserted = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
         var lastError = Marshal.GetLastPInvokeError();
-        if (inserted != (uint)inputs.Length)
+        if (inserted != 1)
             throw new InvalidOperationException(
-                $"SendInput inserted {inserted} of {inputs.Length} log-wheel sequence events for {operation}; " +
-                $"lastError={lastError}");
+                $"SendInput inserted {inserted} of 1 log-wheel event for {operation}; lastError={lastError}");
     }
 
     private static void AssertFixtureRetainsRecords(
