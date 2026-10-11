@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from io import BytesIO
 from pathlib import Path
 import tempfile
@@ -18,6 +19,109 @@ from torturer_runner.ui.observations import for_base_adapter
 
 
 class NativeCaseObservationProcessTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "real helper process fixture uses a POSIX executable script")
+    def test_immediate_child_exit_does_not_close_stderr_before_its_reader_starts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            child_exited = root / "child-exited"
+            helper = self._helper(root, f'''
+                import pathlib, sys
+                sys.stdout.buffer.write(b"immediate stdout\\n")
+                sys.stdout.buffer.flush()
+                sys.stderr.buffer.write(b"immediate stderr\\n")
+                sys.stderr.buffer.flush()
+                pathlib.Path({str(child_exited)!r}).write_text("exited", encoding="utf-8")
+            ''')
+            app = root / "app"
+            app.mkdir()
+            directory = root / "case"
+            log_writers = {}
+            stderr_open_before_stdout_starts = []
+            original_open = Path.open
+            original_start = threading.Thread.start
+            original_popen = subprocess.Popen
+            children = []
+
+            def record_child(*args, **kwargs):
+                child = original_popen(*args, **kwargs)
+                children.append(child)
+                return child
+
+            def track_log_writer(path, *args, **kwargs):
+                stream = original_open(path, *args, **kwargs)
+                if path.parent == directory and path.name.endswith(".log"):
+                    log_writers[path.name] = stream
+                return stream
+
+            def wait_for_child_exit_before_stderr_start(thread):
+                result = original_start(thread)
+                if thread.name == "native-case-stderr":
+                    deadline = time.monotonic() + 2
+                    while not child_exited.exists() and time.monotonic() < deadline:
+                        time.sleep(0.005)
+                    self.assertTrue(child_exited.exists())
+                    children[0].wait(timeout=2)
+                    stderr_open_before_stdout_starts.append(not log_writers["native-case.stderr.log"].closed)
+                return result
+
+            with (
+                patch.object(Path, "open", new=track_log_writer),
+                patch.object(threading.Thread, "start", new=wait_for_child_exit_before_stderr_start),
+                patch("torturer_runner.ui.native_case.subprocess.Popen", new=record_child),
+                self.assertRaises(BrokenPipeError),
+            ):
+                _run_observed_case(
+                    helper, app / "DobbyVPN.exe", directory,
+                    {"operation": "native-case", "case": "connected-session"},
+                    2, 0, lambda _request: {},
+                )
+
+            self.assertEqual(stderr_open_before_stdout_starts, [True])
+            self.assertTrue(all(stream.closed for stream in log_writers.values()))
+            self.assertIn(b"immediate stdout\n", (directory / "native-case.stdout.log").read_bytes())
+            self.assertIn(b"immediate stderr\n", (directory / "native-case.stderr.log").read_bytes())
+
+    @unittest.skipIf(os.name == "nt", "real helper process fixture uses a POSIX executable script")
+    def test_reader_start_failures_release_or_close_all_output_streams(self) -> None:
+        original_open = Path.open
+        original_start = threading.Thread.start
+        for failed_name in ("native-case-stderr", "native-case-stdout"):
+            with self.subTest(failed_reader=failed_name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                helper = self._helper(root, r'''
+                    import sys
+                    sys.stdin.buffer.readline()
+                ''')
+                app = root / "app"
+                app.mkdir()
+                directory = root / "case"
+                log_writers = {}
+
+                def track_log_writer(path, *args, **kwargs):
+                    stream = original_open(path, *args, **kwargs)
+                    if path.parent == directory and path.name.endswith(".log"):
+                        log_writers[path.name] = stream
+                    return stream
+
+                def fail_selected_reader(thread):
+                    if thread.name == failed_name:
+                        raise RuntimeError(f"simulated {failed_name} startup failure")
+                    return original_start(thread)
+
+                with (
+                    patch.object(Path, "open", new=track_log_writer),
+                    patch.object(threading.Thread, "start", new=fail_selected_reader),
+                    self.assertRaisesRegex(RuntimeError, f"simulated {failed_name} startup failure"),
+                ):
+                    _run_observed_case(
+                        helper, app / "DobbyVPN.exe", directory,
+                        {"operation": "native-case", "case": "connected-session"},
+                        2, 0, lambda _request: {},
+                    )
+
+                self.assertEqual(set(log_writers), {"native-case.stdout.log", "native-case.stderr.log"})
+                self.assertTrue(all(stream.closed for stream in log_writers.values()))
+
     @unittest.skipIf(os.name == "nt", "real helper process fixture uses a POSIX executable script")
     def test_helper_request_gets_same_adapter_reply_and_exact_streams(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -226,27 +330,46 @@ class NativeCaseObservationProcessTests(unittest.TestCase):
             callback_started = threading.Event()
             release_callback = threading.Event()
             callback_finished = threading.Event()
+            log_writers = {}
 
             def blocked_observer(_request):
                 callback_started.set()
                 try:
                     release_callback.wait()
-                    return {"state": "CONNECTED"}
+                    raise ValueError("late active observer diagnostic")
                 finally:
                     callback_finished.set()
 
-            with self.assertRaisesRegex(RuntimeError, "native helper timed out") as caught:
-                _run_observed_case(
-                    helper, app / "DobbyVPN.exe", directory,
-                    {"operation": "native-case", "case": "connected-session"},
-                    0.1, 0, blocked_observer,
-                )
+            original_open = Path.open
+
+            def track_log_writer(path, *args, **kwargs):
+                stream = original_open(path, *args, **kwargs)
+                if path.parent == directory and path.name.endswith(".log"):
+                    log_writers[path.name] = stream
+                return stream
+
+            with patch.object(Path, "open", new=track_log_writer):
+                with self.assertRaisesRegex(RuntimeError, "native helper timed out") as caught:
+                    _run_observed_case(
+                        helper, app / "DobbyVPN.exe", directory,
+                        {"operation": "native-case", "case": "connected-session"},
+                        0.1, 0, blocked_observer,
+                    )
 
             self.assertTrue(callback_started.is_set())
             self.assertIs(caught.exception.observer_quiescent, False)
             self.assertIn("backend cleanup is unconfirmed", "\n".join(caught.exception.__notes__))
+            self.assertEqual(set(log_writers), {"native-case.stdout.log", "native-case.stderr.log"})
+            self.assertTrue(all(not stream.closed for stream in log_writers.values()))
             release_callback.set()
             self.assertTrue(callback_finished.wait(2))
+            close_deadline = time.monotonic() + 2
+            while not all(stream.closed for stream in log_writers.values()) and time.monotonic() < close_deadline:
+                time.sleep(0.01)
+            self.assertTrue(all(stream.closed for stream in log_writers.values()))
+            stderr = (directory / "native-case.stderr.log").read_bytes()
+            self.assertIn(b"late active observer diagnostic", stderr)
+            self.assertIn(b"Traceback (most recent call last)", stderr)
 
     @staticmethod
     def _helper(root: Path, body: str) -> Path:

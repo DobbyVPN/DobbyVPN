@@ -118,6 +118,7 @@ def _run_observed_case(
     reader_failures: list[BaseException] = []
     stdout_stream = None
     stderr_stream = None
+    stdout_done = threading.Event()
     stdout_thread: threading.Thread | None = None
     stderr_thread: threading.Thread | None = None
     timeout_error: subprocess.TimeoutExpired | None = None
@@ -219,6 +220,17 @@ def _run_observed_case(
                     respond(line, remaining=case_deadline - time.monotonic())
         except BaseException as error:
             reader_failures.append(error)
+        finally:
+            for stream in (stdout_stream, process.stdout):
+                if stream is None:
+                    continue
+                try:
+                    stream.close()
+                except ValueError:
+                    pass
+                except OSError as error:
+                    reader_failures.append(error)
+            stdout_done.set()
 
     def read_stderr() -> None:
         assert process is not None and process.stderr is not None
@@ -230,6 +242,25 @@ def _run_observed_case(
                 write_stderr(chunk)
         except BaseException as error:
             reader_failures.append(error)
+        finally:
+            # The stdout reader owns observer callbacks, which may write their
+            # traceback to this log after the child's stderr pipe has closed.
+            # Keep this writer open until those callbacks have returned.
+            stdout_done.wait()
+            with stderr_lock:
+                try:
+                    if stderr_stream is not None:
+                        stderr_stream.close()
+                except ValueError:
+                    pass
+                except OSError as error:
+                    reader_failures.append(error)
+            try:
+                process.stderr.close()
+            except ValueError:
+                pass
+            except OSError as error:
+                reader_failures.append(error)
 
     try:
         # Open before starting the child, then remove these empty files if the
@@ -250,8 +281,8 @@ def _run_observed_case(
         process = subprocess.Popen([str(helper)], **popen_kwargs)
         stdout_thread = threading.Thread(target=read_stdout, name="native-case-stdout", daemon=True)
         stderr_thread = threading.Thread(target=read_stderr, name="native-case-stderr", daemon=True)
-        stdout_thread.start()
         stderr_thread.start()
+        stdout_thread.start()
         assert process.stdin is not None
         initial_request = (json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
         process.stdin.write(initial_request)
@@ -282,6 +313,10 @@ def _run_observed_case(
         if not readers_quiescent:
             reader_failures.append(TimeoutError("native helper output reader did not finish"))
     except BaseException as error:
+        if stdout_thread is None or stdout_thread.ident is None:
+            # stderr waits for stdout callbacks to finish before closing its
+            # log. If stdout never started, there can be no later callback.
+            stdout_done.set()
         if process is not None and process.poll() is None:
             try:
                 _terminate_logged_process(process, label, cwd=app.parent, logs=directory)
@@ -327,13 +362,19 @@ def _run_observed_case(
                 if stream is not None:
                     try:
                         stream.close()
-                    except OSError:
+                    except ValueError:
                         pass
+                    except OSError as error:
+                        reader_failures.append(error)
             if readers_quiescent:
-                if stdout_stream is not None:
-                    stdout_stream.close()
-                if stderr_stream is not None:
-                    stderr_stream.close()
+                for stream in (stdout_stream, stderr_stream):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except ValueError:
+                            pass
+                        except OSError as error:
+                            reader_failures.append(error)
 
     if readers_quiescent:
         stdout = stdout_path.read_bytes()
