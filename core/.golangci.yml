@@ -96,6 +96,25 @@ linters:
           - goconst
           - gosec
           - gocritic
+      # These helpers are used by the Android/iOS binding adapter in
+      # sessionapi/mobilebinding/platform_mobile.go. Linux product analysis
+      # has no production caller for that build-tagged adapter.
+      - path: ^sessionapi/mobilebinding/(ownership|platform)\.go$
+        text: "is unused"
+        linters:
+          - unused
+      # The panic-recovery helper is called by native_runtime_mobile.go
+      # (android || ios); desktop uses the lifecycle state definitions here.
+      - path: ^sessionapi/runtime/native_lifecycle\.go$
+        text: "runLockedWithPanicRecovery is unused"
+        linters:
+          - unused
+      # This protected dialer helper graph is installed only by the Android
+      # build-tagged protected_system_dialer_android.go.
+      - path: ^xray/internal/protected_system_dialer\.go$
+        text: "is unused"
+        linters:
+          - unused
 
 formatters:
   enable:

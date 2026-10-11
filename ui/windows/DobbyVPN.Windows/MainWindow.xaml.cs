@@ -840,7 +840,13 @@ public sealed partial class MainWindow : Window
             var revision = ++_logRevision;
             var preview = await _diagnostics.EntriesAsync();
             if (revision != _logRevision) return;
-            _logPresentation.ReplaceEntries(preview.Entries);
+            var ingestedBackendEntries = _logPresentation.ReplaceEntries(preview.Entries);
+            foreach (var entry in ingestedBackendEntries)
+                _diagnostics.RecordInfo("logs.backend-ingested", "Backend log entry ingested", new
+                {
+                    backend_entry_id = entry.EntryId,
+                    follows_tail = entry.FollowsTail,
+                });
             LogsErrorText.Text = preview.Error;
             if (_logPresentation.FollowsTail) RenderLogs();
         }

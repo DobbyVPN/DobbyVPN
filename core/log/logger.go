@@ -247,10 +247,6 @@ func cloneArguments(arguments map[string]any) map[string]any {
 	return cloned
 }
 
-func emit(logger *slog.Logger, level slog.Level, event, category, message string, arguments map[string]any) {
-	emitAt(logger, time.Now(), level, event, category, message, arguments)
-}
-
 func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, category, message string, arguments map[string]any) {
 	ctx := context.Background()
 	if !logger.Enabled(ctx, level) {
