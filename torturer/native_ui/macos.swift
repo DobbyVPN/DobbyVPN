@@ -3701,43 +3701,7 @@ func run() throws -> [String: Any] {
         return ["ready": true]
     }
     if operation == "native-case" { return try runMacOSNativeCase(request) }
-    try require(["probe", "close", "kill"].contains(operation), "Unknown native helper operation: \(operation)")
-    guard let executable = request["executable"] as? String, !executable.isEmpty else {
-        throw HelperError("Native process operation is missing its executable path")
-    }
-    let expected = URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
-    let requestedPID = request["pid"] as? Int
-    let matches = NSWorkspace.shared.runningApplications.filter { app in
-        app.executableURL?.resolvingSymlinksInPath().path == expected &&
-            (requestedPID == nil || Int(app.processIdentifier) == requestedPID)
-    }
-    if matches.isEmpty { return ["ready": false, "alive": false] }
-    try require(matches.count == 1, "UI executable has \(matches.count) matching processes")
-    let app = matches[0]
-    if operation == "probe", app.isTerminated {
-        return ["ready": false, "alive": false]
-    }
-    let pid = app.processIdentifier
-    let process: MacOSProcessIdentity
-    do {
-        process = try macOSProcessIdentity(pid)
-    } catch is MacOSProcessMissing {
-        if operation == "probe" { return ["ready": false, "alive": false] }
-        throw HelperError("UI process disappeared before its OS start identity could be read")
-    }
-    try require(process.executablePath == expected,
-                "UI process executable path changed: expected=\(expected), actual=\(process.executablePath)")
-    let identity = process.started
-    if let prior = request["identity"] as? String {
-        try require(prior == identity, "UI process creation time changed")
-    }
-    if operation == "probe" { return ["alive": true, "pid": Int(pid), "identity": identity] }
-    if operation == "close" {
-        try require(app.terminate(), "Native application quit request failed")
-        return ["alive": true]
-    }
-    try require(app.forceTerminate(), "Could not terminate owned UI process")
-    return [:]
+    throw HelperError("Unknown native helper operation: \(operation)")
 }
 
 do {
