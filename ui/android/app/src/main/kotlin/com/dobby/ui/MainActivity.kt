@@ -47,6 +47,7 @@ import com.dobby.presentation.PermissionTargetFence
 import com.dobby.presentation.SubscriptionLoadCoordinator
 import com.dobby.presentation.SubscriptionRequest
 import com.dobby.vpn.BuildConfig
+import com.dobby.vpn.R
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.Executors
@@ -923,8 +924,7 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
         AndroidView(
             factory = { controller.createLogView(it) },
             modifier = Modifier.fillMaxWidth().weight(1f)
-                .clipToBounds()
-                .testTag("logs.viewport"),
+                .clipToBounds(),
             update = {
                 it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor)
                 controller.restoreRetainedLogView(it)
@@ -935,6 +935,7 @@ private fun LogsPane(controller: SessionController, modifier: Modifier) {
 
 private class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {
     private val content = android.widget.TextView(context).apply {
+        id = R.id.logs_viewport
         textSize = 12f
         setTextIsSelectable(true)
         movementMethod = android.text.method.LinkMovementMethod.getInstance()

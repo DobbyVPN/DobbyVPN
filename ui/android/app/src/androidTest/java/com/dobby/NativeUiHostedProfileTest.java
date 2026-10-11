@@ -1957,8 +1957,11 @@ public final class NativeUiHostedProfileTest {
                 tapEnabledControl("Profile " + (selectedIndex + 1) + " action", deadline);
                 JSONObject selected = awaitSelection(
                         auto.getLong("generation"), "PROFILE_INDEX", selectedIndex, deadline);
-                tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
-                verifyPendingAutoTransition(subscriptionURL, selected, deadline);
+                Object service = currentNativeVpnService();
+                synchronized (service) {
+                    tapEnabledControl(CONNECTION_ACTION_LABEL, deadline);
+                    verifyPendingAutoTransition(subscriptionURL, selected, deadline);
+                }
                 JSONObject active = awaitSelection(
                         selected.getLong("generation"), "AUTO_SELECT", -1, deadline);
                 tapUiControl("Clear", remainingTimeout(deadline, "ANDROID_UI_STATE_TIMEOUT"));
@@ -4691,7 +4694,9 @@ public final class NativeUiHostedProfileTest {
         if ("Paste".equals(label)) return "subscription.paste";
         if ("Retry".equals(label)) return "subscription.retry";
         if ("Connection controls".equals(label)) return "connection.controls";
-        if ("Connection logs".equals(label)) return "logs.viewport";
+        if ("Connection logs".equals(label)) {
+            return context.getPackageName() + ":id/logs_viewport";
+        }
         if ("Clear".equals(label)) return "logs.clear";
         if ("Share logs".equals(label)) return "logs.export";
         if ("Active profile".equals(label)) return "profile.active";
