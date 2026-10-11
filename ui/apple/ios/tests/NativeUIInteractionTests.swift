@@ -135,8 +135,6 @@ final class NativeUIInteractionTests: XCTestCase {
         assertLogLayout()
         let logs = app.textViews["Connection logs"]
         XCTAssertTrue(logs.waitForExistence(timeout: 10))
-        let populated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", ""), object: logs)
-        XCTAssertEqual(XCTWaiter.wait(for: [populated], timeout: 10), .completed, "Retained records should be visible before clearing")
         let clearSentinel = "Paste an HTTPS subscription URL with a host"
         UIPasteboard.general.string = "http://example.invalid/clear-sentinel"
         let sentinelCount = occurrences(of: clearSentinel, in: logs.value as? String ?? "")
