@@ -2230,7 +2230,18 @@ internal static partial class Program
         LogsCaseDeadline deadline, List<object> assertions, List<string> screenshots, string screenshotDirectory)
     {
         var initialEntry = ReadFixtureEntry(diagnostics, fixtureMarkers[^1]);
-        WaitForRenderedDetails(app, initialEntry, deadline);
+        var initialAutomationId = LogPresentationState.DetailsAutomationId(initialEntry);
+        WaitLogsCase(deadline, "initial rendered log tail", () =>
+        {
+            var root = AutomationElement.FromHandle(app.Window);
+            if (FindUniqueAutomationId(root, initialAutomationId) is null) return false;
+            var currentViewport = FindUniqueAutomationId(root, "Backend logs");
+            if (currentViewport is null || currentViewport.Current.IsOffscreen ||
+                !HasUsableBounds(PhysicalBounds(currentViewport, "Backend logs")) ||
+                !currentViewport.TryGetCurrentPattern(ScrollPattern.Pattern, out var currentPattern))
+                return false;
+            return ((ScrollPattern)currentPattern).Current.VerticalScrollPercent == 100.0;
+        }, "The fixture row was not present at the exact rendered log tail before the logs-case deadline");
         var viewport = RequireLogsViewport(app);
         if (!viewport.TryGetCurrentPattern(ScrollPattern.Pattern, out var scrollPattern))
             throw new InvalidOperationException("Rendered Backend logs control did not expose scrolling");
