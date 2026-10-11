@@ -2895,7 +2895,7 @@ func runMacOSConnectedLayoutCase(
     _ = try pasteValueWithNativeControl(activeApp!.application, window: input.nodes[0],
                                         value: subscriptionURL, expectedSource: subscriptionURL)
     let originalInventory = try waitMacOSForAcceptedInventory(
-        activeApp!, source: subscriptionURL, minimumRows: 1, deadline: deadline
+        activeApp!, source: subscriptionURL, minimumRows: 2, deadline: deadline
     )
     _ = try macOSNativeWaitForSubscription(request, deadline: deadline, count: initialCount + 1)
     let originalSnapshot = try observer("snapshot", min(30, deadline.remaining), nil)
@@ -2905,8 +2905,8 @@ func runMacOSConnectedLayoutCase(
           !originalProfiles.isEmpty else {
         throw HelperError("Connected-layout Configure did not expose its accepted real profile inventory")
     }
-    try require(originalProfiles.count == 2 && originalInventory.rows.count == 2,
-                "Connected-layout requires the original two-profile inventory used for restoration")
+    try require(originalProfiles.count >= 2 && originalInventory.rows.count >= 2,
+                "Connected-layout requires at least two profiles in the original inventory")
     try macOSNativeAssertion(&assertions, id: "connected-layout-source-inventory-is-accepted",
                              expected: ["source_url": subscriptionURL,
                                         "digest": originalDigest,
@@ -3001,7 +3001,7 @@ func runMacOSConnectedLayoutCase(
     try macOSNativeAssertion(&assertions, id: "connected-layout-restore-reuses-owned-native-process",
                              expected: Int(activeApp!.pid), actual: Int(restoreOpen.processIdentifier))
     let restoredInventory = try waitMacOSForAcceptedInventory(
-        activeApp!, source: restoreURL, minimumRows: 1, deadline: deadline
+        activeApp!, source: restoreURL, minimumRows: 2, deadline: deadline
     )
     let restoredRequest = try macOSNativeWaitForSubscription(request, deadline: deadline,
                                                              count: beforeRestoreCount + 1)

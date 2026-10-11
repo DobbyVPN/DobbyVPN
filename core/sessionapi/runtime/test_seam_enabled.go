@@ -264,6 +264,7 @@ func (s *recoveryStopSeam) finishRecoveryHold(err error) {
 	}
 	s.phase = recoveryStopEnabled
 	s.faultRef = sessionapi.SessionRef{}
+	s.markerSeen = false
 }
 
 func (s *recoveryStopSeam) cancelRecovery(ref sessionapi.SessionRef) {
@@ -272,6 +273,7 @@ func (s *recoveryStopSeam) cancelRecovery(ref sessionapi.SessionRef) {
 	if s.phase == recoveryStopFaultInjected && ref.SessionID == s.faultRef.SessionID && ref.Generation > s.faultRef.Generation {
 		s.phase = recoveryStopEnabled
 		s.faultRef = sessionapi.SessionRef{}
+		s.markerSeen = false
 	}
 }
 

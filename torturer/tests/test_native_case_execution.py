@@ -148,6 +148,92 @@ class NativeCaseExecutionTests(unittest.TestCase):
             base.finalize.assert_called_once()
             self.assertNotIn("backend_cleanup_confirmed", record)
 
+    def test_auto_recovery_repeat_resets_marker_between_clean_attempts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = argparse.Namespace(
+                platform="windows", native_cases=["auto-recovery-stop"], repeat=2,
+                raw_log_dir=root, timeout=1200, ui_helper=Path("helper"),
+                ui=Path("app"), profile=Path("profile"),
+            )
+            base = Mock()
+            fixture = Mock()
+            fixture.start.return_value = "https://127.0.0.1/subscription"
+            fixture.failure_url = "https://127.0.0.1/failure"
+            fixture.control_url = "https://127.0.0.1/control"
+            fixture.control_key = "fixture-key"
+            marker_states = []
+
+            def run_case(_helper, _app, _case, _directory, _timeout, *, context, observer):
+                marker = Path(context["auto_recovery_marker"])
+                marker_states.append(marker.exists())
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text("armed after real route and traffic\n", encoding="utf-8")
+                return {"outcome": "passed", "cleanup_errors": []}
+
+            with (
+                patch("torturer_runner.subscription_fixture.SubscriptionFixture", return_value=fixture),
+                patch("torturer_runner.ui.journey._base_adapter", return_value=base),
+                patch("torturer_runner.ui.native_case.run_desktop_case", side_effect=run_case),
+            ):
+                result = run_native_cases(args)
+
+            self.assertTrue(result["complete"])
+            self.assertEqual([case["outcome"] for case in result["cases"]], ["passed", "passed"])
+            self.assertEqual(marker_states, [False, False])
+            self.assertEqual((root / "recovery-stop.arm").read_text(encoding="utf-8"),
+                             "armed after real route and traffic\n")
+            self.assertEqual(base.reset.call_count, 2)
+            self.assertEqual(base.finalize.call_count, 2)
+
+    def test_auto_recovery_repeat_stops_when_marker_reset_is_unproven(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = argparse.Namespace(
+                platform="windows", native_cases=["auto-recovery-stop"], repeat=2,
+                raw_log_dir=root, timeout=1200, ui_helper=Path("helper"),
+                ui=Path("app"), profile=Path("profile"),
+            )
+            fixture = Mock()
+            fixture.start.return_value = "https://127.0.0.1/subscription"
+            fixture.failure_url = "https://127.0.0.1/failure"
+            fixture.control_url = "https://127.0.0.1/control"
+            fixture.control_key = "fixture-key"
+            with (
+                patch("torturer_runner.subscription_fixture.SubscriptionFixture", return_value=fixture),
+                patch("torturer_runner.ui.journey._base_adapter", return_value=Mock()),
+                patch("torturer_runner.ui.native_case.run_desktop_case",
+                      return_value={"outcome": "passed", "cleanup_errors": []}) as run_case,
+            ):
+                result = run_native_cases(args)
+
+            self.assertEqual(run_case.call_count, 1)
+            self.assertEqual([case["outcome"] for case in result["cases"]], ["failed", "not-run"])
+            self.assertTrue(any("repeat marker reset" in error
+                                for error in result["cases"][0]["cleanup_errors"]))
+
+    def test_auto_recovery_setup_failure_keeps_original_error_and_stops_repeat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(
+                platform="windows", native_cases=["auto-recovery-stop"], repeat=2,
+                raw_log_dir=Path(directory), timeout=1200, ui_helper=Path("helper"),
+                ui=Path("app"), profile=Path("profile"),
+            )
+            fixture = Mock()
+            fixture.start.side_effect = RuntimeError("fixture setup failed")
+            with (
+                patch("torturer_runner.subscription_fixture.SubscriptionFixture", return_value=fixture),
+                patch("torturer_runner.ui.journey._base_adapter") as base_adapter,
+                patch("torturer_runner.ui.native_case.run_desktop_case") as run_case,
+            ):
+                result = run_native_cases(args)
+
+            self.assertEqual([case["outcome"] for case in result["cases"]], ["failed", "not-run"])
+            self.assertIn("fixture setup failed", result["cases"][0]["error"])
+            self.assertEqual(run_case.call_count, 0)
+            base_adapter.assert_not_called()
+            fixture.close.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

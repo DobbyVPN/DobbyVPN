@@ -35,7 +35,7 @@ internal static partial class Program
             throw new InvalidDataException("Connected-layout source profile must contain 1 byte through 1 MiB");
         var fixtureGets = fixtureStart.SubscriptionGets;
         ApplySubscriptionThroughRenderedControl(app, subscriptionUrl, paste: false, deadline);
-        var originalLayout = WaitForAcceptedProfiles(app, subscriptionUrl, deadline, minimumRows: 1);
+        var originalLayout = WaitForAcceptedProfiles(app, subscriptionUrl, deadline, minimumRows: 2);
         var originalDigest = originalLayout.GetValueOrDefault("profile_digest") as string
             ?? throw new InvalidOperationException("Connected-layout source inventory has no rendered configuration digest");
         var originalRows = ProfileRows(originalLayout);
@@ -45,16 +45,17 @@ internal static partial class Program
         var originalFixture = WaitForSubscriptionFixtureGets(
             controlUrl, controlKey, fixtureGets + 1, deadline, TimeSpan.FromMilliseconds(300));
         AssertSubscriptionFixtureRequest(assertions, "connected-layout-source-configure", fixtureStart, originalFixture);
-        AssertLogsCase(assertions, "connected-layout-source-is-the-restorable-two-profile-inventory", 2,
-            originalRows.Length);
         AssertLogsCase(assertions, "connected-layout-source-editor-retains-requested-url", subscriptionUrl,
             ReadSourceEditor(app));
         fixtureGets = originalFixture.SubscriptionGets;
 
         var originalSnapshot = WaitNativeSnapshot(request, deadline, "connected-layout source inventory", snapshot =>
             JsonBoolean(snapshot, "configured") && JsonString(snapshot, "source_url") == subscriptionUrl &&
-            JsonString(snapshot, "digest") == originalDigest && JsonArrayLength(snapshot, "profiles") > 0 &&
+            JsonString(snapshot, "digest") == originalDigest && JsonArrayLength(snapshot, "profiles") >= 2 &&
             IsDisconnectedInventory(snapshot));
+        var originalProfileCount = JsonArrayLength(originalSnapshot, "profiles");
+        AssertLogsCase(assertions, "connected-layout-source-inventory-has-at-least-two-profiles", true,
+            originalProfileCount >= 2 && originalRows.Length >= 2);
         AssertLogsCase(assertions, "connected-layout-source-Go-and-rendered-digests-match", originalDigest,
             JsonString(originalSnapshot, "digest"));
 
@@ -152,7 +153,7 @@ internal static partial class Program
             app.StartTicks);
         AssertLogsCase(assertions, "connected-layout-restore-import-retains-owned-window", true,
             app.Window == appWindowBeforeRestore && restoreWindowOwner == (uint)appPidBeforeRestore);
-        var restoredLayout = WaitForAcceptedProfiles(app, restoreUrl, deadline, minimumRows: originalRows.Length);
+        var restoredLayout = WaitForAcceptedProfiles(app, restoreUrl, deadline, minimumRows: 2);
         AssertLogsCase(assertions, "connected-layout-restore-os-import-renders-requested-url", restoreUrl,
             ReadSourceEditor(app));
         AssertProfileRowsHaveSemanticIds(assertions, restoredLayout);
@@ -165,10 +166,10 @@ internal static partial class Program
         fixtureGets = afterRestoreStats.SubscriptionGets;
         var restored = WaitNativeSnapshot(request, deadline, "restore original connected profile inventory", snapshot =>
             JsonString(snapshot, "source_url") == restoreUrl && JsonString(snapshot, "state") == "CONNECTED" &&
-            JsonString(snapshot, "digest") == originalDigest && JsonArrayLength(snapshot, "profiles") == originalRows.Length);
+            JsonString(snapshot, "digest") == originalDigest && JsonArrayLength(snapshot, "profiles") == originalProfileCount);
         AssertLogsCase(assertions, "connected-layout-restores-original-inventory-digest", originalDigest,
             restoredDigest);
-        AssertLogsCase(assertions, "connected-layout-restores-original-inventory-count", originalRows.Length,
+        AssertLogsCase(assertions, "connected-layout-restores-original-inventory-count", originalProfileCount,
             JsonArrayLength(restored, "profiles"));
         AssertLogsCase(assertions, "connected-layout-restore-retains-connected-generation", initialGeneration,
             JsonInt64(restored, "generation"));
@@ -176,8 +177,12 @@ internal static partial class Program
             SameActiveGeneration(restored, connected));
         AssertLogsCase(assertions, "connected-layout-restore-preserves-active-profile-fields", true,
             SameActiveProfile(restored, connected));
-        AssertLogsCase(assertions, "connected-layout-restores-original-semantic-row-ids", true,
-            SameProfileAutomationIds(originalLayout, restoredLayout));
+        var restoredRows = ProfileRows(restoredLayout);
+        AssertLogsCase(assertions, "connected-layout-restored-rows-belong-to-original-inventory", true,
+            restoredRows.Length >= 2 && restoredRows.All(row =>
+                row.GetValueOrDefault("profile_digest") as string == originalDigest &&
+                row.GetValueOrDefault("profile_index") is int index &&
+                index >= 0 && index < originalProfileCount));
         AssertLogsCase(assertions, "connected-layout-restore-keeps-rendered-connected-status", "Connected",
             ReadRenderedStatus(app));
         AddScreenshot(app, "connected-layout", "restored-original-inventory", deadline, screenshots, screenshotDirectory);

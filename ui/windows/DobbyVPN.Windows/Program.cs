@@ -2,6 +2,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using Windows.ApplicationModel.Activation;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace DobbyVPN.Windows;
@@ -34,12 +35,13 @@ internal static class Program
         var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
         LogActivation("activation.startup", "Captured Windows app startup activation", activation, args);
         var instance = AppInstance.FindOrRegisterForKey("DobbyVPN");
+        LogInstanceRegistration(instance);
         if (!instance.IsCurrent)
         {
             LogActivation("activation.redirect-start", "Redirecting activation to the running app", activation, args);
             try
             {
-                Task.Run(async () => await instance.RedirectActivationToAsync(activation)).GetAwaiter().GetResult();
+                StaActivationRedirect.WaitForRedirect(async () => await instance.RedirectActivationToAsync(activation));
                 LogActivation("activation.redirect-complete", "Startup activation redirect completed", activation, args, true);
             }
             catch (Exception error)
@@ -64,6 +66,37 @@ internal static class Program
         {
             SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread()));
             _ = new App();
+        });
+    }
+
+    private static void LogInstanceRegistration(AppInstance instance)
+    {
+        object targetProcess;
+        try
+        {
+            using var process = Process.GetProcessById(checked((int)instance.ProcessId));
+            targetProcess = new
+            {
+                processId = process.Id,
+                processName = process.ProcessName,
+                executablePath = process.MainModule?.FileName,
+                startTimeUtc = process.StartTime.ToUniversalTime().ToString("O"),
+                sessionId = process.SessionId,
+                hasExited = process.HasExited,
+            };
+        }
+        catch (Exception error)
+        {
+            targetProcess = new { processId = instance.ProcessId, error = error.ToString() };
+        }
+
+        NativeDiagnostics.Current.RecordInfo("activation.instance-registration", "Resolved the Windows app instance key", new
+        {
+            key = instance.Key,
+            isCurrent = instance.IsCurrent,
+            currentProcessId = Environment.ProcessId,
+            targetProcessId = instance.ProcessId,
+            targetProcess,
         });
     }
 

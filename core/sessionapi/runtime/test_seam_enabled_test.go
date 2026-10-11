@@ -129,7 +129,7 @@ func TestRecoveryStopControlUsesRealChecksAndHoldsOnlyRecoveryGeneration(t *test
 	}
 }
 
-func TestRecoveryStopMarkerArmsOnNewMarkerOnly(t *testing.T) {
+func TestRecoveryStopMarkerCanArmForRepeatedStopCycles(t *testing.T) {
 	resetTestSeamsForTest()
 	t.Cleanup(resetTestSeamsForTest)
 	marker := filepath.Join(t.TempDir(), "trigger")
@@ -151,41 +151,54 @@ func TestRecoveryStopMarkerArmsOnNewMarkerOnly(t *testing.T) {
 		t.Fatalf("enabled marker timing=%s/%d, want 1s/1", interval, threshold)
 	}
 
-	ref := sessionapi.SessionRef{SessionID: "marker-session", Generation: 4}
-	if err := r.options.InitialReadiness(context.Background(), ref, ""); err != nil {
-		t.Fatalf("initial real readiness failed: %v", err)
-	}
-	if err := r.options.ConnectedHealth(context.Background(), ref, ""); err != nil {
-		t.Fatalf("pre-marker real health failed: %v", err)
-	}
-	if err := os.WriteFile(marker, nil, 0o600); err != nil {
-		t.Fatalf("create run-owned marker: %v", err)
-	}
-	if err := r.options.ConnectedHealth(context.Background(), ref, ""); err == nil {
-		t.Fatal("marker did not arm the connected-health fault")
-	}
-	if healthCalls != 1 {
-		t.Fatalf("real health checks=%d, want only the pre-marker check", healthCalls)
-	}
-	recoveryCtx, cancelRecovery := context.WithCancel(context.Background())
-	recoveryDone := make(chan error, 1)
-	go func() {
-		recoveryDone <- r.options.InitialReadiness(recoveryCtx, sessionapi.SessionRef{
-			SessionID: ref.SessionID, Generation: ref.Generation + 1,
-		}, "")
-	}()
-	waitForRecoveryStopPhase(t, recoveryStopHolding)
-	if readinessCalls != 2 {
-		t.Fatalf("real initial readiness calls=%d, want initial and recovery checks", readinessCalls)
-	}
-	cancelRecovery()
-	select {
-	case err := <-recoveryDone:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("marker recovery readiness error=%v, want context cancellation", err)
+	for attempt := 0; attempt < 2; attempt++ {
+		ref := sessionapi.SessionRef{SessionID: "marker-session", Generation: uint64(4 + attempt*2)}
+		if err := r.options.InitialReadiness(context.Background(), ref, ""); err != nil {
+			t.Fatalf("attempt %d initial real readiness failed: %v", attempt+1, err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("marker recovery readiness did not return after cancellation")
+		if err := r.options.ConnectedHealth(context.Background(), ref, ""); err != nil {
+			t.Fatalf("attempt %d pre-marker real health failed: %v", attempt+1, err)
+		}
+		if err := os.WriteFile(marker, nil, 0o600); err != nil {
+			t.Fatalf("attempt %d create run-owned marker: %v", attempt+1, err)
+		}
+		if err := r.options.ConnectedHealth(context.Background(), ref, ""); err == nil {
+			t.Fatalf("attempt %d marker did not arm the connected-health fault", attempt+1)
+		}
+		if healthCalls != attempt+1 {
+			t.Fatalf("attempt %d real health checks=%d, want %d", attempt+1, healthCalls, attempt+1)
+		}
+		recoveryCtx, cancelRecovery := context.WithCancel(context.Background())
+		recoveryDone := make(chan error, 1)
+		go func(ref sessionapi.SessionRef) {
+			recoveryDone <- r.options.InitialReadiness(recoveryCtx, sessionapi.SessionRef{
+				SessionID: ref.SessionID, Generation: ref.Generation + 1,
+			}, "")
+		}(ref)
+		waitForRecoveryStopPhase(t, recoveryStopHolding)
+		if readinessCalls != 2*(attempt+1) {
+			t.Fatalf("attempt %d real initial readiness calls=%d, want %d", attempt+1,
+				readinessCalls, 2*(attempt+1))
+		}
+		cancelRecovery()
+		select {
+		case err := <-recoveryDone:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("attempt %d marker recovery readiness error=%v, want context cancellation", attempt+1, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("attempt %d marker recovery readiness did not return after cancellation", attempt+1)
+		}
+
+		stopSeam.mu.Lock()
+		phase, markerSeen := stopSeam.phase, stopSeam.markerSeen
+		stopSeam.mu.Unlock()
+		if phase != recoveryStopEnabled || markerSeen {
+			t.Fatalf("attempt %d Stop left phase=%d markerSeen=%t, want enabled/unseen", attempt+1, phase, markerSeen)
+		}
+		if err := os.Remove(marker); err != nil {
+			t.Fatalf("attempt %d remove marker before next Stop: %v", attempt+1, err)
+		}
 	}
 }
 

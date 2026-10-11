@@ -2236,15 +2236,54 @@ internal static partial class Program
             throw new InvalidOperationException("Rendered Backend logs control did not expose scrolling");
         var scroll = (ScrollPattern)scrollPattern;
         var initialPercent = scroll.Current.VerticalScrollPercent;
-        AssertLogsCase(assertions, "initial-view-follows-tail", true, initialPercent >= 99);
+        AssertLogsCase(assertions, "initial-view-follows-tail", 100.0, initialPercent);
+        var initialWindow = FirstVisibleLogWindow(app)
+            ?? throw new InvalidOperationException("Initial log viewport did not expose a visible structured record");
 
         RequireForeground(app.Window, "freezing log follow with a wheel input over the rendered log viewport");
+        var freezeAssertion = new Dictionary<string, object?>
+        {
+            ["id"] = "upward-wheel-moves-rendered-log-viewport",
+            ["outcome"] = "not-run",
+            ["expected"] = new { vertical_percent_decreased = true, visible_window_changed = true },
+            ["actual"] = new
+            {
+                vertical_percent_before = initialPercent,
+                visible_window_before = initialWindow,
+            },
+        };
+        assertions.Add(freezeAssertion);
+        var frozenPercent = initialPercent;
+        VisibleLogWindow? frozenWindowAfterWheel = null;
         SendLogsViewportWheel(app, 120, "freeze log follow", deadline);
-        WaitLogsCase(deadline, "log follow freeze", () => CurrentVerticalScrollPercent(app) < 99,
-            "Rendered log viewport did not move upward after the wheel input");
-        var frozenWindow = FirstVisibleLogWindow(app);
-        if (frozenWindow is null)
-            throw new InvalidOperationException("Frozen log viewport did not expose a visible structured record");
+        try
+        {
+            WaitLogsCase(deadline, "log follow freeze", () =>
+            {
+                frozenPercent = CurrentVerticalScrollPercent(app);
+                frozenWindowAfterWheel = FirstVisibleLogWindow(app);
+                var percentDecreased = frozenPercent < initialPercent;
+                var visibleWindowChanged = frozenWindowAfterWheel is { } currentWindow && currentWindow != initialWindow;
+                freezeAssertion["actual"] = new
+                {
+                    vertical_percent_before = initialPercent,
+                    vertical_percent_after = frozenPercent,
+                    visible_window_before = initialWindow,
+                    visible_window_after = frozenWindowAfterWheel,
+                    vertical_percent_decreased = percentDecreased,
+                    visible_window_changed = visibleWindowChanged,
+                };
+                return percentDecreased && visibleWindowChanged;
+            }, "Rendered log viewport did not move upward after the wheel input");
+            freezeAssertion["outcome"] = "passed";
+        }
+        catch
+        {
+            freezeAssertion["outcome"] = "failed";
+            throw;
+        }
+        var frozenWindow = frozenWindowAfterWheel
+            ?? throw new InvalidOperationException("Frozen log viewport did not expose a visible structured record");
 
         var markerPrefix = fixtureMarkers[0].Split("-row-", StringSplitOptions.None)[0];
         var appendedMarkers = new[] { markerPrefix + "-controlled-append-1", markerPrefix + "-controlled-append-2" };
@@ -2264,14 +2303,53 @@ internal static partial class Program
         AddScreenshot(app, "logs-freeze-resume", "frozen", deadline, screenshots, screenshotDirectory);
 
         RequireForeground(app.Window, "resuming log follow with a wheel input over the rendered log viewport");
-        SendLogsViewportWheel(app, -120, "resume log follow", deadline);
-        WaitLogsCase(deadline, "log follow resume", () =>
+        var resumeStartPercent = CurrentVerticalScrollPercent(app);
+        var resumeStartWindow = FirstVisibleLogWindow(app)
+            ?? throw new InvalidOperationException("Frozen log viewport did not expose a visible structured record before resume");
+        var resumeAssertion = new Dictionary<string, object?>
         {
-            var currentPercent = CurrentVerticalScrollPercent(app);
-            var currentRoot = AutomationElement.FromHandle(app.Window);
-            return currentPercent >= 99 && appendedEntries.All(entry =>
-                FindUniqueAutomationId(currentRoot, LogPresentationState.DetailsAutomationId(entry)) is not null);
-        }, "Controlled log entries were not rendered after returning to the bottom");
+            ["id"] = "downward-wheel-resumes-rendered-log-tail",
+            ["outcome"] = "not-run",
+            ["expected"] = new { vertical_scroll_percent = 100.0, appended_records_rendered = true },
+            ["actual"] = new
+            {
+                vertical_percent_before = resumeStartPercent,
+                visible_window_before = resumeStartWindow,
+                appended_records_rendered = false,
+            },
+        };
+        assertions.Add(resumeAssertion);
+        var resumedPercent = resumeStartPercent;
+        VisibleLogWindow? resumedWindow = null;
+        var appendedRecordsRendered = false;
+        SendLogsViewportWheel(app, -120, "resume log follow", deadline);
+        try
+        {
+            WaitLogsCase(deadline, "log follow resume", () =>
+            {
+                resumedPercent = CurrentVerticalScrollPercent(app);
+                resumedWindow = FirstVisibleLogWindow(app);
+                var currentRoot = AutomationElement.FromHandle(app.Window);
+                appendedRecordsRendered = appendedEntries.All(entry =>
+                    FindUniqueAutomationId(currentRoot, LogPresentationState.DetailsAutomationId(entry)) is not null);
+                resumeAssertion["actual"] = new
+                {
+                    vertical_percent_before = resumeStartPercent,
+                    vertical_percent_after = resumedPercent,
+                    visible_window_before = resumeStartWindow,
+                    visible_window_after = resumedWindow,
+                    at_exact_bottom = resumedPercent == 100.0,
+                    appended_records_rendered = appendedRecordsRendered,
+                };
+                return resumedPercent == 100.0 && appendedRecordsRendered;
+            }, "Controlled log entries were not rendered after returning to the bottom");
+            resumeAssertion["outcome"] = "passed";
+        }
+        catch
+        {
+            resumeAssertion["outcome"] = "failed";
+            throw;
+        }
         foreach (var (entry, index) in appendedEntries.Select((entry, index) => (entry, index)))
             AssertLogsCase(assertions, $"resumed-tail-shows-controlled-append-{index + 1}", entry.Raw,
                 FindLogDetailsRawText(app, entry));

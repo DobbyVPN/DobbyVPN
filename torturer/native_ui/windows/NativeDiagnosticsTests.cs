@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using DobbyVPN.Windows;
 
@@ -232,9 +233,49 @@ internal static class NativeDiagnosticsTests
             VerifyLogPresentationState();
             VerifySubscriptionLoadState();
             VerifyProfileAutomationIds();
-            Console.WriteLine("Native diagnostics: 64 MiB exact export, bounded preview, persisted history, structured ordering, raw streams, capture classification, same-stream incomplete record/UTF-8 completion, rotation, input protection, failure cleanup, production log presentation, subscription load state, and profile automation identifiers passed");
+            await VerifyStaActivationRedirectAsync();
+            Console.WriteLine("Native diagnostics: 64 MiB exact export, bounded preview, persisted history, structured ordering, raw streams, capture classification, same-stream incomplete record/UTF-8 completion, rotation, input protection, failure cleanup, production log presentation, subscription load state, profile automation identifiers, and production STA activation wait passed");
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    private static async Task VerifyStaActivationRedirectAsync()
+    {
+        var completed = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sta = new Thread(() =>
+        {
+            try
+            {
+                var workFinished = false;
+                StaActivationRedirect.WaitForRedirect(async () =>
+                {
+                    await Task.Yield();
+                    workFinished = true;
+                });
+                Require(workFinished, "STA activation wait returned before asynchronous redirection completed");
+
+                var expected = new InvalidOperationException("activation redirect failure sentinel");
+                try
+                {
+                    StaActivationRedirect.WaitForRedirect(() => Task.FromException(expected));
+                    throw new InvalidOperationException("STA activation wait swallowed a redirect failure");
+                }
+                catch (InvalidOperationException actual) when (ReferenceEquals(actual, expected)) { }
+
+                completed.SetResult(null);
+            }
+            catch (Exception error)
+            {
+                completed.SetResult(error);
+            }
+        });
+        sta.IsBackground = true;
+        sta.SetApartmentState(ApartmentState.STA);
+        sta.Start();
+        var failure = await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        sta.Join();
+        if (failure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
     private static void VerifyLogPresentationState()

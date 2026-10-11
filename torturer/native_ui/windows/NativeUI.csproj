@@ -12,5 +12,6 @@
     <Compile Include="../../../ui/windows/DobbyVPN.Windows/LogPresentationState.cs" Link="LogPresentationState.cs" />
     <Compile Include="../../../ui/windows/DobbyVPN.Windows/SubscriptionLoadState.cs" Link="SubscriptionLoadState.cs" />
     <Compile Include="../../../ui/windows/DobbyVPN.Windows/ProfileAutomationIds.cs" Link="ProfileAutomationIds.cs" />
+    <Compile Include="../../../ui/windows/DobbyVPN.Windows/StaActivationRedirect.cs" Link="StaActivationRedirect.cs" />
   </ItemGroup>
 </Project>

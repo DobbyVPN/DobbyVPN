@@ -146,6 +146,26 @@ def _run_case(args: argparse.Namespace, case: str, attempt: int, deadline: float
                 traceback.print_exception(cleanup_error, file=sys.stderr)
                 record.setdefault("cleanup_errors", []).append(_exception_details(cleanup_error))
                 record["outcome"] = "failed"
+        if case == AUTO_RECOVERY_STOP_CASE and attempt < getattr(args, "repeat", 1):
+            if record.get("outcome") != "passed" or record.get("cleanup_errors"):
+                record.setdefault("cleanup_errors", []).append(
+                    "auto-recovery repeat boundary unconfirmed after an unsuccessful attempt; marker state unchanged"
+                )
+                record["outcome"] = "failed"
+            else:
+                marker = Path(context["auto_recovery_marker"])
+                try:
+                    if marker.is_symlink() or not marker.is_file():
+                        raise OSError("expected regular recovery marker after passed Stop case")
+                    marker.unlink()
+                    if marker.exists() or marker.is_symlink():
+                        raise OSError("recovery marker remains after removal")
+                except OSError as cleanup_error:
+                    traceback.print_exception(cleanup_error, file=sys.stderr)
+                    record.setdefault("cleanup_errors", []).append(
+                        f"auto-recovery repeat marker reset: {_exception_details(cleanup_error)}"
+                    )
+                    record["outcome"] = "failed"
 
 
 def run_native_cases(args: argparse.Namespace) -> dict[str, object]:
