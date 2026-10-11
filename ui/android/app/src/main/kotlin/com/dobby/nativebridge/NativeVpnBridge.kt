@@ -253,7 +253,7 @@ object NativeVpnBridge {
                 .setType("application/gzip")
                 .putExtra(Intent.EXTRA_STREAM, uri)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                .setClipData(ClipData.newUri(context.contentResolver, "DobbyVPN logs", uri))
+            share.setClipData(ClipData.newUri(context.contentResolver, "DobbyVPN logs", uri))
             context.startActivity(
                 Intent.createChooser(share, "Export logs")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),

@@ -11,7 +11,6 @@ from torturer_runner.screenshot_artifacts import (
     ScreenshotIntegrityError,
     assert_marker_matches,
     file_metadata,
-    nonblank_png_dimensions,
     png_metadata,
 )
 
@@ -36,28 +35,7 @@ class ScreenshotArtifactTests(unittest.TestCase):
             self.assertEqual(metadata["mime"], "image/png")
             self.assertEqual(metadata["bytes"], len(original))
             self.assertEqual(metadata["sha256"], sha256(original).hexdigest())
-            self.assertEqual(nonblank_png_dimensions(path), (2, 2))
             self.assertEqual(path.read_bytes(), original)
-
-    def test_nonblank_proof_rejects_black_uniform_and_invisible_frames(self) -> None:
-        samples = {
-            "black": ([(0, 0, 0, 255)] * 4, "is blank"),
-            "uniform": ([(70, 70, 70, 255)] * 4, "uniformly blank"),
-            "invisible": (
-                [(255, 0, 0, 0), (0, 255, 0, 0), (0, 0, 255, 0), (255, 255, 255, 0)],
-                "no visible pixels",
-            ),
-        }
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            for label, (pixels, message) in samples.items():
-                with self.subTest(label=label):
-                    path = root / f"{label}.png"
-                    image = Image.new("RGBA", (2, 2))
-                    image.putdata(pixels)
-                    image.save(path, format="PNG")
-                    with self.assertRaisesRegex(ScreenshotIntegrityError, message):
-                        nonblank_png_dimensions(path)
 
     def test_transfer_integrity_checks_do_not_decode_png_bytes(self) -> None:
         payload = b"not a decodable PNG, preserved until producer validation"

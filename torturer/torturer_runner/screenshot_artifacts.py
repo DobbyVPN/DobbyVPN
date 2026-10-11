@@ -94,21 +94,6 @@ def png_metadata(path: Path) -> dict[str, Any]:
     return metadata
 
 
-def nonblank_png_dimensions(path: Path) -> tuple[int, int]:
-    """Decode and require visible, nonuniform pixels in a rendered screenshot."""
-
-    image = _decode_png(path)
-    rgb = image.convert("RGB")
-    extrema = rgb.getextrema()
-    if all(low == 0 and high == 0 for low, high in extrema):
-        raise ScreenshotIntegrityError(f"screenshot {path} is blank")
-    if all(low == high for low, high in extrema):
-        raise ScreenshotIntegrityError(f"screenshot {path} is uniformly blank")
-    if image.convert("RGBA").getchannel("A").getextrema()[1] == 0:
-        raise ScreenshotIntegrityError(f"screenshot {path} has no visible pixels")
-    return image.width, image.height
-
-
 def assert_marker_matches(
     metadata: dict[str, Any],
     *,
@@ -137,6 +122,5 @@ __all__ = [
     "assert_files_identical",
     "assert_marker_matches",
     "file_metadata",
-    "nonblank_png_dimensions",
     "png_metadata",
 ]
