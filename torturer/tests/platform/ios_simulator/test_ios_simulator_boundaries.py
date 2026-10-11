@@ -64,22 +64,66 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                 return ios_simulator_app.CommandResult(0, "", "")
 
         with tempfile.TemporaryDirectory() as name:
-            root = Path(name)
-            result_bundle = root / "xctest-results.xcresult"
-            result_bundle.mkdir()
-            work_dir = root / "work"
-            work_dir.mkdir()
-            retained = ios_simulator_app._retain_xctest_screenshots(
+            run_dir = Path(name) / "run"
+            work_dir = run_dir / "work" / "ios"
+            diagnostics = work_dir / "diagnostics" / "ios-simulator"
+            result_bundle = diagnostics / "xctest-results.xcresult"
+            result_bundle.mkdir(parents=True)
+            result_bytes = b"complete original xcresult payload\x00\xff"
+            (result_bundle / "Data").write_bytes(result_bytes)
+            unexpected_output = b"producer-owned future diagnostic\x00\xff"
+            (diagnostics / "future-diagnostic.bin").write_bytes(unexpected_output)
+            exported = ios_simulator_app._retain_xctest_screenshots(
                 ExportRunner(),
                 result_bundle,
                 work_dir,
                 budget=ios_simulator_app.RunBudget(),
             )
-            self.assertEqual(retained.name, "ui-screenshots")
-            self.assertEqual((retained / "scroll-check.png").read_bytes(), screenshot_bytes)
+            self.assertEqual(exported.name, "ui-screenshots")
+            self.assertEqual((exported / "scroll-check.png").read_bytes(), screenshot_bytes)
             self.assertEqual(
-                sorted(path.name for path in retained.iterdir()), ["scroll-check.png"]
+                sorted(path.name for path in exported.iterdir()), ["scroll-check.png"]
             )
+            destination = run_dir / "logs" / "ios-simulator"
+            retained = ios_simulator_app.retain_ios_diagnostics(work_dir, destination)
+            self.assertEqual(retained, destination)
+            self.assertFalse(result_bundle.exists())
+            self.assertFalse(exported.exists())
+            self.assertEqual(
+                (retained / "future-diagnostic.bin").read_bytes(), unexpected_output
+            )
+            retained_bundle = retained / "xctest-results.xcresult"
+            self.assertEqual((retained_bundle / "Data").read_bytes(), result_bytes)
+            self.assertEqual(
+                (retained / "ui-screenshots" / "scroll-check.png").read_bytes(),
+                screenshot_bytes,
+            )
+            self.assertEqual(
+                ios_simulator_app.png_metadata(
+                    retained / "ui-screenshots" / "scroll-check.png"
+                )["width"],
+                1,
+            )
+            self.assertEqual(
+                (retained / "ui-screenshots" / "scroll-check.png").stat().st_mode
+                & 0o777,
+                0o600,
+            )
+            self.assertEqual((retained / "ui-screenshots").stat().st_mode & 0o777, 0o700)
+            self.assertEqual(retained.stat().st_mode & 0o777, 0o700)
+
+            source_bundle = diagnostics / "xctest-results.xcresult"
+            diagnostics.mkdir()
+            source_bundle.mkdir()
+            source_payload = source_bundle / "Data"
+            source_payload.write_bytes(b"complete source result")
+            with self.assertRaisesRegex(
+                ios_simulator_app.IOSSimulatorAppContractError,
+                "retained iOS diagnostics already exist",
+            ):
+                ios_simulator_app.retain_ios_diagnostics(work_dir, destination)
+            self.assertEqual(source_payload.read_bytes(), b"complete source result")
+            self.assertEqual((retained_bundle / "Data").read_bytes(), result_bytes)
 
     def test_disposable_simulator_creation_uses_unique_name_and_selected_device_type(self) -> None:
         selected = ios_simulator_app.AvailableSimulator(
@@ -179,6 +223,10 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             retained = ios_simulator_app.retain_ios_diagnostics(
                 work_dir, work_dir / "collected"
             )
+            self.assertFalse(report.exists())
+            retained_report = retained / report.name
+            retained_content = retained_report.read_text(encoding="utf-8")
+            retained_mode = retained_report.stat().st_mode & 0o777
 
         self.assertTrue(content.strip())
         self.assertIn(
@@ -187,14 +235,20 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
         )
         self.assertIn("command_stdout:\ninstall stdout", content)
         self.assertIn("command_stderr:\ninstall stderr", content)
-        self.assertEqual([path.name for path in retained], ["runner-failure.txt"])
+        self.assertEqual(retained, work_dir / "collected")
+        self.assertEqual(retained_content, content)
+        self.assertEqual(retained_mode, 0o600)
 
     def _run_local_adapter_failure(
-        self, phase: str, root: Path, failure: BaseException,
+        self,
+        phase: str,
+        root: Path,
+        failure: BaseException,
+        *, result_bundle_bytes: bytes | None = None,
     ) -> tuple[BaseException, Path, Path]:
         run_dir = root / "run"
         run_dir.mkdir(parents=True, exist_ok=True)
-        logs = root / "logs"
+        logs = run_dir / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         work = run_dir / "work" / "ios"
 
@@ -227,11 +281,22 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                 "screenshot_python": str(screenshot_python),
                 "source_sha": "d" * 40,
             }
+
+            def fail_contract(**_kwargs):
+                if result_bundle_bytes is not None:
+                    result_bundle = (
+                        work / "diagnostics" / "ios-simulator"
+                        / "xctest-results.xcresult"
+                    )
+                    result_bundle.mkdir(parents=True)
+                    (result_bundle / "Data").write_bytes(result_bundle_bytes)
+                raise failure
+
             with mock.patch.object(local_vm_ios.sys, "path", sys.path[:]):
                 with mock.patch.object(
                     local_vm_ios.ios,
                     "run_ios_simulator_app_contract",
-                    side_effect=failure,
+                    side_effect=fail_contract,
                 ):
                     with self.assertRaises(
                         ios_simulator_app.IOSSimulatorAppContractError
@@ -240,8 +305,13 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
 
         return caught.exception, work, logs
 
-    def test_local_prepare_and_run_retain_original_early_failure_reports(self) -> None:
-        for phase, stage in (("prepare", "ios-simulator-build"), ("run", "bootstatus")):
+    def test_local_prepare_and_run_retain_failure_reports_and_xctest_bundle(self) -> None:
+        bundle_bytes = b"complete xcresult payload\x00\xff"
+        cases = (
+            ("prepare", "ios-simulator-build", None),
+            ("run", "xctest-ui", bundle_bytes),
+        )
+        for phase, stage, result_bundle_bytes in cases:
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as name:
                 failure = ios_simulator_app.IOSSimulatorStageError(
                     stage, f"{phase} command failed"
@@ -256,7 +326,10 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                 original_notes = failure.__notes__[:]
 
                 caught, work, logs = self._run_local_adapter_failure(
-                    phase, Path(name), failure
+                    phase,
+                    Path(name),
+                    failure,
+                    result_bundle_bytes=result_bundle_bytes,
                 )
 
                 self.assertIs(caught, failure)
@@ -265,14 +338,27 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                 source_report = (
                     work / "diagnostics" / "ios-simulator" / "runner-failure.txt"
                 )
-                copied_report = logs / "ios-simulator" / "runner-failure.txt"
-                source_bytes = source_report.read_bytes()
+                retained_dir = logs / "ios-simulator"
+                retained_report = retained_dir / "runner-failure.txt"
+                self.assertFalse(source_report.exists())
+                source_bytes = retained_report.read_bytes()
                 self.assertTrue(source_bytes)
-                self.assertEqual(copied_report.read_bytes(), source_bytes)
                 self.assertIn(f"IOSSimulatorStageError: {failure}".encode(), source_bytes)
                 self.assertIn(f"TimeoutError: original {stage} cause".encode(), source_bytes)
                 for note in original_notes:
                     self.assertIn(note.encode(), source_bytes)
+                if result_bundle_bytes is not None:
+                    source_bundle = (
+                        work / "diagnostics" / "ios-simulator"
+                        / "xctest-results.xcresult"
+                    )
+                    retained_bundle = (
+                        retained_dir / "xctest-results.xcresult"
+                    )
+                    self.assertFalse(source_bundle.exists())
+                    self.assertEqual(
+                        (retained_bundle / "Data").read_bytes(), result_bundle_bytes
+                    )
 
     def test_local_prepare_write_failure_does_not_skip_existing_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -308,14 +394,14 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
             copied_existing = logs / "ios-simulator" / "ui_diagnostics.jsonl"
             self.assertEqual(copied_existing.read_bytes(), existing_bytes)
 
-    def test_local_run_copy_failure_keeps_boot_failure_and_report(self) -> None:
+    def test_local_run_collection_failure_keeps_boot_failure_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
             failure = ios_simulator_app.IOSSimulatorStageError(
                 "bootstatus", "simulator did not reach BackBoard"
             )
             failure.add_note("original bootstatus output")
-            collection_error = OSError("guest diagnostic copy failed")
+            collection_error = OSError("guest diagnostic transfer failed")
             with mock.patch.object(
                 local_vm_ios.ios,
                 "retain_ios_diagnostics",
@@ -1075,16 +1161,13 @@ class IOSSimulatorBoundaryTests(unittest.TestCase):
                             work_dir, root / "collected"
                         )
                         for filename, contents in native_bytes.items():
-                            self.assertEqual((diagnostics_dir / filename).read_bytes(), contents)
                             self.assertIn(
                                 f"bootstatus_native_log_{filename.replace('.', '_')}_retained=",
                                 notes,
                             )
-                            collected_file = next(
-                                path for path in retained if path.name == filename
-                            )
-                            self.assertEqual(collected_file.read_bytes(), contents)
-                        self.assertTrue(report.is_file())
+                            self.assertEqual((retained / filename).read_bytes(), contents)
+                        self.assertFalse(report.exists())
+                        self.assertTrue((retained / report.name).is_file())
 
     def test_stalled_process_pipe_drain_is_bounded_and_keeps_all_available_output(self) -> None:
         process = mock.Mock()

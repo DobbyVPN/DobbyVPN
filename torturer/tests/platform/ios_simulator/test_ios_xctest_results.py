@@ -255,11 +255,10 @@ class IOSXCTestResultsTests(unittest.TestCase):
             report = ios_simulator_app._write_xctest_test_results(raw, work_dir)
             retained_dir = Path(temporary) / "logs"
             retained = ios_simulator_app.retain_ios_diagnostics(work_dir, retained_dir)
-            report_bytes = report.read_bytes()
-            retained_bytes = (retained_dir / "xctest-test-results.json").read_bytes()
+            retained_bytes = (retained / report.name).read_bytes()
 
-        self.assertEqual(report_bytes, raw.encode("utf-8"))
-        self.assertEqual(len(retained), 1)
+        self.assertEqual(retained, retained_dir)
+        self.assertFalse(report.exists())
         self.assertEqual(retained_bytes, raw.encode("utf-8"))
 
     def test_missing_result_json_fails_without_creating_an_empty_artifact(self) -> None:
@@ -270,7 +269,23 @@ class IOSXCTestResultsTests(unittest.TestCase):
                 "returned no iOS XCTest test-results JSON",
             ):
                 ios_simulator_app._write_xctest_test_results("", work_dir)
-            self.assertFalse((work_dir / "diagnostics/ios-simulator/xctest-test-results.json").exists())
+            diagnostics = work_dir / "diagnostics/ios-simulator"
+            self.assertFalse((diagnostics / "xctest-test-results.json").exists())
+            with self.assertRaisesRegex(
+                ios_simulator_app.IOSSimulatorAppContractError,
+                "retained iOS diagnostics are missing",
+            ):
+                ios_simulator_app.retain_ios_diagnostics(
+                    work_dir, Path(temporary) / "logs"
+                )
+            diagnostics.mkdir(parents=True)
+            with self.assertRaisesRegex(
+                ios_simulator_app.IOSSimulatorAppContractError,
+                "contain no complete artifacts",
+            ):
+                ios_simulator_app.retain_ios_diagnostics(
+                    work_dir, Path(temporary) / "logs"
+                )
 
 
 if __name__ == "__main__":

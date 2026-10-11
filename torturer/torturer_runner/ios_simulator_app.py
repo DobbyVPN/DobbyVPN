@@ -769,40 +769,8 @@ def retain_ios_failure_diagnostic(work_dir: Path, failure: BaseException) -> Pat
         "".join(traceback.format_exception(type(failure), failure, failure.__traceback__)),
         encoding="utf-8",
     )
+    report.chmod(0o600)
     return report
-
-
-def _copy_complete_directory(source: Path, destination: Path, *, label: str) -> Path:
-    """Copy one owned directory without accepting a partial destination."""
-    if source.is_symlink() or not source.is_dir():
-        raise IOSSimulatorAppContractError(f"{label} is not a complete directory: {source}")
-    if destination.exists() or destination.is_symlink():
-        try:
-            if destination.is_symlink() or destination.is_file():
-                destination.unlink()
-            else:
-                shutil.rmtree(destination)
-        except OSError as error:
-            raise IOSSimulatorAppContractError(
-                f"could not replace retained {label}: {destination}"
-            ) from error
-    try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, destination)
-    except OSError as error:
-        raise IOSSimulatorAppContractError(
-            f"could not retain complete {label}: {destination}"
-        ) from error
-    return destination
-
-
-def _retain_xctest_result_bundle(result_bundle: Path, work_dir: Path) -> Path:
-    destination = _ios_diagnostics_directory(work_dir) / result_bundle.name
-    return _copy_complete_directory(
-        result_bundle,
-        destination,
-        label="XCTest result bundle",
-    )
 
 
 def _xctest_context_matches(test_case: str, context: Sequence[str]) -> bool:
@@ -1140,14 +1108,6 @@ _IOS_LOG_NAMES = (
     "go_app_logs.jsonl", "go_app_logs.jsonl.stderr",
     "go_tunnel_logs.jsonl", "go_tunnel_logs.jsonl.stderr",
 )
-_IOS_NATIVE_SIMULATOR_LOG_NAMES = {
-    "system.log", "mobile_installation.log.0", "AppConduit.log.0",
-}
-_IOS_RETAINED_LOG_NAMES = (
-    {"app-native.log", "runner-failure.txt", "xctest-test-results.json"}
-    | _IOS_NATIVE_SIMULATOR_LOG_NAMES
-    | {name + suffix for name in _IOS_LOG_NAMES for suffix in ("", ".previous")}
-)
 
 
 def _collect_ios_native_log(
@@ -1406,46 +1366,36 @@ def _retain_bootstatus_native_logs(
             add_exception_notes(failure, label, error)
 
 
-def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> tuple[Path, ...]:
-    """Copy retained iOS artifacts into a local guest manifest directory."""
+def retain_ios_diagnostics(work_dir: Path, destination_dir: Path) -> Path:
+    """Transfer the complete owned diagnostics directory into the local manifest.
+
+    The runner keeps work and manifest paths under one run directory, so this
+    is a same-filesystem ownership transfer. Hosted CI consumes the source
+    diagnostics directory directly. A failed transfer leaves its source in
+    place for normal failure cleanup.
+    """
     source_dir = _ios_diagnostics_directory(work_dir)
     if source_dir.is_symlink() or not source_dir.is_dir():
         raise IOSSimulatorAppContractError(
             f"retained iOS diagnostics are missing: {source_dir}"
         )
-    destination_dir.mkdir(parents=True, exist_ok=True)
-    retained: list[Path] = []
-    for source in sorted(source_dir.iterdir(), key=lambda path: path.name):
-        destination = destination_dir / source.name
-        if source.name.endswith(".xcresult"):
-            retained.append(_copy_complete_directory(source, destination, label="XCTest result bundle"))
-            continue
-        if source.name == "ui-screenshots":
-            retained.append(_copy_complete_directory(source, destination, label="iOS UI screenshots"))
-            for screenshot in destination.iterdir():
-                assert_files_identical(source / screenshot.name, screenshot)
-                screenshot.chmod(0o600)
-            destination.chmod(0o700)
-            continue
-        if source.name in _IOS_RETAINED_LOG_NAMES:
-            if source.is_symlink() or not source.is_file():
-                raise IOSSimulatorAppContractError(
-                    f"native app log is not a regular file: {source}"
-                )
-            try:
-                shutil.copy2(source, destination)
-            except OSError as error:
-                raise IOSSimulatorAppContractError(
-                    f"could not retain complete native app log: {destination}"
-                ) from error
-            destination.chmod(0o600)
-            retained.append(destination)
-            continue
-    if not retained:
+    if next(source_dir.iterdir(), None) is None:
         raise IOSSimulatorAppContractError(
             f"retained iOS diagnostics contain no complete artifacts: {source_dir}"
         )
-    return tuple(retained)
+    if destination_dir.exists() or destination_dir.is_symlink():
+        raise IOSSimulatorAppContractError(
+            f"retained iOS diagnostics already exist: {destination_dir}"
+        )
+    try:
+        destination_dir.parent.mkdir(parents=True, exist_ok=True)
+        source_dir.chmod(0o700)
+        source_dir.rename(destination_dir)
+    except OSError as error:
+        raise IOSSimulatorAppContractError(
+            f"could not transfer complete iOS diagnostics: {destination_dir}"
+        ) from error
+    return destination_dir
 
 
 def _shutdown_simulator(
@@ -1764,7 +1714,9 @@ def run_ios_simulator_app_contract(
     keyboard_state: SimulatorHardwareKeyboardState | None = None
     failure: BaseException | None = None
     app_path = contract.app_path(work_dir)
-    result_bundle = work_dir / "xctest-results.xcresult"
+    diagnostics_dir = _ios_diagnostics_directory(work_dir)
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    result_bundle = diagnostics_dir / "xctest-results.xcresult"
     xctest_started = False
     retained_result_bundle: Path | None = None
     retained_native_log: Path | None = None
@@ -2117,10 +2069,11 @@ def run_ios_simulator_app_contract(
         failure = error
     finally:
         # XCTest attachments are extra artifacts, not a replacement for its
-        # complete stdout/stderr streams. Retain the result bundle and native
-        # app log while the app data container is still installed; collection
-        # failures remain explicit and secondary to a product assertion so
-        # cleanup can still run.
+        # complete stdout/stderr streams. Keep the original result bundle in
+        # work through attachment validation and native-log collection; the
+        # local adapter transfers it to the manifest after this function ends.
+        # Collection failures remain explicit and secondary to a product
+        # assertion so simulator cleanup can still run.
         cleanup_errors: list[tuple[str, BaseException]] = []
 
         def cleanup_simulator() -> None:
@@ -2128,11 +2081,9 @@ def run_ios_simulator_app_contract(
             if xctest_started:
                 if result_bundle.exists():
                     try:
-                        retained_result_bundle = _retain_xctest_result_bundle(
-                            result_bundle, work_dir
-                        )
+                        retained_result_bundle = result_bundle
                         _retain_xctest_screenshots(
-                            runner, retained_result_bundle, work_dir, budget=budget
+                            runner, result_bundle, work_dir, budget=budget
                         )
                     except BaseException as error:
                         cleanup_errors.append(("iOS XCTest result collection failed", error))

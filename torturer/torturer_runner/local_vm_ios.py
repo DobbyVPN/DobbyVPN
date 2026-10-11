@@ -141,10 +141,9 @@ def run(
         )
     except BaseException as error:
         # The contract retains artifacts before uninstall even when XCTest's
-        # assertion is the primary failure. Copy them into the guest manifest
-        # tree before the supervisor removes the disposable work directory;
-        # retain the original exception before copying, and keep either
-        # collection failure secondary to it.
+        # assertion is the primary failure. Transfer them into the guest
+        # manifest tree before the supervisor removes disposable work; record
+        # the original exception first and keep collection failures secondary.
         try:
             ios.retain_ios_failure_diagnostic(work, error)
         except BaseException as report_error:
