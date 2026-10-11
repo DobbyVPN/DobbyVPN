@@ -39,7 +39,7 @@ internal static partial class Program
         var originalDigest = originalLayout.GetValueOrDefault("profile_digest") as string
             ?? throw new InvalidOperationException("Connected-layout source inventory has no rendered configuration digest");
         var originalRows = ProfileRows(originalLayout);
-        AssertLogsCase(assertions, "connected-layout-fixture-starts-with-no-subscription-get", 0,
+        AssertLogsCase(assertions, "connected-layout-fixture-starts-with-no-subscription-get", 0L,
             fixtureStart.SubscriptionGets);
         AssertProfileRowsHaveSemanticIds(assertions, originalLayout);
         var originalFixture = WaitForSubscriptionFixtureGets(
@@ -603,7 +603,7 @@ internal static partial class Program
             controlUrl, controlKey, fixtureGets, deadline, TimeSpan.FromMilliseconds(1600));
         AssertLogsCase(assertions, "cold-import-reopen-does-not-refetch-inventory", fixtureGets,
             reusedFixture.SubscriptionGets);
-        AssertLogsCase(assertions, "cold-import-reopen-has-no-request-in-flight", 0,
+        AssertLogsCase(assertions, "cold-import-reopen-has-no-request-in-flight", 0L,
             reusedFixture.InFlightGets);
         AssertLogsCase(assertions, "cold-import-reopen-reuses-identical-digest", profileDigest,
             reopenedLayout.GetValueOrDefault("profile_digest"));

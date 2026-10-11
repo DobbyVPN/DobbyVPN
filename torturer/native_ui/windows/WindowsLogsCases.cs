@@ -191,9 +191,9 @@ internal static partial class Program
                 fixtureControlUrl = RequiredSubscriptionControlUrl(request);
                 fixtureControlKey = RequiredSubscriptionControlKey(request);
                 fixtureBefore = ReadSubscriptionFixtureStats(fixtureControlUrl, fixtureControlKey, deadline);
-                AssertLogsCase(assertions, caseId + "-fixture-starts-with-no-subscription-get", 0,
+                AssertLogsCase(assertions, caseId + "-fixture-starts-with-no-subscription-get", 0L,
                     fixtureBefore.SubscriptionGets);
-                AssertLogsCase(assertions, caseId + "-fixture-starts-with-no-request-in-flight", 0,
+                AssertLogsCase(assertions, caseId + "-fixture-starts-with-no-request-in-flight", 0L,
                     fixtureBefore.InFlightGets);
             }
 
@@ -705,10 +705,10 @@ internal static partial class Program
             deadline, TimeSpan.Zero);
         var fixtureGetDelta = fixtureAfter.SubscriptionGets - fixtureBefore.SubscriptionGets;
         AssertLogsCase(assertions, "performance-fixture-observed-one-subscription-get-per-sample",
-            warmupCount + sampleCount, fixtureGetDelta);
-        AssertLogsCase(assertions, "performance-fixture-had-no-concurrent-subscription-gets", 1,
+            (long)(warmupCount + sampleCount), fixtureGetDelta);
+        AssertLogsCase(assertions, "performance-fixture-had-no-concurrent-subscription-gets", 1L,
             fixtureAfter.MaximumInFlightGets);
-        AssertLogsCase(assertions, "performance-fixture-has-no-in-flight-get-at-completion", 0,
+        AssertLogsCase(assertions, "performance-fixture-has-no-in-flight-get-at-completion", 0L,
             fixtureAfter.InFlightGets);
         var ordered = samples.OrderBy(value => value).ToArray();
         var medianMilliseconds = (ordered[(sampleCount / 2) - 1] + ordered[sampleCount / 2]) / 2.0;
@@ -1897,7 +1897,7 @@ internal static partial class Program
             {
                 var marker = markerPrefix + "-" + theme.ToLowerInvariant() + "-" + severity.ToLowerInvariant();
                 AppendPaletteFixtureRecord(fixturePath, theme, severity, marker);
-                var entry = ReadFixtureEntry(diagnostics, marker);
+                var entry = ReadFixtureEntry(diagnostics, "synthetic rendered palette fixture " + marker);
                 AssertLogsCase(assertions, $"{theme}-{severity}-fixture-has-expected-severity", severity, entry.Level);
                 var rendered = WaitForRenderedPaletteText(app, entry, marker, severity, deadline);
                 var capture = CapturePaletteRow(app, theme, severity, rendered, deadline,
@@ -2475,13 +2475,142 @@ internal static partial class Program
         if (ownerPid != (uint)app.Process.Id)
             throw new InvalidOperationException($"Log wheel input target changed ownership before {operation}");
 
-        var input = CreateMouseInput(MouseEventWheel, unchecked((uint)(short)wheelDelta));
-        Marshal.SetLastPInvokeError(0);
-        var inserted = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
-        var lastError = Marshal.GetLastPInvokeError();
-        if (inserted != 1)
-            throw new InvalidOperationException(
-                $"SendInput inserted {inserted} of 1 log-wheel event for {operation}; lastError={lastError}");
+        object? keyState = null;
+        string? observerError = null;
+        Exception? inputFailure = null;
+        Exception? cleanupFailure = null;
+        var diagnosticClock = Stopwatch.StartNew();
+        var diagnosticBudget = Math.Min(2, deadline.RemainingSeconds);
+        var hook = IntPtr.Zero;
+        var callbackRoot = default(GCHandle);
+        LowLevelMouseData? observedWheel = null;
+        LowLevelMouseProcedure callback = (code, message, data) =>
+        {
+            try
+            {
+                if (code >= 0 && message.ToUInt64() == WmMouseWheel && observedWheel is null)
+                    observedWheel = Marshal.PtrToStructure<LowLevelMouseData>(data);
+            }
+            catch (Exception error) { observerError ??= error.ToString(); }
+            return CallNextHookEx(hook, code, message, data);
+        };
+
+        try
+        {
+            _ = PeekMessage(out _, IntPtr.Zero, 0, 0, PmNoRemove); // create queue without consuming a pending message
+            callbackRoot = GCHandle.Alloc(callback);
+            hook = SetWindowsHookEx(WhMouseLowLevel, callback, GetModuleHandle(null), 0);
+            if (hook == IntPtr.Zero)
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not install WH_MOUSE_LL");
+        }
+        catch (Exception error)
+        {
+            observerError ??= error.ToString();
+            if (hook == IntPtr.Zero && callbackRoot.IsAllocated) callbackRoot.Free();
+        }
+        var hookInstalled = hook != IntPtr.Zero;
+
+        uint inserted = 0;
+        int lastError = 0;
+        try
+        {
+            try
+            {
+                keyState = new
+                {
+                    left = (GetAsyncKeyState(0x01) & 0x8000) != 0,
+                    right = (GetAsyncKeyState(0x02) & 0x8000) != 0,
+                    middle = (GetAsyncKeyState(0x04) & 0x8000) != 0,
+                    shift = (GetAsyncKeyState(0x10) & 0x8000) != 0,
+                    control = (GetAsyncKeyState(0x11) & 0x8000) != 0,
+                    alt = (GetAsyncKeyState(0x12) & 0x8000) != 0,
+                };
+            }
+            catch (Exception error) { observerError ??= error.ToString(); }
+
+            try
+            {
+                var input = CreateMouseInput(MouseEventWheel, unchecked((uint)(short)wheelDelta));
+                Marshal.SetLastPInvokeError(0);
+                inserted = SendInput(1, new[] { input }, Marshal.SizeOf<NativeInput>());
+                lastError = Marshal.GetLastPInvokeError();
+                if (inserted != 1)
+                    inputFailure = new InvalidOperationException(
+                        $"SendInput inserted {inserted} of 1 log-wheel event for {operation}; lastError={lastError}");
+            }
+            catch (Exception error) { inputFailure = error; }
+
+            var waitSeconds = Math.Min(Math.Max(0, diagnosticBudget - diagnosticClock.Elapsed.TotalSeconds), deadline.RemainingSeconds);
+            var wait = Stopwatch.StartNew();
+            try
+            {
+                while (hook != IntPtr.Zero && observedWheel is null && wait.Elapsed.TotalSeconds < waitSeconds && deadline.RemainingSeconds > 0)
+                {
+                    while (PeekMessage(out var message, IntPtr.Zero, 0, 0, PmRemove))
+                    {
+                        DispatchMessage(ref message);
+                        if (observedWheel is not null || wait.Elapsed.TotalSeconds >= waitSeconds || deadline.RemainingSeconds <= 0) break;
+                    }
+                }
+            }
+            catch (Exception error) { observerError ??= error.ToString(); }
+        }
+        finally
+        {
+            if (hook != IntPtr.Zero)
+            {
+                try
+                {
+                    if (!UnhookWindowsHookEx(hook))
+                        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not remove WH_MOUSE_LL");
+                    hook = IntPtr.Zero;
+                }
+                catch (Exception error)
+                {
+                    cleanupFailure = error;
+                    observerError ??= error.ToString();
+                }
+            }
+            try
+            {
+                if (hook == IntPtr.Zero && callbackRoot.IsAllocated) callbackRoot.Free();
+            }
+            catch (Exception error)
+            {
+                cleanupFailure = error;
+                observerError ??= error.ToString();
+            }
+            GC.KeepAlive(callback);
+        }
+
+        try { TracePhase("logs.mouse-wheel-observation " + SerializeNativeCaseJson(new
+        {
+            operation,
+            expected = new { x = point.X, y = point.Y, delta = wheelDelta, inserted, last_error = lastError },
+            buttons_and_modifiers = keyState,
+            hook_installed = hookInstalled,
+            hook_removed = hookInstalled && hook == IntPtr.Zero,
+            hook_wheel = observedWheel is null ? null : new
+            {
+                x = observedWheel.Value.Point.X,
+                y = observedWheel.Value.Point.Y,
+                delta = unchecked((short)(observedWheel.Value.MouseData >> 16)),
+                flags = observedWheel.Value.Flags,
+            },
+            observer_error = observerError,
+            cleanup_error = cleanupFailure?.ToString(),
+        })); }
+        catch (Exception error) { observerError ??= error.ToString(); }
+
+        if (inputFailure is not null)
+        {
+            if (cleanupFailure is not null)
+                throw new AggregateException("The native wheel input and hook cleanup failed", inputFailure, cleanupFailure);
+            ExceptionDispatchInfo.Capture(inputFailure).Throw();
+        }
+        if (cleanupFailure is not null) ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+        if (observerError is not null)
+            throw new InvalidOperationException("The native wheel observer reported errors", new Exception(observerError));
     }
 
     private static void AssertFixtureRetainsRecords(

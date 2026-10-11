@@ -31,6 +31,7 @@ internal static partial class Program
     [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll", SetLastError = true)] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr GetModuleHandle(string? moduleName);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool ProcessIdToSessionId(uint processId, out uint sessionId);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
@@ -43,6 +44,14 @@ internal static partial class Program
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint numberOfInputs, NativeInput[] inputs, int size);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetCursorPos(out NativePoint point);
+    [DllImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int hookId, LowLevelMouseProcedure callback, IntPtr module, uint threadId);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("user32.dll")] private static extern IntPtr CallNextHookEx(IntPtr hook, int code, UIntPtr message, IntPtr data);
+    [DllImport("user32.dll", EntryPoint = "DispatchMessageW")] private static extern IntPtr DispatchMessage(ref NativeMessage message);
+    [DllImport("user32.dll", EntryPoint = "PeekMessageW", SetLastError = true)] private static extern bool PeekMessage(out NativeMessage message, IntPtr window, uint min, uint max, uint remove);
+    [DllImport("user32.dll", SetLastError = true)] private static extern short GetAsyncKeyState(int key);
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)] private delegate IntPtr LowLevelMouseProcedure(int code, UIntPtr message, IntPtr data);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW", SetLastError = true)]
     private static extern int GetClassName(IntPtr window, StringBuilder className, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextLengthW")]
@@ -59,6 +68,14 @@ internal static partial class Program
     [DllImport("user32.dll")] private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
     [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] private struct NativeMessage
+    {
+        public IntPtr Window; public uint Message; public UIntPtr WParam; public IntPtr LParam; public uint Time; public NativePoint Point; public uint Private;
+    }
+    [StructLayout(LayoutKind.Sequential)] private struct LowLevelMouseData
+    {
+        public NativePoint Point; public uint MouseData, Flags, Time; public UIntPtr ExtraInfo;
+    }
     // INPUT and MOUSEINPUT use a pointer-sized dwExtraInfo on both architectures.
     [StructLayout(LayoutKind.Sequential)]
     private struct NativeInput
@@ -94,6 +111,10 @@ internal static partial class Program
     private const uint MouseEventLeftDown = 0x0002;
     private const uint MouseEventLeftUp = 0x0004;
     private const uint MouseEventWheel = 0x0800;
+    private const int WhMouseLowLevel = 14;
+    private const uint WmMouseWheel = 0x020A;
+    private const int PmNoRemove = 0;
+    private const int PmRemove = 0x0001;
 
     private readonly record struct SettingsWindowCandidate(
         IntPtr Window,
