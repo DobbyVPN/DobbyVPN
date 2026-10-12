@@ -26,8 +26,8 @@ the accepted URL and restores it when the app reopens. About shows the version,
 commit and source link. File and inline configuration remain available in the CLI.
 
 Logs show timestamps, severity labels and colors, source, and readable messages.
-Expand **Details** to inspect the original record. Scroll up to hold your reading
-position; return to the bottom to follow updates. **Clear** hides earlier entries
+Scroll up to hold your reading position; return to the bottom to follow updates.
+**Clear** hides earlier entries
 across app restarts without deleting diagnostics. Share logs (Save logs on
 Windows) exports both retained generations as a gzip file with version and
 platform information, including entries hidden by Clear.
