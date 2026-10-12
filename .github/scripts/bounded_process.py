@@ -138,10 +138,12 @@ def terminate_process_group(
         pass
     except OSError as error:
         raise ProcessCleanupError(
-            f"could not terminate process group={group_id}: {error}"
+            f"could not terminate process group={group_id}: {error}; "
+            "process-group-final-state=unknown"
         ) from error
 
     deadline = time.monotonic() + max(grace_seconds, 0)
+    forced = False
     while True:
         try:
             os.killpg(group_id, 0)
@@ -149,7 +151,8 @@ def terminate_process_group(
             break
         except OSError as error:
             raise ProcessCleanupError(
-                f"could not inspect process group={group_id}: {error}"
+                f"could not inspect process group={group_id}: {error}; "
+                "process-group-final-state=unknown"
             ) from error
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -159,8 +162,10 @@ def terminate_process_group(
                 pass
             except OSError as error:
                 raise ProcessCleanupError(
-                    f"could not kill process group={group_id}: {error}"
+                    f"could not kill process group={group_id}: {error}; "
+                    "process-group-final-state=unknown"
                 ) from error
+            forced = True
             break
         wait_slice = min(remaining, 0.05)
         if process.poll() is None:
@@ -170,17 +175,105 @@ def terminate_process_group(
                 pass
         else:
             time.sleep(wait_slice)
+    wait_error: subprocess.TimeoutExpired | None = None
     try:
         process.wait(timeout=max(grace_seconds, 0))
     except subprocess.TimeoutExpired as error:
+        wait_error = error
+    if forced:
+        try:
+            os.killpg(group_id, 0)
+        except ProcessLookupError:
+            if wait_error is not None:
+                raise ProcessCleanupError(
+                    f"process group={group_id} disappeared after SIGKILL, but the "
+                    f"owned child could not be reaped: {wait_error}; "
+                    "process-group-final-state=unknown"
+                ) from wait_error
+        except OSError as error:
+            wait_detail = (
+                f"; owned child wait also timed out: {wait_error}"
+                if wait_error is not None
+                else ""
+            )
+            raise ProcessCleanupError(
+                f"could not verify process group={group_id} after SIGKILL: {error}"
+                f"{wait_detail}; "
+                "process-group-final-state=unknown"
+            ) from error
+        else:
+            wait_detail = (
+                f"; owned child wait also timed out: {wait_error}"
+                if wait_error is not None
+                else ""
+            )
+            raise ProcessCleanupError(
+                f"process group={group_id} still exists after SIGKILL; "
+                f"final probe confirmed members remain{wait_detail}; "
+                "process-group-final-state=unknown"
+            )
+    elif wait_error is not None:
         raise ProcessCleanupError(
-            f"process group {group_id} did not terminate after escalation"
-        ) from error
+            f"process group={group_id} disappeared, but the owned child could not "
+            f"be reaped: {wait_error}; process-group-final-state=unknown"
+        ) from wait_error
     return "process-group=terminated"
 
 
 def _remaining(deadline: float) -> float:
     return max(0.0, deadline - time.monotonic())
+
+
+def _stop_direct_child(
+    process: subprocess.Popen[bytes],
+    *,
+    deadline: float,
+) -> list[BaseException]:
+    """Bounded fallback to stop and reap the owned child when its group fails."""
+    errors: list[BaseException] = []
+    try:
+        if process.poll() is not None:
+            process.wait(timeout=0)
+            return errors
+    except (OSError, subprocess.SubprocessError) as error:
+        errors.append(error)
+
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        errors.append(error)
+
+    graceful_wait = min(0.25, _remaining(deadline))
+    try:
+        process.wait(timeout=graceful_wait)
+        return errors
+    except subprocess.TimeoutExpired:
+        pass
+    except (OSError, subprocess.SubprocessError) as error:
+        errors.append(error)
+
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        errors.append(error)
+
+    try:
+        process.wait(timeout=_remaining(deadline))
+    except subprocess.TimeoutExpired as error:
+        errors.append(
+            ProcessCleanupError(
+                f"owned direct child process={process.pid} could not be reaped "
+                "before the cleanup deadline"
+            )
+        )
+        errors.append(error)
+    except (OSError, subprocess.SubprocessError) as error:
+        errors.append(error)
+    return errors
 
 
 def _drain_after_cleanup(
@@ -331,6 +424,9 @@ def run_finite_capture(
             cleanup_stdout, cleanup_stderr = exception_output(cleanup_error)
             stdout = merge_output_fragments(stdout, cleanup_stdout)
             stderr = merge_output_fragments(stderr, cleanup_stderr)
+            cleanup_errors.extend(
+                _stop_direct_child(process, deadline=cleanup_deadline)
+            )
         if close_boundary is not None and not detached:
             try:
                 close_boundary(process, cleanup_deadline)

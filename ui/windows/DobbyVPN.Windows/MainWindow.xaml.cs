@@ -55,7 +55,7 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<LogRowKey, RenderedLogRow> _logRowCache = [];
     private List<RenderedLogRow> _renderedLogRows = [];
     private ContentDialog? _aboutDialog;
-    private Windows.Foundation.IAsyncInfo? _savePickerOperation;
+    private global::Windows.Foundation.IAsyncInfo? _savePickerOperation;
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
