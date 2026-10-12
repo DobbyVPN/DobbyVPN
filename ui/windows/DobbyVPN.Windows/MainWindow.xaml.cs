@@ -65,40 +65,6 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        // TEMPORARY: distinguish window routing from delivery to LogsScroll during wheel diagnosis.
-        Root.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
-        {
-            var source = args.OriginalSource as DependencyObject;
-            var sourceReachesLogs = false;
-            for (var ancestor = source; ancestor is not null; ancestor = VisualTreeHelper.GetParent(ancestor))
-            {
-                if (ReferenceEquals(ancestor, LogsScroll)) sourceReachesLogs = true;
-                if (ReferenceEquals(ancestor, Root)) break;
-            }
-            var rootPointerPoint = args.GetCurrentPoint(Root);
-            var rootPoint = rootPointerPoint.Position;
-            var logsPoint = args.GetCurrentPoint(LogsScroll).Position;
-            var logsOrigin = LogsScroll.TransformToVisual(Root).TransformPoint(new global::Windows.Foundation.Point(0, 0));
-            var properties = rootPointerPoint.Properties;
-            _diagnostics.RecordInfo("logs.root-pointer-wheel", "Pointer wheel reached the window root", new
-            {
-                is_horizontal_mouse_wheel = properties.IsHorizontalMouseWheel,
-                mouse_wheel_delta = properties.MouseWheelDelta,
-                handled = args.Handled,
-                root_point = new { x = rootPoint.X, y = rootPoint.Y },
-                logs_point = new { x = logsPoint.X, y = logsPoint.Y },
-                logs_bounds_in_root = new
-                {
-                    x = logsOrigin.X,
-                    y = logsOrigin.Y,
-                    width = LogsScroll.ActualWidth,
-                    height = LogsScroll.ActualHeight,
-                },
-                source_type = args.OriginalSource?.GetType().FullName,
-                source_automation_id = source is null ? null : AutomationProperties.GetAutomationId(source),
-                source_reaches_logs_viewport = sourceReachesLogs,
-            });
-        }), true);
         Root.LayoutUpdated += (_, _) => UpdateContentLayout();
         foreach (var details in new[] { LoadStatus, ProfileText, FailureText, ErrorText, LogsErrorText })
         {
@@ -643,21 +609,7 @@ public sealed partial class MainWindow : Window
         };
         LogsScroll.AddHandler(UIElement.PointerWheelChangedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
-            var point = args.GetCurrentPoint(LogsScroll);
-            var properties = point.Properties;
-            var source = args.OriginalSource as DependencyObject;
-            _diagnostics.RecordInfo("logs.pointer-wheel", "Pointer wheel reached the log viewport", new
-            {
-                is_horizontal_mouse_wheel = properties.IsHorizontalMouseWheel,
-                mouse_wheel_delta = properties.MouseWheelDelta,
-                point = new { x = point.Position.X, y = point.Position.Y },
-                source_type = args.OriginalSource?.GetType().FullName,
-                source_automation_id = source is null ? null : AutomationProperties.GetAutomationId(source),
-                handled = args.Handled,
-                vertical_offset = LogsScroll.VerticalOffset,
-                scrollable_height = LogsScroll.ScrollableHeight,
-                follows_tail = _logPresentation.FollowsTail,
-            });
+            var properties = args.GetCurrentPoint(LogsScroll).Properties;
             if (properties.IsHorizontalMouseWheel || properties.MouseWheelDelta == 0) return;
             if (properties.MouseWheelDelta > 0) RequestLogFollowFreezeForUpwardIntent();
             else RegisterLogDownScrollIntent();
