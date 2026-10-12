@@ -9,7 +9,6 @@ internal sealed class LogPresentationState
 {
     private List<NativeDiagnostics.Entry> _latestEntries = [];
     private List<NativeDiagnostics.Entry> _visibleEntries = [];
-    private readonly HashSet<string> _expandedEntries = [];
     // This set mirrors the current bounded diagnostics preview; it is not a
     // history of every backend record the app has ever read.
     private HashSet<string> _latestBackendEntryIds = new(StringComparer.Ordinal);
@@ -56,20 +55,11 @@ internal sealed class LogPresentationState
         else Freeze();
     }
 
-    public bool IsExpanded(string entryId) => _expandedEntries.Contains(entryId);
-
-    public void SetExpanded(string entryId, bool expanded)
-    {
-        if (expanded) _expandedEntries.Add(entryId);
-        else _expandedEntries.Remove(entryId);
-    }
-
     public void ClearAfterBoundary()
     {
         _latestEntries = [];
         _visibleEntries = [];
         _latestBackendEntryIds.Clear();
-        _expandedEntries.Clear();
         FollowTail();
     }
 
@@ -81,12 +71,5 @@ internal sealed class LogPresentationState
     private void ShowLatestEntries()
     {
         _visibleEntries = _latestEntries.ToList();
-        _expandedEntries.IntersectWith(_visibleEntries.Select(entry => entry.Id));
     }
-
-    public static string DetailsAutomationId(NativeDiagnostics.Entry entry) =>
-        $"Log details {entry.Id}";
-
-    // Keep the existing accessible label; identity is carried only by the stable ID.
-    public static string DetailsAccessibleName(NativeDiagnostics.Entry entry) => "Details";
 }

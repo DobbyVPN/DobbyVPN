@@ -62,7 +62,6 @@ private const val SOURCE_LOAD_PENDING = "load_pending"
 internal data class FrozenLogViewState(
     val entries: List<LogEntry>,
     val scrollY: Int,
-    val expandedIds: Set<String>,
     val clearBoundary: Map<String, Long>,
 )
 
@@ -938,7 +937,6 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
         id = R.id.logs_viewport
         textSize = 12f
         setTextIsSelectable(true)
-        movementMethod = android.text.method.LinkMovementMethod.getInstance()
         contentDescription = "Connection logs"
     }
     private val followState = LogFollowState()
@@ -952,7 +950,6 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     private var errorColor = android.graphics.Color.rgb(179, 38, 30)
     private var rendered = emptyList<LogEntry>()
     private var latest = emptyList<LogEntry>()
-    private val expanded = mutableSetOf<String>()
     private var hasRendered = false
     private var awaitingRestoredEntries = false
     private var restoredScrollY: Int? = null
@@ -963,7 +960,6 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     fun restoreState(state: Bundle) {
         followState.restore(state.getBoolean("following", true))
         restoredScrollY = state.getInt("scroll_y", 0).coerceAtLeast(0)
-        expanded.addAll(state.getStringArrayList("expanded_ids").orEmpty())
         awaitingRestoredEntries = !following
         val identities = state.getStringArrayList("visible_stream_ids").orEmpty()
         val offsets = state.getLongArray("visible_stream_offsets")
@@ -975,7 +971,6 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     fun saveState(): Bundle = Bundle().apply {
         putBoolean("following", following)
         putInt("scroll_y", scrollY)
-        putStringArrayList("expanded_ids", ArrayList(expanded))
         val visibleBoundaries = rendered.mapNotNull { entry ->
             val separator = entry.id.lastIndexOf(':')
             val offset = entry.id.substring(separator + 1).toLongOrNull()
@@ -988,13 +983,11 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     fun hasStableState(): Boolean = hasRendered && !awaitingRestoredEntries
 
     fun frozenState(clearBoundary: Map<String, Long>): FrozenLogViewState? = if (following) null else {
-        FrozenLogViewState(rendered.toList(), scrollY, expanded.toSet(), clearBoundary.toMap())
+        FrozenLogViewState(rendered.toList(), scrollY, clearBoundary.toMap())
     }
 
     fun restoreFrozenState(state: FrozenLogViewState) {
         followState.pause()
-        expanded.clear()
-        expanded.addAll(state.expandedIds)
         restoredScrollY = state.scrollY.coerceAtLeast(0)
         awaitingRestoredEntries = false
         restoredVisibleBoundaries = null
@@ -1004,7 +997,6 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
 
     fun resetToLatest() {
         followState.resume()
-        expanded.clear()
         restoredScrollY = null
         awaitingRestoredEntries = false
         restoredVisibleBoundaries = null
@@ -1026,7 +1018,6 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
         if (clear != lastClear) {
             followState.clear()
             lastClear = clear
-            expanded.clear()
             awaitingRestoredEntries = false
             restoredVisibleBoundaries = null
         }
@@ -1071,17 +1062,6 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
                 else -> normalColor
             }
             text.setSpan(android.text.style.ForegroundColorSpan(color), start, text.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            if (entry.level != "RAW") {
-                val linkStart = text.length
-                text.append(if (expanded.contains(entry.id)) "Hide details\n" else "Details\n")
-                text.setSpan(object : android.text.style.ClickableSpan() {
-                    override fun onClick(widget: android.view.View) {
-                        if (!expanded.add(entry.id)) expanded.remove(entry.id)
-                        render(rendered)
-                    }
-                }, linkStart, text.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                if (expanded.contains(entry.id)) text.append(entry.raw).append("\n")
-            }
         }
         val offset = restoredScrollY ?: scrollY
         restoredScrollY = null

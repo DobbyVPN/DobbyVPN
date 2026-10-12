@@ -84,46 +84,15 @@ private final class DobbyLogTextView: UITextView {
     func captureReadingPosition() {
         guard textStorage.length > 0 else { return }
         layoutManager.ensureLayout(for: textContainer)
-        let capturedAnchor: (character: Int, line: CGRect)
-        if let detailsAnchor = firstVisibleDetailsAnchor() {
-            capturedAnchor = (detailsAnchor.character, detailsAnchor.line)
-        } else {
-            let point = CGPoint(
-                x: textContainerInset.left + 1,
-                y: contentOffset.y + textContainerInset.top + 1
-            )
-            let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
-            let character = min(layoutManager.characterIndexForGlyph(at: glyph), textStorage.length - 1)
-            let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-            capturedAnchor = (character, line)
-        }
-        let character = capturedAnchor.character
-        let line = capturedAnchor.line
+        let point = CGPoint(
+            x: textContainerInset.left + 1,
+            y: contentOffset.y + textContainerInset.top + 1
+        )
+        let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+        let character = min(layoutManager.characterIndexForGlyph(at: glyph), textStorage.length - 1)
+        let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
         anchorCharacterIndex = character
         anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
-    }
-
-    private func firstVisibleDetailsAnchor() -> (character: Int, line: CGRect)? {
-        var selected: (character: Int, line: CGRect, viewportY: CGFloat)?
-        textStorage.enumerateAttribute(
-            .link,
-            in: NSRange(location: 0, length: textStorage.length),
-            options: []
-        ) { value, characterRange, _ in
-            guard value != nil, characterRange.length > 0 else { return }
-            let glyphRange = layoutManager.glyphRange(
-                forCharacterRange: characterRange,
-                actualCharacterRange: nil
-            )
-            guard glyphRange.length > 0,
-                  glyphRange.location < layoutManager.numberOfGlyphs else { return }
-            let line = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
-            let viewportY = line.minY + textContainerInset.top - contentOffset.y
-            guard viewportY < bounds.height, viewportY + line.height > 0 else { return }
-            if selected.map({ $0.viewportY <= viewportY }) ?? false { return }
-            selected = (characterRange.location, line, viewportY)
-        }
-        return selected.map { (character: $0.character, line: $0.line) }
     }
 
     private func restoreReadingPosition() {
@@ -174,17 +143,14 @@ struct DobbyLogView: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.latestEntries = entries
         let cleared = clear != coordinator.lastClear
-        if cleared {
-            coordinator.followingState.resetForClear()
-            coordinator.expanded.removeAll()
-        }
+        if cleared { coordinator.followingState.resetForClear() }
         if coordinator.followingState.isFollowing { coordinator.displayedEntries = entries }
         if let logView = view as? DobbyLogTextView {
             logView.preservesReadingPosition = !coordinator.followingState.isFollowing
             logView.updateFollowingAccessibilityHint(isFollowing: coordinator.followingState.isFollowing)
         }
         let restoreCountBeforeLayout = (view as? DobbyLogTextView)?.readingPositionRestoreCount
-        let attributed = logText(coordinator.displayedEntries, expanded: coordinator.expanded)
+        let attributed = logText(coordinator.displayedEntries)
         let text = attributed.string
         coordinator.updating = true
         let offset = view.contentOffset
@@ -217,27 +183,8 @@ struct DobbyLogView: UIViewRepresentable {
         var updating = false
         var latestEntries: [DobbyLogEntry] = []
         var displayedEntries: [DobbyLogEntry] = []
-        var expanded = Set<String>()
         private var lastStableContentHeight: CGFloat?
 
-        func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
-            guard let id = logDetailsRecordID(url), displayedEntries.contains(where: { $0.id == id }) else { return false }
-            if !expanded.insert(id).inserted { expanded.remove(id) }
-            updating = true
-            let offset = textView.contentOffset
-            textView.attributedText = logText(displayedEntries, expanded: expanded)
-            textView.layoutIfNeeded()
-            if let logView = textView as? DobbyLogTextView {
-                _ = effectiveContentHeight(for: logView)
-            }
-            if followingState.isFollowing {
-                textView.scrollRangeToVisible(NSRange(location: textView.textStorage.length, length: 0))
-            } else {
-                textView.setContentOffset(offset, animated: false)
-            }
-            updating = false
-            return false
-        }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard scrollView is DobbyLogTextView else { return }
             let gestureActive = isUserDragging || scrollView.isDragging || scrollView.isDecelerating
@@ -282,7 +229,7 @@ struct DobbyLogView: UIViewRepresentable {
 
         private func displayLatestEntries(in logView: DobbyLogTextView) {
             displayedEntries = latestEntries
-            let attributed = logText(displayedEntries, expanded: expanded)
+            let attributed = logText(displayedEntries)
             let selection = logView.selectedRange
             updating = true
             if logView.text != attributed.string {
@@ -367,10 +314,10 @@ struct DobbyLogView: NSViewRepresentable {
         guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage else { return }
         let coordinator = context.coordinator
         coordinator.parent = self
-        if clear != coordinator.lastClear { resetLogPresentationForClear(following: $following, expanded: &coordinator.expanded) }
+        if clear != coordinator.lastClear { resetLogFollowingForClear(following: $following) }
         guard following else { return }
         coordinator.entries = entries
-        let attributed = logText(entries, expanded: coordinator.expanded)
+        let attributed = logText(entries)
         let text = attributed.string
         coordinator.updating = true
         let origin = scroll.contentView.bounds.origin
@@ -397,27 +344,14 @@ struct DobbyLogView: NSViewRepresentable {
         var observers: [NSObjectProtocol] = []
         var userScrolling = false
         var entries: [DobbyLogEntry] = []
-        var expanded = Set<String>()
         init(_ parent: DobbyLogView) { self.parent = parent }
-        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            guard let url = link as? URL, let id = logDetailsRecordID(url), entries.contains(where: { $0.id == id }) else { return false }
-            if !expanded.insert(id).inserted { expanded.remove(id) }
-            updating = true
-            let scroll = textView.enclosingScrollView
-            let origin = scroll?.contentView.bounds.origin
-            textView.textStorage?.setAttributedString(logText(entries, expanded: expanded))
-            if let origin { scroll?.contentView.scroll(to: origin) }
-            updating = false
-            return true
-        }
         deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
     }
 }
 #endif
 
-func resetLogPresentationForClear(following: Binding<Bool>, expanded: inout Set<String>) {
+func resetLogFollowingForClear(following: Binding<Bool>) {
     following.wrappedValue = true
-    expanded.removeAll()
 }
 
 func shouldFollowLogUpdates(viewportBottom: CGFloat, contentHeight: CGFloat) -> Bool {
@@ -461,7 +395,7 @@ private var normalLogColor: LogColor { .textColor }
 private var mutedLogColor: LogColor { .secondaryLabelColor }
 #endif
 
-func logText(_ entries: [DobbyLogEntry], expanded: Set<String>) -> NSAttributedString {
+func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     let output = NSMutableAttributedString(string: "")
     for entry in entries {
         let color: LogColor
@@ -473,28 +407,6 @@ func logText(_ entries: [DobbyLogEntry], expanded: Set<String>) -> NSAttributedS
         }
         let header = [entry.timestamp, entry.level, entry.source].filter { !$0.isEmpty }.joined(separator: " · ")
         output.append(NSAttributedString(string: header + "\n" + entry.message + "\n", attributes: [.font: logFont, .foregroundColor: color]))
-        if entry.level != "RAW", let link = logDetailsURL(entry) {
-            let label = expanded.contains(entry.id) ? "Hide details" : "Details"
-            output.append(NSAttributedString(string: label, attributes: [.font: logFont, .link: link]))
-            output.append(NSAttributedString(string: "\n", attributes: [.font: logFont]))
-            if expanded.contains(entry.id) {
-                output.append(NSAttributedString(string: entry.raw + "\n", attributes: [.font: logFont, .foregroundColor: normalLogColor]))
-            }
-        }
     }
     return output
-}
-
-func logDetailsURL(_ entry: DobbyLogEntry) -> URL? {
-    var components = URLComponents()
-    components.scheme = "dobbylog"
-    components.host = "record"
-    components.path = "/\(entry.id)"
-    return components.url
-}
-
-func logDetailsRecordID(_ url: URL) -> String? {
-    guard url.scheme == "dobbylog", url.host == "record" else { return nil }
-    let identifier = url.lastPathComponent
-    return identifier.isEmpty || identifier == "/" ? nil : identifier
 }

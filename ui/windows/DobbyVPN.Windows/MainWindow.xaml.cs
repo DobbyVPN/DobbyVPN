@@ -870,10 +870,9 @@ public sealed partial class MainWindow : Window
         _updatingLogs = true;
         var renderGeneration = ++_logRenderGeneration;
 
-        // Normal refreshes append rows or trim the oldest preview rows. Keep
-        // retained controls attached so text selection and expanded Details
-        // survive those updates. If timestamps reorder streams, reattach the
-        // keyed controls in the new chronological order without recreating them.
+        // Keep retained controls attached during refresh so text selection
+        // survives appends and preview trimming. Reattach keyed controls only
+        // when timestamps reorder streams.
         if (!retainedOrderMatches)
             foreach (var row in _renderedLogRows)
                 foreach (var control in row.Controls)
@@ -938,19 +937,7 @@ public sealed partial class MainWindow : Window
         var paragraph = new Paragraph();
         paragraph.Inlines.Add(new Run { Text = string.Join(" · ", new[] { entry.Timestamp, entry.Level, entry.Source }.Where(value => value.Length > 0)) + "\n" + entry.Message });
         text.Blocks.Add(paragraph);
-        var controls = new List<UIElement> { text };
-        if (entry.Level != "RAW")
-        {
-            var details = new Expander { Header = "Details", HorizontalAlignment = HorizontalAlignment.Stretch,
-                IsExpanded = _logPresentation.IsExpanded(entry.Id),
-                Content = new TextBlock { Text = entry.Raw, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true } };
-            AutomationProperties.SetAutomationId(details, LogPresentationState.DetailsAutomationId(entry));
-            AutomationProperties.SetName(details, LogPresentationState.DetailsAccessibleName(entry));
-            details.Expanding += (_, _) => _logPresentation.SetExpanded(entry.Id, true);
-            details.Collapsed += (_, _) => _logPresentation.SetExpanded(entry.Id, false);
-            controls.Add(details);
-        }
-        return new RenderedLogRow(key, controls.ToArray());
+        return new RenderedLogRow(key, [text]);
     }
 
     private void QueueLogTailChangeView(long renderGeneration)
