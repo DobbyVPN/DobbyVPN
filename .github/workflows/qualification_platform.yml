@@ -480,10 +480,12 @@ jobs:
           ui_stderr="$RUN_DIR/android-native-ui.stderr.log"
           ui_status=0
           ui_timed_out=false
+          ui_methods="$(PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
+            python3 -c 'from torturer_runner.native_cases import ANDROID_DEFAULT_UI_METHODS; print(",".join(ANDROID_DEFAULT_UI_METHODS))')"
           # The 20 lifecycle cycles reached final reopen at the former 300s
           # limit on hosted API 35; leave time for live-log/export assertions.
           timeout --foreground 420s "$ADB" shell am instrument -w -r \
-            -e class com.dobby.NativeUiInstrumentedTest,com.dobby.NativeDiagnosticRetentionTest \
+            -e class "$ui_methods" \
             com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
             >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
           if [ "$ui_status" -eq 124 ]; then
@@ -493,6 +495,10 @@ jobs:
             --stdout "$ui_stdout" --stderr "$ui_stderr"
             --returncode "$ui_status"
           )
+          IFS=, read -r -a selected_methods <<< "$ui_methods"
+          for method in "${selected_methods[@]}"; do
+            parser_args+=(--expected-method "$method")
+          done
           if [ "$ui_timed_out" = true ]; then
             parser_args+=(--timed-out)
           fi
