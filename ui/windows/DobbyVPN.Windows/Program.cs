@@ -112,7 +112,7 @@ internal static class Program
         {
             while (_window is not null && Pending.TryDequeue(out var activation))
             {
-                _window.Activate();
+                if (!_window.TryActivate()) continue;
                 if (activation.Kind == ExtendedActivationKind.Protocol && activation.Data is IProtocolActivatedEventArgs protocol)
                 {
                     LogActivation("activation.drain-protocol", "Dispatching protocol activation", activation, route: "protocol");

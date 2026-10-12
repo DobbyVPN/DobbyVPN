@@ -21,7 +21,7 @@ public sealed partial class MainWindow : Window
 {
     private const string PipeName = "DobbyVPN.Control";
     private readonly PeriodicTimer _pollTimer = new(TimeSpan.FromMilliseconds(750));
-    private readonly CancellationTokenSource _shutdown = new();
+    private readonly WindowLifetime _lifetime = new();
     private readonly long _loadClockOrigin = Stopwatch.GetTimestamp();
     private readonly SubscriptionLoadState _subscriptionLoad = new();
     private Snapshot? _snapshot;
@@ -54,6 +54,8 @@ public sealed partial class MainWindow : Window
     private readonly LogPresentationState _logPresentation = new();
     private readonly Dictionary<LogRowKey, RenderedLogRow> _logRowCache = [];
     private List<RenderedLogRow> _renderedLogRows = [];
+    private ContentDialog? _aboutDialog;
+    private Windows.Foundation.IAsyncInfo? _savePickerOperation;
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
@@ -85,25 +87,85 @@ public sealed partial class MainWindow : Window
         _commit = commit ?? "N/A";
         SourceEditor.TextChanged += (_, _) =>
         {
-            if (_updatingSource || SourceEditor.Text == _programmaticSourceText) return;
+            if (_lifetime.IsClosing || _updatingSource || SourceEditor.Text == _programmaticSourceText) return;
             _programmaticSourceText = null;
             SourceChanged();
         };
-        Closed += (_, _) =>
-        {
-            _shutdown.Cancel();
-            _pollTimer.Dispose();
-            _shutdown.Dispose();
-        };
+        Closed += MainWindow_Closed;
         Clipboard.ContentChanged += ClipboardChanged;
-        Activated += (_, _) => DispatcherQueue.TryEnqueue(RefreshClipboard);
-        Closed += (_, _) => Clipboard.ContentChanged -= ClipboardChanged;
-        _ = PollSnapshotsAsync(_shutdown.Token);
-        _ = RefreshSnapshotAsync();
+        Activated += MainWindow_Activated;
+        StartWindowWork(PollSnapshotsAsync);
+        StartWindowWork(RefreshSnapshotAsync);
     }
+
+    private void MainWindow_Activated(object sender, WindowActivatedEventArgs args) =>
+        EnqueueUiCallback(RefreshClipboard);
+
+    private async void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        if (!_lifetime.BeginClosing()) return;
+        CancelPendingModalOperations();
+        _diagnostics.RecordInfo("window.closed", "The Windows frontend window entered its closed state", new
+        {
+            process_id = Environment.ProcessId,
+            pending_work = "draining",
+        });
+        _pollTimer.Dispose();
+        Clipboard.ContentChanged -= ClipboardChanged;
+        Activated -= MainWindow_Activated;
+        var drained = false;
+        try
+        {
+            await _lifetime.DrainAsync();
+            drained = true;
+        }
+        catch (Exception error)
+        {
+            _diagnostics.Record(error.ToString(), "window.shutdown.failure");
+        }
+        finally
+        {
+            _debounce?.Dispose();
+            _debounce = null;
+        }
+        if (drained)
+        {
+            _diagnostics.RecordInfo("window.shutdown-drained", "The Windows frontend drained its asynchronous work", new
+            {
+                process_id = Environment.ProcessId,
+            });
+        }
+    }
+
+    private void CancelPendingModalOperations()
+    {
+        try { _aboutDialog?.Hide(); }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "window.about-dialog.cancel.failure"); }
+        try { _savePickerOperation?.Cancel(); }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "window.save-picker.cancel.failure"); }
+    }
+
+    private bool StartWindowWork(Func<CancellationToken, Task> operation) =>
+        _lifetime.TryRun(operation, ReportWindowWorkFailure);
+
+    private void ReportWindowWorkFailure(Exception error)
+    {
+        _diagnostics.Record(error.ToString(), "window.async.failure");
+        EnqueueUiCallback(() => ShowError(error.ToString(), "Could not complete the request. Check your configuration and logs."));
+    }
+
+    private bool EnqueueUiCallback(Action callback, Microsoft.UI.Dispatching.DispatcherQueuePriority priority =
+        Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal)
+    {
+        if (_lifetime.IsClosing) return false;
+        return DispatcherQueue.TryEnqueue(priority, () => _lifetime.TryRunCallback(callback));
+    }
+
+    internal bool TryActivate() => _lifetime.TryRunCallback(Activate);
 
     private void UpdateContentLayout()
     {
+        if (_lifetime.IsClosing) return;
         var height = Root.ActualHeight;
         if (height <= 0) return;
         var logChrome = LogsGrid.RowDefinitions[0].ActualHeight +
@@ -131,20 +193,23 @@ public sealed partial class MainWindow : Window
         {
             while (await _pollTimer.WaitForNextTickAsync(cancellationToken))
             {
-                await RefreshSnapshotAsync();
-                await RefreshLogsAsync();
+                await RefreshSnapshotAsync(cancellationToken);
+                if (cancellationToken.IsCancellationRequested) return;
+                await RefreshLogsAsync(cancellationToken);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 
-    private async Task RefreshSnapshotAsync()
+    private async Task RefreshSnapshotAsync(CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing) return;
         if (_snapshotInFlight) return;
         _snapshotInFlight = true;
         try
         {
-            var result = await ReadSnapshotAsync();
+            var result = await ReadSnapshotAsync(cancellationToken);
+            if (_lifetime.IsClosing) return;
             var previous = _snapshot;
             if (result.SessionId == previous?.SessionId && result.Sequence < Math.Max(previous.Sequence, _acceptedSequence)) return;
             var recoveringFromSnapshotError = previous is null || StatusText.Text == "Error";
@@ -197,9 +262,10 @@ public sealed partial class MainWindow : Window
             if (!result.Configured && !_subscriptionLoad.SourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
-                SourceChanged(SubscriptionInputKind.Restore);
+                await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);
             }
-            _ = LoadNextAsync();
+            await LoadNextAsync(cancellationToken);
+            if (_lifetime.IsClosing) return;
             if (!string.IsNullOrEmpty(result.SourceError)) ShowError(result.SourceError, "Check the subscription URL or configuration. See logs for details.", "source.failure");
             else
             {
@@ -207,12 +273,12 @@ public sealed partial class MainWindow : Window
                 if (recoveringFromSnapshotError) ErrorText.Text = string.Empty;
             }
         }
-        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Window shutdown cancels the in-flight Snapshot request. Do not
             // report this expected lifecycle cancellation as a UI failure.
         }
-        catch (Exception error)
+        catch (Exception error) when (!_lifetime.IsClosing)
         {
             _snapshot = null;
             ShowError(error.ToString(), _snapshot is null ? "VPN service is unavailable. See logs for details." : "Could not complete the request. Check your configuration and logs.");
@@ -226,19 +292,19 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<Snapshot> ReadSnapshotAsync()
+    private async Task<Snapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
     {
         var sessionId = _snapshot?.SessionId ?? "";
         try
         {
-            return await CallAsync<Snapshot>("Snapshot", new { session_id = sessionId });
+            return await CallAsync<Snapshot>("Snapshot", new { session_id = sessionId }, cancellationToken);
         }
         catch (BackendCommandException error) when (error.Code == "NOT_FOUND" && !string.IsNullOrEmpty(sessionId))
         {
             // The Go backend owns session state. A replacement backend has a
             // new session ID, so reattach through its owner-independent
             // Snapshot entry point and let it restore the saved configuration URL.
-            return await CallAsync<Snapshot>("Snapshot", new { session_id = "" });
+            return await CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
         }
     }
 
@@ -271,6 +337,7 @@ public sealed partial class MainWindow : Window
 
     private void RenderActions()
     {
+        if (_lifetime.IsClosing) return;
         SetConnectionAction(ActionTitle(null));
         ConnectionButton.IsEnabled = CanAct(null);
         if (_snapshot is not { } current) return;
@@ -320,18 +387,22 @@ public sealed partial class MainWindow : Window
                 Margin = new Thickness(12, 0, 0, 0)
             };
             AutomationProperties.SetAutomationId(button, ProfileAutomationIds.Create(current.Digest, profile.Index, "action"));
-            button.Click += async (_, _) => await PerformActionAsync(profile.Index);
+            button.Click += (_, _) => StartWindowWork(token => PerformActionAsync(profile.Index, false, token));
             Grid.SetColumn(button, 3);
             row.Children.Add(button);
             ProfileList.Children.Add(row);
         }
     }
 
-    private async void ConnectionButton_Click(object sender, RoutedEventArgs e) => await PerformActionAsync(null);
-    private async void ActiveStop_Click(object sender, RoutedEventArgs e) => await PerformActionAsync(null, forceStop: true);
+    private void ConnectionButton_Click(object sender, RoutedEventArgs e) =>
+        StartWindowWork(token => PerformActionAsync(null, false, token));
 
-    private async Task PerformActionAsync(int? index, bool forceStop = false)
+    private void ActiveStop_Click(object sender, RoutedEventArgs e) =>
+        StartWindowWork(token => PerformActionAsync(null, true, token));
+
+    private async Task PerformActionAsync(int? index, bool forceStop, CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing) return;
         if (_snapshot is not { } current) return;
         if (forceStop || IsStopTarget(index))
         {
@@ -341,10 +412,18 @@ public sealed partial class MainWindow : Window
             ErrorText.Text = "";
             try
             {
-                await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation });
+                await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation }, cancellationToken);
             }
-            catch (Exception error) { ShowError(error.ToString(), error.Message); }
-            finally { _stopInFlight = false; await RefreshSnapshotAsync(); RenderActions(); }
+            catch (Exception error) when (!_lifetime.IsClosing) { ShowError(error.ToString(), error.Message); }
+            finally
+            {
+                _stopInFlight = false;
+                if (!_lifetime.IsClosing)
+                {
+                    await RefreshSnapshotAsync(cancellationToken);
+                    RenderActions();
+                }
+            }
             return;
         }
         if (_busy || !CanAct(index)) return;
@@ -357,16 +436,28 @@ public sealed partial class MainWindow : Window
                 session_id = current.SessionId, expected_sequence = current.Sequence,
                 mode = index is null ? "AUTO_SELECT" : "PROFILE_INDEX", index = index ?? 0,
                 digest = current.Digest, replace_current = true
-            });
+            }, cancellationToken);
         }
-        catch (Exception error) { ShowError(error.ToString(), error.Message); }
-        finally { _busy = false; await RefreshSnapshotAsync(); RenderActions(); }
+        catch (Exception error) when (!_lifetime.IsClosing) { ShowError(error.ToString(), error.Message); }
+        finally
+        {
+            _busy = false;
+            if (!_lifetime.IsClosing)
+            {
+                await RefreshSnapshotAsync(cancellationToken);
+                RenderActions();
+            }
+        }
     }
 
     private static bool ValidSubscription(string source) => Uri.TryCreate(source, UriKind.Absolute, out var uri) && uri.Scheme == "https" && uri.Host.Length > 0;
 
-    private async void SourceChanged(SubscriptionInputKind kind = SubscriptionInputKind.Typed)
+    private void SourceChanged(SubscriptionInputKind kind = SubscriptionInputKind.Typed) =>
+        StartWindowWork(token => SourceChangedAsync(kind, token));
+
+    private async Task SourceChangedAsync(SubscriptionInputKind kind, CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing) return;
         var source = SourceEditor.Text.Trim();
         var valid = ValidSubscription(source);
         var revision = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
@@ -375,8 +466,9 @@ public sealed partial class MainWindow : Window
         RetryButton.Visibility = Visibility.Collapsed;
         _debounce?.Cancel();
         _debounce?.Dispose();
-        _debounce = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
-        var cancellation = _debounce.Token;
+        var debounce = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _debounce = debounce;
+        var cancellation = debounce.Token;
         RenderActions();
         if (!valid) { LoadStatus.Text = "Enter an HTTPS subscription URL"; return; }
         try
@@ -385,27 +477,37 @@ public sealed partial class MainWindow : Window
                 await Task.Delay(SubscriptionLoadState.DebounceMilliseconds, cancellation);
             cancellation.ThrowIfCancellationRequested();
             if (revision != _subscriptionLoad.Revision) return;
-            await LoadNextAsync();
+            await LoadNextAsync(cancellationToken);
         }
         catch (OperationCanceledException) { }
+        finally
+        {
+            if (ReferenceEquals(_debounce, debounce)) _debounce = null;
+            debounce.Dispose();
+        }
     }
 
-    private void ClipboardChanged(object? sender, object e) => DispatcherQueue.TryEnqueue(RefreshClipboard);
+    private void ClipboardChanged(object? sender, object e) => EnqueueUiCallback(RefreshClipboard);
     private void RefreshClipboard()
     {
+        if (_lifetime.IsClosing) return;
         try { PasteButton.Visibility = Clipboard.GetContent().Contains(StandardDataFormats.Text) ? Visibility.Visible : Visibility.Collapsed; }
         catch (Exception error) { RecordError(error.ToString()); PasteButton.Visibility = Visibility.Collapsed; }
     }
-    private async void Paste_Click(object sender, RoutedEventArgs e)
+    private void Paste_Click(object sender, RoutedEventArgs e) => StartWindowWork(PasteAsync);
+
+    private async Task PasteAsync(CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing) return;
         _diagnostics.RecordInfo("subscription.paste-click", "Started handling a Paste button click", new { session_id = _snapshot?.SessionId });
         try
         {
             var pastedText = (await Clipboard.GetContent().GetTextAsync()).Trim();
+            if (cancellationToken.IsCancellationRequested) return;
             _diagnostics.RecordInfo("subscription.paste-clipboard-text-returned", "Clipboard text returned to the Paste handler", new { session_id = _snapshot?.SessionId, text_length = pastedText.Length });
             ImportSubscription(pastedText, SubscriptionInputKind.Paste);
         }
-        catch (Exception error) { ShowError(error.ToString(), error.Message); }
+        catch (Exception error) when (!_lifetime.IsClosing) { ShowError(error.ToString(), error.Message); }
     }
     private void ImportSubscription(string source, SubscriptionInputKind kind)
     {
@@ -416,6 +518,7 @@ public sealed partial class MainWindow : Window
     }
     public void ImportLink(string value)
     {
+        if (_lifetime.IsClosing) return;
         _diagnostics.RecordInfo(
             "activation.import-link",
             "Received a URI for the main window",
@@ -441,16 +544,18 @@ public sealed partial class MainWindow : Window
 
     private TimeSpan LoadNow => Stopwatch.GetElapsedTime(_loadClockOrigin);
 
-    private async Task LoadNextAsync()
+    private async Task LoadNextAsync(CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
         if (_snapshot is null) return;
         var request = _subscriptionLoad.BeginReady(LoadNow);
         if (request is null) return;
-        await ExecuteLoadAsync(request);
+        await ExecuteLoadAsync(request, cancellationToken);
     }
 
-    private async Task ExecuteLoadAsync(SubscriptionLoadState.Request request)
+    private async Task ExecuteLoadAsync(SubscriptionLoadState.Request request, CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing) return;
         var source = request.Source;
         LoadStatus.Text = "Loading profiles…";
         RenderActions();
@@ -458,13 +563,15 @@ public sealed partial class MainWindow : Window
         {
             var snapshotBeforeConfigure = _snapshot;
             _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-start", "Started the preflight Snapshot before Configure", new { source, session_id = snapshotBeforeConfigure?.SessionId });
-            var current = await ReadSnapshotAsync();
+            var current = await ReadSnapshotAsync(cancellationToken);
+            if (_lifetime.IsClosing) return;
             _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-end", "Completed the preflight Snapshot before Configure", new { source, session_id = current.SessionId, sequence = current.Sequence });
             _diagnostics.RecordInfo(
                 "subscription.configure-submit",
                 "Submitting a subscription URL to the Go backend",
                 new { source, session_id = current.SessionId, expected_sequence = current.Sequence });
-            var configured = await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source });
+            var configured = await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source }, cancellationToken);
+            if (_lifetime.IsClosing) return;
             if (_subscriptionLoad.MarkAccepted(request))
             {
                 _acceptedSequence = configured.GetProperty("sequence").GetInt64();
@@ -472,7 +579,7 @@ public sealed partial class MainWindow : Window
                 LoadStatus.Text = "";
             }
         }
-        catch (Exception error)
+        catch (Exception error) when (!_lifetime.IsClosing)
         {
             if (_subscriptionLoad.IsCurrent(request))
             {
@@ -485,20 +592,23 @@ public sealed partial class MainWindow : Window
         finally
         {
             SubscriptionLoadState.Request? next = null;
-            try { await RefreshSnapshotAsync(); }
+            try
+            {
+                if (!_lifetime.IsClosing) await RefreshSnapshotAsync(cancellationToken);
+            }
             finally
             {
                 next = _subscriptionLoad.Finish(request, LoadNow);
-                RenderActions();
+                if (!_lifetime.IsClosing) RenderActions();
             }
-            if (next is not null) await ExecuteLoadAsync(next);
+            if (!_lifetime.IsClosing && next is not null) await ExecuteLoadAsync(next, cancellationToken);
         }
-        await LoadNextAsync();
+        if (!_lifetime.IsClosing) await LoadNextAsync(cancellationToken);
     }
 
-    private async Task<T> CallAsync<T>(string method, object parameters)
+    private async Task<T> CallAsync<T>(string method, object parameters, CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(2));
         await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
         if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-start", "Started connecting the Configure named pipe", new { method, parameters });
@@ -555,8 +665,11 @@ public sealed partial class MainWindow : Window
     private static string NormalizeSource(string value) =>
         value.Replace("\r\n", "\n").Replace("\r", "\n");
 
-    private async void About_Click(object sender, RoutedEventArgs e)
+    private void About_Click(object sender, RoutedEventArgs e) => StartWindowWork(ShowAboutAsync);
+
+    private async Task ShowAboutAsync(CancellationToken cancellationToken)
     {
+        if (cancellationToken.IsCancellationRequested) return;
         var details = new StackPanel { Spacing = 12 };
         var version = new TextBlock { Text = $"Version: {_version}", IsTextSelectionEnabled = true };
         AutomationProperties.SetAutomationId(version, "About version metadata");
@@ -575,19 +688,30 @@ public sealed partial class MainWindow : Window
             AutomationProperties.SetHelpText(sourceLink, sourceUrl);
             details.Children.Add(sourceLink);
         }
-        await new ContentDialog { Title = "About DobbyVPN", Content = details, CloseButtonText = "Done", XamlRoot = Root.XamlRoot }.ShowAsync();
+        var dialog = new ContentDialog
+        {
+            Title = "About DobbyVPN", Content = details, CloseButtonText = "Done", XamlRoot = Root.XamlRoot,
+        };
+        _aboutDialog = dialog;
+        try { await dialog.ShowAsync(); }
+        finally
+        {
+            if (ReferenceEquals(_aboutDialog, dialog)) _aboutDialog = null;
+        }
     }
 
     private void RecordError(string message) => _diagnostics.Record(message, "ui.failure");
 
     private void ShowError(string details, string message, string category = "ui.failure")
     {
+        if (_lifetime.IsClosing) return;
         _diagnostics.Record(details, category);
         ErrorText.Text = message;
     }
 
     private void SetConnectionStatus(string value)
     {
+        if (_lifetime.IsClosing) return;
         StatusText.Text = value;
         AutomationProperties.SetAutomationId(StatusText, "connection.status");
         AutomationProperties.SetName(StatusText, value);
@@ -595,6 +719,7 @@ public sealed partial class MainWindow : Window
 
     private void LogsText_Loaded(object sender, RoutedEventArgs e)
     {
+        if (_lifetime.IsClosing) return;
         _logScroll = LogsScroll;
         CaptureLogScrollPosition();
         LogsScroll.SizeChanged += (_, _) =>
@@ -669,7 +794,7 @@ public sealed partial class MainWindow : Window
         {
             ObserveLogScrollPosition(args.IsIntermediate);
         };
-        _ = RefreshLogsAsync();
+        StartWindowWork(RefreshLogsAsync);
     }
 
     private void RegisterLogDownScrollIntent()
@@ -759,8 +884,11 @@ public sealed partial class MainWindow : Window
     private bool IsLogScrollAtBottom() => _logScroll is not null &&
         _logScroll.VerticalOffset >= _logScroll.ScrollableHeight - 8;
 
-    private async void ClearLogs_Click(object sender, RoutedEventArgs e)
+    private void ClearLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(ClearLogsAsync);
+
+    private async Task ClearLogsAsync(CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
         try
         {
             if (_clearingLogs) return;
@@ -772,26 +900,28 @@ public sealed partial class MainWindow : Window
             _pendingLogUpwardIntent = false;
             _logTailChangeViewPending = false;
             await _diagnostics.ClearViewAsync();
+            if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
             _logPresentation.ClearAfterBoundary();
             _logRowCache.Clear();
             _renderedLogRows = [];
             LogEntries.Children.Clear();
             CaptureLogScrollPosition();
             _clearingLogs = false;
-            await RefreshLogsAsync();
+            await RefreshLogsAsync(cancellationToken);
         }
-        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
         finally { _clearingLogs = false; }
     }
 
-    private async Task RefreshLogsAsync()
+    private async Task RefreshLogsAsync(CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
         try
         {
             if (_clearingLogs) return;
             var revision = ++_logRevision;
             var preview = await _diagnostics.EntriesAsync();
-            if (revision != _logRevision) return;
+            if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested || revision != _logRevision) return;
             var ingestedBackendEntries = _logPresentation.ReplaceEntries(preview.Entries);
             foreach (var entry in ingestedBackendEntries)
                 _diagnostics.RecordInfo("logs.backend-ingested", "Backend log entry ingested", new
@@ -802,11 +932,12 @@ public sealed partial class MainWindow : Window
             LogsErrorText.Text = preview.Error;
             if (_logPresentation.FollowsTail) RenderLogs();
         }
-        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
     }
 
     private void RenderLogs()
     {
+        if (_lifetime.IsClosing) return;
         var entries = _logPresentation.VisibleEntries;
         var keys = entries.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
         if (_updatingLogs || keys.SequenceEqual(_renderedLogRows.Select(row => row.Key))) return;
@@ -860,7 +991,7 @@ public sealed partial class MainWindow : Window
         }
         _renderedLogRows = nextRows;
         CaptureLogScrollPosition();
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        EnqueueUiCallback(() =>
         {
             if (renderGeneration != _logRenderGeneration) return;
             _updatingLogs = false;
@@ -872,7 +1003,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
             QueueLogTailChangeView(renderGeneration);
-        });
+        }, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
     }
 
     private RenderedLogRow CreateLogRow(NativeDiagnostics.Entry entry, LogRowKey key)
@@ -896,7 +1027,7 @@ public sealed partial class MainWindow : Window
     {
         if (_updatingLogs) return;
         _logTailChangeViewPending = true;
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        EnqueueUiCallback(() =>
         {
             if (renderGeneration != _logRenderGeneration)
                 return;
@@ -918,28 +1049,47 @@ public sealed partial class MainWindow : Window
             var targetOffset = _logScroll.ScrollableHeight;
             _logScroll.ChangeView(null, targetOffset, null, true);
             CaptureLogScrollPosition();
-        });
+        }, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
     }
 
     private string ExportHeader =>
         $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n";
 
-    private async void SaveLogs_Click(object sender, RoutedEventArgs e)
+    private void SaveLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(SaveLogsAsync);
+
+    private async Task SaveLogsAsync(CancellationToken cancellationToken)
     {
+        if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
         if (_exportingLogs) return;
         _exportingLogs = true;
         try
         {
             var picker = new FileSavePicker(AppWindow.Id) { SuggestedFileName = "DobbyVPN-logs" };
             picker.FileTypeChoices.Add("Compressed diagnostics", new List<string> { ".gz" });
-            var file = await picker.PickSaveFileAsync();
+            var operation = picker.PickSaveFileAsync();
+            _savePickerOperation = operation;
+            _diagnostics.RecordInfo("window.file-picker-open", "Opened the system file picker for log export", new
+            {
+                process_id = Environment.ProcessId,
+            });
+            var file = await operation;
+            _diagnostics.RecordInfo("window.file-picker-returned", "The system file picker returned to the log export", new
+            {
+                process_id = Environment.ProcessId,
+                selected = file is not null,
+            });
+            if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
             if (file is not null)
             {
                 await _diagnostics.SaveAsync(file.Path, ExportHeader);
             }
         }
-        catch (Exception error) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be saved. Try another location."; }
-        finally { _exportingLogs = false; }
+        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be saved. Try another location."; }
+        finally
+        {
+            _savePickerOperation = null;
+            _exportingLogs = false;
+        }
     }
 
     private sealed class Snapshot
