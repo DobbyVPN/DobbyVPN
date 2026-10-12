@@ -10,6 +10,7 @@ internal sealed class WindowLifetime
     private bool _closing;
     private bool _disposed;
     private Task<bool>? _drainTask;
+    private Task? _closeTask;
 
     public WindowLifetime() => _shutdownToken = _shutdown.Token;
 
@@ -91,12 +92,43 @@ internal sealed class WindowLifetime
         return DrainAsync();
     }
 
+    /// <summary>
+    /// Cancel pending modal work and drain tracked operations before allowing the
+    /// owning window to close. A failed drain is reported, and never marked as
+    /// successful, while the final close request is still made.
+    /// </summary>
+    public Task DrainBeforeCloseAsync(
+        Action cancelPendingOperations,
+        Action recordDrained,
+        Action<Exception> reportFailure,
+        Func<Task> requestFinalClose)
+    {
+        ArgumentNullException.ThrowIfNull(cancelPendingOperations);
+        ArgumentNullException.ThrowIfNull(recordDrained);
+        ArgumentNullException.ThrowIfNull(reportFailure);
+        ArgumentNullException.ThrowIfNull(requestFinalClose);
+
+        TaskCompletionSource<bool> completion;
+        lock (_gate)
+        {
+            if (_closeTask is not null) return _closeTask;
+            _closing = true;
+            completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _closeTask = completion.Task;
+        }
+
+        _ = CompleteCloseAsync(completion, cancelPendingOperations, recordDrained,
+            reportFailure, requestFinalClose);
+        return completion.Task;
+    }
+
     private async Task RunTrackedAsync(
         Func<CancellationToken, Task> operation,
         Action<Exception> reportError,
         TaskCompletionSource<bool> completion)
     {
         Exception? reportingFailure = null;
+        Exception? operationFailure = null;
         try
         {
             if (!IsClosing)
@@ -107,7 +139,11 @@ internal sealed class WindowLifetime
         }
         catch (Exception error)
         {
-            if (!IsClosing)
+            if (IsClosing)
+            {
+                operationFailure = error;
+            }
+            else
             {
                 try { reportError(error); }
                 catch (Exception reportErrorFailure)
@@ -118,10 +154,61 @@ internal sealed class WindowLifetime
         }
         finally
         {
-            if (reportingFailure is null) completion.TrySetResult(true);
-            else completion.TrySetException(reportingFailure);
+            if (reportingFailure is not null) completion.TrySetException(reportingFailure);
+            else if (operationFailure is not null) completion.TrySetException(operationFailure);
+            else completion.TrySetResult(true);
             lock (_gate) _pending.Remove(completion.Task);
         }
+    }
+
+    private async Task CompleteCloseAsync(
+        TaskCompletionSource<bool> completion,
+        Action cancelPendingOperations,
+        Action recordDrained,
+        Action<Exception> reportFailure,
+        Func<Task> requestFinalClose)
+    {
+        var drainFailures = new List<Exception>();
+        var callbackFailures = new List<Exception>();
+        var drain = DrainAsync();
+
+        // DrainAsync starts cancellation before returning, so modal cancellation
+        // sees the cached shutdown token already canceled.
+        try { cancelPendingOperations(); }
+        catch (Exception error) { drainFailures.Add(error); }
+
+        try { await drain; }
+        catch (Exception error) { drainFailures.Add(error); }
+
+        if (drainFailures.Count == 0)
+        {
+            try { recordDrained(); }
+            catch (Exception error) { drainFailures.Add(error); }
+        }
+
+        if (drainFailures.Count > 0)
+        {
+            try
+            {
+                reportFailure(new AggregateException(
+                    "Windows window shutdown did not drain cleanly.", drainFailures));
+            }
+            catch (Exception error) { callbackFailures.Add(error); }
+        }
+
+        try { await requestFinalClose(); }
+        catch (Exception error)
+        {
+            callbackFailures.Add(error);
+            try { reportFailure(error); }
+            catch (Exception reportError) { callbackFailures.Add(reportError); }
+        }
+
+        if (callbackFailures.Count > 0)
+            completion.TrySetException(new AggregateException(
+                "Windows window close callback failed.", callbackFailures));
+        else
+            completion.TrySetResult(true);
     }
 
     private async Task CancelDrainAndDisposeAsync(TaskCompletionSource<bool> completion)

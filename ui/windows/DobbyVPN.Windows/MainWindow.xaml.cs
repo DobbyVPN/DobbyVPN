@@ -13,6 +13,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Windowing;
 using Microsoft.Windows.Storage.Pickers;
 
 namespace DobbyVPN.Windows;
@@ -56,6 +57,8 @@ public sealed partial class MainWindow : Window
     private List<RenderedLogRow> _renderedLogRows = [];
     private ContentDialog? _aboutDialog;
     private global::Windows.Foundation.IAsyncInfo? _savePickerOperation;
+    private bool _allowFinalClose;
+    private bool _shutdownDrainCompleted;
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
@@ -91,6 +94,7 @@ public sealed partial class MainWindow : Window
             _programmaticSourceText = null;
             SourceChanged();
         };
+        AppWindow.Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
         Clipboard.ContentChanged += ClipboardChanged;
         Activated += MainWindow_Activated;
@@ -101,11 +105,20 @@ public sealed partial class MainWindow : Window
     private void MainWindow_Activated(object sender, WindowActivatedEventArgs args) =>
         EnqueueUiCallback(RefreshClipboard);
 
-    private async void MainWindow_Closed(object sender, WindowEventArgs args)
+    private void MainWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
     {
+        if (_allowFinalClose) return;
+        if (_shutdownDrainCompleted)
+        {
+            // If the dispatcher rejected the programmatic close request, a
+            // later user/system close may safely complete the already-drained
+            // shutdown instead of leaving the window permanently inert.
+            _allowFinalClose = true;
+            return;
+        }
+        args.Cancel = true;
         if (!_lifetime.BeginClosing()) return;
-        CancelPendingModalOperations();
-        _diagnostics.RecordInfo("window.closed", "The Windows frontend window entered its closed state", new
+        _diagnostics.RecordInfo("window.close-requested", "The Windows frontend began draining before close", new
         {
             process_id = Environment.ProcessId,
             pending_work = "draining",
@@ -113,28 +126,67 @@ public sealed partial class MainWindow : Window
         _pollTimer.Dispose();
         Clipboard.ContentChanged -= ClipboardChanged;
         Activated -= MainWindow_Activated;
-        var drained = false;
+        _ = CompleteShutdownBeforeCloseAsync();
+    }
+
+    private async Task CompleteShutdownBeforeCloseAsync()
+    {
         try
         {
-            await _lifetime.DrainAsync();
-            drained = true;
+            await _lifetime.DrainBeforeCloseAsync(
+                CancelPendingModalOperations,
+                () =>
+                {
+                    _diagnostics.RecordInfo("window.shutdown-drained", "The Windows frontend drained its asynchronous work", new
+                    {
+                        process_id = Environment.ProcessId,
+                    });
+                },
+                error => _diagnostics.Record(error.ToString(), "window.shutdown.failure"),
+                RequestFinalCloseAsync);
         }
         catch (Exception error)
         {
             _diagnostics.Record(error.ToString(), "window.shutdown.failure");
         }
-        finally
+    }
+
+    private Task RequestFinalCloseAsync()
+    {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _shutdownDrainCompleted = true;
+        void CloseAfterDrain()
         {
-            _debounce?.Dispose();
-            _debounce = null;
-        }
-        if (drained)
-        {
-            _diagnostics.RecordInfo("window.shutdown-drained", "The Windows frontend drained its asynchronous work", new
+            try
             {
-                process_id = Environment.ProcessId,
-            });
+                _allowFinalClose = true;
+                Close();
+                completion.TrySetResult(true);
+            }
+            catch (Exception error) { completion.TrySetException(error); }
         }
+
+        if (DispatcherQueue.HasThreadAccess)
+        {
+            CloseAfterDrain();
+        }
+        else if (!DispatcherQueue.TryEnqueue(CloseAfterDrain))
+        {
+            completion.TrySetException(new InvalidOperationException(
+                "The Windows dispatcher rejected the final close request after shutdown drain."));
+        }
+        return completion.Task;
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        AppWindow.Closing -= MainWindow_Closing;
+        _debounce?.Dispose();
+        _debounce = null;
+        _diagnostics.RecordInfo("window.closed", "The Windows frontend window entered its closed state", new
+        {
+            process_id = Environment.ProcessId,
+        });
     }
 
     private void CancelPendingModalOperations()
