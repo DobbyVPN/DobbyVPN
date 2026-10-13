@@ -128,8 +128,12 @@ def terminate_process_group(
     """Stop the command's process group, escalating to a forced stop."""
     group_id = getattr(process, "_dobby_process_group_id", process.pid)
     if os.name == "nt":
-        if process.poll() is None:
-            _run_windows_taskkill(process.pid, grace_seconds)
+        if process.poll() is not None:
+            # Once the owned root exits, its PID no longer identifies the
+            # original tree. Do not risk targeting a reused PID or claim that
+            # descendants have stopped without an observable process group.
+            return "process-group=unknown"
+        _run_windows_taskkill(process.pid, grace_seconds)
         return "process-group=terminated"
 
     try:
