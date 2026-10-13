@@ -127,7 +127,11 @@ public struct DobbyRootView: View {
                         Color.clear.preference(key: ControlsHeight.self, value: size.size.height)
                     })
                 }
+#if os(iOS)
+                .frame(maxHeight: min(controlsHeight, geometry.size.height * controlsFraction))
+#else
                 .frame(height: min(controlsHeight, geometry.size.height * controlsFraction))
+#endif
                 .accessibilityIdentifier("Connection controls")
                 .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0 }
 #if os(iOS)
