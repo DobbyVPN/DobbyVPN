@@ -270,8 +270,8 @@ private class SessionController(
         val uri = runCatching { java.net.URI(source) }.getOrNull()
         val valid = uri?.scheme?.lowercase() == "https" && !uri.host.isNullOrEmpty()
         val alreadyAccepted = trigger == LoadTrigger.TYPED && valid &&
-            latest.configured && latest.sourceUrl == source &&
-            !sourceLoads.inFlight
+            state.loadError.isEmpty() && !sourceLoads.inFlight &&
+            (sourceLoads.isAccepted(source) || (latest.configured && latest.sourceUrl == source))
         sourceLoads.change(source, trigger, valid, alreadyAccepted)
         if (alreadyAccepted) {
             if (permissionTarget != null) state = state.copy(busy = false)
@@ -306,7 +306,7 @@ private class SessionController(
                 configured.getJSONObject("result").getLong("sequence")
             }
             main.post {
-                sourceLoads.complete(request) { current ->
+                sourceLoads.complete(request, succeeded = outcome.isSuccess) { current ->
                     state = state.copy(loading = false)
                     if (current) {
                         if (outcome.isSuccess) acceptedSequence = outcome.getOrThrow()
@@ -542,7 +542,9 @@ private class SessionController(
         val source = value.trim()
         if (source == state.source && sourceLoads.hasOutstanding(source)) return
         val noOutstandingLoad = !sourceLoads.hasWork
-        if (noOutstandingLoad && state.loadError.isEmpty() && latest.configured && latest.sourceUrl == source) {
+        if (noOutstandingLoad && state.loadError.isEmpty() &&
+            (sourceLoads.isAccepted(source) || (latest.configured && latest.sourceUrl == source))
+        ) {
             state = state.copy(source = source, sourceDirty = false, loadError = "", error = "")
             return
         }
@@ -668,6 +670,7 @@ private class SessionController(
             main.post {
                 if (current.sessionId == state.session.sessionId && current.sequence < maxOf(state.session.sequence, acceptedSequence)) return@post
                 if (current.sessionId != state.session.sessionId) acceptedSequence = 0
+                sourceLoads.snapshotObserved()
                 val displayedSession = if (state.sourceDirty && current.sessionId == state.session.sessionId) {
                     current.copy(
                         configured = state.session.configured,
