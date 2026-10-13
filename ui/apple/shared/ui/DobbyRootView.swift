@@ -11,6 +11,9 @@ public struct DobbyRootView: View {
     @FocusState private var configurationFocused: Bool
     @State private var showingAbout = false
     @State private var controlsHeight: CGFloat = 0
+#if os(iOS)
+    @State private var logsChromeHeight: CGFloat = 0
+#endif
     @State private var canPaste = false
     @State private var followingLogs = true
     @State private var exportedLogsURL: URL?
@@ -92,7 +95,7 @@ public struct DobbyRootView: View {
 
     private var content: some View {
         GeometryReader { geometry in
-            VStack(spacing: 12) {
+            VStack(spacing: DobbyRootLayout.sectionSpacing) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         configurationEditor
@@ -128,7 +131,7 @@ public struct DobbyRootView: View {
                     })
                 }
 #if os(iOS)
-                .frame(maxHeight: min(controlsHeight, geometry.size.height * controlsFraction))
+                .frame(height: iosControlsHeight(in: geometry.size.height))
 #else
                 .frame(height: min(controlsHeight, geometry.size.height * controlsFraction))
 #endif
@@ -142,7 +145,7 @@ public struct DobbyRootView: View {
                 logs.frame(maxHeight: .infinity)
 #endif
             }
-            .padding(16)
+            .padding(DobbyRootLayout.contentPadding)
         }
     }
 
@@ -250,7 +253,25 @@ public struct DobbyRootView: View {
     }
 
     private var logs: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DobbyRootLayout.logsSpacing) {
+            logsChrome
+#if os(iOS)
+                .background(GeometryReader { size in
+                    Color.clear.preference(key: LogsChromeHeight.self, value: size.size.height)
+                })
+                .onPreferenceChange(LogsChromeHeight.self) { logsChromeHeight = $0 }
+            DobbyLogView(entries: model.logEntries, clear: model.clearRevision)
+                .frame(minHeight: DobbyRootLayout.minimumLogViewportHeight, maxHeight: .infinity)
+                .accessibilityIdentifier("Connection logs")
+#else
+            DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)
+                .accessibilityIdentifier("Connection logs")
+#endif
+        }
+    }
+
+    private var logsChrome: some View {
+        VStack(alignment: .leading, spacing: DobbyRootLayout.logsSpacing) {
             HStack {
                 Text("Logs").font(.headline)
                 Spacer()
@@ -276,15 +297,21 @@ public struct DobbyRootView: View {
 #if os(iOS)
             Text("Recent logs. Shared diagnostics include both retained generations.")
                 .font(.caption).foregroundStyle(.secondary)
-            DobbyLogView(entries: model.logEntries, clear: model.clearRevision)
-                .frame(minHeight: 60, maxHeight: .infinity)
-                .accessibilityIdentifier("Connection logs")
-#else
-            DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)
-                .accessibilityIdentifier("Connection logs")
 #endif
         }
     }
+
+#if os(iOS)
+    private func iosControlsHeight(in containerHeight: CGFloat) -> CGFloat {
+        let spaceReservedForLogs = 2 * DobbyRootLayout.contentPadding
+            + DobbyRootLayout.sectionSpacing
+            + logsChromeHeight
+            + DobbyRootLayout.logsSpacing
+            + DobbyRootLayout.minimumLogViewportHeight
+        let logsAwareMaximum = max(0, containerHeight - spaceReservedForLogs)
+        return min(min(controlsHeight, containerHeight * controlsFraction), logsAwareMaximum)
+    }
+#endif
 
     private func announceStatus(_ status: String) {
         guard scenePhase == .active else { return }
@@ -309,6 +336,20 @@ public struct DobbyRootView: View {
 private struct ControlsHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+#if os(iOS)
+private struct LogsChromeHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+#endif
+
+private enum DobbyRootLayout {
+    static let contentPadding: CGFloat = 16
+    static let sectionSpacing: CGFloat = 12
+    static let logsSpacing: CGFloat = 8
+    static let minimumLogViewportHeight: CGFloat = 60
 }
 
 public struct DobbyAboutView: View {
