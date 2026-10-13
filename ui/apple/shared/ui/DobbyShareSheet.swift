@@ -51,6 +51,73 @@ struct DobbyShareSheet: NSViewRepresentable {
 #endif
 
 #if os(iOS)
+private struct DobbyTextLayoutCapture {
+    let identifier: Int
+    let characterIndex: Int
+    let glyphIndex: Int
+    let paragraphRange: NSRange
+    let point: CGPoint
+    let lineFragment: CGRect
+    let lineUsed: CGRect
+    let contentOffsetY: CGFloat
+    let anchorViewportY: CGFloat
+    let bounds: CGSize
+    let textContainerSize: CGSize
+}
+
+private enum DobbyTextLayoutTrace {
+    private static let maximumRecords = 16
+
+    static func append(_ event: [String: Any], order: Int) -> Bool {
+        guard order < maximumRecords else { return false }
+        guard let rawIdentifier = ProcessInfo.processInfo.environment[
+            "DOBBY_SIMULATOR_TEST_LOG_DIRECTORY_ID"
+        ], let identifier = UUID(uuidString: rawIdentifier) else { return false }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DobbyVPN-UI-\(identifier.uuidString)", isDirectory: true)
+        let path = directory.appendingPathComponent("textkit_layout.jsonl")
+
+        do {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true
+            )
+            var boundedEvent = event
+            boundedEvent["sample_order"] = order
+            let encoded = try JSONSerialization.data(withJSONObject: boundedEvent, options: [.sortedKeys])
+            if !FileManager.default.fileExists(atPath: path.path) {
+                guard FileManager.default.createFile(atPath: path.path, contents: nil) else {
+                    return false
+                }
+            }
+            let handle = try FileHandle(forWritingTo: path)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: encoded + Data([0x0a]))
+            try handle.synchronize()
+            return true
+        } catch {
+            let message = "Dobby text layout diagnostic write failed: \(String(reflecting: error))\n"
+            try? FileHandle.standardError.write(contentsOf: Data(message.utf8))
+            return false
+        }
+    }
+
+    static func size(_ value: CGSize) -> [String: Double] {
+        ["width": Double(value.width), "height": Double(value.height)]
+    }
+
+    static func point(_ value: CGPoint) -> [String: Double] {
+        ["x": Double(value.x), "y": Double(value.y)]
+    }
+
+    static func rect(_ value: CGRect) -> [String: Double] {
+        [
+            "x": Double(value.origin.x), "y": Double(value.origin.y),
+            "width": Double(value.size.width), "height": Double(value.size.height),
+        ]
+    }
+}
+
 private final class DobbyLogTextView: UITextView {
     var preservesReadingPosition = false
     private(set) var isRestoringReadingPosition = false
@@ -58,15 +125,19 @@ private final class DobbyLogTextView: UITextView {
     private var lastLayoutSize: CGSize?
     private var anchorCharacterIndex: Int?
     private var anchorViewportY: CGFloat?
+    private var latestLayoutCapture: DobbyTextLayoutCapture?
+    private var nextLayoutCaptureIdentifier = 0
+    private var layoutTraceRecordCount = 0
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        let previousSize = lastLayoutSize
         let sizeChanged = lastLayoutSize.map {
             abs($0.width - bounds.width) > 0.5 || abs($0.height - bounds.height) > 0.5
         } ?? false
         lastLayoutSize = bounds.size
         if sizeChanged && preservesReadingPosition {
-            restoreReadingPosition()
+            restoreReadingPosition(from: previousSize)
         }
     }
 
@@ -91,26 +162,91 @@ private final class DobbyLogTextView: UITextView {
         let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
         let character = min(layoutManager.characterIndexForGlyph(at: glyph), textStorage.length - 1)
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let lineUsed = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+        let paragraphRange = (textStorage.string as NSString).paragraphRange(
+            for: NSRange(location: character, length: 0)
+        )
+        nextLayoutCaptureIdentifier += 1
         anchorCharacterIndex = character
         anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
+        latestLayoutCapture = DobbyTextLayoutCapture(
+            identifier: nextLayoutCaptureIdentifier,
+            characterIndex: character,
+            glyphIndex: glyph,
+            paragraphRange: paragraphRange,
+            point: point,
+            lineFragment: line,
+            lineUsed: lineUsed,
+            contentOffsetY: contentOffset.y,
+            anchorViewportY: anchorViewportY ?? 0,
+            bounds: bounds.size,
+            textContainerSize: textContainer.size
+        )
     }
 
-    private func restoreReadingPosition() {
+    private func restoreReadingPosition(from previousSize: CGSize?) {
         guard let character = anchorCharacterIndex,
               let viewportY = anchorViewportY,
               textStorage.length > 0 else { return }
         layoutManager.ensureLayout(for: textContainer)
         let glyph = layoutManager.glyphIndexForCharacter(at: min(character, textStorage.length - 1))
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let lineUsed = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
         let maximumAnchorViewportY = max(0, bounds.height - adjustedContentInset.bottom - line.height)
         let restoredAnchorViewportY = min(max(viewportY, 0), maximumAnchorViewportY)
         let requestedY = line.minY + textContainerInset.top - restoredAnchorViewportY
         let maximumY = max(-adjustedContentInset.top, contentSize.height - bounds.height + adjustedContentInset.bottom)
         let restoredY = min(max(requestedY, -adjustedContentInset.top), maximumY)
+        let contentOffsetBefore = contentOffset.y
         isRestoringReadingPosition = true
         setContentOffset(CGPoint(x: contentOffset.x, y: restoredY), animated: false)
         isRestoringReadingPosition = false
         readingPositionRestoreCount += 1
+
+        if let capture = latestLayoutCapture {
+            let paragraph = (textStorage.string as NSString).substring(
+                with: NSIntersectionRange(
+                    capture.paragraphRange,
+                    NSRange(location: 0, length: textStorage.length)
+                )
+            )
+            let recordOrder = layoutTraceRecordCount
+            layoutTraceRecordCount += 1
+            _ = DobbyTextLayoutTrace.append([
+                "restore_id": readingPositionRestoreCount,
+                "size_before": DobbyTextLayoutTrace.size(previousSize ?? .zero),
+                "size_after": DobbyTextLayoutTrace.size(bounds.size),
+                "text_container_size": DobbyTextLayoutTrace.size(textContainer.size),
+                "capture": [
+                    "capture_id": capture.identifier,
+                    "character_index": capture.characterIndex,
+                    "glyph_index": capture.glyphIndex,
+                    "paragraph_range_location": capture.paragraphRange.location,
+                    "paragraph_range_length": capture.paragraphRange.length,
+                    "logical_paragraph": paragraph,
+                    "text_container_point": DobbyTextLayoutTrace.point(capture.point),
+                    "line_fragment": DobbyTextLayoutTrace.rect(capture.lineFragment),
+                    "line_used": DobbyTextLayoutTrace.rect(capture.lineUsed),
+                    "content_offset_y": Double(capture.contentOffsetY),
+                    "anchor_viewport_y": Double(capture.anchorViewportY),
+                    "bounds": DobbyTextLayoutTrace.size(capture.bounds),
+                    "text_container_size": DobbyTextLayoutTrace.size(capture.textContainerSize),
+                ],
+                "restore_character_index": character,
+                "restore_line_fragment": DobbyTextLayoutTrace.rect(line),
+                "restore_line_used": DobbyTextLayoutTrace.rect(lineUsed),
+                "requested_offset_y": Double(requestedY),
+                "anchor_viewport_y_after_bounds_clamp": Double(restoredAnchorViewportY),
+                "content_offset_y_after_content_clamp": Double(restoredY),
+                "content_offset_y_before": Double(contentOffsetBefore),
+                "content_offset_y_after": Double(contentOffset.y),
+                "content_size": DobbyTextLayoutTrace.size(contentSize),
+                "adjusted_insets": [
+                    "top": Double(adjustedContentInset.top),
+                    "bottom": Double(adjustedContentInset.bottom),
+                ],
+            ], order: recordOrder)
+        }
     }
 }
 
