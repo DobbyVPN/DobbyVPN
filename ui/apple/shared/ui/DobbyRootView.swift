@@ -254,8 +254,8 @@ public struct DobbyRootView: View {
 
     private var logs: some View {
         VStack(alignment: .leading, spacing: DobbyRootLayout.logsSpacing) {
-            logsChrome
 #if os(iOS)
+            logsChrome
                 .background(GeometryReader { size in
                     Color.clear.preference(key: LogsChromeHeight.self, value: size.size.height)
                 })
@@ -264,6 +264,7 @@ public struct DobbyRootView: View {
                 .frame(minHeight: DobbyRootLayout.minimumLogViewportHeight, maxHeight: .infinity)
                 .accessibilityIdentifier("Connection logs")
 #else
+            logsChrome
             DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)
                 .accessibilityIdentifier("Connection logs")
 #endif
