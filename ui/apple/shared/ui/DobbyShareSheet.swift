@@ -67,14 +67,21 @@ private struct DobbyTextLayoutCapture {
 
 private enum DobbyTextLayoutTrace {
     private static let maximumRecords = 16
-
-    static func append(_ event: [String: Any], order: Int) -> Bool {
-        guard order < maximumRecords else { return false }
+    private static let testSessionDirectory: URL? = {
         guard let rawIdentifier = ProcessInfo.processInfo.environment[
             "DOBBY_SIMULATOR_TEST_LOG_DIRECTORY_ID"
-        ], let identifier = UUID(uuidString: rawIdentifier) else { return false }
-        let directory = FileManager.default.temporaryDirectory
+        ], let identifier = UUID(uuidString: rawIdentifier) else { return nil }
+        return FileManager.default.temporaryDirectory
             .appendingPathComponent("DobbyVPN-UI-\(identifier.uuidString)", isDirectory: true)
+    }()
+
+    static func canRecord(order: Int) -> Bool {
+        order < maximumRecords && testSessionDirectory != nil
+    }
+
+    static func append(_ event: [String: Any], order: Int) -> Bool {
+        guard canRecord(order: order) else { return false }
+        guard let directory = testSessionDirectory else { return false }
         let path = directory.appendingPathComponent("textkit_layout.jsonl")
 
         do {
@@ -162,13 +169,14 @@ private final class DobbyLogTextView: UITextView {
         let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
         let character = min(layoutManager.characterIndexForGlyph(at: glyph), textStorage.length - 1)
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        anchorCharacterIndex = character
+        anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
+        guard DobbyTextLayoutTrace.canRecord(order: layoutTraceRecordCount) else { return }
         let lineUsed = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
         let paragraphRange = (textStorage.string as NSString).paragraphRange(
             for: NSRange(location: character, length: 0)
         )
         nextLayoutCaptureIdentifier += 1
-        anchorCharacterIndex = character
-        anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
         latestLayoutCapture = DobbyTextLayoutCapture(
             identifier: nextLayoutCaptureIdentifier,
             characterIndex: character,
@@ -191,7 +199,11 @@ private final class DobbyLogTextView: UITextView {
         layoutManager.ensureLayout(for: textContainer)
         let glyph = layoutManager.glyphIndexForCharacter(at: min(character, textStorage.length - 1))
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-        let lineUsed = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+        let traceEnabled = DobbyTextLayoutTrace.canRecord(order: layoutTraceRecordCount)
+            && latestLayoutCapture != nil
+        let lineUsed = traceEnabled
+            ? layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+            : .zero
         let maximumAnchorViewportY = max(0, bounds.height - adjustedContentInset.bottom - line.height)
         let restoredAnchorViewportY = min(max(viewportY, 0), maximumAnchorViewportY)
         let requestedY = line.minY + textContainerInset.top - restoredAnchorViewportY
@@ -203,7 +215,7 @@ private final class DobbyLogTextView: UITextView {
         isRestoringReadingPosition = false
         readingPositionRestoreCount += 1
 
-        if let capture = latestLayoutCapture {
+        if traceEnabled, let capture = latestLayoutCapture {
             let paragraph = (textStorage.string as NSString).substring(
                 with: NSIntersectionRange(
                     capture.paragraphRange,
