@@ -164,7 +164,7 @@ private final class DobbyLogTextView: UITextView {
         layoutManager.ensureLayout(for: textContainer)
         let point = CGPoint(
             x: textContainerInset.left + 1,
-            y: contentOffset.y + textContainerInset.top + 1
+            y: contentOffset.y - textContainerInset.top + 1
         )
         let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
         let character = min(layoutManager.characterIndexForGlyph(at: glyph), textStorage.length - 1)
