@@ -134,7 +134,7 @@ internal sealed class WindowLifetime
             if (!IsClosing)
                 await operation(_shutdownToken);
         }
-        catch (OperationCanceledException) when (_shutdownToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (IsClosing)
         {
         }
         catch (Exception error)
@@ -170,13 +170,14 @@ internal sealed class WindowLifetime
     {
         var drainFailures = new List<Exception>();
         var callbackFailures = new List<Exception>();
-        var drain = DrainAsync();
 
-        // DrainAsync starts cancellation before returning, so modal cancellation
-        // sees the cached shutdown token already canceled.
+        // Cancel modal WinRT operations while their original status is still
+        // observable. DrainAsync then cancels the lifetime token so cancellable
+        // task bridges can unwind even if an operation withholds completion.
         try { cancelPendingOperations(); }
         catch (Exception error) { drainFailures.Add(error); }
 
+        var drain = DrainAsync();
         try { await drain; }
         catch (Exception error) { drainFailures.Add(error); }
 

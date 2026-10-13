@@ -1150,7 +1150,7 @@ public sealed partial class MainWindow : Window
             {
                 process_id = Environment.ProcessId,
             });
-            var file = await operation;
+            var file = await operation.AsTask(cancellationToken);
             RecordSavePickerOperationState("await-returned", operation);
             _diagnostics.RecordInfo("window.file-picker-returned", "The system file picker returned to the log export", new
             {
