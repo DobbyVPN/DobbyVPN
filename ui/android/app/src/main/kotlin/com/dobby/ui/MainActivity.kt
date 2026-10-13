@@ -271,7 +271,7 @@ private class SessionController(
         val valid = uri?.scheme?.lowercase() == "https" && !uri.host.isNullOrEmpty()
         val alreadyAccepted = trigger == LoadTrigger.TYPED && valid &&
             state.loadError.isEmpty() && !sourceLoads.inFlight &&
-            (sourceLoads.isAccepted(source) || (latest.configured && latest.sourceUrl == source))
+            sourceLoads.isAlreadyAccepted(source, latest.configured, latest.sourceUrl)
         sourceLoads.change(source, trigger, valid, alreadyAccepted)
         if (alreadyAccepted) {
             if (permissionTarget != null) state = state.copy(busy = false)
@@ -308,8 +308,8 @@ private class SessionController(
             main.post {
                 sourceLoads.complete(request, succeeded = outcome.isSuccess) { current ->
                     state = state.copy(loading = false)
+                    if (outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
                     if (current) {
-                        if (outcome.isSuccess) acceptedSequence = outcome.getOrThrow()
                         state = if (outcome.isSuccess) state.copy(sourceDirty = false, loadError = "")
                         else state.copy(loadError = outcome.exceptionOrNull()?.message ?: "Subscription could not be loaded")
                     }
@@ -543,7 +543,7 @@ private class SessionController(
         if (source == state.source && sourceLoads.hasOutstanding(source)) return
         val noOutstandingLoad = !sourceLoads.hasWork
         if (noOutstandingLoad && state.loadError.isEmpty() &&
-            (sourceLoads.isAccepted(source) || (latest.configured && latest.sourceUrl == source))
+            sourceLoads.isAlreadyAccepted(source, latest.configured, latest.sourceUrl)
         ) {
             state = state.copy(source = source, sourceDirty = false, loadError = "", error = "")
             return

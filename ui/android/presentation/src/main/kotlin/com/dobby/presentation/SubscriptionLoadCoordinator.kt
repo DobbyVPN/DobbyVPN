@@ -26,6 +26,7 @@ class SubscriptionLoadCoordinator(
     private var queued: SubscriptionRequest? = null
     private var active: SubscriptionRequest? = null
     private var acceptedSource: String? = null
+    private var snapshotPending = false
 
     val revision: Long get() = revisionValue
     val inFlight: Boolean get() = active != null
@@ -54,11 +55,13 @@ class SubscriptionLoadCoordinator(
         timer?.request?.source == source || queued?.source == source || active?.source == source
 
     /** A current successful configure can be newer than the next backend snapshot. */
-    fun isAccepted(source: String): Boolean = acceptedSource == source
+    fun isAlreadyAccepted(source: String, snapshotConfigured: Boolean, snapshotSource: String): Boolean =
+        acceptedSource == source || (!snapshotPending && snapshotConfigured && snapshotSource == source)
 
-    /** Clear the short-lived success record once a current backend snapshot is observed. */
+    /** Clear accepted-source and pending-configure state after a fresh backend snapshot. */
     fun snapshotObserved() {
         acceptedSource = null
+        snapshotPending = false
     }
 
     /** Start a request left queued while the backend session was unavailable. */
@@ -82,6 +85,9 @@ class SubscriptionLoadCoordinator(
         val next = queued ?: return
         queued = null
         active = next
+        // A later configure may replace the source represented by any earlier
+        // accepted-source bridge before the next snapshot is observed.
+        acceptedSource = null
         start(next)
     }
 
@@ -93,6 +99,7 @@ class SubscriptionLoadCoordinator(
         check(active == request) { "Completed request does not own the active subscription load" }
         active = null
         val current = request.revision == revisionValue
+        snapshotPending = true
         if (current && succeeded) acceptedSource = request.source
         completed(current)
         startQueued()
