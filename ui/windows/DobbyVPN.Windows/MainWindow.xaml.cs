@@ -193,8 +193,31 @@ public sealed partial class MainWindow : Window
     {
         try { _aboutDialog?.Hide(); }
         catch (Exception error) { _diagnostics.Record(error.ToString(), "window.about-dialog.cancel.failure"); }
-        try { _savePickerOperation?.Cancel(); }
+        var pickerOperation = _savePickerOperation;
+        if (pickerOperation is null) return;
+        RecordSavePickerOperationState("before-cancel", pickerOperation);
+        try
+        {
+            pickerOperation.Cancel();
+            RecordSavePickerOperationState("after-cancel", pickerOperation);
+        }
         catch (Exception error) { _diagnostics.Record(error.ToString(), "window.save-picker.cancel.failure"); }
+    }
+
+    private void RecordSavePickerOperationState(string phase, global::Windows.Foundation.IAsyncInfo operation)
+    {
+        try
+        {
+            _diagnostics.RecordInfo("window.file-picker-operation-state", "Observed the system file picker operation", new
+            {
+                process_id = Environment.ProcessId,
+                phase,
+                operation_id = operation.Id,
+                status = operation.Status.ToString(),
+                error_code = operation.ErrorCode?.ToString(),
+            });
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "window.save-picker.state.failure"); }
     }
 
     private bool StartWindowWork(Func<CancellationToken, Task> operation) =>
@@ -1114,17 +1137,21 @@ public sealed partial class MainWindow : Window
         if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
         if (_exportingLogs) return;
         _exportingLogs = true;
+        global::Windows.Foundation.IAsyncInfo? pickerOperation = null;
         try
         {
             var picker = new FileSavePicker(AppWindow.Id) { SuggestedFileName = "DobbyVPN-logs" };
             picker.FileTypeChoices.Add("Compressed diagnostics", new List<string> { ".gz" });
             var operation = picker.PickSaveFileAsync();
+            pickerOperation = operation;
             _savePickerOperation = operation;
+            RecordSavePickerOperationState("opened", operation);
             _diagnostics.RecordInfo("window.file-picker-open", "Opened the system file picker for log export", new
             {
                 process_id = Environment.ProcessId,
             });
             var file = await operation;
+            RecordSavePickerOperationState("await-returned", operation);
             _diagnostics.RecordInfo("window.file-picker-returned", "The system file picker returned to the log export", new
             {
                 process_id = Environment.ProcessId,
@@ -1139,6 +1166,8 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be saved. Try another location."; }
         finally
         {
+            if (pickerOperation is not null)
+                RecordSavePickerOperationState("await-finally", pickerOperation);
             _savePickerOperation = null;
             _exportingLogs = false;
         }

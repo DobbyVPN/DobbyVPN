@@ -411,14 +411,15 @@ def run_finite_capture(
             cleanup_started + max(termination_grace_seconds, 0),
         )
         cleanup_errors: list[BaseException] = []
+        termination_outcome: object | None = None
         try:
             if terminate is None:
-                terminate_process_group(
+                termination_outcome = terminate_process_group(
                     process,
                     grace_seconds=max(termination_deadline - cleanup_started, 0),
                 )
             else:
-                terminate(process, termination_deadline)
+                termination_outcome = terminate(process, termination_deadline)
         except BaseException as cleanup_error:
             cleanup_errors.append(cleanup_error)
             cleanup_stdout, cleanup_stderr = exception_output(cleanup_error)
@@ -443,6 +444,25 @@ def run_finite_capture(
         )
         cleanup_errors.extend(drain_errors)
         set_exception_output(original_error, stdout, stderr)
+        if isinstance(original_error, subprocess.TimeoutExpired):
+            group_id = getattr(process, "_dobby_process_group_id", process.pid)
+            try:
+                owned_child_reaped = process.poll() is not None
+            except BaseException as state_error:
+                owned_child_reaped = None
+                original_error.add_note(
+                    f"owned child reap state could not be read: {type(state_error).__name__}: {state_error}"
+                )
+            if termination_outcome == "process-group=terminated":
+                group_final_state = "terminated"
+            else:
+                group_final_state = "unknown"
+            original_error.add_note(
+                "process timeout cleanup: "
+                f"owned_pid={process.pid}; process_group={group_id}; "
+                f"owned_child_reaped={'yes' if owned_child_reaped else 'unknown' if owned_child_reaped is None else 'no'}; "
+                f"process_group_final_state={group_final_state}"
+            )
         if cleanup_errors:
             for error in cleanup_errors:
                 original_error.add_note(

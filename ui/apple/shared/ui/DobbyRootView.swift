@@ -76,7 +76,7 @@ public struct DobbyRootView: View {
 
     private var controlsFraction: CGFloat {
 #if os(iOS)
-        0.4
+        configurationFocused ? 0.25 : 0.4
 #else
         0.65
 #endif
@@ -130,7 +130,13 @@ public struct DobbyRootView: View {
                 .frame(height: min(controlsHeight, geometry.size.height * controlsFraction))
                 .accessibilityIdentifier("Connection controls")
                 .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0 }
+#if os(iOS)
+                logs
+                    .frame(maxHeight: .infinity)
+                    .layoutPriority(1)
+#else
                 logs.frame(maxHeight: .infinity)
+#endif
             }
             .padding(16)
         }
@@ -267,6 +273,7 @@ public struct DobbyRootView: View {
             Text("Recent logs. Shared diagnostics include both retained generations.")
                 .font(.caption).foregroundStyle(.secondary)
             DobbyLogView(entries: model.logEntries, clear: model.clearRevision)
+                .frame(minHeight: 60, maxHeight: .infinity)
                 .accessibilityIdentifier("Connection logs")
 #else
             DobbyLogView(entries: model.logEntries, following: $followingLogs, clear: model.clearRevision)
