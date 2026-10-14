@@ -307,7 +307,7 @@ write_dependency_manifest() {
   fi
   python3 "$dependency_helper" --source-root "$source_root" --source-commit "$source_commit" \
     --source-tree "$source_tree" --spec "$dependency_spec" \
-    --java-version "$java_version" "${gradle_proof_args[@]}" "${go_origin_args[@]}" \
+    --java-version "$java_version" ${gradle_proof_args[@]+"${gradle_proof_args[@]}"} "${go_origin_args[@]}" \
     --output "$dependency_manifest"
 }
 java_bin=${JAVA_BIN:-"$(command -v java || true)"}
@@ -477,13 +477,17 @@ if [[ "$trusted_archive_source" == 1 ]]; then
 fi
 python3 "$reproducibility_verifier" create --first-apk "$first_output" --second-apk "$output" \
   --output "$reproducibility" --source-sha "$source_commit" --version-name "$version_name" --version-code "$version_code" \
-  "${reproducibility_profile_args[@]}"
+  ${reproducibility_profile_args[@]+"${reproducibility_profile_args[@]}"}
 [[ -f "$source_verifier" ]] || { echo 'APK source verifier is missing' >&2; exit 2; }
-apkanalyzer_bin=${APKANALYZER:-"$(command -v apkanalyzer || true)"}
+# Prefer the SDK's own apkanalyzer: a copy from another install (for example
+# Homebrew) looks for build-tools next to itself and cannot find this SDK's.
+apkanalyzer_bin=${APKANALYZER:-}
 if [[ -z "$apkanalyzer_bin" ]]; then
   sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
   if [[ -n "$sdk_root" && -x "$sdk_root/cmdline-tools/latest/bin/apkanalyzer" ]]; then
     apkanalyzer_bin="$sdk_root/cmdline-tools/latest/bin/apkanalyzer"
+  else
+    apkanalyzer_bin=$(command -v apkanalyzer || true)
   fi
 fi
 [[ -n "$apkanalyzer_bin" && -x "$apkanalyzer_bin" ]] || { echo 'apkanalyzer is required for source identity verification' >&2; exit 2; }
@@ -502,10 +506,15 @@ python3 "$source_verifier" "${source_verifier_args[@]}"
 # ABIs include the TrustTunnel bridge and resolve its native runtime symbols.
 readelf_bin=${ANDROID_READELF:-}
 if [[ -z "$readelf_bin" ]]; then
-  mapfile -t ndk_toolchains < <(
+  # macOS ships bash 3.2, which has no mapfile.
+  ndk_toolchains=()
+  while IFS= read -r ndk_toolchain_path; do
+    ndk_toolchains+=("$ndk_toolchain_path")
+  done < <(
     find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print
   )
-  printf '%s\n' "${ndk_toolchains[@]}" >&2
+  # Bash 3.2 treats an empty array as unset under set -u.
+  printf '%s\n' ${ndk_toolchains[@]+"${ndk_toolchains[@]}"} >&2
   [[ "${#ndk_toolchains[@]}" -eq 1 ]] || {
     echo 'Android NDK must contain exactly one host toolchain' >&2
     exit 2

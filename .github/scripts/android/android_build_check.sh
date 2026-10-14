@@ -71,7 +71,11 @@ fi
 
 readelf_bin=${ANDROID_READELF:-}
 if [[ -z "$readelf_bin" ]]; then
-  mapfile -t ndk_toolchains < <(
+  # macOS ships bash 3.2, which has no mapfile.
+  ndk_toolchains=()
+  while IFS= read -r ndk_toolchain_path; do
+    ndk_toolchains+=("$ndk_toolchain_path")
+  done < <(
     find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print
   )
   [[ "${#ndk_toolchains[@]}" -eq 1 ]] || {
