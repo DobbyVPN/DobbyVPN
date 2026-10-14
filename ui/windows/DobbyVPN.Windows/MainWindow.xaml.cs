@@ -868,6 +868,11 @@ public sealed partial class MainWindow : Window
         LogsScroll.ViewChanged += (_, args) =>
         {
             ObserveLogScrollPosition(args.IsIntermediate);
+            if (!_updatingLogs && !_logTailChangeViewPending && !_logDirectManipulation &&
+                !_logScrollbarPointerDown && _logPresentation.TryRequestSettledTailAlignment(
+                    args.IsIntermediate, LogsScroll.VerticalOffset, LogsScroll.ScrollableHeight,
+                    _logRenderGeneration))
+                QueueLogTailChangeView(_logRenderGeneration);
         };
         StartWindowWork(RefreshLogsAsync);
     }
