@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.IO;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Windows.ApplicationModel.DataTransfer;
 using System.Collections.Generic;
 using System.Text;
@@ -59,6 +60,14 @@ public sealed partial class MainWindow : Window
     private global::Windows.Foundation.IAsyncInfo? _savePickerOperation;
     private bool _allowFinalClose;
     private bool _shutdownDrainCompleted;
+    private int _diagnosticClosingDepth;
+    private readonly List<object> _diagnosticScrollSamples = [];
+    private bool _diagnosticScrollFlushed;
+    private bool _diagnosticWheelObserved;
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hwnd);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
@@ -107,26 +116,66 @@ public sealed partial class MainWindow : Window
 
     private void MainWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
     {
-        if (_allowFinalClose) return;
-        if (_shutdownDrainCompleted)
+        _diagnosticClosingDepth++;
+        RecordCloseBoundary("closing-enter");
+        try
         {
-            // If the dispatcher rejected the programmatic close request, a
-            // later user/system close may safely complete the already-drained
-            // shutdown instead of leaving the window permanently inert.
-            _allowFinalClose = true;
-            return;
+            if (_allowFinalClose) return;
+            if (_shutdownDrainCompleted)
+            {
+                // If the dispatcher rejected the programmatic close request, a
+                // later user/system close may safely complete the already-drained
+                // shutdown instead of leaving the window permanently inert.
+                _allowFinalClose = true;
+                return;
+            }
+            args.Cancel = true;
+            if (!_lifetime.BeginClosing()) return;
+            if (!_diagnosticScrollFlushed && _diagnosticWheelObserved)
+            {
+                _diagnosticScrollFlushed = true;
+                _diagnostics.RecordInfo("diagnostic.logs-scroll-boundary", "Buffered log scroll boundary observations",
+                    new { samples = _diagnosticScrollSamples, sample_cap = 100 });
+            }
+            _diagnostics.RecordInfo("window.close-requested", "The Windows frontend began draining before close", new
+            {
+                process_id = Environment.ProcessId,
+                pending_work = "draining",
+            });
+            _pollTimer.Dispose();
+            Clipboard.ContentChanged -= ClipboardChanged;
+            Activated -= MainWindow_Activated;
+            _ = CompleteShutdownBeforeCloseAsync();
         }
-        args.Cancel = true;
-        if (!_lifetime.BeginClosing()) return;
-        _diagnostics.RecordInfo("window.close-requested", "The Windows frontend began draining before close", new
+        finally
         {
-            process_id = Environment.ProcessId,
-            pending_work = "draining",
-        });
-        _pollTimer.Dispose();
-        Clipboard.ContentChanged -= ClipboardChanged;
-        Activated -= MainWindow_Activated;
-        _ = CompleteShutdownBeforeCloseAsync();
+            _diagnosticClosingDepth--;
+            RecordCloseBoundary("closing-return", args.Cancel);
+        }
+    }
+
+    private void RecordCloseBoundary(string stage, bool? canceled = null)
+    {
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            var thread = GetWindowThreadProcessId(hwnd, out var process);
+            _diagnostics.RecordInfo("diagnostic.window-close-boundary", "Native close boundary observation", new
+            {
+                stage, canceled, observed_utc = DateTimeOffset.UtcNow,
+                monotonic_timestamp = Stopwatch.GetTimestamp(),
+                window_handle = hwnd.ToInt64(), native_window_valid = IsWindow(hwnd),
+                native_owner_process_id = process, native_thread_id = thread,
+                managed_thread_id = Environment.CurrentManagedThreadId,
+                closing_callback_depth = _diagnosticClosingDepth,
+                dispatcher_thread_access = DispatcherQueue.HasThreadAccess,
+                allow_final_close = _allowFinalClose, shutdown_drain_completed = _shutdownDrainCompleted,
+            });
+        }
+        catch (Exception error)
+        {
+            _diagnostics.Record(error.ToString(), "diagnostic.window-close-boundary.failure");
+        }
     }
 
     private async Task CompleteShutdownBeforeCloseAsync()
@@ -160,7 +209,9 @@ public sealed partial class MainWindow : Window
             try
             {
                 _allowFinalClose = true;
+                RecordCloseBoundary("final-close-before");
                 Close();
+                RecordCloseBoundary("final-close-after");
                 completion.TrySetResult(true);
             }
             catch (Exception error) { completion.TrySetException(error); }
@@ -180,6 +231,7 @@ public sealed partial class MainWindow : Window
 
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
+        RecordCloseBoundary("managed-closed");
         AppWindow.Closing -= MainWindow_Closing;
         _debounce?.Dispose();
         _debounce = null;
@@ -811,8 +863,11 @@ public sealed partial class MainWindow : Window
         {
             var properties = args.GetCurrentPoint(LogsScroll).Properties;
             if (properties.IsHorizontalMouseWheel || properties.MouseWheelDelta == 0) return;
+            _diagnosticWheelObserved = true;
+            RecordLogScrollBoundary("wheel-before", wheelDelta: properties.MouseWheelDelta);
             if (properties.MouseWheelDelta > 0) RequestLogFollowFreezeForUpwardIntent();
             else RegisterLogDownScrollIntent();
+            RecordLogScrollBoundary("wheel-after", wheelDelta: properties.MouseWheelDelta);
         }), true);
         LogsScroll.AddHandler(UIElement.KeyDownEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler((_, args) =>
         {
@@ -867,9 +922,31 @@ public sealed partial class MainWindow : Window
         };
         LogsScroll.ViewChanged += (_, args) =>
         {
+            RecordLogScrollBoundary("view-before", args.IsIntermediate);
             ObserveLogScrollPosition(args.IsIntermediate);
+            RecordLogScrollBoundary("view-after", args.IsIntermediate);
         };
         StartWindowWork(RefreshLogsAsync);
+    }
+
+    private void RecordLogScrollBoundary(string stage, bool? intermediate = null, int? wheelDelta = null)
+    {
+        if (!_diagnosticWheelObserved || _diagnosticScrollSamples.Count >= 100 || _logScroll is null) return;
+        _diagnosticScrollSamples.Add(new
+        {
+            stage, intermediate, wheel_delta = wheelDelta, sample = _diagnosticScrollSamples.Count + 1,
+            observed_utc = DateTimeOffset.UtcNow, monotonic_timestamp = Stopwatch.GetTimestamp(),
+            window_handle = WinRT.Interop.WindowNative.GetWindowHandle(this).ToInt64(),
+            managed_thread_id = Environment.CurrentManagedThreadId,
+            vertical_offset = _logScroll.VerticalOffset, scrollable_height = _logScroll.ScrollableHeight,
+            viewport_height = _logScroll.ViewportHeight, extent_height = _logScroll.ExtentHeight,
+            last_offset = _lastLogScrollOffset, pending_offset = _pendingLogScrollOffset,
+            follows_tail = _logPresentation.FollowsTail, pending_down = _pendingLogDownScroll,
+            pending_up = _pendingLogUpwardIntent, direct_manipulation = _logDirectManipulation,
+            scrollbar_pointer_down = _logScrollbarPointerDown, updating_logs = _updatingLogs,
+            tail_change_pending = _logTailChangeViewPending, generation = _logRenderGeneration,
+            rendered_rows = _renderedLogRows.Count, latest_rows = _logPresentation.LatestEntries.Count,
+        });
     }
 
     private void RegisterLogDownScrollIntent()
@@ -1122,8 +1199,10 @@ public sealed partial class MainWindow : Window
             }
             if (!_logPresentation.FollowsTail) return;
             var targetOffset = _logScroll.ScrollableHeight;
+            RecordLogScrollBoundary("tail-change-before");
             _logScroll.ChangeView(null, targetOffset, null, true);
             CaptureLogScrollPosition();
+            RecordLogScrollBoundary("tail-change-after");
         }, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
     }
 
