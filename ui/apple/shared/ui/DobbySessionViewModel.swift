@@ -76,19 +76,32 @@ public final class DobbySessionViewModel: ObservableObject {
     private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
 
     public convenience init(client: DobbySessionClient) {
-        self.init(client: client, debounceScheduler: SystemSessionDebounceScheduler())
+        self.init(client: client, debounceScheduler: SystemSessionDebounceScheduler(), automaticallyPoll: true)
     }
 
-    init(client: DobbySessionClient, debounceScheduler: any DobbySessionDebounceScheduling) {
+    convenience init(client: DobbySessionClient, automaticallyPoll: Bool) {
+        self.init(client: client, debounceScheduler: SystemSessionDebounceScheduler(), automaticallyPoll: automaticallyPoll)
+    }
+
+    init(
+        client: DobbySessionClient,
+        debounceScheduler: any DobbySessionDebounceScheduling,
+        automaticallyPoll: Bool = true
+    ) {
         self.client = client
         self.debounceScheduler = debounceScheduler
         refreshSnapshot()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshSnapshot()
-                if self?.logsVisible == true { self?.refreshLogs() }
+        if automaticallyPoll {
+            timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.refreshForTimerTick() }
             }
         }
+    }
+
+    @MainActor
+    func refreshForTimerTick() {
+        refreshSnapshot()
+        if logsVisible { refreshLogs() }
     }
 
     deinit {
