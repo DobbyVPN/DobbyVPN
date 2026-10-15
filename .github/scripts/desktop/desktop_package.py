@@ -44,6 +44,7 @@ from bounded_process import (
     command_deadline_remaining,
     exception_output,
     run_finite_capture,
+    run_streamed,
 )
 
 
@@ -97,8 +98,15 @@ def _run(
                 popen_kwargs={"stdin": subprocess.DEVNULL},
                 cleanup_timeout_seconds=2 * PROCESS_CLEANUP_GRACE_SECONDS,
             )
+        elif supervised:
+            completed = run_streamed(
+                command,
+                timeout_seconds=deadline_timeout,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+            )
         else:
-            effective_timeout = deadline_timeout if supervised else timeout_seconds
             completed = subprocess.run(
                 command,
                 cwd=cwd,
@@ -107,7 +115,7 @@ def _run(
                 stdout=subprocess.PIPE if capture else None,
                 stderr=subprocess.PIPE if capture else None,
                 check=False,
-                timeout=effective_timeout,
+                timeout=timeout_seconds,
             )
     except subprocess.TimeoutExpired as error:
         # Preserve output collected before termination, including process-group

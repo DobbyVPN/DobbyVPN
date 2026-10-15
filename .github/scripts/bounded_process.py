@@ -531,6 +531,87 @@ def run_finite_capture(
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
+def run_streamed(
+    command: Sequence[str],
+    *,
+    timeout_seconds: float,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    stdin: int | None = None,
+    termination_grace_seconds: float = PROCESS_CLEANUP_GRACE_SECONDS,
+    cleanup_timeout_seconds: float = 2 * PROCESS_CLEANUP_GRACE_SECONDS,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a command with inherited output and bounded process-group cleanup."""
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("subprocess timeout must be positive")
+    if (
+        not math.isfinite(termination_grace_seconds)
+        or termination_grace_seconds < 0
+        or not math.isfinite(cleanup_timeout_seconds)
+        or cleanup_timeout_seconds < 0
+    ):
+        raise ValueError("subprocess cleanup timeouts must be finite and non-negative")
+
+    argv = tuple(command)
+    operation_deadline = time.monotonic() + timeout_seconds
+    arguments: dict[str, Any] = process_group_options()
+    if cwd is not None:
+        arguments["cwd"] = str(cwd)
+    if env is not None:
+        arguments["env"] = dict(env)
+    if stdin is not None:
+        arguments["stdin"] = stdin
+    process = subprocess.Popen(list(argv), **arguments)
+    process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
+    try:
+        returncode = process.wait(timeout=_remaining(operation_deadline))
+    except BaseException as original_error:
+        cleanup_started = time.monotonic()
+        cleanup_deadline = cleanup_started + cleanup_timeout_seconds
+        termination_deadline = min(
+            cleanup_deadline,
+            cleanup_started + termination_grace_seconds,
+        )
+        cleanup_errors: list[BaseException] = []
+        termination_outcome: object | None = None
+        try:
+            termination_outcome = terminate_process_group(
+                process,
+                grace_seconds=max(termination_deadline - time.monotonic(), 0),
+            )
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+            cleanup_errors.extend(_stop_direct_child(process, deadline=cleanup_deadline))
+
+        if isinstance(original_error, subprocess.TimeoutExpired):
+            group_id = getattr(process, "_dobby_process_group_id", process.pid)
+            try:
+                owned_child_reaped = process.poll() is not None
+            except BaseException as state_error:
+                owned_child_reaped = None
+                original_error.add_note(
+                    f"owned child reap state could not be read: {type(state_error).__name__}: {state_error}"
+                )
+            group_final_state = (
+                "terminated" if termination_outcome == "process-group=terminated" else "unknown"
+            )
+            original_error.add_note(
+                "process timeout cleanup: "
+                f"owned_pid={process.pid}; process_group={group_id}; "
+                f"owned_child_reaped={'yes' if owned_child_reaped else 'unknown' if owned_child_reaped is None else 'no'}; "
+                f"process_group_final_state={group_final_state}"
+            )
+        for error in cleanup_errors:
+            original_error.add_note(
+                f"process cleanup failed: {type(error).__name__}: {error}"
+            )
+            for note in getattr(error, "__notes__", ()):
+                original_error.add_note(f"process cleanup: {note}")
+        raise
+
+    return subprocess.CompletedProcess(argv, returncode)
+
+
 def run_bounded_capture(
     command: list[str],
     *,

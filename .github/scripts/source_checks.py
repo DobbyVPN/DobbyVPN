@@ -33,6 +33,7 @@ from bounded_process import (
     command_deadline_remaining,
     exception_output,
     run_finite_capture,
+    run_streamed,
 )
 from android_dependency_provenance import (
     ANDROID_BUILD_TOOLS,
@@ -126,10 +127,10 @@ def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = No
     log("$ " + " ".join(command))
     try:
         timeout = command_deadline_remaining(env)
-        arguments = {"cwd": cwd, "env": env, "check": False}
-        if timeout is not None:
-            arguments["timeout"] = timeout
-        result = subprocess.run(command, **arguments)
+        if timeout is None:
+            result = subprocess.run(command, cwd=cwd, env=env, check=False)
+        else:
+            result = run_streamed(command, timeout_seconds=timeout, cwd=cwd, env=env)
     except FileNotFoundError as error:
         raise CheckError(f"required command is missing: {error.filename}") from error
     if result.returncode:
