@@ -13,6 +13,44 @@ from pathlib import Path
 from typing import Any
 
 PROCESS_CLEANUP_GRACE_SECONDS = 5
+COMMAND_DEADLINE_ENV = "DOBBYVPN_COMMAND_DEADLINE_MONOTONIC"
+
+
+class CommandDeadlineError(RuntimeError):
+    """The inherited platform command deadline is malformed or exhausted."""
+
+
+def command_deadline_remaining(
+    environment: Mapping[str, str] | None = None,
+) -> float | None:
+    """Return the live remaining time from the optional guest deadline contract."""
+    source = os.environ if environment is None else environment
+    value = source.get(COMMAND_DEADLINE_ENV)
+    if value is None:
+        return None
+    try:
+        deadline = float(value)
+    except (TypeError, ValueError) as error:
+        raise CommandDeadlineError(
+            f"{COMMAND_DEADLINE_ENV} must be a finite monotonic timestamp"
+        ) from error
+    if not math.isfinite(deadline):
+        raise CommandDeadlineError(
+            f"{COMMAND_DEADLINE_ENV} must be a finite monotonic timestamp"
+        )
+    remaining = deadline - time.monotonic()
+    if not math.isfinite(remaining) or remaining <= 0:
+        raise CommandDeadlineError(f"{COMMAND_DEADLINE_ENV} has expired")
+    return remaining
+
+
+def command_timeout(
+    default_seconds: float,
+    environment: Mapping[str, str] | None = None,
+) -> float:
+    """Use the inherited platform deadline, or the standalone default."""
+    remaining = command_deadline_remaining(environment)
+    return default_seconds if remaining is None else remaining
 
 
 def output_text(output: str | bytes | None) -> str:

@@ -25,7 +25,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bounded_process import (
+    COMMAND_DEADLINE_ENV,
+    CommandDeadlineError,
     PROCESS_CLEANUP_GRACE_SECONDS,
+    command_deadline_remaining,
+    command_timeout,
     exception_output as _exception_output,
     output_text,
     process_group_options,
@@ -179,11 +183,12 @@ def run_bounded_capture(
     cwd: Path = ROOT_DIR,
     timeout_seconds: int = PROBE_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
+    child_env = child_environment(command)
     return _run_bounded_capture(
         command,
         cwd=cwd,
-        env=child_environment(command),
-        timeout_seconds=timeout_seconds,
+        env=child_env,
+        timeout_seconds=command_timeout(timeout_seconds, child_env),
         cleanup_grace_seconds=PROCESS_CLEANUP_GRACE_SECONDS,
     )
 
@@ -232,6 +237,12 @@ def run_capture(command: list[str], cwd: Path = ROOT_DIR) -> str | None:
             stdout,
         )
         emit_process_diagnostic("[!] Probe stderr:", stderr)
+        if COMMAND_DEADLINE_ENV in os.environ:
+            details = "; ".join(getattr(error, "__notes__", ()))
+            suffix = f"; {details}" if details else ""
+            raise CommandDeadlineError(
+                f"{COMMAND_DEADLINE_ENV} expired during probe: {printable}{suffix}"
+            ) from error
         return None
     except OSError as error:
         stdout, stderr = _exception_output(error)
@@ -287,7 +298,10 @@ def prepend_path(path: Path) -> None:
 def download(url: str, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     log(f"Downloading {url}")
+    remaining = command_deadline_remaining()
     if shutil.which("curl"):
+        connect_timeout = "60" if remaining is None else str(remaining)
+        transfer_timeout = "900" if remaining is None else str(remaining)
         run(
             [
                 "curl",
@@ -296,9 +310,9 @@ def download(url: str, output: Path) -> None:
                 "--show-error",
                 "--http1.1",
                 "--connect-timeout",
-                "60",
+                connect_timeout,
                 "--max-time",
-                "900",
+                transfer_timeout,
                 "--continue-at",
                 "-",
                 url,
@@ -309,7 +323,8 @@ def download(url: str, output: Path) -> None:
         return
 
     request = urllib.request.Request(url, headers={"User-Agent": "DobbyVPN desktop_build.py"})
-    with urllib.request.urlopen(request, timeout=120) as response:
+    timeout = 120 if remaining is None else remaining
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         with open(output, "wb") as handle:
             shutil.copyfileobj(response, handle)
 

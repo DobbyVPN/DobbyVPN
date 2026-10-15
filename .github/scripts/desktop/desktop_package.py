@@ -36,6 +36,16 @@ WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS = 180
 WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS = 30
 WINDOWS_TEMP_PATH_BUFFER_CAPACITY = 32768
 
+sys.path.insert(0, str(SCRIPT_DIR.parent))
+from bounded_process import (
+    COMMAND_DEADLINE_ENV,
+    CommandDeadlineError,
+    PROCESS_CLEANUP_GRACE_SECONDS,
+    command_deadline_remaining,
+    exception_output,
+    run_finite_capture,
+)
+
 
 class DesktopPlatformError(RuntimeError):
     """A desktop package build, install, or cleanup failure."""
@@ -73,29 +83,42 @@ def _run(
 ) -> subprocess.CompletedProcess[bytes]:
     _log(f"{label}: $ {' '.join(command)}")
     try:
-        completed = subprocess.run(
-            command,
-            cwd=cwd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE if capture else None,
-            stderr=subprocess.PIPE if capture else None,
-            check=False,
-            timeout=timeout_seconds,
-        )
+        deadline_timeout = command_deadline_remaining(env)
+    except CommandDeadlineError as error:
+        raise DesktopPlatformError(f"{label}: {error}") from error
+    supervised = deadline_timeout is not None
+    try:
+        if supervised and capture:
+            completed = run_finite_capture(
+                command,
+                timeout_seconds=deadline_timeout,
+                cwd=cwd,
+                env=env,
+                popen_kwargs={"stdin": subprocess.DEVNULL},
+                cleanup_timeout_seconds=2 * PROCESS_CLEANUP_GRACE_SECONDS,
+            )
+        else:
+            effective_timeout = deadline_timeout if supervised else timeout_seconds
+            completed = subprocess.run(
+                command,
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if capture else None,
+                stderr=subprocess.PIPE if capture else None,
+                check=False,
+                timeout=effective_timeout,
+            )
     except subprocess.TimeoutExpired as error:
-        # subprocess.run kills and reaps the timed-out process. Forward output
-        # collected before termination so the timeout keeps its diagnostics.
+        # Preserve output collected before termination, including process-group
+        # cleanup notes from a supervised command.
         if capture:
-            stdout = error.stdout
-            stderr = error.stderr
-            if isinstance(stdout, str):
-                stdout = stdout.encode("utf-8", errors="backslashreplace")
-            if isinstance(stderr, str):
-                stderr = stderr.encode("utf-8", errors="backslashreplace")
+            stdout, stderr = exception_output(error)
             _forward(sys.stdout, stdout or b"")
             _forward(sys.stderr, stderr or b"")
-        raise DesktopPlatformError(f"{label}: {error}") from error
+        notes = "; ".join(getattr(error, "__notes__", ()))
+        suffix = f"; {notes}" if notes else ""
+        raise DesktopPlatformError(f"{label}: {error}{suffix}") from error
     except OSError as error:
         _fail(f"{label}: command could not start: {error}")
     if capture:
@@ -104,6 +127,30 @@ def _run(
     if check and completed.returncode != 0:
         _fail(f"{label}: command exited {completed.returncode}")
     return completed
+
+
+def _deadline_sudo_assignments(
+    environment: dict[str, str] | None = None,
+) -> list[str]:
+    source = os.environ if environment is None else environment
+    value = source.get(COMMAND_DEADLINE_ENV)
+    return [] if value is None else [f"{COMMAND_DEADLINE_ENV}={value}"]
+
+
+def _macos_install_command(package_path: Path, uid: str) -> list[str]:
+    return [
+        "sudo", "-n", "env",
+        f"DOBBYVPN_CONTROL_PEER_UID={uid}",
+        *_deadline_sudo_assignments(),
+        "installer", "-pkg", str(package_path), "-target", "/",
+    ]
+
+
+def _macos_uninstall_command(uninstaller: Path) -> list[str]:
+    assignments = _deadline_sudo_assignments()
+    if assignments:
+        return ["sudo", "-n", "env", *assignments, str(uninstaller)]
+    return ["sudo", "-n", str(uninstaller)]
 
 
 def _windows_identity_details() -> tuple[str, str]:
@@ -892,14 +939,7 @@ def _install(args: argparse.Namespace) -> int:
                 _emit_file("Windows MSI install log", msi_log)
     else:
         uid = str(os.getuid())
-        _run(
-            "install macOS PKG",
-            [
-                "sudo", "-n", "env",
-                f"DOBBYVPN_CONTROL_PEER_UID={uid}",
-                "installer", "-pkg", str(package_path), "-target", "/",
-            ],
-        )
+        _run("install macOS PKG", _macos_install_command(package_path, uid))
 
     required = [Path(descriptor["cli"]), Path(descriptor["service"])]
     if host == "windows":
@@ -959,7 +999,7 @@ def _uninstall(args: argparse.Namespace) -> int:
         uninstaller = Path("/usr/local/libexec/dobbyvpn-uninstall")
         if not uninstaller.is_file():
             uninstaller = ROOT / "ui" / "apple" / "macos" / "installer" / "uninstall.sh"
-        _run("remove macOS PKG", ["sudo", "-n", str(uninstaller)])
+        _run("remove macOS PKG", _macos_uninstall_command(uninstaller))
     descriptor["installed"] = False
     descriptor["cleanup_complete"] = True
     _write_json(args.installed_descriptor, descriptor)

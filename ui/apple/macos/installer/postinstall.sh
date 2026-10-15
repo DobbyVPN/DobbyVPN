@@ -76,7 +76,15 @@ if [ "$service_status" -eq 0 ]; then
     # launchd can reject an immediate bootstrap while bootout is still
     # removing the same label.
     service_removed=""
-    for _ in {1..50}; do
+    poll_count=0
+    poll_limit=50
+    if [ -n "${DOBBYVPN_COMMAND_DEADLINE_MONOTONIC:-}" ]; then
+        # The supervised guest owns the absolute deadline and process-group
+        # cleanup. Keep polling until it ends this installer command.
+        poll_limit=0
+    fi
+    while [ "$poll_limit" -eq 0 ] || [ "$poll_count" -lt "$poll_limit" ]; do
+        poll_count=$((poll_count + 1))
         capture_command launchctl-removal-probe launchctl print system/com.dobby.vpnservice
         service_state="$CAPTURE_OUTPUT"
         service_status="$CAPTURE_STATUS"
@@ -89,7 +97,7 @@ if [ "$service_status" -eq 0 ]; then
             *) printf 'Unexpected launchctl removal probe failure (status %s)\n' "$service_status" >&2; exit "$service_status" ;;
         esac
     done
-    if [ -z "$service_removed" ]; then
+    if [ -z "$service_removed" ] && [ "$poll_limit" -ne 0 ]; then
         echo "Timed out waiting for com.dobby.vpnservice removal" >&2
         exit 1
     fi
