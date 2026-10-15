@@ -54,7 +54,10 @@ def main() -> None:
     # Prefer the SDK's own apkanalyzer: a copy from another install (for example
     # Homebrew) looks for build-tools next to itself and cannot find this SDK's.
     sdk_analyzer = sdk / "cmdline-tools/latest/bin/apkanalyzer"
-    analyzer = str(sdk_analyzer) if os.access(sdk_analyzer, os.X_OK) else (shutil.which("apkanalyzer") or str(sdk_analyzer))
+    analyzer = os.environ.get("APKANALYZER") or (
+        str(sdk_analyzer) if os.access(sdk_analyzer, os.X_OK)
+        else (shutil.which("apkanalyzer") or str(sdk_analyzer))
+    )
     if run([analyzer, "manifest", "debuggable", str(apk)]).strip() != "true":
         raise ValueError("Debug APK must allow debugger attachment")
     if run([analyzer, "manifest", "application-id", str(apk)]).strip() != "com.dobby.vpn.debug":
