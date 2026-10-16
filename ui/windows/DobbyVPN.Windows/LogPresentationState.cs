@@ -73,6 +73,13 @@ internal sealed class LogPresentationState
         else Freeze();
     }
 
+    public void ObserveDirectedDownScroll(bool isAtBottom)
+    {
+        // Resuming can append rows before the downward animation finishes.
+        // Its later positions must not freeze following against the larger layout.
+        if (!FollowsTail && isAtBottom) FollowTail();
+    }
+
     public void ClearAfterBoundary()
     {
         _settledTailAlignment = null;

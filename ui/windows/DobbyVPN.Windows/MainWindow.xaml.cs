@@ -961,8 +961,7 @@ public sealed partial class MainWindow : Window
             ClearPendingLogDownScrollIntent();
         else
         {
-            ObserveLogPresentationForScroll("directed-down-scroll", isIntermediate,
-                _lastLogScrollGestureId, _lastLogScrollGestureDirection);
+            ObserveDirectedLogDownScroll(isIntermediate);
             if (!isIntermediate) ClearPendingLogDownScrollIntent();
         }
         if (directManipulation || scrollbarInteraction)
@@ -995,6 +994,14 @@ public sealed partial class MainWindow : Window
         var wasFollowingTail = _logPresentation.FollowsTail;
         _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
         RecordLogFollowTransition(cause, wasFollowingTail, gestureId, direction, isIntermediate);
+    }
+
+    private void ObserveDirectedLogDownScroll(bool isIntermediate)
+    {
+        var wasFollowingTail = _logPresentation.FollowsTail;
+        _logPresentation.ObserveDirectedDownScroll(IsLogScrollAtBottom());
+        RecordLogFollowTransition("directed-down-scroll", wasFollowingTail,
+            _lastLogScrollGestureId, _lastLogScrollGestureDirection, isIntermediate);
     }
 
     private void RecordLogFollowTransition(string cause, bool wasFollowingTail,
