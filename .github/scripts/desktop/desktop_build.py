@@ -1225,9 +1225,13 @@ def build_native_ui(
         executable.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(binary, executable)
         executable.chmod(executable.stat().st_mode | 0o111)
+        resources = output / "Contents" / "Resources"
+        resources.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / "ui" / "apple" / "macos" / "AppIcon.icns", resources / "AppIcon.icns")
         info = {
             "CFBundleDisplayName": "Dobby VPN",
             "CFBundleExecutable": "DobbyVPNMacApp",
+            "CFBundleIconFile": "AppIcon",
             "CFBundleIdentifier": "vpn.dobby.desktop",
             "CFBundleName": "Dobby VPN",
             "CFBundleURLTypes": [{"CFBundleURLName": "DobbyVPN", "CFBundleURLSchemes": ["dobbyvpn"]}],
