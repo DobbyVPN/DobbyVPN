@@ -588,7 +588,7 @@ jobs:
               raise SystemExit("published GitHub Release notes do not match the reviewed Publish input")
           PYTHON
       - name: Record the successful Publish identity for Release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: publish-result
           path: published/release-provenance.json
