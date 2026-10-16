@@ -218,7 +218,25 @@ private fun Connections(controller: SessionController, modifier: Modifier) {
     val session = controller.state.session
     Box(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Tray)) {
         val orphan = controller.orphanProfile
-        if (session.profiles.isEmpty() && orphan == null) {
+        if (session.profiles.isEmpty() && orphan == null && controller.state.loadError.isNotEmpty()) {
+            Column(
+                Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                SockIcon(holey = true, width = 40.dp)
+                Text("Couldn't load the subscription", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Box(
+                    Modifier.heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Ink)
+                        .clickable(role = Role.Button, onClick = controller::retryLoad)
+                        .testTag("tray.retry")
+                        .padding(horizontal = 22.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text("Retry", color = Surface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+            }
+        } else if (session.profiles.isEmpty() && orphan == null) {
             SockIcon(
                 holey = false,
                 width = 40.dp,

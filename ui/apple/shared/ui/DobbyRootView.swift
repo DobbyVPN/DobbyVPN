@@ -222,7 +222,24 @@ public struct DobbyRootView: View {
         let orphan = model.orphanProfile
         return ZStack {
             Color.tray.onTapGesture { sourceFocused = false }
-            if snapshot.profiles.isEmpty && orphan == nil {
+            if snapshot.profiles.isEmpty && orphan == nil && !model.loadError.isEmpty {
+                VStack(spacing: pt(10)) {
+                    SockIcon(holey: true).frame(width: pt(40), height: pt(50))
+                    Text("Couldn't load the subscription")
+                        .dobbyFont(15, .medium)
+                        .foregroundColor(.ink)
+                    Button { model.retryLoad() } label: {
+                        Text("Retry")
+                            .dobbyFont(15, .semibold)
+                            .foregroundColor(.surface)
+                            .padding(.horizontal, pt(22))
+                            .frame(minHeight: pt(40))
+                            .background(Color.ink, in: RoundedRectangle(cornerRadius: pt(8)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("tray.retry")
+                }
+            } else if snapshot.profiles.isEmpty && orphan == nil {
                 SockIcon(holey: false)
                     .frame(width: pt(40), height: pt(50))
                     .accessibilityElement()
