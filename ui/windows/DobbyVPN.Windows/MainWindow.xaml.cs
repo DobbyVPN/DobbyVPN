@@ -48,6 +48,11 @@ public sealed partial class MainWindow : Window
     private double _lastLogScrollOffset;
     private double _pendingLogScrollOffset;
     private bool _pendingLogDownScroll;
+    private long _logScrollGestureSequence;
+    private long? _pendingLogScrollGestureId;
+    private string? _pendingLogScrollGestureDirection;
+    private long? _lastLogScrollGestureId;
+    private string? _lastLogScrollGestureDirection;
     private bool _logDirectManipulation;
     private bool _logScrollbarPointerDown;
     private bool _pendingLogUpwardIntent;
@@ -880,32 +885,46 @@ public sealed partial class MainWindow : Window
     private void RegisterLogDownScrollIntent()
     {
         if (_logScroll is null) return;
+        var gestureId = BeginLogScrollGesture("down");
         var remainingRange = _logScroll.ScrollableHeight - _logScroll.VerticalOffset;
         if (remainingRange <= 0.5)
         {
             ClearPendingLogDownScrollIntent();
             _pendingLogUpwardIntent = false;
+            var wasFollowingTail = _logPresentation.FollowsTail;
             _logPresentation.FollowTail();
+            RecordLogScrollGestureIntent(gestureId, "down");
+            RecordLogFollowTransition("down-at-bottom", wasFollowingTail, gestureId, "down");
             if (!_clearingLogs) RenderLogs();
             return;
         }
-        if (_logPresentation.FollowsTail) return;
+        if (_logPresentation.FollowsTail)
+        {
+            RecordLogScrollGestureIntent(gestureId, "down");
+            return;
+        }
         _pendingLogScrollOffset = _logScroll.VerticalOffset;
         _pendingLogDownScroll = true;
+        RecordLogScrollGestureIntent(gestureId, "down");
     }
 
     private void RequestLogFollowFreezeForUpwardIntent()
     {
         if (_logScroll is null) return;
+        var gestureId = BeginLogScrollGesture("up");
         ClearPendingLogDownScrollIntent();
         if (_logScroll.ScrollableHeight > 0.5)
         {
+            var wasFollowingTail = _logPresentation.FollowsTail;
             _logPresentation.Freeze();
+            RecordLogScrollGestureIntent(gestureId, "up");
+            RecordLogFollowTransition("upward-scroll-intent", wasFollowingTail, gestureId, "up");
             return;
         }
 
         if (_updatingLogs || _logTailChangeViewPending)
             _pendingLogUpwardIntent = true;
+        RecordLogScrollGestureIntent(gestureId, "up");
     }
 
     private static ScrollBar? FindLogVerticalScrollBar(object? source)
@@ -942,12 +961,82 @@ public sealed partial class MainWindow : Window
             ClearPendingLogDownScrollIntent();
         else
         {
-            _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
+            ObserveLogPresentationForScroll("directed-down-scroll", isIntermediate,
+                _lastLogScrollGestureId, _lastLogScrollGestureDirection);
             if (!isIntermediate) ClearPendingLogDownScrollIntent();
         }
         if (directManipulation || scrollbarInteraction)
-            _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
+            ObserveLogPresentationForScroll(directManipulation ? "direct-manipulation" : "scrollbar-interaction",
+                isIntermediate);
         if (!_updatingLogs && _logPresentation.FollowsTail) RenderLogs();
+    }
+
+    private long BeginLogScrollGesture(string direction)
+    {
+        var gestureId = ++_logScrollGestureSequence;
+        _pendingLogScrollGestureId = gestureId;
+        _pendingLogScrollGestureDirection = direction;
+        _lastLogScrollGestureId = gestureId;
+        _lastLogScrollGestureDirection = direction;
+        return gestureId;
+    }
+
+    private void RecordLogScrollGestureIntent(long gestureId, string direction) =>
+        _diagnostics.RecordInfo("logs.scroll-gesture", "Observed an explicit log scroll gesture", new
+        {
+            gesture_id = gestureId,
+            direction,
+            state = CaptureLogScrollDiagnosticState(),
+        });
+
+    private void ObserveLogPresentationForScroll(string cause, bool isIntermediate,
+        long? gestureId = null, string? direction = null)
+    {
+        var wasFollowingTail = _logPresentation.FollowsTail;
+        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
+        RecordLogFollowTransition(cause, wasFollowingTail, gestureId, direction, isIntermediate);
+    }
+
+    private void RecordLogFollowTransition(string cause, bool wasFollowingTail,
+        long? gestureId = null, string? direction = null, bool? isIntermediate = null)
+    {
+        if (wasFollowingTail == _logPresentation.FollowsTail) return;
+        _diagnostics.RecordInfo("logs.follow-state-transition", "Log tail-follow state changed", new
+        {
+            gesture_id = gestureId,
+            direction,
+            cause,
+            is_intermediate = isIntermediate,
+            follows_tail_before = wasFollowingTail,
+            follows_tail_after = _logPresentation.FollowsTail,
+            state = CaptureLogScrollDiagnosticState(),
+        });
+    }
+
+    private object CaptureLogScrollDiagnosticState()
+    {
+        try
+        {
+            return new
+            {
+                follows_tail = _logPresentation.FollowsTail,
+                vertical_offset = _logScroll?.VerticalOffset,
+                scrollable_height = _logScroll?.ScrollableHeight,
+                render_generation = _logRenderGeneration,
+                updating_logs = _updatingLogs,
+                clearing_logs = _clearingLogs,
+                direct_manipulation = _logDirectManipulation,
+                scrollbar_pointer_down = _logScrollbarPointerDown,
+                pending_down_scroll = _pendingLogDownScroll,
+                pending_upward_intent = _pendingLogUpwardIntent,
+                tail_change_view_pending = _logTailChangeViewPending,
+            };
+        }
+        catch (Exception error)
+        {
+            _diagnostics.Record(error.ToString(), "logs.scroll-diagnostic-geometry.failure");
+            throw;
+        }
     }
 
     private void ClearPendingLogDownScrollIntent()
@@ -979,6 +1068,10 @@ public sealed partial class MainWindow : Window
             ClearPendingLogDownScrollIntent();
             _pendingLogUpwardIntent = false;
             _logTailChangeViewPending = false;
+            _pendingLogScrollGestureId = null;
+            _pendingLogScrollGestureDirection = null;
+            _lastLogScrollGestureId = null;
+            _lastLogScrollGestureDirection = null;
             await _diagnostics.ClearViewAsync();
             if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
             _logPresentation.ClearAfterBoundary();
@@ -1105,13 +1198,46 @@ public sealed partial class MainWindow : Window
 
     private void QueueLogTailChangeView(long renderGeneration)
     {
-        if (_updatingLogs) return;
-        _logTailChangeViewPending = true;
-        EnqueueUiCallback(() =>
+        // Correlate only the first tail-queue attempt for an explicit gesture.
+        var gestureId = _pendingLogScrollGestureId;
+        var gestureDirection = _pendingLogScrollGestureDirection;
+        _pendingLogScrollGestureId = null;
+        _pendingLogScrollGestureDirection = null;
+
+        if (_updatingLogs)
         {
+            if (gestureId is { } skippedGestureId)
+                RecordLogTailGestureObservation(skippedGestureId, gestureDirection, "queue-skipped",
+                    renderGeneration, skipReason: "logs-updating");
+            return;
+        }
+        _logTailChangeViewPending = true;
+        var queued = EnqueueUiCallback(() =>
+        {
+            if (gestureId is { } callbackGestureId)
+                RecordLogTailGestureObservation(callbackGestureId, gestureDirection, "callback-entered", renderGeneration);
+
             if (renderGeneration != _logRenderGeneration)
+            {
+                if (gestureId is { } staleGestureId)
+                    RecordLogTailGestureObservation(staleGestureId, gestureDirection, "callback-skipped",
+                        renderGeneration, skipReason: "stale-render-generation");
                 return;
-            if (_clearingLogs || _updatingLogs || _logDirectManipulation || _logScrollbarPointerDown || _logScroll is null) return;
+            }
+            if (_clearingLogs || _updatingLogs || _logDirectManipulation || _logScrollbarPointerDown || _logScroll is null)
+            {
+                if (gestureId is { } callbackSkippedGestureId)
+                {
+                    var skipReason = _clearingLogs ? "clearing-logs" :
+                        _updatingLogs ? "logs-updating" :
+                        _logDirectManipulation ? "direct-manipulation" :
+                        _logScrollbarPointerDown ? "scrollbar-pointer-down" :
+                        "scroll-viewer-unavailable";
+                    RecordLogTailGestureObservation(callbackSkippedGestureId, gestureDirection,
+                        "callback-skipped", renderGeneration, skipReason: skipReason);
+                }
+                return;
+            }
             _logTailChangeViewPending = false;
             if (_pendingLogUpwardIntent)
             {
@@ -1119,18 +1245,52 @@ public sealed partial class MainWindow : Window
                 if (_logScroll.ScrollableHeight > 0.5)
                 {
                     ClearPendingLogDownScrollIntent();
+                    var wasFollowingTailBeforeFreeze = _logPresentation.FollowsTail;
                     _logPresentation.Freeze();
+                    RecordLogFollowTransition("tail-callback-upward-intent-freeze",
+                        wasFollowingTailBeforeFreeze, gestureId, gestureDirection);
                     return;
                 }
                 ClearPendingLogDownScrollIntent();
+                var wasFollowingTailBeforeFollow = _logPresentation.FollowsTail;
                 _logPresentation.FollowTail();
+                RecordLogFollowTransition("tail-callback-upward-intent-follow",
+                    wasFollowingTailBeforeFollow, gestureId, gestureDirection);
             }
-            if (!_logPresentation.FollowsTail) return;
+            if (!_logPresentation.FollowsTail)
+            {
+                if (gestureId is { } frozenGestureId)
+                    RecordLogTailGestureObservation(frozenGestureId, gestureDirection, "callback-skipped",
+                        renderGeneration, skipReason: "tail-follow-frozen");
+                return;
+            }
             var targetOffset = _logScroll.ScrollableHeight;
-            _logScroll.ChangeView(null, targetOffset, null, true);
+            var changeViewResult = _logScroll.ChangeView(null, targetOffset, null, true);
             CaptureLogScrollPosition();
+            if (gestureId is { } alignedGestureId)
+                RecordLogTailGestureObservation(alignedGestureId, gestureDirection, "change-view-returned",
+                    renderGeneration, targetOffset: targetOffset, changeViewResult: changeViewResult);
         }, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
+        if (gestureId is { } queuedGestureId)
+            RecordLogTailGestureObservation(queuedGestureId, gestureDirection, "queue-result",
+                renderGeneration, queueAccepted: queued);
     }
+
+    private void RecordLogTailGestureObservation(long gestureId, string? direction, string stage,
+        long renderGeneration, bool? queueAccepted = null, string? skipReason = null,
+        double? targetOffset = null, bool? changeViewResult = null) =>
+        _diagnostics.RecordInfo("logs.tail-gesture", "Observed the first tail alignment attempt for an explicit scroll gesture", new
+        {
+            gesture_id = gestureId,
+            direction,
+            stage,
+            queue_accepted = queueAccepted,
+            skip_reason = skipReason,
+            render_generation = renderGeneration,
+            target_offset = targetOffset,
+            change_view_result = changeViewResult,
+            state = CaptureLogScrollDiagnosticState(),
+        });
 
     private string ExportHeader =>
         $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n";
