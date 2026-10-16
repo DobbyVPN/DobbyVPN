@@ -268,6 +268,7 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
 
   render_start:
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' }}
     needs: [resolve_build, source_linux, source_linux_arm, source_windows, source_macos, source_android, ios_simulator]
     uses: ./.github/workflows/render_start.yml
     permissions:
@@ -280,6 +281,7 @@ jobs:
       retention_days: 7
 
   qualify_linux:
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.render_start.result == 'success' }}
     needs: [resolve_build, render_start]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
@@ -296,6 +298,7 @@ jobs:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   qualify_windows:
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.render_start.result == 'success' }}
     needs: [resolve_build, render_start]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
@@ -312,8 +315,10 @@ jobs:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   qualify_macos:
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.render_start.result == 'success' }}
     needs: [resolve_build, render_start]
     strategy:
+      fail-fast: false
       matrix:
         architecture: [arm64, amd64]
     uses: ./.github/workflows/qualification_platform.yml
@@ -332,6 +337,7 @@ jobs:
       render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
 
   qualify_android:
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.render_start.result == 'success' }}
     needs: [resolve_build, render_start]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
