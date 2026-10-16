@@ -61,6 +61,23 @@ jobs:
       DOBBYVPN_COMMIT_SHA: ${{ inputs.source_sha || github.sha }}
       SELECTED_BUILD_RUN_ID: ${{ inputs.build_run_id || github.run_id }}
     steps:
+      - name: Initialize runner-local qualification paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "RESULT_DIR=$RUNNER_TEMP/dobbyvpn-release-result"
+            echo "RUN_DIR=$RUNNER_TEMP/dobbyvpn-release-run"
+            echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-release-diagnostics"
+            echo "RESULT_PATH=$RUNNER_TEMP/dobbyvpn-release-result/functional-result.json"
+            echo "DESKTOP_PACKAGE_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/desktop-package.json"
+            echo "INSTALLED_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/installed.json"
+            echo "ANDROID_SIGNED_DIR=$RUNNER_TEMP/dobbyvpn-android-test-signed"
+          } >> "$GITHUB_ENV"
+          if [ "$PLATFORM" = linux ]; then
+            echo "CONTROL_DIR=$RUNNER_TEMP/dobbyvpn-release-control" >> "$GITHUB_ENV"
+          fi
+
       - name: Reject hosted mini reruns before package qualification
         shell: bash
         run: |
@@ -125,23 +142,6 @@ jobs:
           done
           python3 .github/scripts/release/download_artifact.py \
             "$GITHUB_RUN_ID" "$RENDER_ARTIFACT_NAME" render
-
-      - name: Initialize runner-local qualification paths
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo "RESULT_DIR=$RUNNER_TEMP/dobbyvpn-release-result"
-            echo "RUN_DIR=$RUNNER_TEMP/dobbyvpn-release-run"
-            echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-release-diagnostics"
-            echo "RESULT_PATH=$RUNNER_TEMP/dobbyvpn-release-result/functional-result.json"
-            echo "DESKTOP_PACKAGE_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/desktop-package.json"
-            echo "INSTALLED_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/installed.json"
-            echo "ANDROID_SIGNED_DIR=$RUNNER_TEMP/dobbyvpn-android-test-signed"
-          } >> "$GITHUB_ENV"
-          if [ "$PLATFORM" = linux ]; then
-            echo "CONTROL_DIR=$RUNNER_TEMP/dobbyvpn-release-control" >> "$GITHUB_ENV"
-          fi
 
       - name: Check package and prepare qualification directories
         shell: bash
