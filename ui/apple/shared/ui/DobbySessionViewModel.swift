@@ -31,6 +31,10 @@ private struct SystemSessionDebounceScheduler: DobbySessionDebounceScheduling {
     }
 }
 
+public enum DobbyProfileStatus: String {
+    case connecting, connected, reconnecting, stopping, failed
+}
+
 @MainActor
 public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
@@ -82,6 +86,7 @@ public final class DobbySessionViewModel: ObservableObject {
     init(client: DobbySessionClient, debounceScheduler: any DobbySessionDebounceScheduling) {
         self.client = client
         self.debounceScheduler = debounceScheduler
+        recordAppStarted()
         refreshSnapshot()
         timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -128,6 +133,59 @@ public final class DobbySessionViewModel: ObservableObject {
 
     public func canAct(_ index: Int? = nil) -> Bool {
         !busy && !snapshot.sessionID.isEmpty && (isStopTarget(index) || inventoryReady && (snapshot.primaryAction == "START" || snapshot.canSwitch))
+    }
+
+    private var connected: Bool { snapshot.primaryAction == "STOP" }
+
+    public var mainActionTitle: String {
+        if !connected { return busy ? "Connecting…" : "Auto connect" }
+        return ["CONNECTED", "STOPPING"].contains(snapshot.state) && snapshot.pendingTarget == nil ? "Disconnect" : "Connecting…"
+    }
+
+    public var mainActionEnabled: Bool { connected ? !busy : canAct() }
+
+    public func mainAction() { connected ? stop() : performPrimaryAction() }
+
+    public func profileStatus(_ index: Int) -> DobbyProfileStatus? {
+        guard snapshot.activeDigest == snapshot.digest else { return nil }
+        let active = snapshot.activeProfile.map { $0.index == index }
+            ?? (snapshot.activeMode == "PROFILE_INDEX" && snapshot.activeIndex == index)
+        return active ? sessionStatus : nil
+    }
+
+    public func profileActionTitle(_ index: Int) -> String {
+        let title = actionTitle(index)
+        return profileStatus(index) == .connecting || title == "Stop" ? "Connecting…" : title
+    }
+
+    /// The connection still running from a subscription that has since been replaced.
+    public var orphanProfile: DobbyProfile? {
+        connected && snapshot.activeDigest != snapshot.digest ? snapshot.activeProfile : nil
+    }
+
+    public var sessionStatus: DobbyProfileStatus? {
+        if snapshot.recovering { return .reconnecting }
+        switch snapshot.state {
+        case "CONNECTED": return .connected
+        case "PROBING", "PREPARING": return .connecting
+        case "STOPPING": return .stopping
+        default: return snapshot.lastFailure == nil ? nil : .failed
+        }
+    }
+
+    public var failureDetail: String {
+        [importError, loadError, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
+            .first { !$0.isEmpty } ?? ""
+    }
+
+    /// Closes the error the popup shows first: import guidance, then the last command error.
+    public func dismissError() {
+        if importError.isEmpty {
+            error = ""
+            return
+        }
+        if error == importError { error = "" }
+        importError = ""
     }
 
     public func sourceChanged(_ value: String, immediate: Bool = false) {
@@ -322,11 +380,21 @@ public final class DobbySessionViewModel: ObservableObject {
         if visible { refreshLogs() }
     }
 
+    private func recordAppStarted() {
+        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
+        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
+        recordDiagnostic(line, event: "app.started", level: "INFO")
+    }
+
     private func recordError(_ message: String) {
+        recordDiagnostic(message, event: "ui.failure", level: "ERROR")
+    }
+
+    private func recordDiagnostic(_ message: String, event: String, level: String) {
         let path = client.uiDiagnosticPath
         logWorker.async { [weak self] in
             do {
-                try appendUIDiagnostic(message, to: path)
+                try appendUIDiagnostic(message, event: event, level: level, to: path)
                 Task { @MainActor [weak self] in
                     guard let self, self.logsVisible else { return }
                     self.refreshLogs()
@@ -385,6 +453,7 @@ public final class DobbySessionViewModel: ObservableObject {
                 case .success:
                     self.logEntries = []
                     self.clearRevision += 1
+                    self.recordAppStarted()
                 case let .failure(error): self.reportLogsError(error.localizedDescription)
                 }
                 self.refreshLogs()
