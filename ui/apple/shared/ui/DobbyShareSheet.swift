@@ -370,18 +370,18 @@ private final class DobbyLogTextView: NSTextView {
     var onSendLogs: () -> Void = {}
     var onClear: () -> Void = {}
 
-    private func logsMenu(_ base: NSMenu = NSMenu()) -> NSMenu {
-        if !base.items.isEmpty { base.insertItem(.separator(), at: 0) }
-        base.insertItem(LogsMenuItem("Clear") { [weak self] in self?.onClear() }, at: 0)
-        base.insertItem(LogsMenuItem("Send logs") { [weak self] in self?.onSendLogs() }, at: 0)
-        return base
+    private var logsMenu: NSMenu {
+        let menu = NSMenu()
+        menu.addItem(LogsMenuItem("Send logs") { [weak self] in self?.onSendLogs() })
+        menu.addItem(LogsMenuItem("Clear") { [weak self] in self?.onClear() })
+        return menu
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? { logsMenu(super.menu(for: event) ?? NSMenu()) }
+    override func menu(for event: NSEvent) -> NSMenu? { logsMenu }
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2 {
-            NSMenu.popUpContextMenu(logsMenu(), with: event, for: self)
+            NSMenu.popUpContextMenu(logsMenu, with: event, for: self)
         } else {
             super.mouseDown(with: event)
         }
