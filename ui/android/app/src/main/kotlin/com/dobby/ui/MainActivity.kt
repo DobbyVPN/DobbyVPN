@@ -3,40 +3,21 @@ package com.dobby.ui
 import android.content.ClipboardManager
 import android.content.ClipDescription
 import android.content.Intent
-import android.net.Uri
+import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.testTagsAsResourceId
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.presentation.LoadTrigger
@@ -46,7 +27,6 @@ import com.dobby.presentation.PermissionTarget
 import com.dobby.presentation.PermissionTargetFence
 import com.dobby.presentation.SubscriptionLoadCoordinator
 import com.dobby.presentation.SubscriptionRequest
-import com.dobby.vpn.BuildConfig
 import com.dobby.vpn.R
 import org.json.JSONObject
 import java.io.File
@@ -89,7 +69,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+        )
         current = this
         NativeGoSession.attach(this)
         retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
@@ -100,13 +83,7 @@ class MainActivity : ComponentActivity() {
             retainedLogViewModel,
         )
         if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
-        setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
-                    DobbyApp(controller)
-                }
-            }
-        }
+        setContent { DobbyApp(controller) }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -145,16 +122,21 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class ProfileData(val index: Int, val description: String, val protocol: String) {
+internal data class ProfileData(val index: Int, val description: String, val protocol: String) {
     val name: String get() = description.ifBlank { "Profile ${index + 1}" }
 }
-private data class SelectionData(val digest: String, val mode: String, val index: Int)
+internal data class SelectionData(val digest: String, val mode: String, val index: Int)
+
+internal enum class ProfileStatus(val label: String) {
+    CONNECTING("connecting"), CONNECTED("connected"), RECONNECTING("reconnecting"), STOPPING("stopping"), FAILED("failed")
+}
+
 private data class PendingPermissionAction(
     val session: SessionData,
     val index: Int?,
     val fence: PermissionTarget,
 )
-private data class SessionData(
+internal data class SessionData(
     val sessionId: String = "",
     val sequence: Long = 0,
     val generation: Long = 0,
@@ -170,7 +152,7 @@ private data class SessionData(
     val activeProfileIndex: Int = -1,
     val pendingTarget: SelectionData? = null,
     val canSwitch: Boolean = false,
-    val activeProfile: String = "",
+    val activeProfile: ProfileData? = null,
     val recovering: Boolean = false,
     val failure: String = "",
     val sourceError: String = "",
@@ -190,7 +172,7 @@ private fun SessionData.permissionSnapshot(
     canSwitch = canSwitch,
 )
 
-private data class ScreenState(
+internal data class ScreenState(
     val session: SessionData = SessionData(),
     val source: String = "",
     val sourceDirty: Boolean = false,
@@ -199,14 +181,13 @@ private data class ScreenState(
     val canPaste: Boolean = false,
     val busy: Boolean = false,
     val error: String = "",
-    val screen: String = "connection",
     val logs: List<LogEntry> = emptyList(),
     val clearRevision: Int = 0,
     val logsError: String = "",
     val exportingLogs: Boolean = false,
 )
 
-private class SessionController(
+internal class SessionController(
     private val activity: MainActivity,
     private var restoredLogViewState: Bundle? = null,
     restoredSourceEditorState: Bundle? = null,
@@ -321,8 +302,6 @@ private class SessionController(
 
     fun retryLoad() = sourceChanged(state.source, LoadTrigger.RETRY)
 
-    fun show(screen: String) { state = state.copy(screen = screen) }
-
     fun createLogView(context: android.content.Context): LiveLogView = LiveLogView(context).also { view ->
         restoredLogViewState?.let(view::restoreState)
         restoredLogViewState = null
@@ -389,6 +368,64 @@ private class SessionController(
     fun actionTitle(index: Int? = null): String = if (isStopTarget(index)) {
         if (state.session.state == "CONNECTED" && state.session.pendingTarget == null) "Disconnect" else "Stop"
     } else if (index == null) "Auto connect" else "Connect"
+
+    val status: String get() {
+        val session = state.session
+        return when {
+            session.recovering -> "Reconnecting"
+            state.error.isNotEmpty() -> "Error"
+            session.state == "CONNECTED" -> "Connected"
+            session.state == "PROBING" || session.state == "PREPARING" -> "Connecting"
+            session.state == "STOPPING" -> "Stopping"
+            session.failure.isNotEmpty() -> "Failed"
+            else -> "Disconnected"
+        }
+    }
+
+    private val connected get() = state.session.primaryAction == "STOP"
+
+    val mainActionTitle: String get() = when {
+        !connected -> if (state.busy) "Connecting…" else "Auto connect"
+        state.session.state in setOf("CONNECTED", "STOPPING") && state.session.pendingTarget == null -> "Disconnect"
+        else -> "Connecting…"
+    }
+
+    val mainActionEnabled: Boolean get() = if (connected) !state.busy else canAct()
+
+    fun mainAction() = if (connected) stop() else connectOrDisconnect()
+
+    fun profileStatus(index: Int): ProfileStatus? {
+        val session = state.session
+        val active = session.activeDigest == session.digest && (session.activeProfileIndex == index ||
+            session.activeProfileIndex < 0 && session.activeMode == "PROFILE_INDEX" && session.activeIndex == index)
+        return if (active) sessionStatus() else null
+    }
+
+    /** The connection still running from a subscription that has since been replaced. */
+    val orphanProfile: ProfileData? get() {
+        val session = state.session
+        return session.activeProfile?.takeIf { connected && session.activeDigest != session.digest }
+    }
+
+    fun orphanStatus(): ProfileStatus? = sessionStatus()
+
+    private fun sessionStatus(): ProfileStatus? {
+        val session = state.session
+        return when {
+            session.recovering -> ProfileStatus.RECONNECTING
+            session.state == "CONNECTED" -> ProfileStatus.CONNECTED
+            session.state == "PROBING" || session.state == "PREPARING" -> ProfileStatus.CONNECTING
+            session.state == "STOPPING" -> ProfileStatus.STOPPING
+            session.failure.isNotEmpty() -> ProfileStatus.FAILED
+            else -> null
+        }
+    }
+
+    fun dismissError() { state = state.copy(error = "") }
+
+    fun copyToClipboard(text: String) {
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DobbyVPN error", text))
+    }
 
     fun connectOrDisconnect(index: Int? = null) {
         if (!canAct(index)) return
@@ -582,6 +619,7 @@ private class SessionController(
         logWorker.execute {
             try {
                 diagnosticView.clear()
+                NativeVpnBridge.recordAppStarted(activity)
                 main.post { state = state.copy(logs = emptyList(), clearRevision = state.clearRevision + 1) }
             } catch (failure: Exception) { main.post { state = state.copy(logsError = failure.stackTraceToString()) } }
         }
@@ -599,12 +637,6 @@ private class SessionController(
                 )
             }
         }
-    }
-
-    fun openSourceCommit() {
-        val link = BuildConfig.PROJECT_REPOSITORY_COMMIT_LINK
-        if (link.isBlank() || link.endsWith("/N/A")) return
-        activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link)))
     }
 
     fun close() {
@@ -650,10 +682,8 @@ private class SessionController(
                 pendingTarget = snapshot.optJSONObject("pending_target")?.let { SelectionData(it.getString("digest"), it.getString("mode"), it.getInt("index")) },
                 canSwitch = snapshot.optBoolean("can_switch"),
                 activeProfile = active?.let {
-                    listOf(it.optString("protocol"), it.optString("description"))
-                        .filter(String::isNotBlank)
-                        .joinToString(" · ")
-                }.orEmpty(),
+                    ProfileData(it.optInt("index"), it.optString("description"), it.optString("protocol"))
+                },
                 recovering = snapshot.optBoolean("recovering"),
                 failure = failure?.let {
                     val message = it.optString("message")
@@ -735,219 +765,28 @@ private class SessionController(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DobbyApp(controller: SessionController) {
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        "DobbyVPN",
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                actions = {
-                    TextButton(onClick = { controller.show("about") }) { Text("About") }
-                },
-            )
-        },
-    ) { padding ->
-        if (controller.state.screen == "about") {
-            AboutScreen(controller, Modifier.padding(padding))
-        } else {
-            ConnectionScreen(controller, Modifier.padding(padding).consumeWindowInsets(padding).imePadding())
-        }
-    }
-}
-
-@Composable
-private fun ConnectionScreen(controller: SessionController, modifier: Modifier) {
-    val state = controller.state
-    val session = state.session
-    val focus = LocalFocusManager.current
-    val status = when {
-        session.recovering -> "Reconnecting"
-        state.error.isNotEmpty() -> "Error"
-        session.state == "CONNECTED" -> "Connected"
-        session.state == "PROBING" || session.state == "PREPARING" -> "Connecting"
-        session.state == "STOPPING" -> "Stopping"
-        session.failure.isNotEmpty() -> "Failed"
-        else -> "Disconnected"
-    }
-    BoxWithConstraints(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        val controlsHeight = maxHeight * 0.5f
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(
-                Modifier.heightIn(max = controlsHeight)
-                    .clipToBounds().verticalScroll(rememberScrollState())
-                    .testTag("connection.controls")
-                    .semantics { contentDescription = MainActivity.CONNECTION_CONTROLS_DESCRIPTION },
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                OutlinedTextField(
-                    value = state.source,
-                    onValueChange = { controller.sourceChanged(it) },
-                    modifier = Modifier.fillMaxWidth().testTag("subscription.url")
-                        .semantics { contentDescription = "Connection configuration" },
-                    label = { Text("Subscription URL") },
-                    placeholder = { Text("https://…") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Done,
-                    ),
-                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-                )
-                if (state.canPaste) TextButton(
-                    onClick = controller::paste,
-                    modifier = Modifier.testTag("subscription.paste"),
-                ) { Text("Paste") }
-                if (state.loading) Text("Loading profiles…")
-                if (state.loadError.isNotEmpty()) {
-                    Text(state.loadError, color = MaterialTheme.colorScheme.error)
-                    TextButton(
-                        onClick = controller::retryLoad,
-                        modifier = Modifier.testTag("subscription.retry"),
-                    ) { Text("Retry") }
-                }
-                Text(status, modifier = Modifier.testTag("connection.status")
-                    .semantics { contentDescription = status; liveRegion = LiveRegionMode.Polite },
-                    style = MaterialTheme.typography.titleMedium)
-                if (session.activeProfile.isNotEmpty()) {
-                    Text(session.activeProfile, modifier = Modifier.testTag("profile.active")
-                        .semantics { contentDescription = "Active profile" })
-                }
-                if (state.error.isNotEmpty() || session.failure.isNotEmpty()) {
-                    Text(
-                        state.error.ifEmpty { session.failure },
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Button(
-                    onClick = { focus.clearFocus(); controller.connectOrDisconnect() },
-                    enabled = controller.canAct(),
-                    modifier = Modifier.testTag("connection.action").semantics {
-                        contentDescription = "VPN connection action"
-                    },
-                ) {
-                    if (state.busy || session.state in setOf("PROBING", "PREPARING", "STOPPING")) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    Text(controller.actionTitle())
-                }
-                if (session.primaryAction == "STOP" && !controller.isStopTarget(null) && session.profiles.none { controller.isStopTarget(it.index) }) {
-                    TextButton(
-                        onClick = controller::stop,
-                        enabled = !state.busy,
-                        modifier = Modifier.testTag("connection.secondary-action"),
-                    ) { Text(if (session.state == "CONNECTED") "Disconnect" else "Stop") }
-                }
-                session.profiles.forEach { profile ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column(Modifier.weight(1f)) { Text(profile.name); Text(profile.protocol, style = MaterialTheme.typography.bodySmall) }
-                        Button(onClick = { controller.connectOrDisconnect(profile.index) }, enabled = controller.canAct(profile.index),
-                            modifier = Modifier.testTag(
-                                "profile.${session.digest}.index.${profile.index}.role.action",
-                            ).semantics {
-                                contentDescription = "Profile ${profile.index + 1} action"
-                            }) { Text(controller.actionTitle(profile.index)) }
-                    }
-                }
-                // Keep the last control's 48dp touch target inside the clipped scroll viewport.
-                Spacer(Modifier.height(4.dp))
-            }
-            LogsPane(controller, Modifier.weight(1f))
-        }
-    }
-}
-
-@Composable
-private fun AboutScreen(controller: SessionController, modifier: Modifier) {
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("About DobbyVPN", style = MaterialTheme.typography.headlineMedium)
-        SelectionContainer {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Version: ${BuildConfig.VERSION_NAME}")
-                Text("Commit: ${BuildConfig.PROJECT_REPOSITORY_COMMIT.take(8)}")
-                Text("Source commit: ${BuildConfig.PROJECT_REPOSITORY_COMMIT}", modifier = Modifier.semantics { contentDescription = "Source commit" })
-            }
-        }
-        TextButton(
-            onClick = controller::openSourceCommit,
-            enabled = BuildConfig.PROJECT_REPOSITORY_COMMIT.isNotBlank() && BuildConfig.PROJECT_REPOSITORY_COMMIT != "N/A",
-            modifier = Modifier.semantics {
-                contentDescription = "Source code ${BuildConfig.PROJECT_REPOSITORY_COMMIT_LINK}"
-            },
-        ) { Text("Source code") }
-        Button(onClick = { controller.show("connection") }) { Text("Back") }
-    }
-}
-
-@Composable
-private fun LogsPane(controller: SessionController, modifier: Modifier) {
-    val state = controller.state
-    val colors = MaterialTheme.colorScheme
-    val normalColor = colors.onSurface.toArgb()
-    val mutedColor = colors.onSurfaceVariant.toArgb()
-    val warningColor = (if (isSystemInDarkTheme()) androidx.compose.ui.graphics.Color(0xFFFFD084)
-        else androidx.compose.ui.graphics.Color(0xFF8A5A00)).toArgb()
-    val errorColor = colors.error.toArgb()
-    Column(modifier.fillMaxWidth()) {
-        Text(
-            "Logs",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            TextButton(
-                onClick = controller::clearLogs,
-                modifier = Modifier.testTag("logs.clear"),
-            ) { Text("Clear") }
-            TextButton(
-                onClick = controller::exportLogs,
-                enabled = !state.exportingLogs,
-                modifier = Modifier.testTag("logs.export"),
-            ) { Text("Share logs") }
-        }
-        if (state.logsError.isNotEmpty()) {
-            Text("Some diagnostics could not be read or shared. Details are included in the logs.", color = MaterialTheme.colorScheme.error)
-        }
-        AndroidView(
-            factory = { controller.createLogView(it) },
-            modifier = Modifier.fillMaxWidth().weight(1f)
-                .clipToBounds(),
-            update = {
-                it.update(state.logs, state.clearRevision, normalColor, mutedColor, warningColor, errorColor)
-                controller.restoreRetainedLogView(it)
-            },
-        )
-    }
-}
-
-private class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {
+internal class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {
     private val content = android.widget.TextView(context).apply {
         id = R.id.logs_viewport
-        textSize = 12f
+        typeface = android.graphics.Typeface.MONOSPACE
+        textSize = 11.5f
+        setLineSpacing(0f, 1.25f)
         setTextIsSelectable(true)
         contentDescription = "Connection logs"
     }
+    var onDoubleTap: (x: Int, y: Int) -> Unit = { _, _ -> }
+    private val gestures = android.view.GestureDetector(context, object : android.view.GestureDetector.SimpleOnGestureListener() {
+        override fun onDoubleTap(event: android.view.MotionEvent): Boolean {
+            onDoubleTap(event.x.toInt(), event.y.toInt())
+            return true
+        }
+    })
     private val followState = LogFollowState()
     private val following get() = followState.followsLatest
     private var updating = false
     private var userScrolling = false
     private var lastClear = 0
-    private var normalColor = android.graphics.Color.BLACK
-    private var mutedColor = android.graphics.Color.GRAY
-    private var warningColor = android.graphics.Color.rgb(138, 90, 0)
-    private var errorColor = android.graphics.Color.rgb(179, 38, 30)
+    private val timeFormat = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")
     private var rendered = emptyList<LogEntry>()
     private var latest = emptyList<LogEntry>()
     private var hasRendered = false
@@ -955,7 +794,36 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
     private var restoredScrollY: Int? = null
     private var restoredVisibleBoundaries: Map<String, Long>? = null
 
-    init { isFillViewport = true; addView(content) }
+    init {
+        isFillViewport = true
+        addView(content)
+        content.setTextColor(Ink.toArgb())
+        // New text is laid out after render() returns; keep the newest line in view.
+        content.addOnLayoutChangeListener { _, _, _, _, bottom, _, _, _, oldBottom ->
+            if (following && bottom != oldBottom) scrollToLatest()
+        }
+    }
+
+    private var consumingDoubleTap = false
+    private var scrollingToLatest = false
+
+    private fun scrollToLatest() {
+        scrollingToLatest = true
+        scrollTo(0, content.bottom)
+        scrollingToLatest = false
+    }
+
+    // A long press selects text; the second tap of a double tap opens the menu
+    // and never reaches the text, so it does not select a word.
+    override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (gestures.onTouchEvent(event) && event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+            consumingDoubleTap = true
+        }
+        if (!consumingDoubleTap) return super.dispatchTouchEvent(event)
+        if (event.actionMasked == android.view.MotionEvent.ACTION_UP ||
+            event.actionMasked == android.view.MotionEvent.ACTION_CANCEL) consumingDoubleTap = false
+        return true
+    }
 
     fun restoreState(state: Bundle) {
         followState.restore(state.getBoolean("following", true))
@@ -1008,13 +876,18 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
         return super.onInterceptTouchEvent(event)
     }
 
+    // Selectable text asks to keep its cursor in view after every update; while
+    // following, the newest line must stay in view instead.
+    override fun requestChildRectangleOnScreen(child: android.view.View, rectangle: android.graphics.Rect, immediate: Boolean): Boolean =
+        if (following) false else super.requestChildRectangleOnScreen(child, rectangle, immediate)
+
     override fun onScrollChanged(left: Int, top: Int, oldLeft: Int, oldTop: Int) {
         super.onScrollChanged(left, top, oldLeft, oldTop)
-        if (updating || !userScrolling || top == oldTop) return
+        if (updating || scrollingToLatest || !userScrolling || top == oldTop) return
         if (followState.scrolled(canScrollVertically(1)) && latest != rendered) post { render(latest) }
     }
 
-    fun update(entries: List<LogEntry>, clear: Int, normal: Int, muted: Int, warning: Int, error: Int) {
+    fun update(entries: List<LogEntry>, clear: Int) {
         if (clear != lastClear) {
             followState.clear()
             lastClear = clear
@@ -1022,11 +895,6 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
             restoredVisibleBoundaries = null
         }
         if (awaitingRestoredEntries && entries.isEmpty()) return
-        val themeChanged = normalColor != normal || mutedColor != muted || warningColor != warning || errorColor != error
-        normalColor = normal
-        mutedColor = muted
-        warningColor = warning
-        errorColor = error
         if (awaitingRestoredEntries) {
             val boundaries = restoredVisibleBoundaries
             val visible = if (boundaries == null) entries else entries.filter { entry ->
@@ -1043,32 +911,32 @@ private class LiveLogView(context: android.content.Context) : android.widget.Scr
         }
         awaitingRestoredEntries = false
         latest = entries
-        if (!hasRendered || following && (rendered != entries || themeChanged)) render(entries)
-        else if (themeChanged) render(rendered)
+        if (!hasRendered || following && rendered != entries) render(entries)
     }
 
     private fun render(entries: List<LogEntry>) {
         updating = true
         rendered = entries
         val text = android.text.SpannableStringBuilder()
+        val muted = Muted.toArgb()
         entries.forEach { entry ->
-            val start = text.length
-            text.append(listOf(entry.timestamp, entry.level, entry.source).filter(String::isNotEmpty).joinToString(" · "))
-                .append("\n").append(entry.message).append("\n")
-            val color = when (entry.level) {
-                "ERROR", "FATAL", "PANIC" -> errorColor
-                "WARN", "WARNING" -> warningColor
-                "DEBUG", "TRACE" -> mutedColor
-                else -> normalColor
+            val time = entry.time?.atZone(java.time.ZoneId.systemDefault())?.format(timeFormat) ?: entry.timestamp
+            if (time.isNotEmpty()) {
+                text.append(time, android.text.style.ForegroundColorSpan(muted), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE).append("  ")
             }
-            text.setSpan(android.text.style.ForegroundColorSpan(color), start, text.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val start = text.length
+            text.append(entry.message).append("\n")
+            when (entry.level) {
+                "ERROR", "FATAL", "PANIC", "WARN", "WARNING" -> android.text.style.StyleSpan(android.graphics.Typeface.BOLD)
+                "DEBUG", "TRACE" -> android.text.style.ForegroundColorSpan(muted)
+                else -> null
+            }?.let { text.setSpan(it, start, text.length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
         }
         val offset = restoredScrollY ?: scrollY
         restoredScrollY = null
-        content.setTextColor(normalColor)
         content.text = text
         post {
-            if (following) scrollTo(0, content.bottom) else scrollTo(0, offset)
+            if (following) scrollToLatest() else scrollTo(0, offset)
             hasRendered = true
             updating = false
         }
