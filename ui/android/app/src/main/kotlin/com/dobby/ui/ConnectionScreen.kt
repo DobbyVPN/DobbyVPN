@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -38,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +58,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -95,11 +98,14 @@ private val ControlsHeight = 180.dp
 
 @Composable
 internal fun DobbyApp(controller: SessionController) {
+    val focus = LocalFocusManager.current
     MaterialTheme(colorScheme = lightColorScheme(primary = Ink, background = Paper)) {
         BoxWithConstraints(
             Modifier.fillMaxSize()
                 // Takes focus when the field gives it up, so the keyboard does not come back.
                 .focusable()
+                // A tap outside the subscription field hides the keyboard; buttons and the field handle their own taps.
+                .pointerInput(Unit) { detectTapGestures { focus.clearFocus() } }
                 .background(Paper)
                 .semantics { testTagsAsResourceId = true },
         ) {
@@ -358,6 +364,8 @@ private fun ErrorDialog(controller: SessionController) {
     val loadFailed = state.loadError.isNotEmpty()
     val detail = listOf(state.loadError, state.error, state.session.failure, state.logsError).firstOrNull(String::isNotEmpty).orEmpty()
     var dismissed by rememberSaveable { mutableStateOf("") }
+    // A new attempt clears the error, so the same failure shows its popup again.
+    LaunchedEffect(detail) { if (detail.isEmpty()) dismissed = "" }
     if (detail.isEmpty() || detail == dismissed) return
     val close = { if (detail == state.error) controller.dismissError() else dismissed = detail }
     val status = controller.status
