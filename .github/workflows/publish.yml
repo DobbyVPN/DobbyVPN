@@ -392,7 +392,7 @@ jobs:
         id: pins
         run: |
           set -euo pipefail
-          for pin in java_major android_build_tools; do
+          for pin in java_major android_build_tools android_cmdline_tools; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
@@ -434,6 +434,8 @@ jobs:
           test -n "$sdk_root"
           apksigner="$sdk_root/build-tools/${{ steps.pins.outputs.android_build_tools }}/apksigner"
           test -x "$apksigner"
+          export APKANALYZER="$sdk_root/cmdline-tools/${{ steps.pins.outputs.android_cmdline_tools }}/bin/apkanalyzer"
+          test -x "$APKANALYZER"
           apkanalyzer="$(python3 .github/scripts/android/android_tool_selection.py --tool apkanalyzer)"
 
           python3 .github/scripts/android/verify_android_reproducibility.py verify-provenance \
