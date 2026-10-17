@@ -93,7 +93,7 @@ jobs:
       # build the pinned Go 1.26.9 toolchain from source. It never compiles the
       # application; the version and binary used for that are verified below.
       - name: Set up bootstrap Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.24.6'
           # This Go only bootstraps make.bash; there is no root go.mod to cache.
@@ -166,8 +166,9 @@ jobs:
           distribution: 'temurin'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
+          cmdline-tools-version: '15859902'
           packages: >
             platforms;android-${{ steps.pins.outputs.android_compile_sdk }}
             build-tools;${{ steps.pins.outputs.android_build_tools }}
@@ -303,7 +304,7 @@ jobs:
 
       - name: Upload unsigned APK
         if: ${{ inputs.reference_build_run_id == '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dobbyvpn-android-unsign.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
@@ -312,7 +313,7 @@ jobs:
 
       - name: Upload Android Build metadata
         if: ${{ inputs.single_build && inputs.reference_build_run_id == '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dobbyvpn-android-build-metadata
           path: |
@@ -323,7 +324,7 @@ jobs:
 
       - name: Upload Android provenance
         if: ${{ inputs.reference_build_run_id != '' || !inputs.single_build }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dobbyvpn-android-provenance
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
@@ -340,7 +341,7 @@ jobs:
 
       - name: Upload Debug APK
         if: ${{ inputs.reference_build_run_id == '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dobbyvpn-android-debug.apk
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-debug.apk
