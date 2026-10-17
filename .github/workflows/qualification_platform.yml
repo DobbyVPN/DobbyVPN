@@ -176,13 +176,15 @@ jobs:
           [[ "$deadline" =~ ^[0-9]+$ ]]
           printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
 
-      - name: Read Android Java version
+      - name: Read Android SDK pins
         id: android_java
         if: inputs.platform == 'android'
         run: |
           set -euo pipefail
-          value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin java_major)"
-          echo "java_major=$value" >> "$GITHUB_OUTPUT"
+          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
 
       - name: Install pinned JDK for temporary Android test signing
         if: inputs.platform == 'android'
@@ -206,10 +208,10 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
-          compile_sdk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_compile_sdk)"
-          build_tools="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_build_tools)"
-          ndk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_ndk)"
-          sdkmanager --install "platforms;android-$compile_sdk" "build-tools;$build_tools" "ndk;$ndk"
+          sdk_platform="${{ steps.android_java.outputs.android_sdk_platform }}"
+          build_tools="${{ steps.android_java.outputs.android_build_tools }}"
+          ndk="${{ steps.android_java.outputs.android_ndk }}"
+          sdkmanager --install "platforms;$sdk_platform" "build-tools;$build_tools" "ndk;$ndk"
           python3 - <<'PYTHON'
           import json, os
           from pathlib import Path
@@ -297,6 +299,14 @@ jobs:
               --platform "$PLATFORM" --arch "$architecture" --version "$version" \
               --source-sha "$DOBBYVPN_COMMIT_SHA" --package "$package" \
               --output "$DESKTOP_PACKAGE_DESCRIPTOR"
+            if [ "$PLATFORM" = linux ]; then
+              # Exercise the selected DEB before functional setup stops/restarts it.
+              export DOBBYVPN_COMMAND_DEADLINE_MONOTONIC="$(python3 -c 'import os,time; print(time.monotonic() + max(0, float(os.environ["RUN_DEADLINE_EPOCH"]) - time.time()))')"
+              run_timed linux-installer-migration python3 -m torturer_runner.installer_migration \
+                --platform linux --package "$package" --current-version "$version" \
+                --package-sha256 "$(python3 -c 'import json,os; print(json.load(open(os.environ["DESKTOP_PACKAGE_DESCRIPTOR"]))["package_sha256"])')" \
+                --log-dir "$RUN_DIR/installer-migration" --temp-parent "$RUN_DIR"
+            fi
             install_arguments=(
               install
               --build-descriptor "$DESKTOP_PACKAGE_DESCRIPTOR"
@@ -346,9 +356,9 @@ jobs:
           case "$PLATFORM" in
             android)
               sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
-              compile_sdk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_compile_sdk)"
+              sdk_platform="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_sdk_platform)"
               build_tools="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_build_tools)"
-              run_timed android-sdk-install sdkmanager --install 'platform-tools' "platforms;android-$compile_sdk" "build-tools;$build_tools" 'emulator' "system-images;android-$compile_sdk;google_apis;x86_64"
+              run_timed android-sdk-install sdkmanager --install 'platform-tools' "platforms;$sdk_platform" "build-tools;$build_tools" 'emulator' 'system-images;android-35;google_apis;x86_64'
               unsigned_app="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-unsign.apk"
               unsigned_companion="$RUNNER_TEMP/private-android-companion/dobbyvpn-test-companion-unsigned.apk"
               signed_app="$ANDROID_SIGNED_DIR/DobbyVPN-test.apk"
@@ -371,7 +381,7 @@ jobs:
               export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
               mkdir -p "$ANDROID_AVD_HOME"
               printf 'Android AVD home: %s\n' "$ANDROID_AVD_HOME"
-              run_timed android-avd-create avdmanager create avd --force --name dobbyvpn-release --package "system-images;android-$compile_sdk;google_apis;x86_64" --device pixel_2
+              run_timed android-avd-create avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
               test -s "$ANDROID_AVD_HOME/dobbyvpn-release.ini"
               avd_list_stdout="$RUN_DIR/android-avds.stdout.log"
               avd_list_stderr="$RUN_DIR/android-avds.stderr.log"
@@ -724,9 +734,6 @@ jobs:
               release_args+=(--service-socket "$SERVICE_SOCKET")
             fi
             if [ "$PLATFORM" = linux ]; then
-              export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
-            fi
-            if [ "$PLATFORM" = macos ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
             fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.desktop_platform "${release_args[@]}"

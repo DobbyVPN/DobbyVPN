@@ -75,7 +75,7 @@ jobs:
         id: android
         shell: bash
         run: |
-          for pin in java_major android_compile_sdk android_build_tools android_ndk; do
+          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
@@ -91,7 +91,7 @@ jobs:
         with:
           cmdline-tools-version: '15859902'
           packages: >
-            platforms;android-${{ steps.android.outputs.android_compile_sdk }}
+            platforms;${{ steps.android.outputs.android_sdk_platform }}
             build-tools;${{ steps.android.outputs.android_build_tools }}
             ndk;${{ steps.android.outputs.android_ndk }}
       - name: Run private checks against selected production sources

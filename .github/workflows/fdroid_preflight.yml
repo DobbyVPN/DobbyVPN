@@ -40,6 +40,12 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Read pinned Android command-line tools
+        id: android_tools
+        run: |
+          set -euo pipefail
+          value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_cmdline_tools)"
+          echo "version=$value" >> "$GITHUB_OUTPUT"
       - name: Download the candidate unsigned Android APK
         env:
           GH_TOKEN: ${{ github.token }}
@@ -71,6 +77,7 @@ jobs:
             --volume "$RUNNER_TEMP/fdroid-build:/home/vagrant/tmp" \
             --env SOURCE_SHA --env VERSION_NAME --env VERSION_CODE \
             --env SOURCE_REPOSITORY="$GITHUB_REPOSITORY" \
+            --env ANDROID_CMDLINE_TOOLS_VERSION="${{ steps.android_tools.outputs.version }}" \
             "$FDROID_IMAGE" bash -euo pipefail -c '
               source /etc/profile.d/bsenv.sh
               export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
@@ -82,7 +89,8 @@ jobs:
               apt-get install -y -t trixie-backports golang-1.27-go
               apt-get install -y -t bookworm openjdk-17-jdk-headless
               test -x /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-              sdkmanager "cmdline-tools;latest"
+              sdkmanager "cmdline-tools;$ANDROID_CMDLINE_TOOLS_VERSION"
+              export PATH="$ANDROID_HOME/cmdline-tools/$ANDROID_CMDLINE_TOOLS_VERSION/bin:$PATH"
               export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
               export PATH="$JAVA_HOME/bin:$PATH"
               chown -R vagrant:vagrant /home/vagrant
@@ -97,7 +105,7 @@ jobs:
                 --reference-apk "/workspace/reference/DobbyVPN-v${VERSION_NAME}-unsign.apk" \
                 --source-sha "$SOURCE_SHA" \
                 --repository "$SOURCE_REPOSITORY" \
-                --apkanalyzer "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" \
+                --apkanalyzer "$ANDROID_HOME/cmdline-tools/$ANDROID_CMDLINE_TOOLS_VERSION/bin/apkanalyzer" \
                 --version-name "$VERSION_NAME" --version-code "$VERSION_CODE"
             '
       - name: Retain failed F-Droid rebuilt APK

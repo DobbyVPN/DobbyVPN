@@ -154,7 +154,7 @@ jobs:
         id: pins
         run: |
           set -euo pipefail
-          for pin in java_major android_compile_sdk android_build_tools android_ndk; do
+          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
@@ -170,7 +170,7 @@ jobs:
         with:
           cmdline-tools-version: '15859902'
           packages: >
-            platforms;android-${{ steps.pins.outputs.android_compile_sdk }}
+            platforms;${{ steps.pins.outputs.android_sdk_platform }}
             build-tools;${{ steps.pins.outputs.android_build_tools }}
             ndk;${{ steps.pins.outputs.android_ndk }}
 
@@ -252,11 +252,7 @@ jobs:
             --first-apk "$original" --second-apk "$reference" \
             --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference-reproducibility.json" \
             --source-sha "$APP_SOURCE_SHA" --version-name "$version" --version-code "$ANDROID_VERSION_CODE"
-          apkanalyzer="$(command -v apkanalyzer || true)"
-          if [[ -z "$apkanalyzer" ]]; then
-            apkanalyzer="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools" -type f -name apkanalyzer -perm -u+x -print -quit)"
-          fi
-          test -n "$apkanalyzer" && test -x "$apkanalyzer"
+          apkanalyzer="$(python3 .github/scripts/android/android_tool_selection.py --tool apkanalyzer)"
           python3 .github/scripts/android/verify_android_apk_source.py \
             --apk "$original" --apk "$reference" --source-sha "$APP_SOURCE_SHA" \
             --repository "$APP_SOURCE_REPOSITORY" --version-name "$version" \
