@@ -260,7 +260,6 @@ public final class DobbySessionViewModel: ObservableObject {
                     let sameSession = value.sessionID == self.snapshot.sessionID
                     if !sameSession {
                         self.acceptedSequence = 0
-                        self.lastSourceErrorIdentity = nil
                         self.clearError(from: .sourceSnapshot)
                     }
                     var displayedValue = value
