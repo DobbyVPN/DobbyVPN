@@ -63,10 +63,16 @@ def _read_spec(path: Path) -> dict[str, Any]:
     if not isinstance(go["source_commit"], str) or not SHA40.fullmatch(go["source_commit"]):
         raise ValueError("Go source commit must be a full lowercase Git SHA")
     android = document["android"]
-    if not isinstance(android, dict) or set(android) != {"build_tools"}:
-        raise ValueError("Android build-tools pin is incomplete")
+    if not isinstance(android, dict) or set(android) != {
+        "build_tools", "cmdline_tools", "cmdline_tools_archive",
+    }:
+        raise ValueError("Android SDK tool pins are incomplete")
     if not isinstance(android["build_tools"], str) or not re.fullmatch(r"\d+(?:\.\d+){2}", android["build_tools"]):
         raise ValueError("Android build-tools version must use X.Y.Z format")
+    if not isinstance(android["cmdline_tools"], str) or not re.fullmatch(r"\d+(?:\.\d+)?", android["cmdline_tools"]):
+        raise ValueError("Android command-line-tools version must use X.Y format")
+    if not isinstance(android["cmdline_tools_archive"], str) or not re.fullmatch(r"\d+", android["cmdline_tools_archive"]):
+        raise ValueError("Android command-line-tools archive version must be numeric")
     return document
 
 
@@ -116,43 +122,202 @@ def _wrapper_values(path: Path) -> dict[str, str]:
     return {"url": url, "version": match.group(1), "sha256": checksum}
 
 
-def _read_android_gradle_values(path: Path) -> tuple[int, str, int]:
+def _single_match(pattern: str, content: str, label: str) -> str:
+    matches = re.findall(pattern, content, flags=re.MULTILINE | re.DOTALL)
+    if len(matches) != 1:
+        raise ValueError(f"Android Gradle build must declare exactly one {label}")
+    value = matches[0]
+    if isinstance(value, tuple):
+        raise TypeError("_single_match patterns must capture one value")
+    return value
+
+
+def _uncommented_kotlin(content: str) -> str:
+    """Remove Kotlin comments without treating comment markers in strings as syntax."""
+    output: list[str] = []
+    index = 0
+    state = "code"
+    block_depth = 0
+    while index < len(content):
+        current = content[index]
+        pair = content[index:index + 2]
+        triple = content[index:index + 3]
+
+        if state == "code":
+            if pair == "//":
+                state = "line_comment"
+                output.extend("  ")
+                index += 2
+                continue
+            if pair == "/*":
+                state = "block_comment"
+                block_depth = 1
+                output.extend("  ")
+                index += 2
+                continue
+            if triple == '"""':
+                state = "raw_string"
+                output.extend('"""')
+                index += 3
+                continue
+            if current == '"':
+                state = "quoted_string"
+            output.append(current)
+            index += 1
+            continue
+
+        if state == "line_comment":
+            if current in "\r\n":
+                output.append(current)
+                state = "code"
+            else:
+                output.append(" ")
+            index += 1
+            continue
+
+        if state == "block_comment":
+            if pair == "/*":
+                block_depth += 1
+                output.extend("  ")
+                index += 2
+                continue
+            if pair == "*/":
+                block_depth -= 1
+                output.extend("  ")
+                index += 2
+                if block_depth == 0:
+                    state = "code"
+                continue
+            output.append(current if current in "\r\n" else " ")
+            index += 1
+            continue
+
+        if state == "raw_string":
+            if triple == '"""':
+                output.extend('"""')
+                index += 3
+                state = "code"
+            else:
+                output.append(current)
+                index += 1
+            continue
+
+        if current == "\\" and index + 1 < len(content):
+            output.extend(content[index:index + 2])
+            index += 2
+            continue
+        output.append(current)
+        index += 1
+        if state == "quoted_string" and current == '"':
+            state = "code"
+
+    return "".join(output)
+
+
+def _read_android_gradle_values(path: Path) -> tuple[int, str, int, str]:
     try:
         build_file = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
         raise ValueError("Android application Gradle build file is unavailable") from error
+    build_file = _uncommented_kotlin(build_file)
     java_versions = set(re.findall(r"JavaVersion\.VERSION_(\d+)", build_file))
     jvm_targets = set(
         re.findall(r'jvmTarget\s*=\s*JvmTarget\.fromTarget\("(\d+)"\)', build_file)
     )
     ndk_versions = set(re.findall(r'pinnedAndroidNdkVersion\s*=\s*"([^"]+)"', build_file))
-    compile_sdks = set(re.findall(r"(?m)^\s*compileSdk\s*=\s*(\d+)\s*$", build_file))
     if len(java_versions) != 1 or jvm_targets != java_versions:
         raise ValueError("Android Gradle Java compatibility declarations must agree on one major version")
     if len(ndk_versions) != 1:
         raise ValueError("Android Gradle build must declare one pinned NDK version")
-    if len(compile_sdks) != 1:
-        raise ValueError("Android Gradle build must declare one compile SDK version")
-    return int(next(iter(java_versions))), next(iter(ndk_versions)), int(next(iter(compile_sdks)))
+    compile_declarations = re.findall(r"\bcompileSdk\s*(?:=|\{)", build_file)
+    canonical_compile_sdks = re.findall(
+        r"\bcompileSdk\s*\{\s*version\s*=\s*release\(\s*(\d+)\s*\)\s*\{\s*minorApiLevel\s*=\s*(\d+)\s*\}\s*\}",
+        build_file,
+        flags=re.DOTALL,
+    )
+    if len(compile_declarations) != 1 or len(canonical_compile_sdks) != 1:
+        raise ValueError(
+            "Android Gradle build must declare one canonical compile SDK release with a minor API level"
+        )
+    compile_sdk, minor_api = map(int, canonical_compile_sdks[0])
+    sdk_platform = f"android-{compile_sdk}.{minor_api}"
+    return int(next(iter(java_versions))), next(iter(ndk_versions)), compile_sdk, sdk_platform
+
+
+def _read_android_plugin_versions(path: Path, app_path: Path) -> dict[str, str]:
+    try:
+        root_build = _uncommented_kotlin(path.read_text(encoding="utf-8"))
+        app_build = _uncommented_kotlin(app_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError) as error:
+        raise ValueError("Android Gradle plugin declarations are unavailable") from error
+
+    if re.search(r'id\("org\.jetbrains\.kotlin\.android"\)', root_build + app_build):
+        raise ValueError("Android app must use AGP built-in Kotlin instead of org.jetbrains.kotlin.android")
+
+    patterns = {
+        "android_agp": r'id\("com\.android\.application"\)\s+version\s+"([^"\r\n]+)"\s+apply\s+false',
+        "compose_compiler_version": r'id\("org\.jetbrains\.kotlin\.plugin\.compose"\)\s+version\s+"([^"\r\n]+)"\s+apply\s+false',
+        "kotlin_jvm_version": r'id\("org\.jetbrains\.kotlin\.jvm"\)\s+version\s+"([^"\r\n]+)"\s+apply\s+false',
+        "kotlin_gradle_plugin_version": r'classpath\("org\.jetbrains\.kotlin:kotlin-gradle-plugin:([^"\r\n]+)"\)',
+    }
+    values = {
+        name: _single_match(pattern, root_build, name.replace("_", " "))
+        for name, pattern in patterns.items()
+    }
+    kotlin_versions = {
+        values["compose_compiler_version"],
+        values["kotlin_jvm_version"],
+        values["kotlin_gradle_plugin_version"],
+    }
+    if len(kotlin_versions) != 1:
+        raise ValueError("Android KGP, Kotlin/JVM, and Compose compiler versions must agree")
+    return values
+
+
+def _read_android_dependency_versions(path: Path) -> dict[str, str]:
+    try:
+        app_build = _uncommented_kotlin(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError) as error:
+        raise ValueError("Android application dependency declarations are unavailable") from error
+    patterns = {
+        "android_core_ktx": r'implementation\("androidx\.core:core-ktx:([^"\r\n]+)"\)',
+        "android_compose_bom": r'implementation\(platform\("androidx\.compose:compose-bom:([^"\r\n]+)"\)\)',
+    }
+    return {
+        name: _single_match(pattern, app_build, name.replace("_", " "))
+        for name, pattern in patterns.items()
+    }
 
 
 def dependency_pins(source_root: Path, spec_path: Path | None = None) -> dict[str, str | int]:
     spec = _read_spec(spec_path or source_root / ".github/scripts/android/dependency-spec.json")
     mobile_module, mobile_version = _read_mobile_module(source_root)
     gradle = _wrapper_values(source_root / "ui/android/gradle/wrapper/gradle-wrapper.properties")
-    java_major, android_ndk, compile_sdk = _read_android_gradle_values(
+    java_major, android_ndk, compile_sdk, sdk_platform = _read_android_gradle_values(
+        source_root / "ui/android/app/build.gradle.kts"
+    )
+    plugin_versions = _read_android_plugin_versions(
+        source_root / "ui/android/build.gradle.kts",
+        source_root / "ui/android/app/build.gradle.kts",
+    )
+    dependency_versions = _read_android_dependency_versions(
         source_root / "ui/android/app/build.gradle.kts"
     )
     return {
         "android_build_tools": spec["android"]["build_tools"],
         "android_ndk": android_ndk,
         "android_compile_sdk": compile_sdk,
+        "android_sdk_platform": sdk_platform,
+        "android_cmdline_tools": spec["android"]["cmdline_tools"],
+        "android_cmdline_tools_archive": spec["android"]["cmdline_tools_archive"],
         "go_source_commit": spec["go"]["source_commit"],
         "go_version": _read_go_version(source_root),
         "gradle_sha256": gradle["sha256"],
         "gradle_url": gradle["url"],
         "gradle_version": gradle["version"],
         "java_major": java_major,
+        **plugin_versions,
+        **dependency_versions,
         "mobile_module": mobile_module,
         "mobile_version": mobile_version,
     }
@@ -164,6 +329,14 @@ _DEFAULT_PINS = dependency_pins(REPOSITORY_ROOT, DEFAULT_SPEC)
 ANDROID_BUILD_TOOLS = str(_DEFAULT_PINS["android_build_tools"])
 ANDROID_NDK = str(_DEFAULT_PINS["android_ndk"])
 ANDROID_COMPILE_SDK = int(_DEFAULT_PINS["android_compile_sdk"])
+ANDROID_SDK_PLATFORM = str(_DEFAULT_PINS["android_sdk_platform"])
+ANDROID_CMDLINE_TOOLS = str(_DEFAULT_PINS["android_cmdline_tools"])
+ANDROID_CMDLINE_TOOLS_ARCHIVE = str(_DEFAULT_PINS["android_cmdline_tools_archive"])
+ANDROID_AGP_VERSION = str(_DEFAULT_PINS["android_agp"])
+KOTLIN_VERSION = str(_DEFAULT_PINS["kotlin_gradle_plugin_version"])
+COMPOSE_COMPILER_VERSION = str(_DEFAULT_PINS["compose_compiler_version"])
+ANDROID_CORE_KTX_VERSION = str(_DEFAULT_PINS["android_core_ktx"])
+ANDROID_COMPOSE_BOM_VERSION = str(_DEFAULT_PINS["android_compose_bom"])
 GO_SOURCE_COMMIT = str(_DEFAULT_PINS["go_source_commit"])
 GO_VERSION = str(_DEFAULT_PINS["go_version"])
 GRADLE_VERSION = str(_DEFAULT_PINS["gradle_version"])
