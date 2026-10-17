@@ -4,5 +4,6 @@ Section: net
 Priority: optional
 Architecture: amd64
 Maintainer: DobbyVPN team
+Depends: init-system-helpers (>= 1.54~)
 Description: DobbyVPN Go backend and command line client
  Shared Go VPN backend and operator CLI for Linux.

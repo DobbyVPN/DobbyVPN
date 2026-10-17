@@ -828,6 +828,14 @@ def _verify_deb(package: Path, version: str, work: Path) -> None:
     actual = (result.stdout or b"").decode("utf-8", errors="replace").strip()
     if actual != version:
         _fail(f"DEB version {actual!r} does not match {version!r}")
+    dependency_result = _run(
+        "Linux DEB init-system-helpers dependency check",
+        ["dpkg-deb", "-f", str(package), "Depends"],
+        capture=True,
+    )
+    dependencies = (dependency_result.stdout or b"").decode("utf-8", errors="replace").strip()
+    if "init-system-helpers (>= 1.54~)" not in dependencies:
+        _fail("Linux DEB does not require init-system-helpers (>= 1.54~)")
     expanded = work / "expanded-deb"
     _run("expand Linux package for closure check", ["dpkg-deb", "-x", str(package), str(expanded)])
     service = expanded / "opt" / "dobbyvpn" / "bin" / "dobbyvpn-backend"
@@ -842,14 +850,38 @@ def _verify_deb(package: Path, version: str, work: Path) -> None:
     control = work / "expanded-deb-control"
     _run("expand Linux package maintainer scripts", ["dpkg-deb", "-e", str(package), str(control)])
     expected_script_fragments = {
-        "postinst": "systemctl enable dobbyvpn.service",
-        "prerm": "systemctl disable dobbyvpn.service",
-        "postrm": "systemctl daemon-reload",
+        "postinst": (
+            'case "${1:-}" in\n    configure)',
+            "admin_masked() {",
+            'deb-systemd-helper debian-installed "$unit"',
+            'deb-systemd-helper --quiet was-enabled "$unit"',
+            'deb-systemd-helper update-state "$unit"',
+            'deb-systemd-helper enable "$unit"',
+            'deb-systemd-invoke start "$unit"',
+            'deb-systemd-invoke restart "$unit"',
+        ),
+        "prerm": ("deb-systemd-invoke stop dobbyvpn.service",),
+        "postrm": (
+            "deb-systemd-helper purge dobbyvpn.service",
+            "systemctl daemon-reload",
+        ),
     }
-    for name, fragment in expected_script_fragments.items():
+    for name, fragments in expected_script_fragments.items():
         script = control / name
-        if not script.is_file() or fragment not in script.read_text(encoding="utf-8"):
-            _fail(f"Linux DEB maintainer script {name} is missing {fragment!r}")
+        if not script.is_file():
+            _fail(f"Linux DEB maintainer script {name} is missing")
+        script_text = script.read_text(encoding="utf-8")
+        missing = [fragment for fragment in fragments if fragment not in script_text]
+        if missing:
+            _fail(f"Linux DEB maintainer script {name} is missing {missing!r}")
+        if "|| true" in script_text:
+            _fail(f"Linux DEB maintainer script {name} suppresses a failure")
+        if name == "prerm" and (
+            "upgrade" in script_text
+            or "systemctl disable" in script_text
+            or "deb-systemd-helper disable" in script_text
+        ):
+            _fail("Linux DEB prerm must neither stop nor disable the service on upgrade")
         _run(f"check Linux DEB {name} syntax", ["sh", "-n", str(script)])
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = str(library_path)
