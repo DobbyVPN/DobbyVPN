@@ -1,11 +1,23 @@
 import java.io.File
 import java.util.Properties
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.Sync
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+abstract class GeneratedSourceSync : Sync() {
+    @get:OutputDirectory
+    abstract val generatedDirectory: DirectoryProperty
+
+    init {
+        into(generatedDirectory)
+    }
 }
 
 val repoRoot = rootProject.projectDir.parentFile.parentFile
@@ -95,12 +107,12 @@ val testSeamsBuild = requestedTestSeams == "1"
 check(!testSeamsBuild || requestedLocalBuild == "1") {
     "the Android test-seams tag is allowed only for an explicit local build"
 }
-val copyLicenseAssets by tasks.registering(Copy::class) {
+val copyLicenseAssets by tasks.registering(GeneratedSourceSync::class) {
     from(repoRoot) {
         include("LICENSE", "THIRD_PARTY_NOTICES", "LICENSES/**")
         into("licenses")
     }
-    into(distributionLicenseAssets)
+    generatedDirectory.set(distributionLicenseAssets)
 }
 
 android {
@@ -149,10 +161,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    listOf("release", "debug").forEach { variant ->
-        sourceSets[variant].jniLibs.srcDir(layout.buildDirectory.dir("generated/go-libs/$variant"))
-    }
-    sourceSets["main"].assets.srcDir(distributionLicenseAssets)
     buildFeatures {
         buildConfig = true
         compose = true
@@ -307,8 +315,29 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
     }
 }
 
-androidComponents.onVariants(androidComponents.selector().withBuildType("debug")) { variant ->
-    variant.packaging.jniLibs.keepDebugSymbols.add("**/*.so")
+val goJniSources = listOf("release", "debug").associateWith { variant ->
+    val taskSuffix = variant.replaceFirstChar { it.uppercase() }
+    tasks.register<GeneratedSourceSync>("stageGoJniLibs$taskSuffix") {
+        from(layout.buildDirectory.dir("generated/go-libs/$variant"))
+        include("**/*.so")
+        generatedDirectory.set(layout.buildDirectory.dir("generated/android-jni-libs/$variant"))
+        dependsOn(backendTasks.filter { it.name.startsWith("buildGoBackend_${variant}_") })
+    }
+}
+
+androidComponents.onVariants { variant ->
+    val buildType = variant.buildType ?: error("Android variants must define a build type")
+    variant.sources.assets?.addGeneratedSourceDirectory(copyLicenseAssets) {
+        it.generatedDirectory
+    }
+    variant.sources.jniLibs?.addGeneratedSourceDirectory(
+        goJniSources.getValue(buildType)
+    ) {
+        it.generatedDirectory
+    }
+    if (buildType == "debug") {
+        variant.packaging.jniLibs.keepDebugSymbols.add("**/*.so")
+    }
 }
 
 // The ABI builds share the Go cache and must run one at a time, including

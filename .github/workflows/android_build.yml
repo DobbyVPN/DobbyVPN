@@ -154,7 +154,7 @@ jobs:
         id: pins
         run: |
           set -euo pipefail
-          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
+          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
@@ -174,7 +174,7 @@ jobs:
             build-tools;${{ steps.pins.outputs.android_build_tools }}
             ndk;${{ steps.pins.outputs.android_ndk }}
 
-      - name: Select and verify pinned Android NDK
+      - name: Select and verify pinned Android NDK and APK analyzer
         run: |
           set -euo pipefail
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
@@ -183,6 +183,10 @@ jobs:
           test -f "$ndk_home/source.properties"
           grep -Fqx 'Pkg.Revision = ${{ steps.pins.outputs.android_ndk }}' "$ndk_home/source.properties"
           printf 'ANDROID_NDK_HOME=%s\n' "$ndk_home" >> "$GITHUB_ENV"
+          # setup-android leaves an older preinstalled cmdline-tools/latest intact.
+          analyzer="$sdk_root/cmdline-tools/${{ steps.pins.outputs.android_cmdline_tools }}/bin/apkanalyzer"
+          test -x "$analyzer"
+          printf 'APKANALYZER=%s\n' "$analyzer" | tee -a "$GITHUB_ENV"
 
       - name: Prepare reproducible Android source path
         run: |

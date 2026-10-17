@@ -200,6 +200,11 @@ jobs:
         run: |
           set -euo pipefail
           export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
+          tools_version="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_cmdline_tools)"
+          # setup-android leaves an older preinstalled cmdline-tools/latest intact.
+          export APKANALYZER="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/$tools_version/bin/apkanalyzer"
+          test -x "$APKANALYZER"
+          printf 'APKANALYZER=%s\n' "$APKANALYZER"
           export GO_BIN="$GOROOT/bin/go"
           export GOPATH="$RUNNER_TEMP/dobbyvpn-android-gopath"
           mkdir -p "$GOPATH"

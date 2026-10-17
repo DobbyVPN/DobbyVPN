@@ -37,7 +37,7 @@ from bounded_process import (
 )
 from android_dependency_provenance import (
     ANDROID_BUILD_TOOLS,
-    ANDROID_COMPILE_SDK,
+    ANDROID_SDK_PLATFORM,
     JAVA_MAJOR,
 )
 
@@ -375,9 +375,9 @@ def require_android_sdk() -> Path:
     sdk = next((Path(value).expanduser() for value in candidates if value and value.strip()), None)
     if sdk is None or not sdk.is_dir():
         raise CheckError("Android Lint requires ANDROID_SDK_ROOT/ANDROID_HOME or ui/android/local.properties")
-    platform_dir = sdk / "platforms" / f"android-{ANDROID_COMPILE_SDK}"
+    platform_dir = sdk / "platforms" / ANDROID_SDK_PLATFORM
     if not platform_dir.is_dir():
-        raise CheckError(f"Android Lint requires Android SDK platform {ANDROID_COMPILE_SDK} at {platform_dir}")
+        raise CheckError(f"Android Lint requires Android SDK platform {ANDROID_SDK_PLATFORM} at {platform_dir}")
     return sdk
 
 
