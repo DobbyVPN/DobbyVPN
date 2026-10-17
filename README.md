@@ -15,6 +15,17 @@ DobbyVPN has native apps for Windows, macOS, Android and iOS. Linux uses the
 command-line interface. Desktop installations include a background VPN service
 and the `dobby-cli` command.
 
+After installing a desktop package, `dobby-cli snapshot` connects to the
+installed background service. On macOS it uses the packaged socket without
+an environment override. `DOBBYVPN_CONTROL_SOCKET` can still select an
+alternative Unix socket when needed.
+
+Linux DEB installation starts the service when system policy permits. Upgrades
+preserve disabled and masked services. The first upgrade from the older 1.5.4
+package may re-enable a disabled, unmasked service because that package did
+not retain enablement history; later upgrades preserve the administrator's
+choice. Removing or purging the package preserves subscription data.
+
 Enter or paste an HTTPS subscription URL to load its profiles automatically.
 Choose **Auto connect** to try profiles in subscription order, or **Connect**
 beside a profile to select it. Choosing another profile while connected stops
@@ -212,18 +223,8 @@ address = "127.0.0.1:10808"
 
 Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nicely expressed Issues accordingly.
 
-Pushes and pull requests run checks. Release starts manually and qualifies its packages with the
-functional suite in `torturer/`. A separate manual Publish step uses the
-successful Release run's tested artifacts. If Release fails, fix the cause and
-start a new Release run; rerunning the old run is unsupported.
-
 Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
 supported.
-
-Windows and macOS packages are built and qualified by Release, including
-installer lifecycle checks. Distribution signing/notarization remains a
-release concern, so locally injected binaries are intended for iteration and
-are not distribution artifacts.
 
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)
