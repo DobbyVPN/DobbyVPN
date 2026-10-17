@@ -785,13 +785,33 @@ jobs:
           if [ -f "$RUN_DIR/service.log.stdout" ]; then cat "$RUN_DIR/service.log.stdout" >&2; fi
           if [ -f "$RUN_DIR/service.log.stderr" ]; then cat "$RUN_DIR/service.log.stderr" >&2; fi
 
+      - name: Recover interrupted Linux installer migration
+        if: always() && inputs.platform == 'linux' && env.RUN_DIR != ''
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import time
+
+          run_dir = Path(os.environ["RUN_DIR"])
+          if any(run_dir.glob("dobbyvpn-installer-migration-*")):
+              # Share the existing command runner's standalone cleanup allowance
+              # across recovery operations instead of restarting it per command.
+              os.environ.setdefault("DOBBYVPN_COMMAND_DEADLINE_MONOTONIC", str(time.monotonic() + 300))
+              from torturer_runner.installer_migration import cleanup_interrupted_linux
+              cleanup_interrupted_linux(run_dir, log_dir=run_dir / "installer-migration-recovery")
+          else:
+              print("No interrupted Linux installer migration remains.")
+          PY
+
       - name: Remove exact installed desktop package
         if: always() && inputs.platform != 'android'
         shell: bash
         run: |
           set -euo pipefail
           if [ ! -s "$INSTALLED_DESCRIPTOR" ]; then
-            printf 'No installed package descriptor was created; package removal was not needed.\n'
+            printf 'No functional-install descriptor was created; no package remains recorded by this step.\n'
             exit 0
           fi
           python3 .github/scripts/desktop/desktop_package.py uninstall \
