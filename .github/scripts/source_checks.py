@@ -91,6 +91,7 @@ NATIVE_GO_PACKAGES = [
     "./diagnostics",
     "./log",
     "./cmd/dobbyvpn",
+    "./clientserver/controlplane",
     "./clientserver/executor",
     "./routing",
     "./sessionapi",
