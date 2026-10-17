@@ -292,8 +292,8 @@ public final class DobbySessionViewModel: ObservableObject {
                         self.sourceChanged(self.sourceText, immediate: true)
                     }
                     self.loadNext()
-                    self.observeSourceError(value.sourceError, sessionID: value.sessionID)
                     if reattached || recoveringFromSnapshotFailure { self.clearSnapshotFailure() }
+                    self.observeSourceError(value.sourceError, sessionID: value.sessionID)
                 case let .failure(failure):
                     self.snapshot = .empty
                     self.snapshotFailureMessage = failure.localizedDescription
@@ -355,8 +355,16 @@ public final class DobbySessionViewModel: ObservableObject {
         preservingSnapshotFailure: Bool = false
     ) {
         if !preservingSnapshotFailure { snapshotFailureMessage = nil }
+        if error == message {
+            if message.isEmpty {
+                errorOrigin = nil
+            } else if origin == .other || errorOrigin == nil {
+                // Source observations must not take ownership of an identical unrelated banner.
+                errorOrigin = origin
+            }
+            return
+        }
         errorOrigin = message.isEmpty ? nil : origin
-        guard error != message else { return }
         error = message
         if record && !message.isEmpty { recordError(message) }
     }
