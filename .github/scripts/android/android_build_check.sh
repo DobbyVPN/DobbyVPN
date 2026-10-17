@@ -62,22 +62,8 @@ if [[ -n "$source_sha" ]]; then
 fi
 "$source_root/.github/scripts/android/android_build_driver.sh" "${driver_args[@]}"
 
-readelf_bin=${ANDROID_READELF:-}
-if [[ -z "$readelf_bin" ]]; then
-  # macOS ships bash 3.2, which has no mapfile.
-  ndk_toolchains=()
-  while IFS= read -r ndk_toolchain_path; do
-    ndk_toolchains+=("$ndk_toolchain_path")
-  done < <(
-    find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print
-  )
-  [[ "${#ndk_toolchains[@]}" -eq 1 ]] || {
-    echo 'Android NDK must contain exactly one host toolchain' >&2
-    exit 2
-  }
-  readelf_bin="${ndk_toolchains[0]}/bin/llvm-readelf"
-fi
-[[ -x "$readelf_bin" ]] || { echo "Android NDK llvm-readelf is required: $readelf_bin" >&2; exit 2; }
+readelf_bin=$(python3 "$source_root/.github/scripts/android/android_tool_selection.py" \
+  --tool readelf --ndk-root "$ANDROID_NDK_HOME")
 python3 "$source_root/.github/scripts/android/verify_android_native_payloads.py" \
   --apk "$output" --readelf "$readelf_bin"
 echo "android_build_check status=passed artifact=$output"

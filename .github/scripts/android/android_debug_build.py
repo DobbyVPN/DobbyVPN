@@ -13,6 +13,7 @@ import tempfile
 import zipfile
 
 from android_dependency_provenance import ANDROID_BUILD_TOOLS
+from android_tool_selection import select_apkanalyzer, select_readelf
 from normalize_android_apk import normalize_apk
 from verify_android_native_payloads import verify
 
@@ -38,7 +39,10 @@ def main() -> None:
     args = parser.parse_args()
     if not args.go_binary:
         parser.error("the pinned Go executable is required")
-    sdk = Path(os.environ.get("ANDROID_SDK_ROOT") or os.environ["ANDROID_HOME"])
+    sdk_value = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
+    if not sdk_value:
+        raise ValueError("Android SDK root is required")
+    sdk = Path(sdk_value)
     gradle = os.environ.get("GRADLE_BIN", str(ROOT / "ui/android/gradlew"))
     build_output = run([gradle, "-p", "ui/android", ":app:assembleDebug", ":app:signingReport",
                         "--no-daemon", "--console=plain", "--stacktrace",
@@ -51,19 +55,13 @@ def main() -> None:
     if not debug_keystore.is_file():
         raise FileNotFoundError(debug_keystore)
     apk = ROOT / "ui/android/app/build/outputs/apk/debug/app-debug.apk"
-    # Prefer the SDK's own apkanalyzer: a copy from another install (for example
-    # Homebrew) looks for build-tools next to itself and cannot find this SDK's.
-    sdk_analyzer = sdk / "cmdline-tools/latest/bin/apkanalyzer"
-    analyzer = os.environ.get("APKANALYZER") or (
-        str(sdk_analyzer) if os.access(sdk_analyzer, os.X_OK)
-        else (shutil.which("apkanalyzer") or str(sdk_analyzer))
-    )
+    analyzer = str(select_apkanalyzer())
     if run([analyzer, "manifest", "debuggable", str(apk)]).strip() != "true":
         raise ValueError("Debug APK must allow debugger attachment")
     if run([analyzer, "manifest", "application-id", str(apk)]).strip() != "com.dobby.vpn.debug":
         raise ValueError("Debug APK must use its separate application ID")
     ndk = Path(os.environ["ANDROID_NDK_HOME"])
-    readelf, = ndk.glob("toolchains/llvm/prebuilt/*/bin/llvm-readelf")
+    readelf = select_readelf(ndk)
     verify(apk, readelf)
     with tempfile.TemporaryDirectory(prefix="dobbyvpn-android-debug-") as temporary, zipfile.ZipFile(apk) as archive:
         for abi in ("arm64-v8a", "x86_64"):
