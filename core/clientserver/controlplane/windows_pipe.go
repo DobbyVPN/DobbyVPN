@@ -8,6 +8,7 @@ import (
 	"net"
 
 	winio "github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 )
 
 const desktopControlPipeName = `\\.\pipe\DobbyVPN.Control`
@@ -26,7 +27,11 @@ func ListenDesktopControlPipe() (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listenDesktopControlPipe(desktopControlPipeName, userSID)
+}
+
+func listenDesktopControlPipe(name string, userSID *windows.SID) (net.Listener, error) {
 	sddl := fmt.Sprintf("D:P(A;;GA;;;SY)(A;;GRGW;;;%s)", userSID.String())
 	// go-winio sets PIPE_REJECT_REMOTE_CLIENTS on every pipe instance.
-	return winio.ListenPipe(desktopControlPipeName, &winio.PipeConfig{SecurityDescriptor: sddl})
+	return winio.ListenPipe(name, &winio.PipeConfig{SecurityDescriptor: sddl})
 }
