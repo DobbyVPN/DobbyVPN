@@ -178,10 +178,14 @@ public struct DobbyRootView: View {
 #if os(iOS)
         if #available(iOS 16.0, *) {
             PasteButton(payloadType: String.self) { values in
-                if let value = values.first { model.paste(value) }
+                model.pasteCallback(values)
             }
+            .accessibilityIdentifier("subscription.paste")
         } else if canPaste {
-            Button("Paste") { if let value = UIPasteboard.general.string { model.paste(value) } }
+            Button("Paste") {
+                if let value = UIPasteboard.general.string { model.pasteCallback([value]) }
+            }
+            .accessibilityIdentifier("subscription.paste")
         }
 #elseif os(macOS)
         if canPaste {

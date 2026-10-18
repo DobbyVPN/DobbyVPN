@@ -190,6 +190,17 @@ public final class DobbySessionViewModel: ObservableObject {
         sourceChanged(source, immediate: true)
     }
 
+    func pasteCallback(_ values: [String]) {
+        let outcome = values.isEmpty ? "empty" : "dispatch_first"
+        recordDiagnostic(
+            "Paste callback received; item_count=\(values.count); outcome=\(outcome)",
+            event: "ui.paste_callback",
+            level: "INFO"
+        )
+        guard let first = values.first else { return }
+        paste(first)
+    }
+
     public func importLink(_ url: URL) {
         do {
             let source = try subscriptionFromLink(url.absoluteString)
@@ -402,10 +413,18 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func recordError(_ message: String) {
+        recordDiagnostic(message)
+    }
+
+    private func recordDiagnostic(
+        _ message: String,
+        event: String = "ui.failure",
+        level: String = "ERROR"
+    ) {
         let path = client.uiDiagnosticPath
         logWorker.async { [weak self] in
             do {
-                try appendUIDiagnostic(message, to: path)
+                try appendUIDiagnostic(message, to: path, event: event, level: level)
                 Task { @MainActor [weak self] in
                     guard let self, self.logsVisible else { return }
                     self.refreshLogs()
