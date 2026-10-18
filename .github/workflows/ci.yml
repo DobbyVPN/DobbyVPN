@@ -74,7 +74,7 @@ jobs:
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ steps.pins.outputs.java_major }}
@@ -182,7 +182,7 @@ jobs:
           test "$(readlink -f "$(command -v go)")" = "$(readlink -f "$go_root/bin/go")"
           echo "GOROOT=$go_root" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ steps.pins.outputs.java_major }}
