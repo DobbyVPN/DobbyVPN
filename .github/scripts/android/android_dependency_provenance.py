@@ -122,22 +122,21 @@ def _wrapper_values(path: Path) -> dict[str, str]:
     return {"url": url, "version": match.group(1), "sha256": checksum}
 
 
-def _single_match(pattern: str, content: str, label: str) -> str:
-    matches = re.findall(pattern, content, flags=re.MULTILINE | re.DOTALL)
-    if len(matches) != 1:
-        raise ValueError(f"Android Gradle build must declare exactly one {label}")
-    value = matches[0]
-    if isinstance(value, tuple):
-        raise TypeError("_single_match patterns must capture one value")
-    return value
+KOTLIN_STRING_TOKEN = r"\x01\d+\x02"
 
 
-def _uncommented_kotlin(content: str) -> str:
-    """Remove Kotlin comments without treating comment markers in strings as syntax."""
+def _uncommented_kotlin(content: str, strings: dict[str, str]) -> str:
+    """Remove comments and replace literals so their contents cannot look like DSL."""
     output: list[str] = []
     index = 0
     state = "code"
     block_depth = 0
+
+    def append_string(value: str) -> None:
+        token = f"\x01{len(strings)}\x02"
+        strings[token] = value
+        output.append(token)
+
     while index < len(content):
         current = content[index]
         pair = content[index:index + 2]
@@ -156,12 +155,27 @@ def _uncommented_kotlin(content: str) -> str:
                 index += 2
                 continue
             if triple == '"""':
-                state = "raw_string"
-                output.extend('"""')
-                index += 3
+                start = index + 3
+                end = content.find('"""', start)
+                if end < 0:
+                    append_string(content[start:])
+                    break
+                append_string(content[start:end])
+                index = end + 3
                 continue
             if current == '"':
-                state = "quoted_string"
+                start = index + 1
+                cursor = start
+                while cursor < len(content):
+                    if content[cursor] == "\\":
+                        cursor += 2
+                    elif content[cursor] == '"':
+                        break
+                    else:
+                        cursor += 1
+                append_string(content[start:cursor])
+                index = min(cursor + 1, len(content))
+                continue
             output.append(current)
             index += 1
             continue
@@ -192,26 +206,48 @@ def _uncommented_kotlin(content: str) -> str:
             index += 1
             continue
 
-        if state == "raw_string":
-            if triple == '"""':
-                output.extend('"""')
-                index += 3
-                state = "code"
-            else:
-                output.append(current)
-                index += 1
-            continue
-
-        if current == "\\" and index + 1 < len(content):
-            output.extend(content[index:index + 2])
-            index += 2
-            continue
-        output.append(current)
+        output.append(current if current in "\r\n" else " ")
         index += 1
-        if state == "quoted_string" and current == '"':
-            state = "code"
 
     return "".join(output)
+
+
+def _resolve_kotlin_strings(pattern: str, content: str, strings: dict[str, str]) -> list[str]:
+    values = re.findall(pattern, content, flags=re.MULTILINE | re.DOTALL)
+    resolved: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or value not in strings:
+            raise ValueError("Android Gradle declaration did not contain a Kotlin string literal")
+        resolved.append(strings[value])
+    return resolved
+
+
+def _single_line_version(value: str, label: str) -> str:
+    if not value or "\r" in value or "\n" in value:
+        raise ValueError(f"Android Gradle build must declare a nonempty single-line {label}")
+    return value
+
+
+def _single_plugin_version(plugin_id: str, content: str, strings: dict[str, str]) -> str:
+    pattern = rf'id\(({KOTLIN_STRING_TOKEN})\)\s+version\s+({KOTLIN_STRING_TOKEN})\s+apply\s+false'
+    versions = [
+        strings[version]
+        for identifier, version in re.findall(pattern, content, flags=re.MULTILINE | re.DOTALL)
+        if strings[identifier] == plugin_id
+    ]
+    if len(versions) != 1:
+        raise ValueError(f"Android Gradle build must declare exactly one {plugin_id} version")
+    return _single_line_version(versions[0], f"{plugin_id} version")
+
+
+def _single_dependency_version(
+    pattern: str, content: str, label: str, prefix: str, strings: dict[str, str]
+) -> str:
+    coordinates = _resolve_kotlin_strings(pattern, content, strings)
+    versions = [coordinate[len(prefix):] for coordinate in coordinates if coordinate.startswith(prefix)]
+    if len(versions) != 1:
+        raise ValueError(f"Android Gradle build must declare exactly one {label}")
+    return _single_line_version(versions[0], f"{label} version")
 
 
 def _read_android_gradle_values(path: Path) -> tuple[int, str, int, str]:
@@ -219,12 +255,17 @@ def _read_android_gradle_values(path: Path) -> tuple[int, str, int, str]:
         build_file = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as error:
         raise ValueError("Android application Gradle build file is unavailable") from error
-    build_file = _uncommented_kotlin(build_file)
+    strings: dict[str, str] = {}
+    build_file = _uncommented_kotlin(build_file, strings)
     java_versions = set(re.findall(r"JavaVersion\.VERSION_(\d+)", build_file))
-    jvm_targets = set(
-        re.findall(r'jvmTarget\s*=\s*JvmTarget\.fromTarget\("(\d+)"\)', build_file)
-    )
-    ndk_versions = set(re.findall(r'pinnedAndroidNdkVersion\s*=\s*"([^"]+)"', build_file))
+    jvm_targets = set(_resolve_kotlin_strings(
+        rf'jvmTarget\s*=\s*JvmTarget\.fromTarget\(({KOTLIN_STRING_TOKEN})\)',
+        build_file,
+        strings,
+    ))
+    ndk_versions = set(_resolve_kotlin_strings(
+        rf'pinnedAndroidNdkVersion\s*=\s*({KOTLIN_STRING_TOKEN})', build_file, strings
+    ))
     if len(java_versions) != 1 or jvm_targets != java_versions:
         raise ValueError("Android Gradle Java compatibility declarations must agree on one major version")
     if len(ndk_versions) != 1:
@@ -246,24 +287,37 @@ def _read_android_gradle_values(path: Path) -> tuple[int, str, int, str]:
 
 def _read_android_plugin_versions(path: Path, app_path: Path) -> dict[str, str]:
     try:
-        root_build = _uncommented_kotlin(path.read_text(encoding="utf-8"))
-        app_build = _uncommented_kotlin(app_path.read_text(encoding="utf-8"))
+        root_strings: dict[str, str] = {}
+        app_strings: dict[str, str] = {}
+        root_build = _uncommented_kotlin(path.read_text(encoding="utf-8"), root_strings)
+        app_build = _uncommented_kotlin(app_path.read_text(encoding="utf-8"), app_strings)
     except (OSError, UnicodeError) as error:
         raise ValueError("Android Gradle plugin declarations are unavailable") from error
 
-    if re.search(r'id\("org\.jetbrains\.kotlin\.android"\)', root_build + app_build):
+    plugin_ids = _resolve_kotlin_strings(
+        rf'id\(({KOTLIN_STRING_TOKEN})\)', root_build, root_strings
+    ) + _resolve_kotlin_strings(rf'id\(({KOTLIN_STRING_TOKEN})\)', app_build, app_strings)
+    if "org.jetbrains.kotlin.android" in plugin_ids:
         raise ValueError("Android app must use AGP built-in Kotlin instead of org.jetbrains.kotlin.android")
 
-    patterns = {
-        "android_agp": r'id\("com\.android\.application"\)\s+version\s+"([^"\r\n]+)"\s+apply\s+false',
-        "compose_compiler_version": r'id\("org\.jetbrains\.kotlin\.plugin\.compose"\)\s+version\s+"([^"\r\n]+)"\s+apply\s+false',
-        "kotlin_jvm_version": r'id\("org\.jetbrains\.kotlin\.jvm"\)\s+version\s+"([^"\r\n]+)"\s+apply\s+false',
-        "kotlin_gradle_plugin_version": r'classpath\("org\.jetbrains\.kotlin:kotlin-gradle-plugin:([^"\r\n]+)"\)',
+    plugin_ids_by_pin = {
+        "android_agp": "com.android.application",
+        "compose_compiler_version": "org.jetbrains.kotlin.plugin.compose",
+        "kotlin_jvm_version": "org.jetbrains.kotlin.jvm",
     }
     values = {
-        name: _single_match(pattern, root_build, name.replace("_", " "))
-        for name, pattern in patterns.items()
+        name: _single_plugin_version(plugin_id, root_build, root_strings)
+        for name, plugin_id in plugin_ids_by_pin.items()
     }
+    kotlin_gradle_plugin_prefix = "org.jetbrains.kotlin:kotlin-gradle-plugin:"
+    values["kotlin_gradle_plugin_version"] = _single_dependency_version(
+        rf'classpath\(({KOTLIN_STRING_TOKEN})\)',
+        root_build,
+        "kotlin gradle plugin",
+        kotlin_gradle_plugin_prefix,
+        root_strings,
+    )
+
     kotlin_versions = {
         values["compose_compiler_version"],
         values["kotlin_jvm_version"],
@@ -276,16 +330,25 @@ def _read_android_plugin_versions(path: Path, app_path: Path) -> dict[str, str]:
 
 def _read_android_dependency_versions(path: Path) -> dict[str, str]:
     try:
-        app_build = _uncommented_kotlin(path.read_text(encoding="utf-8"))
+        strings: dict[str, str] = {}
+        app_build = _uncommented_kotlin(path.read_text(encoding="utf-8"), strings)
     except (OSError, UnicodeError) as error:
         raise ValueError("Android application dependency declarations are unavailable") from error
-    patterns = {
-        "android_core_ktx": r'implementation\("androidx\.core:core-ktx:([^"\r\n]+)"\)',
-        "android_compose_bom": r'implementation\(platform\("androidx\.compose:compose-bom:([^"\r\n]+)"\)\)',
-    }
     return {
-        name: _single_match(pattern, app_build, name.replace("_", " "))
-        for name, pattern in patterns.items()
+        "android_core_ktx": _single_dependency_version(
+            rf'implementation\(({KOTLIN_STRING_TOKEN})\)',
+            app_build,
+            "android core ktx",
+            "androidx.core:core-ktx:",
+            strings,
+        ),
+        "android_compose_bom": _single_dependency_version(
+            rf'implementation\(platform\(({KOTLIN_STRING_TOKEN})\)\)',
+            app_build,
+            "android compose bom",
+            "androidx.compose:compose-bom:",
+            strings,
+        ),
     }
 
 
