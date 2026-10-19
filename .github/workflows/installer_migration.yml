@@ -45,6 +45,77 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_RUN_ATTEMPT" = 1
 
+      - name: Export absolute macOS migration deadline
+        if: inputs.platform == 'macos'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIGRATION_PLATFORM: ${{ inputs.platform }}
+          MIGRATION_ARCHITECTURE: ${{ inputs.architecture }}
+          # Keep this aligned with jobs.migration.timeout-minutes above.
+          MIGRATION_JOB_TIMEOUT_SECONDS: "1200"
+        run: |
+          python3 - <<'PYTHON'
+          from datetime import datetime
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          url = (
+              f"{os.environ['GITHUB_API_URL'].rstrip('/')}/repos/"
+              f"{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+              f"{os.environ['GITHUB_RUN_ID']}/jobs?per_page=100"
+          )
+          request = Request(
+              url,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urlopen(request, timeout=15) as response:
+              jobs = json.load(response)["jobs"]
+          job_name_suffix = (
+              "Installer migration / "
+              f"{os.environ['MIGRATION_PLATFORM']} / "
+              f"{os.environ['MIGRATION_ARCHITECTURE']}"
+          )
+          matches = [
+              job for job in jobs
+              if job.get("status") == "in_progress"
+              and isinstance(job.get("name"), str)
+              and job["name"].endswith(job_name_suffix)
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  "could not identify exactly one in-progress Actions job "
+                  f"with name suffix {job_name_suffix!r}; found {len(matches)}"
+              )
+          job = matches[0]
+          started_at = datetime.fromisoformat(job["started_at"].replace("Z", "+00:00"))
+          deadline_wall = started_at.timestamp() + int(
+              os.environ["MIGRATION_JOB_TIMEOUT_SECONDS"]
+          )
+          remaining = deadline_wall - time.time()
+          if remaining <= 0:
+              raise SystemExit(
+                  f"Actions migration job {job['id']} has exhausted its 20-minute deadline"
+              )
+          deadline_monotonic = time.monotonic() + remaining
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(
+                  "DOBBYVPN_COMMAND_DEADLINE_MONOTONIC="
+                  f"{deadline_monotonic:.9f}\n"
+              )
+          print(
+              "Exported the shared macOS migration deadline from Actions job "
+              f"{job['id']} started_at={started_at.isoformat()} "
+              f"remaining_seconds={remaining:.3f}"
+          )
+          PYTHON
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
@@ -86,6 +157,7 @@ jobs:
             "${{ inputs.build_run_id }}" "$ARTIFACT_NAME" "$DOWNLOAD_DIR"
 
       - name: Qualify fresh install, upgrade, rollback, and final uninstall
+        id: migration
         shell: bash
         env:
           EXPECTED_VERSION: ${{ inputs.version_name }}
@@ -104,6 +176,39 @@ jobs:
             --package "$RUNNER_TEMP/dobbyvpn-installer-migration/package/$package" \
             --current-version "$EXPECTED_VERSION" \
             --log-dir "$RUNNER_TEMP/dobbyvpn-installer-migration/logs"
+
+      - name: Capture macOS service state after migration failure
+        if: always() && inputs.platform == 'macos' && (steps.migration.outcome == 'failure' || steps.migration.outcome == 'cancelled')
+        shell: bash
+        run: |
+          set +e
+          log_dir="$RUNNER_TEMP/dobbyvpn-installer-migration/logs"
+          for captured in "$log_dir"/failure-*-control-socket-readiness-diagnostics.stdout.log; do
+            [ -f "$captured" ] || continue
+            if grep -Fq '[service-state-capture complete]' "$captured"; then
+              echo 'Migration failure service state was already captured.'
+              exit 0
+            fi
+          done
+          socket=/var/run/dobbyvpn/control.sock
+          printf '%s\n' '[socket state]'
+          if [ -e "$socket" ] || [ -L "$socket" ]; then
+            ls -ld "$socket" 2>&1
+            stat -f 'mode=%Sp type=%HT' "$socket" 2>&1
+          else
+            printf 'missing: %s\n' "$socket"
+          fi
+          printf '%s\n' '[launchd state]'
+          launchctl print system/com.dobby.vpnservice 2>&1
+          printf 'launchctl_exit=%s\n' "$?"
+          for log in /Library/Logs/DobbyVPN/backend.jsonl /Library/Logs/DobbyVPN/backend.jsonl.stderr; do
+            printf '[log path=%s]\n' "$log"
+            if [ -f "$log" ]; then
+              cat "$log"
+            else
+              printf 'missing: %s\n' "$log"
+            fi
+          done
 
       - name: Remove migration temporary state
         if: always()

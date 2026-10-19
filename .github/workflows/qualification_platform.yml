@@ -211,7 +211,45 @@ jobs:
           sdk_platform="${{ steps.android_java.outputs.android_sdk_platform }}"
           build_tools="${{ steps.android_java.outputs.android_build_tools }}"
           ndk="${{ steps.android_java.outputs.android_ndk }}"
-          sdkmanager --install "platforms;$sdk_platform" "build-tools;$build_tools" "ndk;$ndk"
+          sdk_install_stdout="$RUN_DIR/android-companion-sdk-install.stdout.log"
+          sdk_install_stderr="$RUN_DIR/android-companion-sdk-install.stderr.log"
+          if sdkmanager --install "platforms;$sdk_platform" "build-tools;$build_tools" "ndk;$ndk" \
+            >"$sdk_install_stdout" 2>"$sdk_install_stderr"; then
+            sdk_install_status=0
+          else
+            sdk_install_status=$?
+          fi
+          sdk_stdout_forward_status=0
+          sdk_stderr_forward_status=0
+          if cat "$sdk_install_stdout"; then
+            :
+          else
+            sdk_stdout_forward_status=$?
+          fi
+          if cat "$sdk_install_stderr" >&2; then
+            :
+          else
+            sdk_stderr_forward_status=$?
+          fi
+          if [ "$sdk_install_status" -ne 0 ]; then
+            if [ "$sdk_stdout_forward_status" -ne 0 ]; then
+              printf 'could not forward Android companion SDK install stdout (exit %s)\n' \
+                "$sdk_stdout_forward_status" >&2 || true
+            fi
+            if [ "$sdk_stderr_forward_status" -ne 0 ]; then
+              printf 'could not forward Android companion SDK install stderr (exit %s)\n' \
+                "$sdk_stderr_forward_status" >&2 || true
+            fi
+            exit "$sdk_install_status"
+          fi
+          if [ "$sdk_stdout_forward_status" -ne 0 ] || [ "$sdk_stderr_forward_status" -ne 0 ]; then
+            printf 'could not forward Android companion SDK install output (stdout exit %s, stderr exit %s)\n' \
+              "$sdk_stdout_forward_status" "$sdk_stderr_forward_status" >&2 || true
+            if [ "$sdk_stdout_forward_status" -ne 0 ]; then
+              exit "$sdk_stdout_forward_status"
+            fi
+            exit "$sdk_stderr_forward_status"
+          fi
           python3 - <<'PYTHON'
           import json, os
           from pathlib import Path
@@ -358,7 +396,47 @@ jobs:
               sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
               sdk_platform="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_sdk_platform)"
               build_tools="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_build_tools)"
-              run_timed android-sdk-install sdkmanager --install 'platform-tools' "platforms;$sdk_platform" "build-tools;$build_tools" 'emulator' 'system-images;android-35;google_apis;x86_64'
+              sdk_install_stdout="$RUN_DIR/android-sdk-install.stdout.log"
+              sdk_install_stderr="$RUN_DIR/android-sdk-install.stderr.log"
+              if run_timed android-sdk-install sdkmanager --install \
+                'platform-tools' "platforms;$sdk_platform" "build-tools;$build_tools" \
+                'emulator' 'system-images;android-35;google_apis;x86_64' \
+                >"$sdk_install_stdout" 2>"$sdk_install_stderr"; then
+                sdk_install_status=0
+              else
+                sdk_install_status=$?
+              fi
+              sdk_stdout_forward_status=0
+              sdk_stderr_forward_status=0
+              if cat "$sdk_install_stdout"; then
+                :
+              else
+                sdk_stdout_forward_status=$?
+              fi
+              if cat "$sdk_install_stderr" >&2; then
+                :
+              else
+                sdk_stderr_forward_status=$?
+              fi
+              if [ "$sdk_install_status" -ne 0 ]; then
+                if [ "$sdk_stdout_forward_status" -ne 0 ]; then
+                  printf 'could not forward Android SDK install stdout (exit %s)\n' \
+                    "$sdk_stdout_forward_status" >&2 || true
+                fi
+                if [ "$sdk_stderr_forward_status" -ne 0 ]; then
+                  printf 'could not forward Android SDK install stderr (exit %s)\n' \
+                    "$sdk_stderr_forward_status" >&2 || true
+                fi
+                exit "$sdk_install_status"
+              fi
+              if [ "$sdk_stdout_forward_status" -ne 0 ] || [ "$sdk_stderr_forward_status" -ne 0 ]; then
+                printf 'could not forward Android SDK install output (stdout exit %s, stderr exit %s)\n' \
+                  "$sdk_stdout_forward_status" "$sdk_stderr_forward_status" >&2 || true
+                if [ "$sdk_stdout_forward_status" -ne 0 ]; then
+                  exit "$sdk_stdout_forward_status"
+                fi
+                exit "$sdk_stderr_forward_status"
+              fi
               unsigned_app="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-unsign.apk"
               unsigned_companion="$RUNNER_TEMP/private-android-companion/dobbyvpn-test-companion-unsigned.apk"
               signed_app="$ANDROID_SIGNED_DIR/DobbyVPN-test.apk"
