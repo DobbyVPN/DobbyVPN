@@ -625,9 +625,65 @@ jobs:
           $env:DOBBY_LOG_ROOT = $env:SERVICE_LOG_ROOT_WIN
           [Console]::Error.WriteLine("Starting qualification process")
           $process = Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-mode", "normal") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru
-          [Console]::Error.WriteLine("Qualification process started")
-          [System.IO.File]::WriteAllText($env:SERVICE_PID_FILE_WIN, [string]$process.Id)
-          [Console]::Error.WriteLine("Qualification PID saved")
+          $identityTemporaryFile = $null
+          $startupError = $null
+          try {
+            [Console]::Error.WriteLine("Qualification process started")
+            $service = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = {0}" -f $process.Id) -ErrorAction Stop
+            if ($null -eq $service) { throw "Qualification process exited before its identity was recorded: pid=$($process.Id)" }
+            if ($null -eq $service.CreationDate -or [string]::IsNullOrWhiteSpace($service.ExecutablePath)) {
+              throw "Qualification process identity is unavailable: pid=$($process.Id)"
+            }
+            $creationTicks = $service.CreationDate.ToUniversalTime().Ticks
+            $identity = "{0}|{1}|{2}" -f $service.ProcessId, $creationTicks, $service.ExecutablePath
+            $encoding = [System.Text.UTF8Encoding]::new($false)
+            $identityTemporaryFile = $env:SERVICE_PID_FILE_WIN + "." + [guid]::NewGuid().ToString("N") + ".tmp"
+            [System.IO.File]::WriteAllText($identityTemporaryFile, $identity + [Environment]::NewLine, $encoding)
+            [Console]::Error.WriteLine("Qualification process identity prepared: pid=$($process.Id) ticks=$creationTicks path=$($service.ExecutablePath)")
+            [System.IO.File]::Move($identityTemporaryFile, $env:SERVICE_PID_FILE_WIN)
+            $identityTemporaryFile = $null
+          } catch {
+            $startupError = $_
+            if ($null -ne $identityTemporaryFile -and [System.IO.File]::Exists($identityTemporaryFile)) {
+              try {
+                [System.IO.File]::Delete($identityTemporaryFile)
+              } catch {
+                $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+                [Console]::Error.WriteLine("Qualification process identity temporary-file cleanup failed: path=$identityTemporaryFile`n$cleanupDiagnostic")
+              }
+            }
+            $killRequired = $true
+            try {
+              $killRequired = -not $process.HasExited
+            } catch {
+              $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+              [Console]::Error.WriteLine("Qualification process state query failed after startup failure: pid=$($process.Id)`n$cleanupDiagnostic")
+            }
+            if ($killRequired) {
+              try {
+                $process.Kill()
+              } catch {
+                $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+                [Console]::Error.WriteLine("Qualification process termination failed after startup failure: pid=$($process.Id)`n$cleanupDiagnostic")
+              }
+            }
+            try {
+              if (-not $process.WaitForExit(30000)) { throw "Qualification process did not stop after startup failure: pid=$($process.Id)" }
+              [Console]::Error.WriteLine("Qualification process stopped after startup failure: pid=$($process.Id)")
+            } catch {
+              $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+              [Console]::Error.WriteLine("Qualification process reap failed after startup failure: pid=$($process.Id)`n$cleanupDiagnostic")
+            }
+            throw $startupError
+          } finally {
+            try {
+              $process.Dispose()
+            } catch {
+              $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+              [Console]::Error.WriteLine("Qualification process handle disposal failed: pid=$($process.Id)`n$cleanupDiagnostic")
+              if ($null -eq $startupError) { throw }
+            }
+          }
           ' > "$SERVICE_START_LOG" 2>&1 &
             launcher_pid=$!
             for _ in $(seq 1 30); do
@@ -644,8 +700,10 @@ jobs:
             if [ ! -s "$SERVICE_PID_FILE" ]; then
               exit 1
             fi
-            service_pid="$(tr -d '\r\n' < "$SERVICE_PID_FILE")"
+            IFS='|' read -r service_pid service_creation_ticks service_executable_path < "$SERVICE_PID_FILE"
             [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
+            [[ "$service_creation_ticks" =~ ^[1-9][0-9]*$ ]]
+            [[ -n "$service_executable_path" ]]
             if kill "$launcher_pid"; then
               if ! wait "$launcher_pid"; then
                 printf 'Windows service launcher exited nonzero after publishing its PID\n' >&2
@@ -771,22 +829,84 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${SERVICE_PID:-}" ]; then
-            export QUALIFICATION_SERVICE_PID="$SERVICE_PID"
-            powershell.exe -NoLogo -NoProfile -NonInteractive -Command '
+          stop_status=0
+          service_identity_file="$RUN_DIR/windows-service.pid"
+          if [ -s "$service_identity_file" ]; then
+            if SERVICE_IDENTITY_FILE_WIN="$(cygpath -w "$service_identity_file")"; then
+              export SERVICE_IDENTITY_FILE_WIN
+              powershell.exe -NoLogo -NoProfile -NonInteractive -Command '
           $ErrorActionPreference = "Stop"
-          $process = Get-Process -Id ([int]$env:QUALIFICATION_SERVICE_PID) -ErrorAction SilentlyContinue
-          if ($null -eq $process) {
-            Write-Output "Windows qualification process was already stopped: pid=$env:QUALIFICATION_SERVICE_PID"
+          $record = [System.IO.File]::ReadAllText($env:SERVICE_IDENTITY_FILE_WIN).TrimEnd("`r", "`n")
+          $parts = $record -split "\|", 3
+          if ($parts.Count -ne 3) { throw "Windows qualification process identity record is malformed" }
+          $servicePid = 0
+          $expectedTicks = [long]0
+          if (-not [int]::TryParse($parts[0], [ref]$servicePid) -or $servicePid -le 0) {
+            throw "Windows qualification process identity record has an invalid PID"
+          }
+          if (-not [long]::TryParse($parts[1], [ref]$expectedTicks) -or $expectedTicks -le 0) {
+            throw "Windows qualification process identity record has invalid creation ticks"
+          }
+          $expectedPath = $parts[2]
+          if ([string]::IsNullOrWhiteSpace($expectedPath)) {
+            throw "Windows qualification process identity record has no executable path"
+          }
+          $preliminaryProcess = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = {0}" -f $servicePid) -ErrorAction Stop
+          if ($null -eq $preliminaryProcess) {
+            Write-Output "Windows qualification process was already stopped: pid=$servicePid"
             exit 0
           }
-          $process.Kill()
-          if (-not $process.WaitForExit(30000)) { throw "Windows qualification process did not stop" }
-          Write-Output "Windows qualification process stopped: pid=$env:QUALIFICATION_SERVICE_PID"
-          '
+          if ($null -eq $preliminaryProcess.CreationDate -or [string]::IsNullOrWhiteSpace($preliminaryProcess.ExecutablePath)) {
+            throw "Windows qualification process identity query returned incomplete data: pid=$servicePid"
+          }
+          if ($preliminaryProcess.CreationDate.ToUniversalTime().Ticks -ne $expectedTicks -or -not [System.StringComparer]::OrdinalIgnoreCase.Equals($preliminaryProcess.ExecutablePath, $expectedPath)) {
+            Write-Output "Windows qualification process identity changed; original instance already stopped: pid=$servicePid"
+            exit 0
+          }
+          $ownedProcess = Get-Process -Id $servicePid -ErrorAction Stop
+          try {
+            $nativeHandle = $ownedProcess.Handle
+            $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = {0}" -f $servicePid) -ErrorAction Stop
+            if ($null -eq $process) {
+              Write-Output "Windows qualification process was already stopped: pid=$servicePid"
+            } elseif ($null -eq $process.CreationDate -or [string]::IsNullOrWhiteSpace($process.ExecutablePath)) {
+              throw "Windows qualification process identity query returned incomplete data: pid=$servicePid"
+            } else {
+              $actualTicks = $process.CreationDate.ToUniversalTime().Ticks
+              $pathMatches = [System.StringComparer]::OrdinalIgnoreCase.Equals($process.ExecutablePath, $expectedPath)
+              if ($actualTicks -ne $expectedTicks -or -not $pathMatches) {
+                Write-Output "Windows qualification process identity changed; original instance already stopped: pid=$servicePid"
+              } else {
+                $ownedProcess.Kill()
+                if (-not $ownedProcess.WaitForExit(30000)) { throw "Windows qualification process did not stop: pid=$servicePid" }
+                Write-Output "Windows qualification process stopped: pid=$servicePid"
+              }
+            }
+          } finally {
+            $ownedProcess.Dispose()
+          }
+          ' || stop_status=$?
+            else
+              stop_status=$?
+              printf 'Windows qualification process identity path conversion failed: status=%s\n' "$stop_status" >&2
+            fi
           fi
-          if [ -f "$RUN_DIR/service.log.stdout" ]; then cat "$RUN_DIR/service.log.stdout" >&2; fi
-          if [ -f "$RUN_DIR/service.log.stderr" ]; then cat "$RUN_DIR/service.log.stderr" >&2; fi
+          forward_status=0
+          if [ -f "$RUN_DIR/service.log.stdout" ]; then
+            cat "$RUN_DIR/service.log.stdout" || {
+              forward_status=$?
+              printf 'Windows qualification service stdout forwarding failed: status=%s\n' "$forward_status" >&2
+            }
+          fi
+          if [ -f "$RUN_DIR/service.log.stderr" ]; then
+            cat "$RUN_DIR/service.log.stderr" >&2 || {
+              cat_status=$?
+              printf 'Windows qualification service stderr forwarding failed: status=%s\n' "$cat_status" >&2
+              if [ "$forward_status" -eq 0 ]; then forward_status=$cat_status; fi
+            }
+          fi
+          if [ "$stop_status" -ne 0 ]; then exit "$stop_status"; fi
+          exit "$forward_status"
 
       - name: Recover interrupted Linux installer migration
         if: always() && inputs.platform == 'linux' && env.RUN_DIR != ''
