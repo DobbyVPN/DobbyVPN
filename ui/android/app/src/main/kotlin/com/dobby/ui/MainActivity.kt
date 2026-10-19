@@ -7,6 +7,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.SystemClock
+import android.os.Trace
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -85,6 +89,97 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         controller.permissionResult(result.resultCode == android.app.Activity.RESULT_OK)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        val startedNs = SystemClock.elapsedRealtimeNanos()
+        val pid = Process.myPid()
+        val tid = Process.myTid()
+        var traceStarted = false
+        try {
+            Trace.beginSection("DobbyVPN.onWindowFocusChanged hasFocus=$hasFocus")
+            traceStarted = true
+        } catch (diagnosticFailure: Exception) {
+            reportFocusDiagnosticFailure("Trace.beginSection", diagnosticFailure)
+        }
+
+        var callbackFailure: Throwable? = null
+        try {
+            recordWindowFocusDiagnostic("entry", hasFocus, pid, tid, startedNs)
+            super.onWindowFocusChanged(hasFocus)
+        } catch (failure: Throwable) {
+            callbackFailure = failure
+            throw failure
+        } finally {
+            val finishedNs = SystemClock.elapsedRealtimeNanos()
+            val failure = callbackFailure
+            try {
+                recordWindowFocusDiagnostic(
+                    if (failure == null) "complete" else "error",
+                    hasFocus,
+                    pid,
+                    tid,
+                    startedNs,
+                    finishedNs,
+                    failure,
+                )
+            } finally {
+                if (traceStarted) {
+                    try {
+                        Trace.endSection()
+                    } catch (diagnosticFailure: Exception) {
+                        reportFocusDiagnosticFailure("Trace.endSection", diagnosticFailure, failure)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun recordWindowFocusDiagnostic(
+        phase: String,
+        hasFocus: Boolean,
+        pid: Int,
+        tid: Int,
+        startedNs: Long,
+        finishedNs: Long? = null,
+        callbackFailure: Throwable? = null,
+    ) {
+        try {
+            val message = buildString {
+                append("callback=MainActivity.onWindowFocusChanged phase=$phase")
+                append(" has_focus=$hasFocus pid=$pid tid=$tid")
+                append(" started_elapsed_realtime_ns=$startedNs")
+                if (finishedNs != null) {
+                    append(" finished_elapsed_realtime_ns=$finishedNs")
+                    append(" duration_ns=${finishedNs - startedNs}")
+                }
+            }
+            NativeVpnBridge.recordDiagnostic(this, "ui.focus", message, callbackFailure)
+        } catch (diagnosticFailure: Exception) {
+            reportFocusDiagnosticFailure("ui.focus $phase", diagnosticFailure, callbackFailure)
+        }
+    }
+
+    private fun reportFocusDiagnosticFailure(
+        operation: String,
+        diagnosticFailure: Exception,
+        callbackFailure: Throwable? = null,
+    ) {
+        if (callbackFailure != null && callbackFailure !== diagnosticFailure) {
+            callbackFailure.addSuppressed(diagnosticFailure)
+        }
+        try {
+            Log.e("DobbyVPN", "Android window-focus diagnostic failed during $operation", diagnosticFailure)
+        } catch (loggingFailure: Exception) {
+            if (callbackFailure != null && callbackFailure !== loggingFailure) {
+                callbackFailure.addSuppressed(loggingFailure)
+            }
+            System.err.println(
+                "Android window-focus diagnostic failed during $operation: " +
+                    diagnosticFailure.stackTraceToString() + " (Logcat fallback failed: " +
+                    loggingFailure.stackTraceToString() + ")",
+            )
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
