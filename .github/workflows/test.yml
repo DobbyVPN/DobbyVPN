@@ -269,7 +269,7 @@ jobs:
 
   render_start:
     if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' }}
-    needs: [resolve_build, source_linux, source_linux_arm, source_windows, source_macos, source_android, ios_simulator]
+    needs: resolve_build
     uses: ./.github/workflows/render_start.yml
     permissions:
       contents: read
