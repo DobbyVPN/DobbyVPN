@@ -1,10 +1,10 @@
-name: Release
+name: Delivery
 
 on:
   workflow_dispatch:
     inputs:
       publish_run_id:
-        description: Successful Publish workflow run whose verified release should be submitted to stores.
+        description: Successful Release workflow run whose verified release assets should be submitted to Apple App Review and F-Droid.
         required: true
         type: string
 
@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   resolve_publish:
-    name: Verify selected Publish lineage and release assets
+    name: Verify selected Release lineage and GitHub Release assets
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -48,7 +48,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Resolve and verify selected Publish run
+      - name: Resolve and verify selected Release run
         id: selection
         env:
           GH_TOKEN: ${{ github.token }}

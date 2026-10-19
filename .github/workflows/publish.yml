@@ -1,10 +1,10 @@
-name: Publish
+name: Release
 
 on:
   workflow_dispatch:
     inputs:
       build_run_id:
-        description: Successful Build workflow run whose packages should be published.
+        description: Successful Build workflow run whose packages should be signed for the GitHub Release and internal TestFlight.
         required: true
         type: string
       test_run_id:
@@ -321,13 +321,13 @@ jobs:
                 break
               end
             end
-            abort "Timed out waiting for Apple build processing; retry Publish to resume" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+            abort "Timed out waiting for Apple build processing; retry Release to resume" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
             puts "Waiting for Apple to process #{version} (#{number})"
             sleep 30
           end
           RUBY
   publish_github_release:
-    name: Sign and publish selected Build packages
+    name: Sign and release selected Build packages
     needs: [resolve_inputs, upload_testflight]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -461,7 +461,7 @@ jobs:
             --source-sha "$RELEASE_SOURCE_SHA" --version-name "$RELEASE_VERSION" \
             --version-code "$ANDROID_VERSION_CODE" \
             --signer-certificate-sha256 "$EXPECTED_ANDROID_SIGNER_SHA256"
-      - name: Create Build/Test/Publish provenance
+      - name: Create Build/Test/Release provenance
         id: provenance
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
@@ -504,7 +504,7 @@ jobs:
           set -e
           printf '%s\n' "$release_view"
           if [ "$release_view_status" -eq 0 ]; then
-            echo "GitHub Release $tag already exists; checking its Build/Test/Publish provenance."
+            echo "GitHub Release $tag already exists; checking its Build/Test/Release provenance."
             mkdir "$RUNNER_TEMP/existing-release"
             gh release download "$tag" --dir "$RUNNER_TEMP/existing-release"
             python3 .github/scripts/release/release_provenance.py verify-published \
@@ -549,7 +549,7 @@ jobs:
               raise SystemExit("GitHub Release body is missing or invalid")
           actual = hashlib.sha256(body.encode("utf-8")).hexdigest()
           if actual != os.environ["RELEASE_NOTES_SHA256"]:
-              raise SystemExit("GitHub Release notes do not match the reviewed Publish input")
+              raise SystemExit("GitHub Release notes do not match the reviewed Release input")
           PYTHON
       - name: Verify published GitHub Release assets
         env:
@@ -584,9 +584,9 @@ jobs:
           release = json.load(open(sys.argv[1], encoding="utf-8"))
           body = release.get("body")
           if not isinstance(body, str) or hashlib.sha256(body.encode("utf-8")).hexdigest() != os.environ["RELEASE_NOTES_SHA256"]:
-              raise SystemExit("published GitHub Release notes do not match the reviewed Publish input")
+              raise SystemExit("published GitHub Release notes do not match the reviewed Release input")
           PYTHON
-      - name: Record the successful Publish identity for Release
+      - name: Record the successful Release identity for Delivery
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: publish-result
