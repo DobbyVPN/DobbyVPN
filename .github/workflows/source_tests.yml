@@ -62,6 +62,13 @@ jobs:
           assert actual == os.environ['DOBBY_TEST_SHA'], 'private revision changed'
           assert guard['tests_tree_sha256'](Path('torturer')) == os.environ['DOBBY_TEST_TREE_SHA256'], 'private tree changed'
           PY
+      - name: Restore dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-modules: ${{ contains(inputs.checks, 'go-') }}
+          gradle: ${{ contains(inputs.checks, 'android-') }}
+          pinned-tools: ${{ contains(inputs.checks, 'go-') && !startsWith(inputs.runner, 'macos-') }}
+          gradle-extra-dependency-files: torturer/source_tests/product/ui/android/presentation/unit-test-wiring.gradle.kts
       - name: Select Xcode
         if: runner.os == 'macOS'
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer

@@ -28,6 +28,9 @@ jobs:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
+      - name: Restore Go module download archives
+        uses: ./.github/actions/dependency-cache
+
       - name: Verify exact source checkout
         shell: bash
         env:
@@ -50,14 +53,14 @@ jobs:
 
       - name: Download Go modules
         working-directory: core
-        run: go mod download
+        run: python3 ../.github/scripts/dependency_fetch.py retry -- go mod download
 
       - name: Install pinned Go mobile runtime tools
         run: |
           set -euo pipefail
           mobile_version='v0.0.0-20260520154334-0e4426e1883d'
-          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
-          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
+          python3 .github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
+          python3 .github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
           gopath="$(go env GOPATH)"
           echo "$gopath/bin" >> "$GITHUB_PATH"
           for tool in gomobile gobind; do
@@ -79,7 +82,7 @@ jobs:
         working-directory: core
         run: |
           test "$(go list -m -f '{{.Version}}' golang.org/x/mobile)" = 'v0.0.0-20260520154334-0e4426e1883d'
-          go mod download golang.org/x/mobile
+          python3 ../.github/scripts/dependency_fetch.py retry -- go mod download golang.org/x/mobile
 
       - name: Build iOS Go runtime XCFramework
         working-directory: core

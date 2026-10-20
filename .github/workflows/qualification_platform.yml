@@ -117,6 +117,14 @@ jobs:
               raise SystemExit("private test identity differs from reserved candidate")
           PYTHON
 
+      - name: Restore Android Gradle dependency archives
+        if: inputs.platform == 'android'
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-modules: 'false'
+          gradle: 'true'
+          gradle-extra-dependency-files: torturer/source_tests/product/ui/android/app/android-test-wiring.gradle.kts
+
       - name: Download qualification artifacts
         shell: bash
         env:

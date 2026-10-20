@@ -250,6 +250,8 @@ else
 fi
 
 mobile_version=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-pin mobile_version | tee_stderr)
+GOTOOLCHAIN=local python3 "$source_root/.github/scripts/dependency_fetch.py" retry \
+  --cwd "$source_root/core" -- "$go_bin" mod download
 observed_mobile_version=$(cd "$source_root/core" && "$go_bin" list -m -f '{{.Version}}' golang.org/x/mobile | tee_stderr)
 [[ "$observed_mobile_version" == "$mobile_version" ]] || {
   echo 'Go module graph is not pinned to the approved x/mobile revision' >&2
@@ -350,6 +352,13 @@ verify_source_integrity_after_build() {
 }
 
 gradle_flags=(--no-build-cache --no-daemon --rerun-tasks --stacktrace --warning-mode=all)
+python3 "$source_root/.github/scripts/dependency_fetch.py" retry --cwd "$source_root" -- \
+  "$gradle_bin" -p ui/android -PdobbyGoBinary="$go_bin" \
+  -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
+  -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name" \
+  --init-script "$source_root/.github/scripts/android/resolve_dependencies.gradle" \
+  resolveDobbyDependencies --no-daemon --stacktrace
+
 run_unsigned_build() {
   local cache=$1 tmp=$2 destination=$3 built
   export GOCACHE="$cache" GOTMPDIR="$tmp"

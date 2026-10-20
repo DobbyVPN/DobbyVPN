@@ -105,15 +105,18 @@ jobs:
           go-version-file: .go-version
           cache: false
 
+      - name: Restore dependency archives
+        uses: ./.github/actions/dependency-cache
+
       - name: Build TrustTunnel-enabled Go runtime for iOS Simulator
         working-directory: core
         shell: bash
         run: |
           set -euo pipefail
           mobile_version='v0.0.0-20260520154334-0e4426e1883d'
-          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
-          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
-          go mod download
+          python3 ../.github/scripts/dependency_fetch.py retry -- go mod download
+          python3 ../.github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
+          python3 ../.github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
           ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
           runtime_binary="$(find DobbyVPNRuntime.xcframework -type f -path '*/DobbyVPNRuntime.framework/DobbyVPNRuntime' -print -quit)"
           test -n "$runtime_binary"

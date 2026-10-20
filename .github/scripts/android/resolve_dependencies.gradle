@@ -1,0 +1,17 @@
+gradle.projectsEvaluated {
+    rootProject.tasks.register("resolveDobbyDependencies") {
+        group = "verification"
+        description = "Download all resolvable project dependencies without running build tasks."
+        doLast {
+            rootProject.allprojects.each { project ->
+                project.configurations
+                    .findAll { configuration -> configuration.canBeResolved }
+                    .sort { left, right -> left.name <=> right.name }
+                    .each { configuration ->
+                        logger.lifecycle("Resolving ${project.path}:${configuration.name}")
+                        configuration.incoming.files.files
+                    }
+            }
+        }
+    }
+}

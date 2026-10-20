@@ -89,6 +89,13 @@ jobs:
             "$GOPATH"
           sudo chown -R "$USER:$USER" /home/vagrant
 
+      - name: Restore dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-module-cache-path: /home/vagrant/go/pkg/mod
+          gradle: 'true'
+          pinned-tools: 'true'
+
       # Go 1.24.6 is only the minimum bootstrap compiler used by make.bash to
       # build the pinned Go 1.26.9 toolchain from source. It never compiles the
       # application; the version and binary used for that are verified below.
@@ -107,11 +114,13 @@ jobs:
         run: |
           set -euo pipefail
           gradle_version="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin gradle_version)"
+          gradle_sha256="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin gradle_sha256)"
           download_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle.XXXXXX")"
           archive="$download_root/gradle-$gradle_version-bin.zip"
           gradle_url="$(python3 .github/scripts/android/android_dependency_provenance.py \
             --print-pin gradle_url)"
-          curl --fail --show-error --location --output "$archive" "$gradle_url"
+          python3 .github/scripts/dependency_fetch.py download \
+            --url "$gradle_url" --output "$archive" --sha256 "$gradle_sha256"
           extraction_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle-root.XXXXXX")"
           unzip "$archive" -d "$extraction_root"
           gradle_root="$extraction_root/gradle-$gradle_version"

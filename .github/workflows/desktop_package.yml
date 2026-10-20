@@ -40,6 +40,11 @@ jobs:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
+      - name: Restore Go modules and verified tool archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          pinned-tools: ${{ inputs.platform == 'linux' || inputs.platform == 'windows' }}
+
       - name: Build package with the local platform command
         id: build
         shell: bash

@@ -408,7 +408,7 @@ cd "$GOROOT/src"
 ./make.bash
 "$GOROOT/bin/go" version
 cd "$product_root/core"
-"$GOROOT/bin/go" mod download
+python3 ../.github/scripts/dependency_fetch.py retry -- "$GOROOT/bin/go" mod download
 # F-Droid adds legacy ndk.dir; the Android project owns the pinned android.ndkPath.
 sed -i '/^[[:space:]]*ndk[.]dir[[:space:]]*=/d' "$product_root/ui/android/local.properties"
 '''

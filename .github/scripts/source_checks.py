@@ -18,7 +18,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -35,6 +34,7 @@ from bounded_process import (
     run_finite_capture,
     run_streamed,
 )
+from dependency_fetch import download_file, run_dependency_command
 from android_dependency_provenance import (
     ANDROID_BUILD_TOOLS,
     ANDROID_SDK_PLATFORM,
@@ -138,6 +138,16 @@ def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = No
         raise SystemExit(result.returncode)
 
 
+def run_dependency_fetch(
+    command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None,
+) -> None:
+    """Retry only a standalone dependency download or resolution command."""
+    log("$ " + " ".join(command))
+    result = run_dependency_command(command, cwd=cwd, env=env)
+    if result.returncode:
+        raise SystemExit(result.returncode)
+
+
 def go_environment(go_executable: Path) -> dict[str, str]:
     import desktop_build
 
@@ -212,20 +222,10 @@ def require_command(name: str, purpose: str) -> str:
     return command
 
 
-def download(url: str, destination: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "DobbyVPN-source-checks"})
+def download(url: str, destination: Path, expected_sha256: str) -> None:
     log(f"Downloading pinned tool asset: {url}")
     try:
-        remaining = command_deadline_remaining()
-        timeout = 120 if remaining is None else remaining
-        with urllib.request.urlopen(request, timeout=timeout) as response, destination.open("wb") as output:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if remaining is not None:
-                    remaining = command_deadline_remaining()
-                if not chunk:
-                    break
-                output.write(chunk)
+        download_file(url, destination, expected_sha256=expected_sha256, default_timeout=120)
     except Exception as error:
         raise CheckError(f"could not download {url}: {error}") from error
 
@@ -286,7 +286,7 @@ class Tools:
         spec = TOOL_ASSETS[name]
         require_platform(spec["platform"])
         archive = self.root / f"{name}.{spec['archive']}"
-        download(spec["url"], archive)
+        download(spec["url"], archive, spec["sha256"])
         verify_sha256(archive, spec["sha256"])
         executable = extract_executable(archive, self.root / f"{name}-unpacked", spec["archive"], spec["member"])
         if not executable.is_file():
@@ -399,6 +399,14 @@ def lint_android(tools: Tools) -> None:
     gradle = ROOT / "ui" / "android" / "gradlew"
     if not gradle.is_file():
         raise CheckError(f"Android Gradle wrapper is missing: {gradle}")
+    resolver = SCRIPT_DIR / "android" / "resolve_dependencies.gradle"
+    run_dependency_fetch(
+        [
+            str(gradle), f"-PdobbyGoBinary={go}", "--init-script", str(resolver),
+            "resolveDobbyDependencies", "--no-daemon", "--stacktrace",
+        ],
+        cwd=ROOT / "ui" / "android",
+    )
     run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "ui" / "android")
 
     lock_file = tools.root / "gradle.lockfile"
