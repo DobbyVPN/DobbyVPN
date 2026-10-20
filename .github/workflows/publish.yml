@@ -651,12 +651,15 @@ jobs:
               --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
               --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
           else
-            tag_record="$(git show-ref --verify "refs/tags/$tag" 2>&1)"
-            tag_status=$?
-            printf '%s\n' "$tag_record"
-            if [ "$tag_status" -eq 0 ]; then
+            if git show-ref --verify --quiet "refs/tags/$tag"; then
               test "$(git rev-list -n1 "$tag^{commit}")" = "$RELEASE_SOURCE_SHA"
             else
+              tag_lookup_status=$?
+              if [ "$tag_lookup_status" -ne 1 ]; then
+                printf 'Unable to inspect exact release tag ref refs/tags/%s (git show-ref exited %s).\n' \
+                  "$tag" "$tag_lookup_status" >&2
+                exit "$tag_lookup_status"
+              fi
               git config user.name github-actions[bot]
               git config user.email 41898282+github-actions[bot]@users.noreply.github.com
               git tag --annotate "$tag" "$RELEASE_SOURCE_SHA" --message "DobbyVPN $tag"
