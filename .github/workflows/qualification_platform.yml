@@ -458,6 +458,7 @@ jobs:
               export ANDROID_USER_HOME="$android_sdk_home/.android"
               export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
               mkdir -p "$ANDROID_AVD_HOME"
+              printf 'ANDROID_AVD_HOME=%s\n' "$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
               printf 'Android AVD home: %s\n' "$ANDROID_AVD_HOME"
               run_timed android-avd-create avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
               test -s "$ANDROID_AVD_HOME/dobbyvpn-release.ini"
@@ -562,6 +563,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Start the 420-second UI allowance before setup diagnostics and
+          # method selection, and clip it to the inherited qualification end.
+          ui_deadline_monotonic="$(python3 - <<'PYTHON'
+          import os
+          import time
+
+          monotonic_now = time.monotonic()
+          wall_now = time.time()
+          inherited_remaining = max(0.0, float(os.environ["RUN_DEADLINE_EPOCH"]) - wall_now)
+          print(f"{min(monotonic_now + 420.0, monotonic_now + inherited_remaining):.9f}")
+          PYTHON
+          )"
+          export ANDROID_UI_SUPERVISION_DEADLINE_MONOTONIC="$ui_deadline_monotonic"
           # This is the same release APK installed for the functional lane,
           # not the renderer-only helper. UI Automator launches the production
           # Compose activity, enters synthetic invalid input through the native
@@ -570,16 +584,65 @@ jobs:
           # traffic, Connect, and Disconnect checks.
           ui_stdout="$RUN_DIR/android-native-ui.stdout.log"
           ui_stderr="$RUN_DIR/android-native-ui.stderr.log"
+          # Torturer owns serial lookup and the one bounded IME capture.
+          capture_android_ime_diagnostics() {
+            local phase="$1"
+            python3 - "$phase" <<'PYTHON'
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          from torturer_runner.local_vm_android import capture_android_ime_diagnostics
+
+          phase = sys.argv[1]
+          run_dir = Path(os.environ["RUN_DIR"])
+          logs = run_dir / f"android-native-ui-ime-{phase}"
+          if phase == "failure":
+              # Failure evidence may use bounded time left in the qualification
+              # recovery window; it never extends the UI allowance or starts tests.
+              global_remaining = max(0.0, float(os.environ["RUN_DEADLINE_EPOCH"]) - time.time())
+              owner_deadline = time.monotonic() + global_remaining
+          else:
+              owner_deadline = float(os.environ["ANDROID_UI_SUPERVISION_DEADLINE_MONOTONIC"])
+          for error in capture_android_ime_diagnostics(
+              os.environ["ADB"],
+              run_dir=run_dir,
+              logs=logs,
+              phase=phase,
+              owner_deadline=owner_deadline,
+              environment=os.environ.copy(),
+          ):
+              print(error, file=sys.stderr)
+          PYTHON
+          }
+          capture_android_ime_diagnostics setup || true
           ui_status=0
           ui_timed_out=false
           ui_methods="$(PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
             python3 -c 'from torturer_runner.native_cases import ANDROID_DEFAULT_UI_METHODS; print(",".join(ANDROID_DEFAULT_UI_METHODS))')"
-          # The 20 lifecycle cycles reached final reopen at the former 300s
-          # limit on hosted API 35; leave time for live-log/export assertions.
-          timeout --foreground 420s "$ADB" shell am instrument -w -r \
-            -e class "$ui_methods" \
-            com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
-            >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
+          # The lifecycle suite uses the remaining UI allowance for both the
+          # outer ADB process and the native watcher; neither timer restarts.
+          ui_timeout="$(python3 - <<'PYTHON'
+          import os
+          import time
+
+          remaining = max(0.0, float(os.environ["ANDROID_UI_SUPERVISION_DEADLINE_MONOTONIC"]) - time.monotonic())
+          print(repr(remaining) if remaining > 0 else "0")
+          PYTHON
+          )"
+          if [ "$ui_timeout" = 0 ]; then
+            ui_timed_out=true
+            ui_status=124
+            printf 'Android UI supervision expired before instrumentation started; no further test work was launched.\n' >&2
+          else
+            printf 'Android UI remaining supervision seconds: %s\n' "$ui_timeout" >&2
+            timeout --foreground "${ui_timeout}s" "$ADB" shell am instrument -w -r \
+              -e class "$ui_methods" \
+              -e dobbyvpn_native_timeout_seconds "$ui_timeout" \
+              com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
+              >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
+          fi
           if [ "$ui_status" -eq 124 ]; then
             ui_timed_out=true
           fi
@@ -598,10 +661,21 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
             python3 -m torturer_runner.android_instrumentation \
             "${parser_args[@]}" || parser_status=$?
+          if [ "$parser_status" -ne 0 ]; then
+            capture_android_ime_diagnostics failure || true
+          fi
           printf '%s\n' '[android-native-ui stdout]' >&2
-          cat "$ui_stdout" >&2
+          if [ -f "$ui_stdout" ]; then
+            cat "$ui_stdout" >&2
+          else
+            printf 'Android native UI stdout was not created because instrumentation did not start.\n' >&2
+          fi
           printf '%s\n' '[android-native-ui stderr]' >&2
-          cat "$ui_stderr" >&2
+          if [ -f "$ui_stderr" ]; then
+            cat "$ui_stderr" >&2
+          else
+            printf 'Android native UI stderr was not created because instrumentation did not start.\n' >&2
+          fi
           printf 'ANDROID_UI_TEST_PARSER_STATUS=%s\n' "$parser_status" >> "$GITHUB_ENV"
           if [ "$parser_status" -ne 0 ]; then
             exit 1
