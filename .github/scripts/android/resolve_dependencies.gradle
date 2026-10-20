@@ -3,8 +3,13 @@ def resolveProjectConfigurations = { project ->
         .findAll { configuration -> configuration.canBeResolved }
         .sort { left, right -> left.name <=> right.name }
         .each { configuration ->
-            project.logger.lifecycle("Resolving ${project.path}:${configuration.name}")
-            configuration.incoming.files.files
+            project.logger.lifecycle("Resolving external artifacts for ${project.path}:${configuration.name}")
+            def files = configuration.incoming.artifactView {
+                componentFilter { componentId ->
+                    !(componentId instanceof org.gradle.api.artifacts.component.ProjectComponentIdentifier)
+                }
+            }.files.files
+            project.logger.lifecycle("Resolved ${files.size()} external artifact(s) for ${project.path}:${configuration.name}")
         }
 }
 
