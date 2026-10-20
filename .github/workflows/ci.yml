@@ -1,3 +1,4 @@
+# Temporary CI path classification probe.
 name: CI
 
 on:
