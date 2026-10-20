@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       test_run_id:
-        description: Test workflow run selected for the Build; the scoped owner exception preserves this exact failed Test.
+        description: Successful Test workflow run that qualified the selected Build.
         required: true
         type: string
       release_notes:
@@ -61,7 +61,7 @@ jobs:
             --run-id "${{ inputs.build_run_id }}" \
             --download-dir "$RUNNER_TEMP/selected-build-manifest" \
             --output "$RUNNER_TEMP/build.json"
-      - name: Resolve the selected Test result for that exact Build
+      - name: Resolve the successful Test result for that exact Build
         id: selection
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,7 +69,7 @@ jobs:
           TEST_RUN_ID: ${{ inputs.test_run_id }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/release/test_manifest_owner_155.py \
+          python3 .github/scripts/release/test_manifest.py \
             --repository "$GITHUB_REPOSITORY" --run-id "$TEST_RUN_ID" \
             --build-manifest "$RUNNER_TEMP/build.json" \
             --download-dir "$RUNNER_TEMP/selected-test-result" \
@@ -92,9 +92,6 @@ jobs:
               for key, value in values.items():
                   output.write(f"{key}={value}\n")
           PYTHON
-      - name: Record the scoped owner exception
-        run: |
-          printf '%s\n' 'Owner exception: hosted Android is incomplete; the reviewed local Android pass is accepted for this release. Original Test: https://github.com/DobbyVPN/DobbyVPN/actions/runs/39457088091' >> "$GITHUB_STEP_SUMMARY"
       - name: Check selected source version and stable tag
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -354,7 +351,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ needs.resolve_inputs.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: true
       - name: Read release metadata
@@ -423,14 +420,11 @@ jobs:
           import hashlib, json, os, sys
           from pathlib import Path
           sys.path.insert(0, ".github/scripts/release")
-          import test_manifest_owner_155 as test_manifest
+          import test_manifest
           raw = Path(sys.argv[1]).read_bytes()
           if hashlib.sha256(raw).hexdigest() != os.environ["TEST_RESULT_SHA256"]:
               raise SystemExit("selected Test result changed before publication")
-          test_manifest.validate_android_pairing(
-              json.loads(raw), hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest(),
-              raw_result_sha256=hashlib.sha256(raw).hexdigest(),
-          )
+          test_manifest.validate_android_pairing(json.loads(raw), hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest())
           PYTHON
           provenance="release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
           signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
