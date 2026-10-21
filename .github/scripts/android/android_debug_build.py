@@ -31,37 +31,13 @@ def run(command: list[str]) -> str:
     return result.stdout.decode("utf-8")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--source-sha", required=True)
-    parser.add_argument("--go-binary", default=os.environ.get("GO_BIN") or shutil.which("go"))
-    args = parser.parse_args()
-    if not args.go_binary:
-        parser.error("the pinned Go executable is required")
-    sdk_value = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
-    if not sdk_value:
-        raise ValueError("Android SDK root is required")
-    sdk = Path(sdk_value)
-    gradle = os.environ.get("GRADLE_BIN", str(ROOT / "ui/android/gradlew"))
-    build_output = run([gradle, "-p", "ui/android", ":app:assembleDebug", ":app:signingReport",
-                        "--no-daemon", "--console=plain", "--stacktrace",
-                        f"-PdobbyGoBinary={args.go_binary}", f"-PprojectRepositoryCommit={args.source_sha}"])
-    # Ask AGP for its selected store; its location can differ between hosts.
-    stores = re.findall(r"(?m)^Variant: debug\r?\nConfig: debug\r?\nStore: (.+)$", build_output)
-    if len(stores) != 1:
-        raise ValueError("Gradle did not report one Debug signing keystore")
-    debug_keystore = Path(stores[0].strip())
-    if not debug_keystore.is_file():
-        raise FileNotFoundError(debug_keystore)
-    apk = ROOT / "ui/android/app/build/outputs/apk/debug/app-debug.apk"
+def verify_debug_apk(apk: Path, go_binary: str) -> None:
     analyzer = str(select_apkanalyzer())
     if run([analyzer, "manifest", "debuggable", str(apk)]).strip() != "true":
         raise ValueError("Debug APK must allow debugger attachment")
     if run([analyzer, "manifest", "application-id", str(apk)]).strip() != "com.dobby.vpn.debug":
         raise ValueError("Debug APK must use its separate application ID")
-    ndk = Path(os.environ["ANDROID_NDK_HOME"])
-    readelf = select_readelf(ndk)
+    readelf = select_readelf(Path(os.environ["ANDROID_NDK_HOME"]))
     verify(apk, readelf)
     with tempfile.TemporaryDirectory(prefix="dobbyvpn-android-debug-") as temporary, zipfile.ZipFile(apk) as archive:
         for abi in ("arm64-v8a", "x86_64"):
@@ -70,21 +46,62 @@ def main() -> None:
             sections = run([str(readelf), "--sections", str(library)])
             if ".debug_info" not in sections:
                 raise ValueError(f"Debug symbols missing for {abi}")
-            metadata = run([args.go_binary, "version", "-m", str(library)])
+            metadata = run([go_binary, "version", "-m", str(library)])
             if "-gcflags=\"all=-N -l\"" not in metadata:
                 raise ValueError(f"Go debugging compiler flags missing for {abi}")
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(apk, args.output)
-    # Match the release compression policy, then restore the development
-    # signature that ZIP normalization invalidates.
-    build_tools = sdk / "build-tools" / ANDROID_BUILD_TOOLS
-    normalize_apk(args.output, build_tools / "zipalign")
-    signer = str(build_tools / "apksigner")
-    run([signer, "sign", "--ks", str(debug_keystore),
-         "--ks-key-alias", "androiddebugkey", "--ks-pass", "pass:android",
-         "--key-pass", "pass:android", "--v4-signing-enabled", "false", str(args.output.resolve())])
-    run([signer, "verify", "--verbose", str(args.output.resolve())])
-    print(f"Verified Debug APK: {args.output}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--go-binary", default=os.environ.get("GO_BIN") or shutil.which("go"))
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--build-only", action="store_true", help="compile and package without verification")
+    mode.add_argument("--verify-only", action="store_true", help="verify a previously built APK without compiling")
+    args = parser.parse_args()
+    if not args.go_binary:
+        parser.error("the pinned Go executable is required")
+    sdk_value = os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
+    if not sdk_value:
+        raise ValueError("Android SDK root is required")
+    sdk = Path(sdk_value)
+    apk = args.output if args.verify_only else ROOT / "ui/android/app/build/outputs/apk/debug/app-debug.apk"
+    debug_keystore = None
+    if not args.verify_only:
+        gradle = os.environ.get("GRADLE_BIN", str(ROOT / "ui/android/gradlew"))
+        build_output = run([gradle, "-p", "ui/android", ":app:assembleDebug", ":app:signingReport",
+                            "--no-daemon", "--console=plain", "--stacktrace",
+                            f"-PdobbyGoBinary={args.go_binary}", f"-PprojectRepositoryCommit={args.source_sha}"])
+        # Ask AGP for its selected store; its location can differ between hosts.
+        stores = re.findall(r"(?m)^Variant: debug\r?\nConfig: debug\r?\nStore: (.+)$", build_output)
+        if len(stores) != 1:
+            raise ValueError("Gradle did not report one Debug signing keystore")
+        debug_keystore = Path(stores[0].strip())
+        if not debug_keystore.is_file():
+            raise FileNotFoundError(debug_keystore)
+    if not apk.is_file():
+        raise FileNotFoundError(apk)
+    if not args.build_only:
+        verify_debug_apk(apk, args.go_binary)
+    if not args.verify_only:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(apk, args.output)
+        # Match release compression, then restore the development signature.
+        build_tools = sdk / "build-tools" / ANDROID_BUILD_TOOLS
+        normalize_apk(args.output, build_tools / "zipalign")
+        signer = str(build_tools / "apksigner")
+        if debug_keystore is None:
+            raise AssertionError("Debug signing keystore was not selected")
+        run([signer, "sign", "--ks", str(debug_keystore),
+             "--ks-key-alias", "androiddebugkey", "--ks-pass", "pass:android",
+             "--key-pass", "pass:android", "--v4-signing-enabled", "false", str(args.output.resolve())])
+    if not args.build_only:
+        signer = str(sdk / "build-tools" / ANDROID_BUILD_TOOLS / "apksigner")
+        run([signer, "verify", "--verbose", str(args.output.resolve())])
+        print(f"Verified Debug APK: {args.output}")
+    else:
+        print(f"Built Debug APK: {args.output}")
 
 
 if __name__ == "__main__":

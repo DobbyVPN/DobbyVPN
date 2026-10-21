@@ -44,6 +44,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          fetch-depth: ${{ github.event_name == 'push' && '0' || '1' }}
           persist-credentials: false
 
       - name: Classify changed paths
@@ -56,6 +57,7 @@ jobs:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
           REPOSITORY: ${{ github.repository }}
+          EVENT_BEFORE_SHA: ${{ github.event.before }}
           SOURCE_SHA: ${{ github.sha }}
           CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
@@ -65,14 +67,19 @@ jobs:
             if python3 .github/scripts/ci_reuse.py \
               --repository "$REPOSITORY" \
               --source-sha "$SOURCE_SHA" \
-              --current-run-id "$CURRENT_RUN_ID" > "$reuse_output"; then
+              --current-run-id "$CURRENT_RUN_ID" > "$reuse_output" && grep -qx 'scope=reused' "$reuse_output"; then
               cat "$reuse_output" >> "$GITHUB_OUTPUT"
             else
-              cat "$reuse_output" >&2 || true
-              echo "CI reuse validation failed; selecting full CI." >&2
-              echo "scope=full" >> "$GITHUB_OUTPUT"
-              echo "reason=reuse-validation-failed" >> "$GITHUB_OUTPUT"
-              echo "reused_run_id=" >> "$GITHUB_OUTPUT"
+              classifier_output="$RUNNER_TEMP/ci-push-scope-output"
+              if python3 .github/scripts/ci_push_scope.py \
+                --before "$EVENT_BEFORE_SHA" --after "$SOURCE_SHA" > "$classifier_output"; then
+                cat "$classifier_output" >> "$GITHUB_OUTPUT"
+              else
+                cat "$classifier_output" >&2 || true
+                echo "scope=full" >> "$GITHUB_OUTPUT"
+                echo "reason=push-classification-failed" >> "$GITHUB_OUTPUT"
+                echo "reused_run_id=" >> "$GITHUB_OUTPUT"
+              fi
             fi
             exit 0
           fi
@@ -101,7 +108,7 @@ jobs:
   go_build:
     name: Go source build (${{ matrix.name }})
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && needs.ci_scope.outputs.scope == 'full' }}
     strategy:
       fail-fast: false
       matrix:
@@ -141,7 +148,7 @@ jobs:
   android_lint:
     name: Android lint
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && (needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'android') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -186,7 +193,7 @@ jobs:
   lint_go:
     name: Go source analysis
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && (needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'android' || needs.ci_scope.outputs.scope == 'apple') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -205,7 +212,7 @@ jobs:
   lint_swift:
     name: Swift source analysis
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && (needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'apple') }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -236,6 +243,23 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Check release tooling syntax and safe imports
+        if: ${{ needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'release' }}
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q .github/scripts/release
+          PYTHONPATH=.github/scripts:.github/scripts/release python3 - <<'PY'
+          import artifact_attempts
+          import build_manifest
+          import download_artifact
+          import publish_selection
+          import release_guard
+          import release_provenance
+          import require_ci
+          import test_manifest
+          import version_metadata
+          PY
 
       - name: Restore dependency archives
         uses: ./.github/actions/dependency-cache
@@ -269,100 +293,18 @@ jobs:
   android_build:
     name: Android product build and native library checks
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' || inputs.platform == 'debug-packages' || inputs.platform == 'fdroid-preflight') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Restore dependency archives
-        uses: ./.github/actions/dependency-cache
-        with:
-          go-module-cache-path: '${{ runner.temp }}/dobbyvpn-android-gopath/pkg/mod'
-          gradle: 'true'
-          pinned-tools: 'true'
-
-      - name: Read Android dependency versions
-        id: pins
-        run: |
-          set -euo pipefail
-          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
-            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
-            echo "$pin=$value" >> "$GITHUB_OUTPUT"
-          done
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: .go-version
-          cache: false
-
-      - name: Verify pinned Go installation
-        run: |
-          set -euo pipefail
-          expected="go$(tr -d '[:space:]' < .go-version)"
-          test "$(go env GOVERSION)" = "$expected"
-          go_root="$(go env GOROOT)"
-          test "$(readlink -f "$(command -v go)")" = "$(readlink -f "$go_root/bin/go")"
-          echo "GOROOT=$go_root" >> "$GITHUB_ENV"
-
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: ${{ steps.pins.outputs.java_major }}
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-        with:
-          cmdline-tools-version: '15859902'
-          packages: >
-            platforms;${{ steps.pins.outputs.android_sdk_platform }}
-            build-tools;${{ steps.pins.outputs.android_build_tools }}
-            ndk;${{ steps.pins.outputs.android_ndk }}
-
-      - name: Build Android app without test companion, then verify native ABI
-        run: |
-          set -euo pipefail
-          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
-          tools_version="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_cmdline_tools)"
-          # setup-android leaves an older preinstalled cmdline-tools/latest intact.
-          export APKANALYZER="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/$tools_version/bin/apkanalyzer"
-          test -x "$APKANALYZER"
-          printf 'APKANALYZER=%s\n' "$APKANALYZER"
-          export GO_BIN="$GOROOT/bin/go"
-          export GOPATH="$RUNNER_TEMP/dobbyvpn-android-gopath"
-          mkdir -p "$GOPATH"
-          build_root="$RUNNER_TEMP/dobbyvpn-android-ci"
-          version="$(python3 .github/scripts/release/version_metadata.py --version-file VERSION --field version_name)"
-          apk="$build_root/DobbyVPN-v${version}-unsign.apk"
-          mkdir -p "$build_root"
-          .github/scripts/android/android_build_driver.sh \
-            --source-root "$GITHUB_WORKSPACE" \
-            --source-sha "$GITHUB_SHA" \
-            --output "$apk" --local
-          mapfile -t ndk_toolchains < <(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print)
-          test "${#ndk_toolchains[@]}" = 1
-          readelf="${ndk_toolchains[0]}/bin/llvm-readelf"
-          test -x "$readelf"
-          python3 .github/scripts/android/verify_android_native_payloads.py --apk "$apk" --readelf "$readelf"
-          python3 .github/scripts/android/android_debug_build.py \
-            --source-sha "$GITHUB_SHA" --go-binary "$GOROOT/bin/go" \
-            --output "$build_root/DobbyVPN-v${version}-debug.apk"
-
-      - name: Upload APK for F-Droid preflight
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'fdroid-preflight' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: dobbyvpn-android-unsign.apk
-          path: ${{ runner.temp }}/dobbyvpn-android-ci/DobbyVPN-v*-unsign.apk
-          if-no-files-found: error
-          retention-days: 1
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' || inputs.platform == 'debug-packages' || inputs.platform == 'fdroid-preflight') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'release' && needs.ci_scope.outputs.scope != 'apple' && needs.ci_scope.outputs.scope != 'reused' }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/ci_android.yml
+    with:
+      source_sha: ${{ github.sha }}
 
   ios_production:
     name: iOS production analysis and archive
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && (needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'apple') }}
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -459,7 +401,7 @@ jobs:
       - ios_production
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every full CI job
+      - name: Require every selected CI job
         env:
           CI_SCOPE: ${{ needs.ci_scope.outputs.scope || 'full' }}
           CI_SCOPE_REASON: ${{ needs.ci_scope.outputs.reason || 'classification-unavailable' }}
@@ -482,32 +424,71 @@ jobs:
             echo "Full CI reused from verified workflow run $REUSED_RUN_ID."
             exit 0
           fi
-          test "$SECURITY_RESULT" = success
-          test "$ACTIONLINT_RESULT" = success
-          if [ "$CI_SCOPE" = light ]; then
-            for result in \
-              "$GO_BUILD_RESULT" \
-              "$ANDROID_LINT_RESULT" \
-              "$LINT_GO_RESULT" \
-              "$LINT_SWIFT_RESULT" \
-              "$ANDROID_BUILD_RESULT" \
-              "$IOS_PRODUCTION_RESULT"; do
-              test "$result" = skipped
-            done
-            echo "Documentation/workflow-only CI passed; platform builds were skipped."
-            exit 0
-          fi
-          test "$CI_SCOPE" = full
-          for result in \
-            "$GO_BUILD_RESULT" \
-            "$ANDROID_LINT_RESULT" \
-            "$LINT_GO_RESULT" \
-            "$LINT_SWIFT_RESULT" \
-            "$ANDROID_BUILD_RESULT" \
-            "$IOS_PRODUCTION_RESULT"; do
-            test "$result" = success
-          done
-          echo "Full CI passed."
+          require_result() {
+            local job="$1" expected="$2" actual="$3"
+            if [ "$actual" != "$expected" ]; then
+              echo "Required CI job '$job' result=$actual; expected $expected." >&2
+              exit 1
+            fi
+          }
+          require_common() {
+            require_result 'Dependency and credential scans' success "$SECURITY_RESULT"
+            require_result 'GitHub workflow validation' success "$ACTIONLINT_RESULT"
+          }
+          require_unselected_platform_jobs() {
+            require_result 'Go source build' skipped "$GO_BUILD_RESULT"
+            require_result 'Android lint' skipped "$ANDROID_LINT_RESULT"
+            require_result 'Go source analysis' skipped "$LINT_GO_RESULT"
+            require_result 'Swift source analysis' skipped "$LINT_SWIFT_RESULT"
+            require_result 'Android product build' skipped "$ANDROID_BUILD_RESULT"
+            require_result 'iOS production analysis and archive' skipped "$IOS_PRODUCTION_RESULT"
+          }
+          case "$CI_SCOPE" in
+            full)
+              require_common
+              require_result 'Go source build' success "$GO_BUILD_RESULT"
+              require_result 'Android lint' success "$ANDROID_LINT_RESULT"
+              require_result 'Go source analysis' success "$LINT_GO_RESULT"
+              require_result 'Swift source analysis' success "$LINT_SWIFT_RESULT"
+              require_result 'Android product build' success "$ANDROID_BUILD_RESULT"
+              require_result 'iOS production analysis and archive' success "$IOS_PRODUCTION_RESULT"
+              echo "Full CI passed; every qualification job succeeded."
+              ;;
+            release)
+              require_common
+              require_unselected_platform_jobs
+              echo "Reduced CI passed: release tooling syntax/import checks, security, and actionlint; app compilation was not selected."
+              ;;
+            android)
+              require_common
+              require_result 'Android lint' success "$ANDROID_LINT_RESULT"
+              require_result 'Go source analysis' success "$LINT_GO_RESULT"
+              require_result 'Android product build' success "$ANDROID_BUILD_RESULT"
+              require_result 'Go source build' skipped "$GO_BUILD_RESULT"
+              require_result 'Swift source analysis' skipped "$LINT_SWIFT_RESULT"
+              require_result 'iOS production analysis and archive' skipped "$IOS_PRODUCTION_RESULT"
+              echo "Reduced CI passed: Android build, Android lint, Go analysis, security, and actionlint."
+              ;;
+            apple)
+              require_common
+              require_result 'Go source analysis' success "$LINT_GO_RESULT"
+              require_result 'Swift source analysis' success "$LINT_SWIFT_RESULT"
+              require_result 'iOS production analysis and archive' success "$IOS_PRODUCTION_RESULT"
+              require_result 'Go source build' skipped "$GO_BUILD_RESULT"
+              require_result 'Android lint' skipped "$ANDROID_LINT_RESULT"
+              require_result 'Android product build' skipped "$ANDROID_BUILD_RESULT"
+              echo "Reduced CI passed: Apple production analysis, Swift and Go analysis, security, and actionlint."
+              ;;
+            light)
+              require_common
+              require_unselected_platform_jobs
+              echo "Reduced CI passed: documentation security and workflow validation; app compilation was not selected."
+              ;;
+            *)
+              echo "Unsupported CI scope: $CI_SCOPE" >&2
+              exit 1
+              ;;
+          esac
 
   debug_packages:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.platform == 'debug-packages' }}

@@ -25,7 +25,8 @@ REQUIRED_CI_JOB_NAMES = (
     "Swift source analysis",
     "Dependency and credential scans",
     "GitHub workflow validation",
-    "Android product build and native library checks",
+    "Android product build and native library checks / Compile Android APK artifacts",
+    "Android product build and native library checks / Verify Android APK artifacts",
     "iOS production analysis and archive",
     "Complete CI",
 )

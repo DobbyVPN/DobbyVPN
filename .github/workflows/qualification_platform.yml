@@ -22,7 +22,7 @@ on:
         type: string
         default: ''
       render_artifact_name:
-        description: Artifact containing the shared Render VPN profile.
+        description: Artifact containing this platform’s Render VPN profile.
         required: true
         type: string
       build_run_id:

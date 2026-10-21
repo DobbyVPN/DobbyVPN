@@ -1,0 +1,304 @@
+name: Android CI build stages
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact product commit to build and verify.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Compile Android APK artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      artifact_name: ${{ steps.identity.outputs.artifact_name }}
+      artifact_digest: ${{ steps.compile_artifact.outputs.artifact-digest }}
+      source_sha: ${{ inputs.source_sha }}
+      producer_run_id: ${{ steps.identity.outputs.producer_run_id }}
+      producer_run_attempt: ${{ steps.identity.outputs.producer_run_attempt }}
+      version_name: ${{ steps.version.outputs.version_name }}
+      version_code: ${{ steps.version.outputs.android_version_code }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Verify exact source and read Android version
+        id: version
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 .github/scripts/release/version_metadata.py \
+            --version-file VERSION --github-output "$GITHUB_OUTPUT"
+
+      - name: Restore Android dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-module-cache-path: '${{ runner.temp }}/dobbyvpn-android-gopath/pkg/mod'
+          gradle: 'true'
+          pinned-tools: 'true'
+
+      - name: Read Android dependency versions
+        id: pins
+        run: |
+          set -euo pipefail
+          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Verify pinned Go installation
+        run: |
+          set -euo pipefail
+          expected="go$(tr -d '[:space:]' < .go-version)"
+          test "$(go env GOVERSION)" = "$expected"
+          go_root="$(go env GOROOT)"
+          test "$(readlink -f "$(command -v go)")" = "$(readlink -f "$go_root/bin/go")"
+          echo "GOROOT=$go_root" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: ${{ steps.pins.outputs.java_major }}
+
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          cmdline-tools-version: ${{ steps.pins.outputs.android_cmdline_tools }}
+          packages: >
+            platforms;${{ steps.pins.outputs.android_sdk_platform }}
+            build-tools;${{ steps.pins.outputs.android_build_tools }}
+            ndk;${{ steps.pins.outputs.android_ndk }}
+
+      - name: Select pinned Android tools
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          ndk_home="$sdk_root/ndk/${{ steps.pins.outputs.android_ndk }}"
+          test -f "$ndk_home/source.properties"
+          grep -Fqx 'Pkg.Revision = ${{ steps.pins.outputs.android_ndk }}' "$ndk_home/source.properties"
+          analyzer="$sdk_root/cmdline-tools/${{ steps.pins.outputs.android_cmdline_tools }}/bin/apkanalyzer"
+          test -x "$analyzer"
+          printf 'ANDROID_NDK_HOME=%s\nAPKANALYZER=%s\n' "$ndk_home" "$analyzer" >> "$GITHUB_ENV"
+
+      - name: Compile unsigned release APK without a test companion
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          GOPATH: ${{ runner.temp }}/dobbyvpn-android-gopath
+        run: |
+          set -euo pipefail
+          export GO_BIN="$GOROOT/bin/go"
+          mkdir -p "$GOPATH"
+          build_root="$RUNNER_TEMP/dobbyvpn-android-ci"
+          mkdir -p "$build_root"
+          release_apk="$build_root/DobbyVPN-v${{ steps.version.outputs.version_name }}-unsign.apk"
+          .github/scripts/android/android_build_driver.sh \
+            --source-root "$GITHUB_WORKSPACE" --source-sha "$SOURCE_SHA" \
+            --output "$release_apk" --local
+          echo "release_apk=$release_apk" >> "$GITHUB_OUTPUT"
+
+      - name: Compile and package native Debug APK
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          GOPATH: ${{ runner.temp }}/dobbyvpn-android-gopath
+        run: |
+          set -euo pipefail
+          export GO_BIN="$GOROOT/bin/go"
+          debug_apk="$RUNNER_TEMP/dobbyvpn-android-ci/DobbyVPN-v${{ steps.version.outputs.version_name }}-debug.apk"
+          python3 .github/scripts/android/android_debug_build.py \
+            --build-only --source-sha "$SOURCE_SHA" --go-binary "$GO_BIN" --output "$debug_apk"
+
+      - name: Bind complete APK payload to this source and producer attempt
+        id: identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_APK: ${{ runner.temp }}/dobbyvpn-android-ci/DobbyVPN-v${{ steps.version.outputs.version_name }}-unsign.apk
+          DEBUG_APK: ${{ runner.temp }}/dobbyvpn-android-ci/DobbyVPN-v${{ steps.version.outputs.version_name }}-debug.apk
+        run: |
+          set -euo pipefail
+          artifact_name="dobbyvpn-android-ci-build-attempt-${GITHUB_RUN_ATTEMPT}"
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "producer_run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "producer_run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/android/android_ci_build_artifact.py package \
+            --release-apk "$RELEASE_APK" --debug-apk "$DEBUG_APK" \
+            --output-dir "$RUNNER_TEMP/dobbyvpn-android-ci-artifact" \
+            --source-sha "$SOURCE_SHA" --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --version-name "${{ steps.version.outputs.version_name }}" \
+            --version-code "${{ steps.version.outputs.android_version_code }}"
+
+      # Upload before native/manifest verification so a verification-only retry
+      # reuses the successful compile job and this immutable payload.
+      - name: Upload immutable Android compile artifact
+        id: compile_artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/dobbyvpn-android-ci-artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload unsigned APK for F-Droid preflight
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-android-unsign.apk${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
+          path: ${{ runner.temp }}/dobbyvpn-android-ci/DobbyVPN-v${{ steps.version.outputs.version_name }}-unsign.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    name: Verify Android APK artifacts
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Verify exact source and Android build metadata
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$SOURCE_SHA" = "${{ needs.build.outputs.source_sha }}"
+          test "$(python3 .github/scripts/release/version_metadata.py --version-file VERSION --field version_name)" = "${{ needs.build.outputs.version_name }}"
+          test "$(python3 .github/scripts/release/version_metadata.py --version-file VERSION --field android_version_code)" = "${{ needs.build.outputs.version_code }}"
+
+      - name: Restore pinned Android tools
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-modules: 'false'
+          pinned-tools: 'true'
+
+      - name: Read Android dependency versions
+        id: pins
+        run: |
+          set -euo pipefail
+          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Verify pinned Go installation
+        run: |
+          set -euo pipefail
+          expected="go$(tr -d '[:space:]' < .go-version)"
+          test "$(go env GOVERSION)" = "$expected"
+          go_root="$(go env GOROOT)"
+          test "$(readlink -f "$(command -v go)")" = "$(readlink -f "$go_root/bin/go")"
+          echo "GOROOT=$go_root" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: ${{ steps.pins.outputs.java_major }}
+
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          cmdline-tools-version: ${{ steps.pins.outputs.android_cmdline_tools }}
+          packages: >
+            platforms;${{ steps.pins.outputs.android_sdk_platform }}
+            build-tools;${{ steps.pins.outputs.android_build_tools }}
+            ndk;${{ steps.pins.outputs.android_ndk }}
+
+      - name: Select pinned Android tools
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          ndk_home="$sdk_root/ndk/${{ steps.pins.outputs.android_ndk }}"
+          test -f "$ndk_home/source.properties"
+          grep -Fqx 'Pkg.Revision = ${{ steps.pins.outputs.android_ndk }}' "$ndk_home/source.properties"
+          analyzer="$sdk_root/cmdline-tools/${{ steps.pins.outputs.android_cmdline_tools }}/bin/apkanalyzer"
+          test -x "$analyzer"
+          printf 'ANDROID_NDK_HOME=%s\nAPKANALYZER=%s\n' "$ndk_home" "$analyzer" >> "$GITHUB_ENV"
+          mapfile -t ndk_toolchains < <(find "$ndk_home/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#ndk_toolchains[@]}" = 1
+          readelf="${ndk_toolchains[0]}/bin/llvm-readelf"
+          test -x "$readelf"
+          echo "ANDROID_READELF=$readelf" >> "$GITHUB_ENV"
+
+      - name: Download exact producer attempt and verify uploaded digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ needs.build.outputs.producer_run_id }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          test -n "$BUILD_RUN_ID" && test -n "$ARTIFACT_NAME" && test -n "$ARTIFACT_DIGEST"
+          python3 .github/scripts/release/download_artifact.py \
+            "$BUILD_RUN_ID" "$ARTIFACT_NAME" "$RUNNER_TEMP/dobbyvpn-android-ci-artifact" \
+            --expected-digest "$ARTIFACT_DIGEST"
+
+      - name: Validate complete source and attempt-bound payload
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PRODUCER_RUN_ID: ${{ needs.build.outputs.producer_run_id }}
+          PRODUCER_ATTEMPT: ${{ needs.build.outputs.producer_run_attempt }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.build.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/android/android_ci_build_artifact.py verify \
+            --artifact-dir "$RUNNER_TEMP/dobbyvpn-android-ci-artifact" \
+            --source-sha "$SOURCE_SHA" --repository "$GITHUB_REPOSITORY" \
+            --run-id "$PRODUCER_RUN_ID" --run-attempt "$PRODUCER_ATTEMPT" \
+            --version-name "$VERSION_NAME" --version-code "$VERSION_CODE"
+
+      - name: Verify release APK metadata and embedded source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.build.outputs.version_code }}
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/dobbyvpn-android-ci-artifact"
+          release_apk="$bundle/DobbyVPN-v${VERSION_NAME}-unsign.apk"
+          python3 .github/scripts/android/verify_android_apk_source.py \
+            --apk "$release_apk" --source-sha "$SOURCE_SHA" \
+            --repository "$GITHUB_REPOSITORY" --version-name "$VERSION_NAME" \
+            --version-code "$VERSION_CODE" --apkanalyzer "$APKANALYZER"
+
+      - name: Verify release native ABI payloads
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/android/verify_android_native_payloads.py \
+            --apk "$RUNNER_TEMP/dobbyvpn-android-ci-artifact/DobbyVPN-v${{ needs.build.outputs.version_name }}-unsign.apk" \
+            --readelf "$ANDROID_READELF"
+
+      - name: Verify Debug APK without recompiling
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          export GO_BIN="$GOROOT/bin/go"
+          python3 .github/scripts/android/android_debug_build.py \
+            --verify-only --source-sha "$SOURCE_SHA" --go-binary "$GO_BIN" \
+            --output "$RUNNER_TEMP/dobbyvpn-android-ci-artifact/DobbyVPN-v${{ needs.build.outputs.version_name }}-debug.apk"

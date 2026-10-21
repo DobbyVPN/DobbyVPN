@@ -9,6 +9,11 @@ on:
       torturer_tree_sha256:
         required: true
         type: string
+      fixture_key:
+        description: Platform owning this disposable Render fixture.
+        required: false
+        default: ''
+        type: string
       retention_days:
         default: 1
         type: number
@@ -25,9 +30,15 @@ jobs:
     steps:
       - name: Require main before creating a Render service
         shell: bash
+        env:
+          FIXTURE_KEY: ${{ inputs.fixture_key }}
         run: |
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_RUN_ATTEMPT" -ge 1
+          case "$FIXTURE_KEY" in
+            ''|linux|windows|macos|android) ;;
+            *) echo "invalid Render fixture key" >&2; exit 1 ;;
+          esac
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -62,6 +73,7 @@ jobs:
         working-directory: torturer
         env:
           RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+          FIXTURE_KEY: ${{ inputs.fixture_key }}
           RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
           RENDER_IMAGE_OWNER_ID: ${{ vars.RENDER_IMAGE_OWNER_ID }}
           RENDER_IMAGE_PATH: ${{ vars.RENDER_IMAGE_PATH }}
@@ -78,6 +90,7 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m disposable_vpn_server.render_service start \
             --run-id "$GITHUB_RUN_ID" \
             --attempt "$GITHUB_RUN_ATTEMPT" \
+            --fixture-key "$FIXTURE_KEY" \
             --owner-id "$RENDER_OWNER_ID" \
             --image-owner-id "$RENDER_IMAGE_OWNER_ID" \
             --image-path "$RENDER_IMAGE_PATH" \
@@ -85,10 +98,10 @@ jobs:
             --region "$RENDER_REGION" \
             --output "$RUNNER_TEMP/render"
 
-      - name: Upload shared Render profile
+      - name: Upload platform Render profile
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}
+          name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.fixture_key && format('-{0}', inputs.fixture_key) || '' }}
           path: |
             ${{ runner.temp }}/render/profile.toml
             ${{ runner.temp }}/render/deadline_epoch.txt

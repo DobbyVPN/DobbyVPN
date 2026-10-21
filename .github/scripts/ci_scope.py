@@ -15,7 +15,26 @@ PAGE_SIZE = 100
 MAX_PULL_REQUEST_FILES = 3000
 API_TIMEOUT_SECONDS = 15
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
-WORKFLOW_SUFFIXES = {".yml", ".yaml"}
+
+# Keep this allowlist intentionally narrow. A path not named here can affect
+# shared behavior, so it receives full CI until its ownership is understood.
+ANDROID_PREFIXES = (
+    ".github/scripts/android/",
+    "ui/android/",
+    "core/cmd/dobbyandroid/",
+    "core/ffi/android/",
+)
+APPLE_PREFIXES = (
+    ".github/scripts/ios/",
+    "ui/apple/",
+    "core/ffi/ios/",
+)
+RELEASE_PREFIXES = (".github/scripts/release/",)
+APPLE_CORE_SCRIPTS = {
+    "core/scripts/build_ios_xcframework.sh",
+    "core/scripts/ios_runtime_framework.py",
+    "core/scripts/package_ios_app.sh",
+}
 
 
 class ScopeDetectionError(RuntimeError):
@@ -182,21 +201,31 @@ def _allowed_markdown(path: str) -> bool:
     return candidate.suffix.lower() in MARKDOWN_SUFFIXES
 
 
-def _allowed_workflow_yaml(path: str) -> bool:
-    parts = PurePosixPath(path).parts
-    return (
-        len(parts) == 3
-        and parts[:2] == (".github", "workflows")
-        and PurePosixPath(path).suffix.lower() in WORKFLOW_SUFFIXES
-    )
+def _path_scope(path: str) -> str:
+    candidate = PurePosixPath(path)
+    if _allowed_markdown(path) or (candidate.parent.as_posix() == ".github/workflows" and candidate.suffix in {".yml", ".yaml"}):
+        return "docs"
+    if path.startswith(RELEASE_PREFIXES):
+        return "release"
+    if path.startswith(ANDROID_PREFIXES) or path.endswith("_android.go"):
+        return "android"
+    if (
+        path.startswith(APPLE_PREFIXES)
+        or path in APPLE_CORE_SCRIPTS
+        or path.endswith("_ios.go")
+    ):
+        return "apple"
+    if _allowed_markdown(path):
+        return "docs"
+    return "shared"
 
 
 def classify_paths(paths: Iterable[str]) -> tuple[str, str]:
-    """Return light scope only when every changed path has an allowed type."""
+    """Select a narrow scope only when every changed path has one clear owner."""
     selected = tuple(paths)
     if not selected:
         return "full", "no-changed-files"
-    kinds: set[str] = set()
+    scopes: set[str] = set()
     for path in selected:
         segments = path.split("/") if isinstance(path, str) else ()
         if (
@@ -207,17 +236,15 @@ def classify_paths(paths: Iterable[str]) -> tuple[str, str]:
             or any(part in {"", ".", ".."} for part in segments)
         ):
             return "full", "unrecognized-path"
-        if _allowed_markdown(path):
-            kinds.add("markdown")
-        elif _allowed_workflow_yaml(path):
-            kinds.add("workflow-yaml")
-        else:
-            return "full", "non-documentation-or-workflow-path"
-    if kinds == {"markdown"}:
-        return "light", "markdown-only"
-    if kinds == {"workflow-yaml"}:
-        return "light", "workflow-yaml-only"
-    return "light", "markdown-and-workflow-yaml-only"
+        scopes.add(_path_scope(path))
+    if len(scopes) > 1:
+        scopes.discard("docs")
+    if len(scopes) != 1 or "shared" in scopes:
+        return "full", "shared-or-mixed-paths"
+    scope = scopes.pop()
+    if scope == "docs":
+        return "light", "markdown-or-workflow-only"
+    return scope, f"{scope}-only"
 
 
 def classify_pull_request_files(
@@ -226,6 +253,8 @@ def classify_pull_request_files(
     """Classify both names of renamed files and the path of deleted files."""
     paths: list[str] = []
     for item in files:
+        if not isinstance(item, dict):
+            return "full", "invalid-file-entry"
         filename = item.get("filename")
         if not isinstance(filename, str):
             return "full", "invalid-file-entry"
