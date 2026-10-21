@@ -42,6 +42,7 @@ jobs:
       apple_build_number: ${{ steps.selection.outputs.apple_build_number }}
       build_manifest_sha256: ${{ steps.selection.outputs.build_manifest_sha256 }}
       test_result_sha256: ${{ steps.selection.outputs.test_result_sha256 }}
+      qualified_unsigned_apk_sha256: ${{ steps.selection.outputs.qualified_unsigned_apk_sha256 }}
     steps:
       - name: Require production branch
         run: |
@@ -87,6 +88,7 @@ jobs:
               "apple_build_number": build["apple_build_number"],
               "build_manifest_sha256": build["manifest_sha256"],
               "test_result_sha256": test["manifest_sha256"],
+              "qualified_unsigned_apk_sha256": test["android_pairing"]["unsigned_product_apk_sha256"],
           }
           with open(sys.argv[3], "a", encoding="utf-8") as output:
               for key, value in values.items():
@@ -347,6 +349,7 @@ jobs:
       TEST_RUN_NUMBER: ${{ needs.resolve_inputs.outputs.test_run_number }}
       BUILD_MANIFEST_SHA256: ${{ needs.resolve_inputs.outputs.build_manifest_sha256 }}
       TEST_RESULT_SHA256: ${{ needs.resolve_inputs.outputs.test_result_sha256 }}
+      QUALIFIED_UNSIGNED_APK_SHA256: ${{ needs.resolve_inputs.outputs.qualified_unsigned_apk_sha256 }}
       PUBLISH_RUN_ID: ${{ github.run_id }}
       PUBLISH_RUN_NUMBER: ${{ github.run_number }}
       RELEASE_NOTES: ${{ inputs.release_notes }}
@@ -466,16 +469,15 @@ jobs:
         run: |
           set -euo pipefail
           unsigned="release/DobbyVPN-v$RELEASE_VERSION-unsign.apk"
-          python3 .github/scripts/release/download_artifact.py "$TEST_RUN_ID" test-result "$RUNNER_TEMP/selected-test-result"
-          python3 - "$RUNNER_TEMP/selected-test-result/test-result.json" "$unsigned" <<'PYTHON'
-          import hashlib, json, os, sys
+          python3 - "$unsigned" <<'PYTHON'
+          import hashlib, os, re, sys
           from pathlib import Path
-          sys.path.insert(0, ".github/scripts/release")
-          import test_manifest
-          raw = Path(sys.argv[1]).read_bytes()
-          if hashlib.sha256(raw).hexdigest() != os.environ["TEST_RESULT_SHA256"]:
-              raise SystemExit("selected Test result changed before publication")
-          test_manifest.validate_android_pairing(json.loads(raw), hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest())
+          expected = os.environ.get("QUALIFIED_UNSIGNED_APK_SHA256", "")
+          if not re.fullmatch(r"[0-9a-f]{64}", expected):
+              raise SystemExit("validated Test unsigned APK digest is missing or invalid")
+          actual = hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit("selected Android package does not match the validated Test result")
           PYTHON
           provenance="release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
           signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
