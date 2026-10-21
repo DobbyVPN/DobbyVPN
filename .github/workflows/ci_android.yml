@@ -52,7 +52,7 @@ jobs:
         id: pins
         run: |
           set -euo pipefail
-          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools; do
+          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools android_cmdline_tools_archive; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
@@ -78,7 +78,7 @@ jobs:
 
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
-          cmdline-tools-version: ${{ steps.pins.outputs.android_cmdline_tools }}
+          cmdline-tools-version: ${{ steps.pins.outputs.android_cmdline_tools_archive }}
           packages: >
             platforms;${{ steps.pins.outputs.android_sdk_platform }}
             build-tools;${{ steps.pins.outputs.android_build_tools }}
@@ -196,7 +196,7 @@ jobs:
         id: pins
         run: |
           set -euo pipefail
-          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools; do
+          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools android_cmdline_tools_archive; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
@@ -222,7 +222,7 @@ jobs:
 
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
-          cmdline-tools-version: ${{ steps.pins.outputs.android_cmdline_tools }}
+          cmdline-tools-version: ${{ steps.pins.outputs.android_cmdline_tools_archive }}
           packages: >
             platforms;${{ steps.pins.outputs.android_sdk_platform }}
             build-tools;${{ steps.pins.outputs.android_build_tools }}
