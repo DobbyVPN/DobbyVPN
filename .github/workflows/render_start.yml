@@ -23,14 +23,11 @@ jobs:
       contents: read
       actions: read
     steps:
-      - name: Reject reruns before creating a Render service
+      - name: Require main before creating a Render service
         shell: bash
         run: |
           test "$GITHUB_REF" = refs/heads/main
-          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo "Workflow reruns are unsupported; dispatch a fresh workflow." >&2
-            exit 1
-          fi
+          test "$GITHUB_RUN_ATTEMPT" -ge 1
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:

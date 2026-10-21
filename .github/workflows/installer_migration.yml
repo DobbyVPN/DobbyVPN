@@ -39,11 +39,11 @@ jobs:
       DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
       PYTHONPATH: ${{ github.workspace }}/torturer
     steps:
-      - name: Reject Test reruns
+      - name: Require a valid Test attempt
         shell: bash
         run: |
           test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_RUN_ATTEMPT" -ge 1
 
       - name: Export absolute macOS migration deadline
         if: inputs.platform == 'macos'

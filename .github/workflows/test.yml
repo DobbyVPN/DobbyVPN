@@ -47,14 +47,13 @@ jobs:
       torturer_tree_sha256: ${{ steps.claim.outputs.torturer_tree_sha256 }}
       claimed: ${{ steps.claim.outputs.claimed }}
     steps:
-      - name: Reject Test reruns
+      - name: Validate Test retry identity
         env:
           TORTURER_SHA: ${{ inputs.torturer_sha }}
           RELEASE_ATTEMPT_ID: ${{ inputs.release_attempt_id }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
         run: |
           test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_RUN_ATTEMPT" = 1
           [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$RELEASE_ATTEMPT_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
@@ -412,6 +411,7 @@ jobs:
               "schema": 2, "repository": os.environ["GITHUB_REPOSITORY"],
               "workflow_path": ".github/workflows/test.yml",
               "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
               "build_run_id": int(os.environ["BUILD_RUN_ID"]),
               "source_sha": build.get("source_sha", ""),
               "build_manifest_sha256": build.get("manifest_sha256", ""),
@@ -423,8 +423,8 @@ jobs:
               "checks": {name: item.get("result") for name, item in needs.items()},
           }
           result_path.write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
-          if os.environ["GITHUB_REF"] != "refs/heads/main" or os.environ["GITHUB_RUN_ATTEMPT"] != "1":
-              raise SystemExit("Only the first main Test attempt can qualify")
+          if os.environ["GITHUB_REF"] != "refs/heads/main":
+              raise SystemExit("Only main Test runs can qualify")
           test_manifest.validate_result(result, repository=os.environ["GITHUB_REPOSITORY"],
                                         run_id=result["run_id"], build=build, source_sha=os.environ["GITHUB_SHA"])
           apk = Path(os.environ["RUNNER_TEMP"]) / "selected-android" / f"DobbyVPN-v{build['version']}-unsign.apk"
@@ -435,7 +435,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-result
+          name: test-result-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/test-result.json
           if-no-files-found: error
           retention-days: 7
@@ -459,9 +459,12 @@ jobs:
           }
           valid = os.environ["QUALIFICATION_VALID"] == "true"
           identity = test_manifest.guard_candidate(json.loads((Path(os.environ["RUNNER_TEMP"]) / "test-result.json").read_text())) if valid else None
+          if identity is not None:
+              identity.update(test_run_id=int(os.environ["GITHUB_RUN_ID"]),
+                              run_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]))
           release_guard.finalize(release_guard.GitHubAPI(), os.environ["GITHUB_REPOSITORY"],
               int(os.environ["RELEASE_ATTEMPT_ID"]), int(os.environ["GITHUB_RUN_ID"]), candidate,
               outcome="success" if valid else "failure", result_identity=identity)
           if not valid:
-              raise SystemExit("Final release verification failed. Release is stopped; diagnose and reproduce locally.")
+              raise SystemExit("Final release verification failed. Release is stopped; diagnose before retrying.")
           PYTHON

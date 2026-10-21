@@ -45,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_RUN_ATTEMPT" -ge 1
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$TORTURER_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]

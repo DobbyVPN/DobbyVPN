@@ -375,6 +375,21 @@ def _post_status(
     return response
 
 
+def _status_attempt(status: Mapping[str, Any]) -> int | None:
+    description = status.get("description", "")
+    if not isinstance(description, str):
+        return None
+    match = re.fullmatch(r"(?:Test run claimed|Test guard finalized: (?:success|failure|error)) \(attempt ([1-9][0-9]*)\)", description)
+    if match:
+        return int(match.group(1))
+    # Existing first-attempt deployments keep their original descriptions.
+    if description == "Test run claimed" or description in {
+        "Test guard finalized: success", "Test guard finalized: failure", "Test guard finalized: error",
+    }:
+        return 1
+    return None
+
+
 def _ensure_no_blockers(api: Any, repository: str, *, exclude_id: int | None = None) -> list[dict[str, Any]]:
     deployments = _all_deployments(api, repository)
     blockers: list[dict[str, Any]] = []
@@ -391,7 +406,8 @@ def _ensure_no_blockers(api: Any, repository: str, *, exclude_id: int | None = N
         if state == "success":
             run_id = _parse_run_url(latest.get("log_url"), repository)
             run = _get_run(api, repository, run_id, deployment["_candidate"], allow_retried=True)
-            if run.get("status") != "completed" or run.get("conclusion") != "success" or run.get("run_attempt") != 1:
+            if (run.get("status") != "completed" or run.get("conclusion") != "success"
+                    or _status_attempt(latest) != run.get("run_attempt")):
                 blockers.append({"id": deployment["id"], "state": "success-unverified"})
             continue
         blockers.append({"id": deployment["id"], "state": state})
@@ -459,7 +475,7 @@ def claim(
     test_run_id: int,
     candidate: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Attach exactly one first-attempt Test run to its queued reservation."""
+    """Claim the original run or the next explicitly authorized attempt."""
     repository = _validate_repository(repository)
     deployment = _target_deployment(api, repository, deployment_id)
     candidate = validate_candidate(dict(candidate))
@@ -467,22 +483,93 @@ def claim(
         raise ReleaseGuardError("claim candidate does not match the immutable reservation")
     statuses = _statuses(api, repository, deployment)
     latest = _latest_status(statuses)
-    if (
-        len(statuses) != 1 or latest is None or latest.get("state") != "queued"
-        or _log_url(latest) is not None
-    ):
+    retry_attempt = None
+    if latest is None or latest.get("state") != "queued":
+        raise ReleaseGuardError("only a queued reservation can be claimed")
+    retry_match = re.fullmatch(r"Retry authorized for attempt ([1-9][0-9]*)", latest.get("description", ""))
+    if retry_match:
+        retry_attempt = int(retry_match.group(1))
+        if _log_url(latest) != _run_url(repository, test_run_id):
+            raise ReleaseGuardError("retry authorization is linked to a different Test run")
+    elif len(statuses) != 1 or _log_url(latest) is not None:
         raise ReleaseGuardError("only an unclaimed queued reservation can be claimed")
     _ensure_no_blockers(api, repository, exclude_id=deployment["id"])
     test_run_id = _positive_int(test_run_id, "Test run ID")
-    if test_run_id in _known_run_ids(api, repository):
+    if retry_attempt is None and test_run_id in _known_run_ids(api, repository):
         raise ReleaseGuardError("this Test run is already linked to a reservation")
-    run = _get_run(api, repository, test_run_id, candidate)
+    run = _get_run(api, repository, test_run_id, candidate, allow_retried=retry_attempt is not None)
     if run.get("status") != "in_progress":
         raise ReleaseGuardError("claim must run inside the active Test workflow")
+    if retry_attempt is not None and run.get("run_attempt") != retry_attempt:
+        raise ReleaseGuardError("active Test attempt does not match the authorized retry")
     _post_status(api, repository, deployment, "in_progress", run_id=test_run_id,
-                 description="Test run claimed")
+                 description=f"Test run claimed (attempt {run['run_attempt']})")
     return {"deployment_id": deployment["id"], "test_run_id": test_run_id,
             "log_url": _run_url(repository, test_run_id), "state": "in_progress"}
+
+
+def prepare_retry(
+    api: Any, repository: str, deployment_id: int, test_run_id: int,
+) -> dict[str, Any]:
+    """Durably authorize the next native Test attempt without clearing its history.
+
+    Repeating this call after an ambiguous gh dispatch is safe: the same queued
+    authorization is returned while GitHub still reports the old failed attempt
+    or has started the exact authorized attempt.
+    """
+    repository = _validate_repository(repository)
+    deployment = _target_deployment(api, repository, deployment_id)
+    test_run_id = _positive_int(test_run_id, "Test run ID")
+    statuses = _statuses(api, repository, deployment)
+    latest = _latest_status(statuses)
+    run = _get_run(api, repository, test_run_id, deployment["_candidate"], allow_retried=True)
+    if run.get("status") == "completed" and run.get("conclusion") == "success":
+        raise ReleaseGuardError("successful Test runs cannot be retried")
+    if latest is None:
+        raise ReleaseGuardError("Test reservation has no status history")
+    expected_url = _run_url(repository, test_run_id)
+    match = re.fullmatch(r"Retry authorized for attempt ([1-9][0-9]*)", latest.get("description", ""))
+    if latest.get("state") == "queued" and match:
+        target_attempt = int(match.group(1))
+        if _log_url(latest) != expected_url:
+            raise ReleaseGuardError("retry authorization is linked to a different Test run")
+        if run.get("run_attempt") not in {target_attempt - 1, target_attempt}:
+            raise ReleaseGuardError("authorized retry no longer matches the Test run attempt")
+        if run.get("run_attempt") == target_attempt and run.get("status") == "completed" and run.get("conclusion") == "success":
+            raise ReleaseGuardError("successful Test attempts cannot be retried")
+        if run.get("run_attempt") != target_attempt or run.get("status") != "completed":
+            return {"deployment_id": deployment_id, "test_run_id": test_run_id,
+                    "attempt": target_attempt, "already_authorized": True}
+        # The authorized attempt ended before its finalizer could record failure.
+        # Preserve that outcome before authorizing a later reviewed attempt.
+        latest_is_unfinalized = True
+    else:
+        latest_is_unfinalized = (
+            latest.get("state") == "in_progress" and _log_url(latest) == expected_url
+            and _status_attempt(latest) == run.get("run_attempt")
+        )
+    if run.get("status") != "completed" or run.get("conclusion") not in NON_SUCCESS_CONCLUSIONS:
+        raise ReleaseGuardError("retry requires a completed failed Test attempt")
+    unclaimed_first_attempt = (
+        run["run_attempt"] == 1 and latest.get("state") == "queued"
+        and len(statuses) == 1 and _log_url(latest) is None
+        and test_run_id not in _known_run_ids(api, repository)
+    )
+    recorded_failure = (
+        latest.get("state") in {"failure", "error"} and _log_url(latest) == expected_url
+        and _status_attempt(latest) == run.get("run_attempt")
+    )
+    if not (recorded_failure or unclaimed_first_attempt or latest_is_unfinalized):
+        raise ReleaseGuardError("latest guard status does not record this failed Test attempt")
+    _ensure_no_blockers(api, repository, exclude_id=deployment_id)
+    if not recorded_failure:
+        _post_status(api, repository, deployment, "failure", run_id=test_run_id,
+                     description=f"Test guard finalized: failure (attempt {run['run_attempt']})")
+    target_attempt = run["run_attempt"] + 1
+    _post_status(api, repository, deployment, "queued", run_id=test_run_id,
+                 description=f"Retry authorized for attempt {target_attempt}")
+    return {"deployment_id": deployment_id, "test_run_id": test_run_id,
+            "attempt": target_attempt, "already_authorized": False}
 
 
 def finalize(
@@ -509,11 +596,17 @@ def finalize(
     if deployment["_candidate"] != candidate:
         raise ReleaseGuardError("finalizer candidate does not match the immutable reservation")
     test_run_id = _positive_int(test_run_id, "Test run ID")
-    run = _get_run(api, repository, test_run_id, candidate)
+    run = _get_run(api, repository, test_run_id, candidate, allow_retried=True)
     if outcome == "success":
         if run.get("status") == "completed" and run.get("conclusion") != "success":
             raise ReleaseGuardError("cannot finalize Test success for a non-successful workflow run")
-        if result_identity is None or validate_candidate(dict(result_identity)) != candidate:
+        identity = dict(result_identity) if isinstance(result_identity, Mapping) else {}
+        identity_candidate = {key: identity.get(key) for key in CANDIDATE_KEYS}
+        if (
+            result_identity is None or validate_candidate(identity_candidate) != candidate
+            or identity.get("test_run_id") != test_run_id
+            or identity.get("run_attempt") != run.get("run_attempt")
+        ):
             raise ReleaseGuardError("successful finalization requires the exact validated Test result identity")
     elif outcome == "failure" and run.get("status") == "completed" and run.get("conclusion") == "success":
         raise ReleaseGuardError("cannot finalize Test failure for a successful workflow run")
@@ -521,15 +614,22 @@ def finalize(
     statuses = _statuses(api, repository, deployment)
     latest = _latest_status(statuses)
     expected_url = _run_url(repository, test_run_id)
-    if latest is not None and latest.get("state") == outcome and latest.get("log_url") == expected_url:
+    if (latest is not None and latest.get("state") == outcome and latest.get("log_url") == expected_url
+            and _status_attempt(latest) == run.get("run_attempt")):
         return {"deployment_id": deployment_id, "test_run_id": test_run_id, "state": outcome,
                 "log_url": expected_url, "already_finalized": True}
     claims = [item for item in statuses if item.get("state") == "in_progress" and item.get("log_url") == expected_url]
-    if latest is None or latest.get("state") != "in_progress" or latest.get("log_url") != expected_url or len(claims) != 1:
-        raise ReleaseGuardError("finalizer must match the single active claim for this Test run")
+    retry_match = re.fullmatch(r"Retry authorized for attempt ([1-9][0-9]*)", latest.get("description", "")) if latest else None
+    retry_armed = bool(retry_match and latest.get("state") == "queued" and _log_url(latest) == expected_url
+                       and int(retry_match.group(1)) == run.get("run_attempt"))
+    active_claim = bool(latest and latest.get("state") == "in_progress" and _log_url(latest) == expected_url
+                        and _status_attempt(latest) == run.get("run_attempt")
+                        and len(claims) >= 1)
+    if not (active_claim or retry_armed):
+        raise ReleaseGuardError("finalizer must match the active or authorized Test attempt")
     _ensure_no_blockers(api, repository, exclude_id=deployment["id"])
     _post_status(api, repository, deployment, outcome, run_id=test_run_id,
-                 description=f"Test guard finalized: {outcome}")
+                 description=f"Test guard finalized: {outcome} (attempt {run['run_attempt']})")
     return {"deployment_id": deployment_id, "test_run_id": test_run_id,
             "state": outcome, "log_url": expected_url}
 
@@ -554,15 +654,16 @@ def require_success(
         linked_id = _parse_run_url(latest.get("log_url"), repository)
         if test_run_id is not None and linked_id != _positive_int(test_run_id, "Test run ID"):
             continue
-        run = _get_run(api, repository, linked_id, candidate)
-        if run.get("status") != "completed" or run.get("conclusion") != "success" or run.get("run_attempt") != 1:
-            raise ReleaseGuardError("successful deployment is not backed by a completed first-attempt Test")
+        run = _get_run(api, repository, linked_id, candidate, allow_retried=True)
+        if (run.get("status") != "completed" or run.get("conclusion") != "success"
+                or _status_attempt(latest) != run.get("run_attempt")):
+            raise ReleaseGuardError("successful deployment is not backed by the completed successful Test attempt")
         matches.append((deployment, latest, linked_id))
     if len(matches) != 1:
         raise ReleaseGuardError("no unique successful Test guard matches this exact candidate and run")
     deployment, _status, linked_id = matches[0]
     return {"deployment_id": deployment["id"], "test_run_id": linked_id,
-            "candidate": candidate, "state": "success"}
+            "run_attempt": run["run_attempt"], "candidate": candidate, "state": "success"}
 
 
 def clear(api: Any, repository: str, deployment_id: int) -> dict[str, Any]:
@@ -586,9 +687,10 @@ def clear(api: Any, repository: str, deployment_id: int) -> dict[str, Any]:
             raise ReleaseGuardError("cannot clear a reservation while its Test workflow is running")
         if (
             latest is not None and latest.get("state") == "success"
-            and run.get("run_attempt") == 1 and run.get("conclusion") == "success"
+            and run.get("conclusion") == "success"
+            and _status_attempt(latest) == run.get("run_attempt")
         ):
-            raise ReleaseGuardError("a successful first-attempt Test reservation cannot be cleared")
+            raise ReleaseGuardError("a successful Test reservation cannot be cleared")
     else:
         active_runs = _active_test_runs(api, repository)
         if active_runs:
@@ -638,6 +740,10 @@ def main(argv: list[str] | None = None) -> int:
     finalize_parser.add_argument("--outcome", choices=("success", "failure", "error"), required=True)
     finalize_parser.add_argument("--result-identity-file", type=Path)
     _add_candidate_args(finalize_parser)
+    retry_parser = subparsers.add_parser("prepare-retry")
+    retry_parser.add_argument("--repository", required=True)
+    retry_parser.add_argument("--deployment-id", type=int, required=True)
+    retry_parser.add_argument("--test-run-id", type=int, required=True)
     for operation in ("require-unblocked", "require-success", "clear"):
         current = subparsers.add_parser(operation)
         current.add_argument("--repository", required=True)
@@ -662,6 +768,8 @@ def main(argv: list[str] | None = None) -> int:
                 api, repository, args.deployment_id, args.test_run_id, _candidate_from_args(args),
                 outcome=args.outcome, result_identity=identity,
             )
+        elif args.operation == "prepare-retry":
+            result = prepare_retry(api, repository, args.deployment_id, args.test_run_id)
         elif args.operation == "require-unblocked":
             result = require_unblocked(api, repository)
         elif args.operation == "require-success":

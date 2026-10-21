@@ -55,6 +55,12 @@ jobs:
           RENDER_OWNER_ID: ${{ vars.RENDER_OWNER_ID }}
         run: |
           set -euo pipefail
-          PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m disposable_vpn_server.render_service stop \
-            --run-id "$GITHUB_RUN_ID" --attempt 1 \
-            --owner-id "$RENDER_OWNER_ID"
+          failed=0
+          for attempt in $(seq 1 "$GITHUB_RUN_ATTEMPT"); do
+            if ! PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m disposable_vpn_server.render_service stop \
+              --run-id "$GITHUB_RUN_ID" --attempt "$attempt" \
+              --owner-id "$RENDER_OWNER_ID"; then
+              failed=1
+            fi
+          done
+          exit "$failed"

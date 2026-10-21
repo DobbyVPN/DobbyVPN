@@ -97,7 +97,7 @@ jobs:
       - name: Upload iOS runtime XCFramework
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: DobbyVPNRuntime${{ inputs.debug && '-debug' || '' }}.xcframework
+          name: DobbyVPNRuntime${{ inputs.debug && '-debug' || '' }}.xcframework${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
           path: core/DobbyVPNRuntime.xcframework
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}

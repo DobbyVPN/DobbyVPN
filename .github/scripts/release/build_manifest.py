@@ -13,6 +13,8 @@ import subprocess
 import sys
 from typing import Any
 
+from artifact_attempts import ArtifactAttemptError, select_artifacts
+
 BUILD_WORKFLOW_PATH = ".github/workflows/build.yml"
 MANIFEST_ARTIFACT = "build-manifest"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -60,13 +62,16 @@ def _json_command(command: list[str]) -> Any:
         raise BuildManifestError(f"command returned invalid JSON: {command[0]}") from error
 
 
-def _artifact_inventory(repository: str, run_id: int) -> dict[str, dict[str, Any]]:
+def _artifact_inventory(
+    repository: str, run_id: int, run_attempt: int = 1,
+    logical_names: tuple[str, ...] | None = None,
+) -> dict[str, dict[str, Any]]:
     payload = _json_command([
         "gh", "api", "--paginate", "--slurp",
         f"repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100",
     ])
     pages = payload if isinstance(payload, list) else [payload]
-    inventory: dict[str, dict[str, Any]] = {}
+    records: list[dict[str, Any]] = []
     for page in pages:
         artifacts = page.get("artifacts") if isinstance(page, dict) else None
         if not isinstance(artifacts, list):
@@ -74,11 +79,48 @@ def _artifact_inventory(repository: str, run_id: int) -> dict[str, dict[str, Any
         for artifact in artifacts:
             if not isinstance(artifact, dict) or not isinstance(artifact.get("name"), str):
                 raise BuildManifestError("GitHub returned an invalid Build artifact record")
+            records.append(artifact)
+    if logical_names is None:
+        # Test/Release callers select an exact physical artifact name themselves.
+        # Keep their attempt suffixes intact, including test-result-attempt-1.
+        inventory = {}
+        for artifact in records:
             name = artifact["name"]
             if name in inventory:
-                raise BuildManifestError(f"Build artifact name is ambiguous: {name}")
+                raise BuildManifestError(f"artifact name is ambiguous: {name}")
             inventory[name] = artifact
-    return inventory
+        return inventory
+    try:
+        return select_artifacts(records, run_attempt, required_names=logical_names)
+    except ArtifactAttemptError as error:
+        raise BuildManifestError(str(error)) from error
+
+
+def _verify_prior_attempts(repository: str, run: dict[str, Any]) -> None:
+    attempt = run.get("run_attempt")
+    if type(attempt) is not int or attempt < 1:
+        raise BuildManifestError("Build has invalid attempt metadata")
+    for prior_attempt in range(1, attempt):
+        prior = _json_command([
+            "gh", "api", f"repos/{repository}/actions/runs/{run['id']}/attempts/{prior_attempt}",
+        ])
+        prior_repo = prior.get("repository") if isinstance(prior, dict) else None
+        if (
+            not isinstance(prior, dict)
+            or type(prior.get("id")) is not int or prior["id"] != run.get("id")
+            or type(prior.get("run_attempt")) is not int or prior["run_attempt"] != prior_attempt
+            or not isinstance(prior_repo, dict) or prior_repo.get("full_name") != repository
+            or prior.get("head_sha") != run.get("head_sha")
+            or prior.get("run_number") != run.get("run_number")
+            or not _workflow_path_matches(prior.get("path"), BUILD_WORKFLOW_PATH)
+            or prior.get("event") != "workflow_dispatch"
+            or prior.get("status") != "completed"
+        ):
+            raise BuildManifestError(f"Build prior attempt {prior_attempt} has invalid identity or status")
+        if prior.get("conclusion") == "success":
+            raise BuildManifestError(f"Build retry rejected because prior attempt {prior_attempt} succeeded")
+        if prior.get("conclusion") not in {"failure", "timed_out", "cancelled"}:
+            raise BuildManifestError(f"Build prior attempt {prior_attempt} has an unsupported conclusion")
 
 
 def _run(repository: str, run_id: int, *, require_main: bool = False) -> dict[str, Any]:
@@ -95,30 +137,36 @@ def _run(repository: str, run_id: int, *, require_main: bool = False) -> dict[st
     if not _workflow_path_matches(run.get("path"), BUILD_WORKFLOW_PATH) or run.get("event") != "workflow_dispatch":
         raise BuildManifestError("selected run is not a manually dispatched Build workflow")
     if (
-        type(run.get("run_attempt")) is not int or run["run_attempt"] != 1
+        type(run.get("run_attempt")) is not int or run["run_attempt"] < 1
         or run.get("status") != "completed" or run.get("conclusion") != "success"
     ):
-        raise BuildManifestError("selected Build must be a successful first attempt")
+        raise BuildManifestError("selected Build must be successful and completed")
     if require_main and run.get("head_branch") != "main":
         raise BuildManifestError("production Release can only select a Build from main")
     if not isinstance(run.get("head_sha"), str) or not SHA_RE.fullmatch(run["head_sha"]):
         raise BuildManifestError("selected Build has an invalid source revision")
+    _verify_prior_attempts(repository, run)
     return run
 
 
-def _current_build_run(repository: str, run_id: int, run_number: int, source_sha: str) -> None:
+def _current_build_run(repository: str, run_id: int, run_number: int, source_sha: str) -> dict[str, Any]:
     run = _json_command(["gh", "api", f"repos/{repository}/actions/runs/{run_id}"])
     repo = run.get("repository") if isinstance(run, dict) else None
     if not isinstance(repo, dict) or repo.get("full_name") != repository:
         raise BuildManifestError("current Build belongs to a different repository")
     if not _workflow_path_matches(run.get("path"), BUILD_WORKFLOW_PATH) or run.get("event") != "workflow_dispatch":
         raise BuildManifestError("current run is not a manually dispatched Build workflow")
-    if type(run.get("run_attempt")) is not int or run["run_attempt"] != 1 or run.get("head_sha") != source_sha:
-        raise BuildManifestError("current Build identity does not match its source revision or first attempt")
-    if run.get("run_number") != run_number or run.get("id") != run_id:
-        raise BuildManifestError("current Build ID or run number does not match its manifest")
+    if (
+        type(run.get("id")) is not int or run["id"] != run_id
+        or type(run.get("run_number")) is not int or run["run_number"] != run_number
+        or type(run.get("run_attempt")) is not int or run["run_attempt"] < 1
+        or run.get("head_sha") != source_sha
+    ):
+        raise BuildManifestError("current Build identity does not match its source revision or attempt")
     if run.get("status") not in {"queued", "in_progress"}:
         raise BuildManifestError("Build manifest must be created by the active Build run")
+    _verify_prior_attempts(repository, run)
+    return run
 
 
 def create_manifest(
@@ -132,8 +180,9 @@ def create_manifest(
         raise BuildManifestError("Build IDs, run numbers and version numbers must be positive integers")
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         raise BuildManifestError("Build version must be canonical X.Y.Z")
-    _current_build_run(repository, run_id, run_number, source_sha)
-    inventory = _artifact_inventory(repository, run_id)
+    current_run = _current_build_run(repository, run_id, run_number, source_sha)
+    run_attempt = current_run["run_attempt"]
+    inventory = _artifact_inventory(repository, run_id, run_attempt, required_artifacts(version))
     artifacts: list[dict[str, Any]] = []
     for name in required_artifacts(version):
         item = inventory.get(name)
@@ -152,6 +201,7 @@ def create_manifest(
         "workflow_path": BUILD_WORKFLOW_PATH,
         "run_id": run_id,
         "run_number": run_number,
+        "run_attempt": run_attempt,
         "source_sha": source_sha,
         "source_tree": source_tree,
         "version": version,
@@ -181,14 +231,21 @@ def resolve_build(repository: str, run_id: int, destination: Path, *, require_ma
         or manifest.get("run_id") != run_id
         or manifest.get("run_number") != run.get("run_number")
         or manifest.get("source_sha") != run.get("head_sha")
+        or manifest.get("run_attempt", 1) != run.get("run_attempt")
     ):
         raise BuildManifestError("Build manifest does not match the selected GitHub run")
     expected_fields = {
         "schema", "repository", "workflow_path", "run_id", "run_number", "source_sha",
         "source_tree", "version", "android_version_code", "apple_build_number", "artifacts",
     }
-    if set(manifest) != expected_fields:
+    manifest_fields = set(manifest)
+    has_attempt = "run_attempt" in manifest_fields
+    if manifest_fields != expected_fields | ({"run_attempt"} if has_attempt else set()):
         raise BuildManifestError("Build manifest has unexpected or missing fields")
+    if (not has_attempt and run.get("run_attempt") != 1) or (
+        has_attempt and (type(manifest.get("run_attempt")) is not int or manifest["run_attempt"] < 1)
+    ):
+        raise BuildManifestError("Build manifest attempt does not match selected Build")
     if (
         type(manifest.get("run_id")) is not int
         or type(manifest.get("run_number")) is not int
@@ -207,7 +264,7 @@ def resolve_build(repository: str, run_id: int, destination: Path, *, require_ma
     if not isinstance(records, list) or len(records) != len(expected_names):
         raise BuildManifestError("Build manifest does not list the complete package set")
     names: set[str] = set()
-    current = _artifact_inventory(repository, run_id)
+    current = _artifact_inventory(repository, run_id, run["run_attempt"], tuple(expected_names))
     for record in records:
         if not isinstance(record, dict) or set(record) != {"name", "sha256", "size"}:
             raise BuildManifestError("Build manifest contains an invalid artifact record")
@@ -256,6 +313,11 @@ def main(argv: list[str] | None = None) -> int:
     resolve.add_argument("--download-dir", type=Path, required=True)
     resolve.add_argument("--output", type=Path, required=True)
     resolve.add_argument("--require-main", action="store_true")
+    verify = sub.add_parser("verify-run")
+    verify.add_argument("--repository", required=True)
+    verify.add_argument("--run-id", type=int, required=True)
+    verify.add_argument("--run-number", type=int, required=True)
+    verify.add_argument("--source-sha", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "create":
@@ -265,9 +327,11 @@ def main(argv: list[str] | None = None) -> int:
                 android_version_code=args.android_version_code, apple_build_number=args.apple_build_number,
             )
             _write_output(args.output, manifest)
-        else:
+        elif args.command == "resolve":
             manifest = resolve_build(args.repository, args.run_id, args.download_dir, require_main=args.require_main)
             _write_output(args.output, manifest)
+        else:
+            _current_build_run(args.repository, args.run_id, args.run_number, args.source_sha)
     except (BuildManifestError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"Build manifest error: {error}", file=sys.stderr)
         return 1

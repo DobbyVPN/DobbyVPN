@@ -19,8 +19,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 25
     steps:
-      - name: Reject Test reruns
-        run: test "$GITHUB_RUN_ATTEMPT" = 1
+      - name: Require a valid Test attempt
+        run: test "$GITHUB_RUN_ATTEMPT" -ge 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}

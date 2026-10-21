@@ -32,16 +32,18 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: read
     outputs:
       scope: ${{ steps.classify.outputs.scope || 'full' }}
       reason: ${{ steps.classify.outputs.reason || 'classification-unavailable' }}
+      reused_run_id: ${{ steps.classify.outputs.reused_run_id || '' }}
     steps:
-      - name: Check out the trusted scope classifier
-        if: ${{ github.event_name == 'pull_request' }}
+      - name: Check out trusted CI helpers
+        if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
         continue-on-error: true
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
 
       - name: Classify changed paths
@@ -54,11 +56,30 @@ jobs:
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
           REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            reuse_output="$RUNNER_TEMP/ci-reuse-output"
+            if python3 .github/scripts/ci_reuse.py \
+              --repository "$REPOSITORY" \
+              --source-sha "$SOURCE_SHA" \
+              --current-run-id "$CURRENT_RUN_ID" > "$reuse_output"; then
+              cat "$reuse_output" >> "$GITHUB_OUTPUT"
+            else
+              cat "$reuse_output" >&2 || true
+              echo "CI reuse validation failed; selecting full CI." >&2
+              echo "scope=full" >> "$GITHUB_OUTPUT"
+              echo "reason=reuse-validation-failed" >> "$GITHUB_OUTPUT"
+              echo "reused_run_id=" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
           if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "scope=full" >> "$GITHUB_OUTPUT"
             echo "reason=non-pull-request-event" >> "$GITHUB_OUTPUT"
+            echo "reused_run_id=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           classifier_output="$RUNNER_TEMP/ci-scope-output"
@@ -80,7 +101,7 @@ jobs:
   go_build:
     name: Go source build (${{ matrix.name }})
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
     strategy:
       fail-fast: false
       matrix:
@@ -120,7 +141,7 @@ jobs:
   android_lint:
     name: Android lint
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -165,7 +186,7 @@ jobs:
   lint_go:
     name: Go source analysis
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -184,7 +205,7 @@ jobs:
   lint_swift:
     name: Swift source analysis
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -207,7 +228,7 @@ jobs:
   security:
     name: Dependency and credential scans
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -228,7 +249,7 @@ jobs:
   actionlint:
     name: GitHub workflow validation
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -248,7 +269,7 @@ jobs:
   android_build:
     name: Android product build and native library checks
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' || inputs.platform == 'debug-packages' || inputs.platform == 'fdroid-preflight') && needs.ci_scope.outputs.scope != 'light' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci' || inputs.platform == 'debug-packages' || inputs.platform == 'fdroid-preflight') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -341,7 +362,7 @@ jobs:
   ios_production:
     name: iOS production analysis and archive
     needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' }}
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'light' && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -442,6 +463,7 @@ jobs:
         env:
           CI_SCOPE: ${{ needs.ci_scope.outputs.scope || 'full' }}
           CI_SCOPE_REASON: ${{ needs.ci_scope.outputs.reason || 'classification-unavailable' }}
+          REUSED_RUN_ID: ${{ needs.ci_scope.outputs.reused_run_id || '' }}
           CI_SCOPE_RESULT: ${{ needs.ci_scope.result }}
           GO_BUILD_RESULT: ${{ needs.go_build.result }}
           ANDROID_LINT_RESULT: ${{ needs.android_lint.result }}
@@ -455,6 +477,11 @@ jobs:
           set -euo pipefail
           echo "CI scope: $CI_SCOPE ($CI_SCOPE_REASON)"
           test "$CI_SCOPE_RESULT" = success
+          if [ "$CI_SCOPE" = reused ]; then
+            test -n "$REUSED_RUN_ID"
+            echo "Full CI reused from verified workflow run $REUSED_RUN_ID."
+            exit 0
+          fi
           test "$SECURITY_RESULT" = success
           test "$ACTIONLINT_RESULT" = success
           if [ "$CI_SCOPE" = light ]; then

@@ -78,14 +78,11 @@ jobs:
             echo "CONTROL_DIR=$RUNNER_TEMP/dobbyvpn-release-control" >> "$GITHUB_ENV"
           fi
 
-      - name: Reject hosted mini reruns before package qualification
+      - name: Require main before package qualification
         shell: bash
         run: |
           test "$GITHUB_REF" = refs/heads/main
-          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo "Hosted mini reruns are unsupported; start a fresh calling workflow run." >&2
-            exit 1
-          fi
+          test "$GITHUB_RUN_ATTEMPT" -ge 1
 
       - name: Check out selected source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -1310,7 +1307,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dobbyvpn-qualification-${{ inputs.platform }}-${{ inputs.architecture || 'default' }}
+          name: dobbyvpn-qualification-${{ inputs.platform }}-${{ inputs.architecture || 'default' }}-attempt-${{ github.run_attempt }}
           path: ${{ env.ARTIFACT_DIR }}
           if-no-files-found: error
           include-hidden-files: true

@@ -59,10 +59,10 @@ def _selected_test_run(repository: str, run_id: int) -> dict[str, Any]:
     if run.get("head_branch") != "main":
         raise TestManifestError("Publish can only select a Test run from main")
     if (
-        type(run.get("run_attempt")) is not int or run["run_attempt"] != 1
+        type(run.get("run_attempt")) is not int or run["run_attempt"] < 1
         or run.get("status") != "completed" or run.get("conclusion") != "success"
     ):
-        raise TestManifestError("selected Test must be a successful first attempt")
+        raise TestManifestError("selected Test must be a successful completed attempt")
     if type(run.get("run_number")) is not int or run["run_number"] <= 0:
         raise TestManifestError("selected Test has an invalid run number")
     if not isinstance(run.get("head_sha"), str) or not SHA_RE.fullmatch(run["head_sha"]):
@@ -78,7 +78,7 @@ def validate_result(
         "source_sha", "build_manifest_sha256", "checks", "torturer_repository",
         "torturer_sha", "torturer_tree_sha256", "release_attempt_id", "android_pairing",
     }
-    if not isinstance(result, dict) or set(result) != expected_fields:
+    if not isinstance(result, dict) or set(result) not in (expected_fields, expected_fields | {"run_attempt"}):
         raise TestManifestError("Test result has unexpected or missing fields")
     if (
         type(result.get("schema")) is not int or result.get("schema") != 2
@@ -92,6 +92,8 @@ def validate_result(
         or result.get("run_id") != run_id
     ):
         raise TestManifestError("Test result does not identify the selected Test run")
+    if type(result.get("run_attempt", 1)) is not int or result.get("run_attempt", 1) < 1:
+        raise TestManifestError("Test result has an invalid workflow attempt")
     if (
         type(result.get("build_run_id")) is not int
         or result.get("build_run_id") <= 0
@@ -198,7 +200,7 @@ def resolve_test(
     if run.get("head_sha") != build.get("source_sha"):
         raise TestManifestError("selected Build and Test source revisions do not match")
     inventory = _artifact_inventory(repository, run_id)
-    artifact = inventory.get(RESULT_ARTIFACT)
+    artifact = inventory.get(f"{RESULT_ARTIFACT}-attempt-{run['run_attempt']}") or inventory.get(RESULT_ARTIFACT)
     if artifact is None or artifact.get("expired") is not False:
         raise TestManifestError("selected Test is missing its unexpired result artifact")
     if type(artifact.get("size_in_bytes")) is not int or artifact["size_in_bytes"] <= 0:
@@ -211,7 +213,7 @@ def resolve_test(
     subprocess.run([
         sys.executable,
         str(Path(__file__).with_name("download_artifact.py")),
-        str(run_id), RESULT_ARTIFACT, str(destination),
+        str(run_id), artifact["name"], str(destination),
     ], check=True, env={**os.environ, "GITHUB_REPOSITORY": repository})
     files = [path for path in destination.iterdir() if path.is_file() and not path.is_symlink()]
     if len(files) != 1 or files[0].name != "test-result.json":
@@ -222,6 +224,9 @@ def resolve_test(
         result, repository=repository, run_id=run_id, build=build,
         source_sha=run["head_sha"],
     )
+    if result.get("run_attempt", 1) != run["run_attempt"]:
+        raise TestManifestError("Test result attempt does not match the selected GitHub attempt")
+    result.setdefault("run_attempt", 1)
     candidate = guard_candidate(result)
     try:
         guard = release_guard.require_success(
@@ -234,6 +239,7 @@ def resolve_test(
         or guard.get("state") != "success"
         or guard.get("candidate") != candidate
         or guard.get("test_run_id") != run_id
+        or guard.get("run_attempt") != run["run_attempt"]
         or guard.get("deployment_id") != result["release_attempt_id"]
     ):
         raise TestManifestError("Test result release_attempt_id does not match its successful release guard")

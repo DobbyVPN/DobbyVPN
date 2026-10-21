@@ -7,6 +7,9 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from pathlib import Path
+
+from artifact_attempts import ArtifactAttemptError, select_artifacts
 
 
 def _forward(stream, payload, failure=None):
@@ -37,11 +40,50 @@ def _normalize_digest(value, label):
     return digest.lower()
 
 
+def _workflow_attempt(run_id, repository):
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repository}/actions/runs/{run_id}"],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as error:
+        _forward(sys.stdout, error.stdout or error.output or b"", failure=error)
+        _forward(sys.stderr, error.stderr or b"", failure=error)
+        raise
+    _forward(sys.stdout, result.stdout or b"")
+    _forward(sys.stderr, result.stderr or b"")
+    run = json.loads(result.stdout)
+    if (
+        not isinstance(run, dict) or type(run.get("id")) is not int
+        or str(run["id"]) != str(run_id)
+        or type(run.get("run_attempt")) is not int or run["run_attempt"] < 1
+    ):
+        raise SystemExit(f"workflow run {run_id!r} has invalid attempt metadata")
+    return run["run_attempt"]
+
+
+def _artifact_record(artifacts, name, current_attempt):
+    explicit = re.fullmatch(r".+-attempt-([0-9]+)", name)
+    if explicit:
+        attempt_text = explicit.group(1)
+        attempt = int(attempt_text)
+        if attempt < 1 or str(attempt) != attempt_text or attempt > current_attempt:
+            raise SystemExit(f"explicit artifact {name!r} has an invalid or future attempt")
+        matches = [item for item in artifacts if item.get("name") == name and item.get("expired") is False]
+        if len(matches) != 1:
+            raise SystemExit(f"expected one unexpired artifact named {name!r}; found {len(matches)}")
+        return matches[0]
+    try:
+        return select_artifacts(artifacts, current_attempt, required_names=(name,))[name]
+    except ArtifactAttemptError as error:
+        raise SystemExit(str(error)) from error
+
+
 def download_artifact(run_id, name, destination, repository, expected_digest=None):
-    endpoint = f"repos/{repository}/actions/runs/{run_id}/artifacts"
+    current_attempt = _workflow_attempt(run_id, repository)
+    endpoint = f"repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100"
     command = [
         "gh", "api", "--method", "GET", "--paginate", "--slurp", endpoint,
-        "-f", f"name={name}", "-F", "per_page=100",
     ]
     try:
         metadata = subprocess.run(
@@ -57,12 +99,12 @@ def download_artifact(run_id, name, destination, repository, expected_digest=Non
     _forward(sys.stdout, metadata.stdout or b"")
     _forward(sys.stderr, metadata.stderr or b"")
     pages = json.loads(metadata.stdout)
-    matches = [artifact for page in pages for artifact in page["artifacts"]
-               if artifact["name"] == name and not artifact["expired"]]
-    if len(matches) != 1:
-        raise SystemExit(f"expected one unexpired artifact named {name!r} in run {run_id}; found {len(matches)}")
-
-    artifact = matches[0]
+    if not isinstance(pages, list) or any(not isinstance(page, dict) or not isinstance(page.get("artifacts"), list) for page in pages):
+        raise SystemExit("GitHub returned an invalid artifact list")
+    artifacts = [artifact for page in pages for artifact in page["artifacts"]]
+    artifact = _artifact_record(artifacts, name, current_attempt)
+    if type(artifact.get("id")) is not int or artifact["id"] <= 0:
+        raise SystemExit(f"artifact {name!r} has an invalid GitHub artifact ID")
     digest = artifact.get("digest") or ""
     if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
         raise SystemExit(f"artifact {name!r} has no valid SHA-256 digest")
@@ -97,6 +139,9 @@ def download_artifact(run_id, name, destination, repository, expected_digest=Non
         if actual_digest.lower() != expected_api_digest:
             raise SystemExit(f"artifact {name!r} SHA-256 digest mismatch")
         archive.seek(0)
+        destination_path = Path(destination)
+        if destination_path.exists() and any(destination_path.iterdir()):
+            raise SystemExit(f"refusing to overwrite existing artifact output: {destination}")
         os.makedirs(destination, exist_ok=True)
         with zipfile.ZipFile(archive) as zipped:
             zipped.extractall(destination)
