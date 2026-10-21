@@ -11,6 +11,8 @@ import android.os.Process
 import android.os.SystemClock
 import android.os.Trace
 import android.util.Log
+import android.view.View
+import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,6 +52,7 @@ import com.dobby.presentation.PermissionTarget
 import com.dobby.presentation.PermissionTargetFence
 import com.dobby.presentation.SubscriptionLoadCoordinator
 import com.dobby.presentation.SubscriptionRequest
+import com.dobby.presentation.UiOperationDiagnostics
 import com.dobby.vpn.BuildConfig
 import com.dobby.vpn.R
 import org.json.JSONObject
@@ -83,8 +86,21 @@ class MainActivity : ComponentActivity() {
         var current: MainActivity? = null
     }
 
+    private val startupDiagnostics = UiOperationDiagnostics(
+        clockNs = { SystemClock.elapsedRealtimeNanos() },
+        emit = ::recordStartupObservation,
+        beginTrace = { operation -> Trace.beginSection("DobbyVPN.$operation") },
+        endTrace = { Trace.endSection() },
+        reportFailure = ::reportStartupDiagnosticFailure,
+    )
     private lateinit var controller: SessionController
     private lateinit var retainedLogViewModel: RetainedLogViewModel
+    private var startupDiagnosticsDisposed = false
+    private var firstFrameObserver: ViewTreeObserver? = null
+    private var firstPreDrawListener: ViewTreeObserver.OnPreDrawListener? = null
+    private var firstOnDrawListener: ViewTreeObserver.OnDrawListener? = null
+    private var firstPreDrawSeen = false
+    private var firstOnDrawSeen = false
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -183,24 +199,37 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        current = this
-        NativeGoSession.attach(this)
-        retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
-        controller = SessionController(
-            this,
-            savedInstanceState?.getBundle(LOG_VIEW_STATE),
-            savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
-            retainedLogViewModel,
-        )
-        if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
-        setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
-                Surface(modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
-                    DobbyApp(controller)
+        startupDiagnostics.observe("MainActivity.onCreate") {
+            startupDiagnostics.observe("MainActivity.onCreate.super") {
+                super.onCreate(savedInstanceState)
+            }
+            enableEdgeToEdge()
+            current = this
+            startupDiagnostics.observe("MainActivity.onCreate.nativeGoSessionAttach") {
+                NativeGoSession.attach(this)
+            }
+            retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
+            startupDiagnostics.observe("MainActivity.onCreate.sessionControllerInitialization") {
+                controller = SessionController(
+                    this,
+                    savedInstanceState?.getBundle(LOG_VIEW_STATE),
+                    savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
+                    retainedLogViewModel,
+                )
+                if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) {
+                    controller.importLink(intent.dataString.orEmpty())
                 }
             }
+            startupDiagnostics.observe("MainActivity.onCreate.setContent") {
+                setContent {
+                    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+                        Surface(modifier = Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
+                            DobbyApp(controller)
+                        }
+                    }
+                }
+            }
+            installFirstFrameDiagnostics()
         }
     }
 
@@ -220,8 +249,16 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStart() {
-        super.onStart()
-        if (::controller.isInitialized) controller.setVisible(true)
+        startupDiagnostics.observe("MainActivity.onStart") {
+            super.onStart()
+            if (::controller.isInitialized) controller.setVisible(true)
+        }
+    }
+
+    override fun onResume() {
+        startupDiagnostics.observe("MainActivity.onResume") {
+            super.onResume()
+        }
     }
 
     override fun onStop() {
@@ -234,9 +271,177 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (::controller.isInitialized) controller.close()
-        if (current === this) current = null
-        super.onDestroy()
+        try {
+            if (::controller.isInitialized) controller.close()
+            if (current === this) current = null
+            super.onDestroy()
+        } finally {
+            cleanupFirstFrameDiagnostics()
+        }
+    }
+
+    private fun recordStartupObservation(observation: UiOperationDiagnostics.Observation) {
+        val mainThread = Looper.myLooper() === Looper.getMainLooper()
+        val observerBoundary = observation.operation.contains("Callback")
+        val mainQueueReturn = observation.operation.endsWith("firstFrameMainQueueReturn")
+        val message = buildString {
+            append("operation=${observation.operation} phase=${observation.phase}")
+            append(" outcome=${when (observation.phase) {
+                "entry" -> "running"
+                "complete" -> "complete"
+                "error" -> "error"
+                else -> observation.phase
+            }}")
+            append(" pid=${Process.myPid()} tid=${Process.myTid()} is_main_thread=$mainThread")
+            append(" started_elapsed_realtime_ns=${observation.startedNs.takeIf { it >= 0 } ?: "unavailable"}")
+            if (observation.finishedNs != null) {
+                append(" finished_elapsed_realtime_ns=${observation.finishedNs}")
+                if (observation.startedNs >= 0) {
+                    append(" duration_ns=${observation.finishedNs - observation.startedNs}")
+                } else {
+                    append(" duration_ns=unavailable")
+                }
+            } else if (observation.phase != "entry") {
+                append(" finished_elapsed_realtime_ns=unavailable duration_ns=unavailable")
+            }
+            if (observerBoundary) append(" measurement=observer_callback_boundary gpu_wait_included=false")
+            if (mainQueueReturn) append(" measurement=main_queue_return_boundary gpu_wait_included=false")
+        }
+        NativeVpnBridge.recordDiagnostic(this, "ui.startup", message, observation.failure)
+    }
+
+    private fun reportStartupDiagnosticFailure(
+        context: String,
+        diagnosticFailure: Throwable,
+        primaryFailure: Throwable?,
+    ) {
+        try {
+            Log.e("DobbyVPN", "Android startup diagnostic failed during $context", diagnosticFailure)
+        } catch (loggingFailure: Throwable) {
+            if (diagnosticFailure !== loggingFailure) {
+                try {
+                    diagnosticFailure.addSuppressed(loggingFailure)
+                } catch (_: Throwable) {
+                }
+            }
+            if (primaryFailure != null && primaryFailure !== loggingFailure) {
+                try {
+                    primaryFailure.addSuppressed(loggingFailure)
+                } catch (_: Throwable) {
+                }
+            }
+            try {
+                System.err.println(
+                    "Android startup diagnostic failed during $context: " +
+                        diagnosticFailure.stackTraceToString() + " (Log.e fallback failed: " +
+                        loggingFailure.stackTraceToString() + ")",
+                )
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun safelyObserveStartupCallback(operation: String, callback: () -> Unit) {
+        try {
+            startupDiagnostics.observe(operation, callback)
+        } catch (failure: Throwable) {
+            reportStartupDiagnosticFailure("observer callback $operation", failure, null)
+        }
+    }
+
+    private fun installFirstFrameDiagnostics() {
+        if (startupDiagnosticsDisposed) return
+        try {
+            val decor = window.decorView
+            val observer = decor.viewTreeObserver
+            if (!observer.isAlive) {
+                reportStartupDiagnosticFailure(
+                    "installing first-frame callbacks",
+                    IllegalStateException("decor ViewTreeObserver is not alive"),
+                    null,
+                )
+                return
+            }
+            val preDrawListener = ViewTreeObserver.OnPreDrawListener {
+                if (startupDiagnosticsDisposed || firstPreDrawSeen) return@OnPreDrawListener true
+                firstPreDrawSeen = true
+                safelyObserveStartupCallback("MainActivity.firstPreDrawCallback") { removeFirstPreDrawListener() }
+                true
+            }
+            val onDrawListener = ViewTreeObserver.OnDrawListener {
+                if (!startupDiagnosticsDisposed && !firstOnDrawSeen) {
+                    firstOnDrawSeen = true
+                    safelyObserveStartupCallback("MainActivity.firstOnDrawCallback") {
+                        postFirstFrameMainQueueReturn(decor)
+                    }
+                }
+            }
+            firstFrameObserver = observer
+            firstPreDrawListener = preDrawListener
+            observer.addOnPreDrawListener(preDrawListener)
+            firstOnDrawListener = onDrawListener
+            observer.addOnDrawListener(onDrawListener)
+        } catch (failure: Throwable) {
+            cleanupFirstFrameDiagnostics()
+            reportStartupDiagnosticFailure("installing first-frame callbacks", failure, null)
+        }
+    }
+
+    private fun postFirstFrameMainQueueReturn(decor: View) {
+        try {
+            val posted = decor.post {
+                if (!startupDiagnosticsDisposed) {
+                    safelyObserveStartupCallback("MainActivity.firstFrameMainQueueReturn") { }
+                }
+                removeFirstOnDrawListener()
+            }
+            if (!posted) {
+                reportStartupDiagnosticFailure(
+                    "posting first main-queue-return callback",
+                    IllegalStateException("decor.post returned false"),
+                    null,
+                )
+            }
+        } catch (failure: Throwable) {
+            reportStartupDiagnosticFailure("posting first main-queue-return callback", failure, null)
+        }
+    }
+
+    private fun removeFirstPreDrawListener() {
+        val observer = firstFrameObserver
+        val listener = firstPreDrawListener
+        if (observer != null && listener != null) {
+            try {
+                if (observer.isAlive) {
+                    observer.removeOnPreDrawListener(listener)
+                    firstPreDrawListener = null
+                }
+            } catch (failure: Throwable) {
+                reportStartupDiagnosticFailure("removing first pre-draw listener", failure, null)
+            }
+        }
+    }
+
+    private fun removeFirstOnDrawListener() {
+        val observer = firstFrameObserver
+        val listener = firstOnDrawListener
+        if (observer != null && listener != null) {
+            try {
+                if (observer.isAlive) {
+                    observer.removeOnDrawListener(listener)
+                    firstOnDrawListener = null
+                }
+            } catch (failure: Throwable) {
+                reportStartupDiagnosticFailure("removing first on-draw listener", failure, null)
+            }
+        }
+    }
+
+    private fun cleanupFirstFrameDiagnostics() {
+        startupDiagnosticsDisposed = true
+        removeFirstPreDrawListener()
+        removeFirstOnDrawListener()
+        if (firstPreDrawListener == null && firstOnDrawListener == null) firstFrameObserver = null
     }
 }
 
