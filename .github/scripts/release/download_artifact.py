@@ -105,6 +105,18 @@ def download_artifact(run_id, name, destination, repository, expected_digest=Non
     artifact = _artifact_record(artifacts, name, current_attempt)
     if type(artifact.get("id")) is not int or artifact["id"] <= 0:
         raise SystemExit(f"artifact {name!r} has an invalid GitHub artifact ID")
+    # Readiness selections pin exact producer artifacts while Build is active.
+    selections = json.loads(os.environ.get("DOBBY_BUILD_PACKAGES") or "{}")
+    if selections and any(str(item.get("build_run_id")) == str(run_id) for item in selections.values()):
+        selected = selections.get(name)
+        if not isinstance(selected, dict):
+            raise SystemExit(f"artifact {name!r} is absent from package readiness selection")
+        if (str(selected.get("build_run_id")) != str(run_id)
+                or selected.get("id") != artifact["id"]
+                or selected.get("name") != artifact["name"]
+                or selected.get("digest") != artifact.get("digest")
+                or selected.get("source_sha") != artifact.get("workflow_run", {}).get("head_sha")):
+            raise SystemExit(f"artifact {name!r} differs from package readiness selection")
     digest = artifact.get("digest") or ""
     if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
         raise SystemExit(f"artifact {name!r} has no valid SHA-256 digest")

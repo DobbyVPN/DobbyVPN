@@ -3,6 +3,11 @@ name: Test installer migration qualification
 on:
   workflow_call:
     inputs:
+      build_packages:
+        description: Exact readiness-selected Build artifacts, when overlapping Build.
+        type: string
+        required: false
+        default: ''
       torturer_sha:
         required: true
         type: string
@@ -28,6 +33,9 @@ on:
 permissions:
   contents: read
   actions: read
+
+env:
+  DOBBY_BUILD_PACKAGES: ${{ inputs.build_packages }}
 
 jobs:
   migration:

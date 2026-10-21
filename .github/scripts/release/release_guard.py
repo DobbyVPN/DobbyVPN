@@ -425,10 +425,88 @@ def require_unblocked(api: Any, repository: str) -> dict[str, Any]:
             "deployment_ids": [item["id"] for item in deployments]}
 
 
+def _test_reservation(api, repository, test_run_id):
+    matches = [deployment for deployment in _all_deployments(api, repository)
+               if any(_log_url(status) == _run_url(repository, test_run_id)
+                      for status in _statuses(api, repository, deployment))]
+    if len(matches) > 1:
+        raise ReleaseGuardError("Test is linked to multiple immutable reservations")
+    return matches[0] if matches else None
+
+
+def validate_early_test(api, repository, test_run_id, build_run_id, product_sha,
+                        tests_sha, tests_tree_sha256, *, reservation_id=None):
+    """Validate existing stops without reserving an unfinished Build manifest."""
+    repository = _validate_repository(repository)
+    other_runs = [run for run in _active_test_runs(api, repository) if run["id"] != test_run_id]
+    if other_runs:
+        raise ReleaseGuardError("another Test workflow is active")
+    deployment = (_target_deployment(api, repository, reservation_id)
+                  if reservation_id else _test_reservation(api, repository, test_run_id))
+    if deployment is None:
+        require_unblocked(api, repository)
+        return
+    candidate = deployment["_candidate"]
+    expected = {"build_run_id": build_run_id, "product_sha": product_sha,
+                "tests_sha": tests_sha, "tests_tree_sha256": tests_tree_sha256,
+                "tests_repository": "DobbyVPN/Torturer"}
+    if any(candidate[key] != value for key, value in expected.items()):
+        raise ReleaseGuardError("early Test differs from supplied reservation")
+    _ensure_no_blockers(api, repository, exclude_id=deployment["id"])
+    latest = _latest_status(_statuses(api, repository, deployment))
+    if latest is None or latest["state"] != "queued":
+        raise ReleaseGuardError("early Test reservation is not queued for execution")
+    match = re.fullmatch(r"Retry authorized for attempt ([1-9][0-9]*)", latest.get("description", ""))
+    if match:
+        run = _get_run(api, repository, test_run_id, candidate, allow_retried=True)
+        if _log_url(latest) != _run_url(repository, test_run_id) or int(match.group(1)) != run["run_attempt"]:
+            raise ReleaseGuardError("early Test retry authorization differs from its run or attempt")
+    elif _log_url(latest) is not None:
+        raise ReleaseGuardError("unclaimed early Test reservation has an unexpected run link")
+
+
+def reservation_for_test(api, repository, test_run_id, candidate, *, reservation_id=None):
+    """Called only after resolving the successful final Build manifest."""
+    candidate = validate_candidate(dict(candidate))
+    deployment = (_target_deployment(api, repository, reservation_id)
+                  if reservation_id else _test_reservation(api, repository, test_run_id))
+    if deployment is not None:
+        if deployment["_candidate"] != candidate:
+            raise ReleaseGuardError("final Build differs from immutable Test reservation")
+        return deployment["id"]
+    return reserve(api, repository, candidate)["deployment_id"]
+
+
+def recover_reservation(api, repository, candidate):
+    """Recover only one exact unclaimed reservation after an interrupted POST."""
+    candidate = validate_candidate(dict(candidate))
+    matches = []
+    for deployment in _all_deployments(api, repository):
+        if deployment["_candidate"] != candidate:
+            continue
+        statuses = _statuses(api, repository, deployment)
+        latest = _latest_status(statuses)
+        if not statuses or (len(statuses) == 1 and latest["state"] == "queued"
+                            and _log_url(latest) is None):
+            matches.append(deployment)
+    if len(matches) > 1:
+        raise ReleaseGuardError("multiple unclaimed reservations match this candidate")
+    if not matches:
+        return None
+    deployment = matches[0]
+    _ensure_no_blockers(api, repository, exclude_id=deployment["id"])
+    if not _statuses(api, repository, deployment):
+        _post_status(api, repository, deployment, "queued", run_id=None, description="Test reservation queued")
+    return {"deployment_id": deployment["id"], "candidate": candidate, "state": "queued"}
+
+
 def reserve(api: Any, repository: str, candidate: Mapping[str, Any]) -> dict[str, Any]:
     """Create the immutable queued reservation before dispatching Test."""
     repository = _validate_repository(repository)
     candidate = validate_candidate(dict(candidate))
+    recovered = recover_reservation(api, repository, candidate)
+    if recovered is not None:
+        return recovered
     deployments = _ensure_no_blockers(api, repository)
     for deployment in deployments:
         latest = _latest_status(_statuses(api, repository, deployment))
@@ -484,6 +562,12 @@ def claim(
     statuses = _statuses(api, repository, deployment)
     latest = _latest_status(statuses)
     retry_attempt = None
+    if latest is not None and latest.get("state") == "in_progress" and _log_url(latest) == _run_url(repository, test_run_id):
+        run = _get_run(api, repository, test_run_id, candidate, allow_retried=True)
+        if run.get("status") == "in_progress" and _status_attempt(latest) == run["run_attempt"]:
+            _ensure_no_blockers(api, repository, exclude_id=deployment["id"])
+            return {"deployment_id": deployment["id"], "test_run_id": test_run_id,
+                    "log_url": _run_url(repository, test_run_id), "state": "in_progress"}
     if latest is None or latest.get("state") != "queued":
         raise ReleaseGuardError("only a queued reservation can be claimed")
     retry_match = re.fullmatch(r"Retry authorized for attempt ([1-9][0-9]*)", latest.get("description", ""))
@@ -506,6 +590,30 @@ def claim(
                  description=f"Test run claimed (attempt {run['run_attempt']})")
     return {"deployment_id": deployment["id"], "test_run_id": test_run_id,
             "log_url": _run_url(repository, test_run_id), "state": "in_progress"}
+
+
+def reserve_early_retry(api, repository, candidate, test_run_id):
+    """Bind a reviewed early failure once its Build has a successful manifest."""
+    candidate = validate_candidate(dict(candidate))
+    run = _get_run(api, repository, test_run_id, candidate, allow_retried=True)
+    if run.get("status") != "completed" or run.get("conclusion") not in {"failure", "cancelled", "timed_out"}:
+        raise ReleaseGuardError("early retry requires a completed unsuccessful Test")
+    existing = _test_reservation(api, repository, test_run_id)
+    if existing is not None:
+        latest = _latest_status(_statuses(api, repository, existing))
+        if (existing["_candidate"] == candidate and latest is not None and latest["state"] == "queued"
+                and latest.get("description") == f"Retry authorized for attempt {run['run_attempt'] + 1}"
+                and _log_url(latest) == _run_url(repository, test_run_id)):
+            _ensure_no_blockers(api, repository, exclude_id=existing["id"])
+            return {"deployment_id": existing["id"], "candidate": candidate,
+                    "state": "queued", "attempt": run["run_attempt"] + 1}
+        raise ReleaseGuardError("early Test already has a reservation")
+    reservation = reserve(api, repository, candidate)
+    deployment = _target_deployment(api, repository, reservation["deployment_id"])
+    attempt = run["run_attempt"] + 1
+    _post_status(api, repository, deployment, "queued", run_id=test_run_id,
+                 description=f"Retry authorized for attempt {attempt}")
+    return {**reservation, "attempt": attempt}
 
 
 def prepare_retry(

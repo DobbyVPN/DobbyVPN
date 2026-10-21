@@ -3,6 +3,11 @@ name: Android Build
 on:
   workflow_call:
     inputs:
+      build_packages:
+        description: Exact readiness-selected Build artifacts, when overlapping Build.
+        type: string
+        required: false
+        default: ''
       single_build:
         description: Build one immutable APK without claiming reproducibility.
         type: boolean
@@ -30,6 +35,9 @@ on:
       retention_days:
         default: 1
         type: number
+
+env:
+  DOBBY_BUILD_PACKAGES: ${{ inputs.build_packages }}
 
 jobs:
   android_build:

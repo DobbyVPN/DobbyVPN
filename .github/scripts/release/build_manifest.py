@@ -123,7 +123,7 @@ def _verify_prior_attempts(repository: str, run: dict[str, Any]) -> None:
             raise BuildManifestError(f"Build prior attempt {prior_attempt} has an unsupported conclusion")
 
 
-def _run(repository: str, run_id: int, *, require_main: bool = False) -> dict[str, Any]:
+def _run(repository: str, run_id: int, *, require_main: bool = False, allow_active: bool = False) -> dict[str, Any]:
     run = _json_command([
         "gh", "api", f"repos/{repository}/actions/runs/{run_id}",
     ])
@@ -138,9 +138,10 @@ def _run(repository: str, run_id: int, *, require_main: bool = False) -> dict[st
         raise BuildManifestError("selected run is not a manually dispatched Build workflow")
     if (
         type(run.get("run_attempt")) is not int or run["run_attempt"] < 1
-        or run.get("status") != "completed" or run.get("conclusion") != "success"
+        or not ((run.get("status") == "completed" and run.get("conclusion") == "success")
+                or (allow_active and run.get("status") in {"queued", "in_progress"}))
     ):
-        raise BuildManifestError("selected Build must be successful and completed")
+        raise BuildManifestError("selected Build must be successful and completed or explicitly allowed active")
     if require_main and run.get("head_branch") != "main":
         raise BuildManifestError("production Release can only select a Build from main")
     if not isinstance(run.get("head_sha"), str) or not SHA_RE.fullmatch(run["head_sha"]):

@@ -6,6 +6,23 @@ on:
       android_pairing:
         value: ${{ jobs.qualification.outputs.android_pairing }}
     inputs:
+      diagnostic_scenario:
+        description: Optional single Android scenario for focused diagnosis; Test leaves empty.
+        type: string
+        default: ''
+      android_companion_manifest_sha256:
+        description: Digest of the separately compiled Android test input manifest.
+        type: string
+        default: ''
+      android_companion_producer_attempt:
+        description: Original compilation attempt retained across execution retries.
+        type: string
+        default: ''
+      build_packages:
+        description: Exact readiness-selected Build artifacts, when overlapping Build.
+        type: string
+        required: false
+        default: ''
       torturer_sha:
         required: true
         type: string
@@ -38,6 +55,9 @@ on:
       retention_days:
         default: 1
         type: number
+
+env:
+  DOBBY_BUILD_PACKAGES: ${{ inputs.build_packages }}
 
 jobs:
   qualification:
@@ -148,6 +168,13 @@ jobs:
           python3 .github/scripts/release/download_artifact.py \
             "$GITHUB_RUN_ID" "$RENDER_ARTIFACT_NAME" render
 
+      - name: Download producer's compiled Android companion
+        if: inputs.platform == 'android'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dobbyvpn-android-test-inputs-${{ github.run_id }}-${{ inputs.android_companion_producer_attempt }}
+          path: ${{ runner.temp }}/private-android-companion
+
       - name: Check package and prepare qualification directories
         shell: bash
         run: |
@@ -205,12 +232,10 @@ jobs:
           cmdline-tools-version: '15859902'
           packages: platform-tools
 
-      - name: Build private Android companion for the selected product APK
+      - name: Validate reusable Android companion against current tools and package
         id: android_companion
         if: inputs.platform == 'android'
         shell: bash
-        env:
-          TMPDIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
           sdk_platform="${{ steps.android_java.outputs.android_sdk_platform }}"
@@ -258,19 +283,62 @@ jobs:
           python3 - <<'PYTHON'
           import json, os
           from pathlib import Path
-          from source_tests.android import build_test_companion
+          from torturer_runner.android_instrumentation import validate_reusable_test_companion
+          from torturer_runner.compiled_test_inputs import command_tool_identity, file_sha256
           product = Path(os.environ["DOBBY_PRODUCT_ROOT"])
           version = (product / "VERSION").read_text().strip()
-          result = build_test_companion(
-              product, Path(os.environ["DOBBY_TESTS_ROOT"]) / "source_tests/product",
-              product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk",
-              Path(os.environ["RUNNER_TEMP"]) / "private-android-companion",
-              product_sha=os.environ["DOBBYVPN_COMMIT_SHA"],
-              torturer_sha=os.environ["DOBBY_TEST_SHA"],
-              torturer_tree_sha256=os.environ["DOBBY_TEST_TREE_SHA256"],
+          sdk = Path(os.environ.get("ANDROID_SDK_ROOT") or os.environ["ANDROID_HOME"])
+          sdk_platform = "${{ steps.android_java.outputs.android_sdk_platform }}"
+          build_tools = "${{ steps.android_java.outputs.android_build_tools }}"
+          ndk = "${{ steps.android_java.outputs.android_ndk }}"
+          gradlew = product / "ui/android/gradlew"
+          java = Path(os.environ["JAVA_HOME"]) / "bin/java"
+          tools = {
+              "gradle": command_tool_identity(
+                  "gradle", [str(gradlew), "--version", "--no-daemon"],
+                  executable_path=gradlew, cwd=product,
+              ),
+              "java": command_tool_identity(
+                  "java", [str(java), "-version"], executable_path=java, cwd=product,
+              ),
+          }
+          properties = lambda path: file_sha256(path / "source.properties")
+          compatibility = {
+              "product_apk_sha256": file_sha256(
+                  product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk"
+              ),
+              "sdk_platform": sdk_platform,
+              "sdk_platform_sha256": properties(sdk / "platforms" / sdk_platform),
+              "build_tools": build_tools,
+              "build_tools_sha256": properties(sdk / "build-tools" / build_tools),
+              "ndk": ndk,
+              "ndk_sha256": properties(sdk / "ndk" / ndk),
+          }
+          root = Path(os.environ["RUNNER_TEMP"]) / "private-android-companion"
+          manifest_sha = "${{ inputs.android_companion_manifest_sha256 }}"
+          producer_attempt = int("${{ inputs.android_companion_producer_attempt }}")
+          source_sha = os.environ["DOBBYVPN_COMMIT_SHA"]
+          tests_sha = os.environ["DOBBY_TEST_SHA"]
+          tests_tree = os.environ["DOBBY_TEST_TREE_SHA256"]
+          companion_name = "dobbyvpn-test-companion-unsigned.apk"
+          companion = validate_reusable_test_companion(
+              root, companion_relative_path=companion_name,
+              expected_manifest_sha256=manifest_sha, source_sha=source_sha,
+              tests_sha=tests_sha, tests_tree_sha256=tests_tree,
+              producer_attempt=producer_attempt, tools=tools,
+              compatibility=compatibility,
           )
+          apk_sha = file_sha256(companion)
+          pairing = {
+              "product_sha": source_sha,
+              "unsigned_product_apk_sha256": compatibility["product_apk_sha256"],
+              "test_companion_sha256": apk_sha,
+              "torturer_repository": "DobbyVPN/Torturer",
+              "torturer_sha": tests_sha,
+              "torturer_tree_sha256": tests_tree,
+          }
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write("pairing=" + json.dumps(result["pairing"], separators=(",", ":")) + "\n")
+              output.write("pairing=" + json.dumps(pairing, separators=(",", ":")) + "\n")
           PYTHON
 
       - name: Validate and install the exact selected native package
@@ -975,6 +1043,8 @@ jobs:
 
       - name: Run canonical test set against exact selected package
         id: functional
+        env:
+          DIAGNOSTIC_SCENARIO: ${{ inputs.diagnostic_scenario }}
         working-directory: torturer
         shell: bash
         run: |
@@ -985,11 +1055,15 @@ jobs:
             exit 1
           fi
           if [ "$PLATFORM" = android ]; then
+            scenario_args=()
+            if [ -n "$DIAGNOSTIC_SCENARIO" ]; then
+              scenario_args=(--scenario "$DIAGNOSTIC_SCENARIO")
+            fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted \
               --platform android --suite mini --adb "$ADB" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
               --app-apk "$ANDROID_SIGNED_APP" --test-companion-apk "$ANDROID_SIGNED_COMPANION" \
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
-              --raw-log-dir "$RUN_DIR"
+              --raw-log-dir "$RUN_DIR" "${scenario_args[@]}"
           else
             release_args=(
               test

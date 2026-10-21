@@ -1,0 +1,134 @@
+name: Android selected-package diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful Build containing the original unsigned Android package.
+        required: true
+        type: string
+      torturer_sha:
+        description: Exact private tests revision to diagnose.
+        required: true
+        type: string
+      scenario:
+        description: Focused process recovery or complete Android mini scenario set.
+        type: choice
+        default: functional.product-process-loss
+        options:
+          - functional.product-process-loss
+          - mini
+
+concurrency:
+  group: android-selected-package-diagnostic
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  identity:
+    runs-on: ubuntu-24.04
+    environment: release-tests
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+      torturer_tree_sha256: ${{ steps.identity.outputs.torturer_tree_sha256 }}
+      packages: ${{ steps.identity.outputs.packages }}
+    steps:
+      - name: Require protected diagnostic entry point
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Bind original package and diagnostic tests
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, '.github/scripts/release')
+          import build_manifest, package_readiness, release_guard
+          repository = os.environ['GITHUB_REPOSITORY']
+          run_id = int(os.environ['BUILD_RUN_ID'])
+          build = build_manifest.resolve_build(repository, run_id, Path(os.environ['RUNNER_TEMP']) / 'selected-build', require_main=True)
+          run = build_manifest._run(repository, run_id, require_main=True)
+          inventory = build_manifest._artifact_inventory(repository, run_id, run['run_attempt'], tuple(package_readiness.PACKAGES['android']))
+          jobs = {attempt: package_readiness._pages(repository, f'actions/runs/{run_id}/attempts/{attempt}/jobs', 'jobs') for attempt in range(1, run['run_attempt'] + 1)}
+          selected = package_readiness.select_ready(run, list(inventory.values()), jobs, 'android')
+          package_readiness.reconcile(build, {'android': selected}, inventory, jobs_by_attempt=jobs)
+          sha = subprocess.check_output(['git', '-C', 'torturer', 'rev-parse', 'HEAD'], text=True).strip()
+          if sha != os.environ['TORTURER_SHA']:
+              raise SystemExit('private tests checkout differs from selected revision')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('source_sha=' + build['source_sha'] + '\n')
+              output.write('torturer_tree_sha256=' + release_guard.tests_tree_sha256(Path('torturer')) + '\n')
+              output.write('packages=' + json.dumps(selected, separators=(',', ':')) + '\n')
+          print('Focused diagnostic only; this workflow cannot qualify a release.')
+          PY
+
+  companion:
+    needs: identity
+    uses: ./.github/workflows/android_test_inputs.yml
+    secrets: inherit
+    with:
+      retention_days: 1
+      build_packages: ${{ needs.identity.outputs.packages }}
+      source_sha: ${{ needs.identity.outputs.source_sha }}
+      build_run_id: ${{ inputs.build_run_id }}
+      torturer_sha: ${{ inputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
+
+  fixture:
+    needs: identity
+    uses: ./.github/workflows/render_start.yml
+    secrets: inherit
+    with:
+      torturer_sha: ${{ inputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
+      fixture_key: android
+      retention_days: 1
+
+  android:
+    needs: [identity, companion, fixture]
+    uses: ./.github/workflows/qualification_platform.yml
+    secrets: inherit
+    with:
+      platform: android
+      diagnostic_scenario: ${{ inputs.scenario != 'mini' && inputs.scenario || '' }}
+      android_companion_manifest_sha256: ${{ needs.companion.outputs.manifest_sha256 }}
+      android_companion_producer_attempt: ${{ needs.companion.outputs.producer_attempt }}
+      build_packages: ${{ needs.identity.outputs.packages }}
+      source_sha: ${{ needs.identity.outputs.source_sha }}
+      build_run_id: ${{ inputs.build_run_id }}
+      torturer_sha: ${{ inputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
+      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}-android
+      retention_days: 1
+
+  cleanup:
+    if: ${{ always() && needs.identity.result == 'success' }}
+    needs: [identity, fixture, android]
+    uses: ./.github/workflows/render_cleanup.yml
+    secrets: inherit
+    with:
+      torturer_sha: ${{ inputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
+      fixture_key: android

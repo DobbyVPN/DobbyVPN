@@ -3,6 +3,11 @@ name: F-Droid Preflight
 on:
   workflow_call:
     inputs:
+      build_packages:
+        description: Exact readiness-selected Build artifacts, when overlapping Build.
+        type: string
+        required: false
+        default: ''
       source_sha:
         type: string
         required: true
@@ -23,6 +28,9 @@ on:
 permissions:
   contents: read
   actions: read
+
+env:
+  DOBBY_BUILD_PACKAGES: ${{ inputs.build_packages }}
 
 jobs:
   check:
