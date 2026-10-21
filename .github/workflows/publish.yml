@@ -374,6 +374,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          staging="$RUNNER_TEMP/selected-release-artifacts"
+          mkdir "$staging"
           for artifact in \
             dobbyVPN-linux-debug.deb \
             dobbyVPN-windows-amd64-debug.msi \
@@ -386,11 +388,57 @@ jobs:
             dobbyVPN-macos-aarch64.pkg \
             dobbyVPN-macos-amd64.pkg \
             dobbyvpn-android-unsign.apk; do
+            destination="$staging/$artifact"
+            mkdir "$destination"
             python3 .github/scripts/release/download_artifact.py \
-              "$BUILD_RUN_ID" "$artifact" release
+              "$BUILD_RUN_ID" "$artifact" "$destination"
           done
+          provenance="$staging/dobbyvpn-android-provenance"
+          mkdir "$provenance"
           python3 .github/scripts/release/download_artifact.py \
-            "$TEST_RUN_ID" dobbyvpn-android-provenance release
+            "$TEST_RUN_ID" dobbyvpn-android-provenance "$provenance"
+      - name: Assemble selected Release artifacts without collisions
+        run: |
+          python3 - "$RUNNER_TEMP/selected-release-artifacts" release <<'PYTHON'
+          import shutil, sys
+          from pathlib import Path
+
+          staging, release = map(Path, sys.argv[1:])
+          if staging.is_symlink() or not staging.is_dir():
+              raise SystemExit("selected Release artifact staging directory is invalid")
+          if release.exists() or release.is_symlink():
+              raise SystemExit("Release assembly destination already exists")
+
+          copies = []
+          names = set()
+          artifact_dirs = sorted(staging.iterdir())
+          if not artifact_dirs:
+              raise SystemExit("no selected Release artifacts were downloaded")
+          for artifact_dir in artifact_dirs:
+              if artifact_dir.is_symlink() or not artifact_dir.is_dir():
+                  raise SystemExit(f"selected Release artifact directory is invalid: {artifact_dir.name}")
+              files = []
+              for path in sorted(artifact_dir.rglob("*")):
+                  if path.is_symlink():
+                      raise SystemExit(f"selected Release artifact contains a symlink: {artifact_dir.name}")
+                  if path.is_dir():
+                      continue
+                  if not path.is_file():
+                      raise SystemExit(f"selected Release artifact contains a non-file: {artifact_dir.name}")
+                  files.append(path)
+              if len(files) != 1:
+                  raise SystemExit(f"selected Release artifact must contain one file: {artifact_dir.name}")
+              source = files[0]
+              if source.name in names:
+                  raise SystemExit(f"selected Release artifact filename collision: {source.name}")
+              names.add(source.name)
+              copies.append((source, source.name))
+
+          release.mkdir()
+          for source, name in copies:
+              with source.open("rb") as source_file, (release / name).open("xb") as destination_file:
+                  shutil.copyfileobj(source_file, destination_file)
+          PYTHON
       - name: Read Android dependency versions
         id: pins
         run: |
