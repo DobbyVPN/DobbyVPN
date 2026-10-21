@@ -486,6 +486,53 @@ jobs:
               test "$avd_found" = true
               sudo -n chown "$(id -un)" /dev/kvm
               run_timed android-emulator-acceleration-check "$emulator_bin" -accel-check
+              adb_listener_stdout="$RUN_DIR/android-adb-listener-5037.stdout.log"
+              adb_listener_stderr="$RUN_DIR/android-adb-listener-5037.stderr.log"
+              if run_timed android-adb-listener-5037 ss -H -ltnp 'sport = :5037' \
+                >"$adb_listener_stdout" 2>"$adb_listener_stderr"; then
+                adb_listener_status=0
+              else
+                adb_listener_status=$?
+              fi
+              cat "$adb_listener_stdout" || printf 'could not forward Android ADB listener stdout: %s\n' "$adb_listener_stdout" >&2
+              cat "$adb_listener_stderr" >&2 || printf 'could not forward Android ADB listener stderr: %s\n' "$adb_listener_stderr" >&2
+              if [ "$adb_listener_status" -ne 0 ]; then
+                printf 'Host ADB tracing unavailable: listener inspection failed (status %s); leaving any existing ADB server untouched.\n' \
+                  "$adb_listener_status" >&2
+              elif [ -s "$adb_listener_stdout" ]; then
+                printf 'Host ADB tracing unavailable: an existing listener uses port 5037; leaving it untouched.\n' >&2
+              else
+                adb_start_stdout="$RUN_DIR/android-adb-start-server.stdout.log"
+                adb_start_stderr="$RUN_DIR/android-adb-start-server.stderr.log"
+                if run_timed android-adb-start-server env ADB_TRACE=transport,sockets \
+                  ANDROID_ADB_LOG_PATH="$RUN_DIR/android-adb-server.log" adb start-server \
+                  >"$adb_start_stdout" 2>"$adb_start_stderr"; then
+                  adb_start_status=0
+                else
+                  adb_start_status=$?
+                fi
+                cat "$adb_start_stdout" || printf 'could not forward Android ADB start-server stdout: %s\n' "$adb_start_stdout" >&2
+                cat "$adb_start_stderr" >&2 || printf 'could not forward Android ADB start-server stderr: %s\n' "$adb_start_stderr" >&2
+                if [ "$adb_start_status" -ne 0 ]; then
+                  printf 'Host ADB tracing unavailable: adb start-server failed (status %s); no retry or server restart attempted.\n' \
+                    "$adb_start_status" >&2
+                else
+                  adb_status_stdout="$RUN_DIR/android-adb-server-status.stdout.log"
+                  adb_status_stderr="$RUN_DIR/android-adb-server-status.stderr.log"
+                  if run_timed android-adb-server-status adb server-status \
+                    >"$adb_status_stdout" 2>"$adb_status_stderr"; then
+                    adb_status_status=0
+                  else
+                    adb_status_status=$?
+                  fi
+                  cat "$adb_status_stdout" || printf 'could not forward Android ADB server-status stdout: %s\n' "$adb_status_stdout" >&2
+                  cat "$adb_status_stderr" >&2 || printf 'could not forward Android ADB server-status stderr: %s\n' "$adb_status_stderr" >&2
+                  if [ "$adb_status_status" -ne 0 ]; then
+                    printf 'Host ADB server status unavailable: adb server-status failed (status %s).\n' \
+                      "$adb_status_status" >&2
+                  fi
+                fi
+              fi
               "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot \
                 > "$RUN_DIR/android-emulator.stdout.log" \
                 2> "$RUN_DIR/android-emulator.stderr.log" &

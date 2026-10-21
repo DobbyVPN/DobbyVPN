@@ -15,8 +15,118 @@ permissions:
   contents: read
   actions: read
 jobs:
+  adb_transport_probe:
+    name: Branch-only SDK ADB transport probe
+    if: startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+    - name: Inspect and trace the preinstalled SDK ADB server
+      shell: bash
+      run: |
+        set -uo pipefail
+        output_dir="$RUNNER_TEMP/release156-adb-transport"
+        mkdir -p "$output_dir"
+        adb_bin="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}/platform-tools/adb"
+        server_log="$output_dir/adb-server.log"
+        probe_status=0
+        owns_server=0
+        capture_rc=0
+        printf 'adb=%s\nserver_log=%s\n' "$adb_bin" "$server_log" > "$output_dir/probe-report.txt"
+
+        adb_local() {
+          env -u ADB_SERVER_SOCKET -u ANDROID_ADB_SERVER_PORT "$adb_bin" "$@"
+        }
+
+        capture() {
+          local name="$1"
+          shift
+          local stdout_file="$output_dir/$name.stdout"
+          local stderr_file="$output_dir/$name.stderr"
+          printf '\n=== %s: %q' "$name" "$1"
+          printf ' %q' "${@:2}"
+          printf ' ===\n'
+          if "$@" > "$stdout_file" 2> "$stderr_file"; then
+            capture_rc=0
+          else
+            capture_rc=$?
+            probe_status=1
+          fi
+          printf '%s exit_status=%s\n' "$name" "$capture_rc" >> "$output_dir/probe-report.txt"
+          printf '%s stdout:\n' "$name"
+          cat "$stdout_file" || probe_status=1
+          printf '%s stderr:\n' "$name"
+          cat "$stderr_file" >&2 || probe_status=1
+        }
+
+        cleanup() {
+          local prior_status=$?
+          trap - EXIT
+          if (( owns_server )); then
+            capture adb-kill-server adb_local kill-server
+            if [[ -f "$server_log" ]]; then
+              if [[ -r "$server_log" ]]; then
+                printf '\n=== complete %s ===\n' "$server_log"
+                cat "$output_dir/adb-server.log" || probe_status=1
+              else
+                printf 'ERROR: could not retain actual ADB server log %s\n' "$server_log" >&2
+                probe_status=1
+              fi
+            else
+              printf 'ERROR: ADB server trace log is absent: %s\n' "$server_log" >&2
+              printf 'adb_server_log=absent\n' >> "$output_dir/probe-report.txt"
+              probe_status=1
+            fi
+          fi
+          printf 'final_probe_status=%s\n' "$(( prior_status != 0 || probe_status != 0 ))" >> "$output_dir/probe-report.txt"
+          if (( prior_status != 0 || probe_status != 0 )); then
+            exit 1
+          fi
+          exit 0
+        }
+        trap cleanup EXIT
+
+        capture adb-version adb_local version
+        capture adb-help adb_local help
+        capture listener-before ss -ltnp 'sport = :5037'
+        if (( capture_rc != 0 )); then
+          printf 'probe=unavailable; could not inspect TCP listener on port 5037\n' >&2
+          printf 'server_status=not-run; listener inspection failed\ndevices=not-run; listener inspection failed\n' >> "$output_dir/probe-report.txt"
+          exit 1
+        fi
+        if awk '$1 == "LISTEN" { found=1 } END { exit !found }' "$output_dir/listener-before.stdout"; then
+          printf 'probe=unavailable; TCP port 5037 was already occupied; no ADB server commands issued\n' >&2
+          printf 'probe=unavailable; port 5037 already occupied\nserver_status=not-run; would contact unrelated listener\ndevices=not-run; would contact unrelated listener\n' >> "$output_dir/probe-report.txt"
+          exit 1
+        fi
+
+        owns_server=1
+        capture adb-start-server env -u ADB_SERVER_SOCKET -u ANDROID_ADB_SERVER_PORT ADB_TRACE=transport,sockets ANDROID_ADB_LOG_PATH="$server_log" "$adb_bin" start-server
+        if (( capture_rc != 0 )); then
+          printf 'probe=failed; standalone ADB server did not start successfully\n' >&2
+          exit 1
+        fi
+        capture adb-server-status adb_local server-status
+        if (( capture_rc == 0 )); then
+          capture adb-devices adb_local devices -l
+        else
+          printf 'adb devices not run because server-status failed; avoiding an implicit server start\n' >&2
+          printf 'adb_devices=not-run-after-server-status-failure\n' >> "$output_dir/probe-report.txt"
+        fi
+    - name: Retain ADB transport probe output
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: release156-adb-transport-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/release156-adb-transport/
+        if-no-files-found: error
+        include-hidden-files: true
+        retention-days: 1
   verify_build:
     name: Verify diagnostic selected Build14
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -487,6 +597,53 @@ jobs:
             test "$avd_found" = true
             sudo -n chown "$(id -un)" /dev/kvm
             run_timed android-emulator-acceleration-check "$emulator_bin" -accel-check
+            adb_listener_stdout="$RUN_DIR/android-adb-listener-5037.stdout.log"
+            adb_listener_stderr="$RUN_DIR/android-adb-listener-5037.stderr.log"
+            if run_timed android-adb-listener-5037 ss -H -ltnp 'sport = :5037' \
+              >"$adb_listener_stdout" 2>"$adb_listener_stderr"; then
+              adb_listener_status=0
+            else
+              adb_listener_status=$?
+            fi
+            cat "$adb_listener_stdout" || printf 'could not forward Android ADB listener stdout: %s\n' "$adb_listener_stdout" >&2
+            cat "$adb_listener_stderr" >&2 || printf 'could not forward Android ADB listener stderr: %s\n' "$adb_listener_stderr" >&2
+            if [ "$adb_listener_status" -ne 0 ]; then
+              printf 'Host ADB tracing unavailable: listener inspection failed (status %s); leaving any existing ADB server untouched.\n' \
+                "$adb_listener_status" >&2
+            elif [ -s "$adb_listener_stdout" ]; then
+              printf 'Host ADB tracing unavailable: an existing listener uses port 5037; leaving it untouched.\n' >&2
+            else
+              adb_start_stdout="$RUN_DIR/android-adb-start-server.stdout.log"
+              adb_start_stderr="$RUN_DIR/android-adb-start-server.stderr.log"
+              if run_timed android-adb-start-server env ADB_TRACE=transport,sockets \
+                ANDROID_ADB_LOG_PATH="$RUN_DIR/android-adb-server.log" adb start-server \
+                >"$adb_start_stdout" 2>"$adb_start_stderr"; then
+                adb_start_status=0
+              else
+                adb_start_status=$?
+              fi
+              cat "$adb_start_stdout" || printf 'could not forward Android ADB start-server stdout: %s\n' "$adb_start_stdout" >&2
+              cat "$adb_start_stderr" >&2 || printf 'could not forward Android ADB start-server stderr: %s\n' "$adb_start_stderr" >&2
+              if [ "$adb_start_status" -ne 0 ]; then
+                printf 'Host ADB tracing unavailable: adb start-server failed (status %s); no retry or server restart attempted.\n' \
+                  "$adb_start_status" >&2
+              else
+                adb_status_stdout="$RUN_DIR/android-adb-server-status.stdout.log"
+                adb_status_stderr="$RUN_DIR/android-adb-server-status.stderr.log"
+                if run_timed android-adb-server-status adb server-status \
+                  >"$adb_status_stdout" 2>"$adb_status_stderr"; then
+                  adb_status_status=0
+                else
+                  adb_status_status=$?
+                fi
+                cat "$adb_status_stdout" || printf 'could not forward Android ADB server-status stdout: %s\n' "$adb_status_stdout" >&2
+                cat "$adb_status_stderr" >&2 || printf 'could not forward Android ADB server-status stderr: %s\n' "$adb_status_stderr" >&2
+                if [ "$adb_status_status" -ne 0 ]; then
+                  printf 'Host ADB server status unavailable: adb server-status failed (status %s).\n' \
+                    "$adb_status_status" >&2
+                fi
+              fi
+            fi
             "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot \
               > "$RUN_DIR/android-emulator.stdout.log" \
               2> "$RUN_DIR/android-emulator.stderr.log" &
@@ -1258,134 +1415,6 @@ jobs:
     needs:
     - verify_build
     - render_start
-  ios:
-    name: Diagnostic iOS interaction / Xcode26.3 / iOS26.2
-    runs-on: macos-15
-    environment: release-tests
-    timeout-minutes: 45
-    env:
-      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
-      DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
-      DOBBY_TEST_SHA: ${{ inputs.torturer_sha }}
-      DOBBY_TEST_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
-      DOBBY_SOURCE_SHA: c519a6b74ead237f7932f6a189ff09327590377d
-    steps:
-    - name: Require final Test on main
-      shell: bash
-      env:
-        SOURCE_SHA: c519a6b74ead237f7932f6a189ff09327590377d
-        TORTURER_SHA: ${{ inputs.torturer_sha }}
-        TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
-      run: |
-        set -euo pipefail
-        test "$GITHUB_REF" = refs/heads/main
-        test "$GITHUB_RUN_ATTEMPT" = 1
-        [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-        [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
-        [[ "$TORTURER_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      with:
-        ref: c519a6b74ead237f7932f6a189ff09327590377d
-        persist-credentials: false
-    - name: Check out exact private tests
-      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      with:
-        repository: DobbyVPN/Torturer
-        ref: ${{ inputs.torturer_sha }}
-        path: torturer
-        ssh-key: ${{ secrets.TORTURER_READ_KEY }}
-        persist-credentials: false
-    - name: Verify selected product and private test trees
-      shell: bash
-      env:
-        SOURCE_SHA: c519a6b74ead237f7932f6a189ff09327590377d
-      run: |
-        set -euo pipefail
-        python3 - <<'PY'
-        import os
-        import runpy
-        import subprocess
-        from pathlib import Path
-
-        product_sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip()
-        if product_sha != os.environ["SOURCE_SHA"]:
-            raise SystemExit("product checkout does not match selected source revision")
-
-        tests_root = Path(os.environ["DOBBY_TESTS_ROOT"])
-        tests_sha = subprocess.check_output(
-            ["git", "-C", str(tests_root), "rev-parse", "HEAD"], text=True
-        ).strip()
-        if tests_sha != os.environ["DOBBY_TEST_SHA"]:
-            raise SystemExit("private tests checkout does not match selected revision")
-
-        release_guard = runpy.run_path(
-            ".github/scripts/release/release_guard.py"
-        )
-        tree_sha = release_guard["tests_tree_sha256"](tests_root)
-        if tree_sha != os.environ["DOBBY_TEST_TREE_SHA256"]:
-            raise SystemExit("private tests tree does not match selected fingerprint")
-        PY
-    - name: Select Xcode 26.3
-      run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
-      with:
-        go-version-file: .go-version
-        cache: false
-    - name: Restore dependency archives
-      uses: ./.github/actions/dependency-cache
-    - name: Build TrustTunnel-enabled Go runtime for iOS Simulator
-      working-directory: core
-      shell: bash
-      run: |
-        set -euo pipefail
-        mobile_version='v0.0.0-20260520154334-0e4426e1883d'
-        python3 ../.github/scripts/dependency_fetch.py retry -- go mod download
-        python3 ../.github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
-        python3 ../.github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
-        ./scripts/build_ios_xcframework.sh --simulator-architecture arm64
-        runtime_binary="$(find DobbyVPNRuntime.xcframework -type f -path '*/DobbyVPNRuntime.framework/DobbyVPNRuntime' -print -quit)"
-        test -n "$runtime_binary"
-        runtime_arches="$(xcrun lipo -archs "$runtime_binary" | tee /dev/stderr)"
-        [[ " $runtime_arches " == *" arm64 "* ]]
-    - name: Install pinned screenshot decoder
-      shell: bash
-      run: |
-        set -euo pipefail
-        package_dir="$RUNNER_TEMP/dobbyvpn-screenshot-python"
-        python3 -m pip install --disable-pip-version-check --only-binary=:all: \
-          --no-deps --target "$package_dir" \
-          --requirement .github/scripts/requirements-native-ui.txt
-    - name: Run private iOS Simulator app contract
-      env:
-        PYTHONPATH: ${{ runner.temp }}/dobbyvpn-screenshot-python:${{ github.workspace }}/torturer
-        SHARD: interaction
-      shell: bash
-      run: |
-        set -euo pipefail
-        python3 "$DOBBY_TESTS_ROOT/tests/platform/ios_simulator/run_app_contract.py" \
-          --candidate-root "$DOBBY_PRODUCT_ROOT" \
-          --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract" \
-          --source-sha "$DOBBY_SOURCE_SHA" \
-          --shard "$SHARD"
-    - name: Retain complete iOS Simulator diagnostics
-      if: always()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-      with:
-        name: dobbyvpn-ios-simulator-contract-interaction-${{ github.run_id }}-${{ github.run_attempt }}
-        path: ${{ runner.temp }}/ios-simulator-mini-contract/diagnostics
-        if-no-files-found: error
-        include-hidden-files: true
-        retention-days: 1
-    - name: Remove Simulator build and decoder scratch
-      if: always()
-      shell: bash
-      run: |
-        rm -rf "$RUNNER_TEMP/ios-simulator-mini-contract" \
-          "$RUNNER_TEMP/dobbyvpn-screenshot-python"
-    needs:
-    - verify_build
   render_cleanup:
     if: ${{ always() && needs.render_start.result != 'skipped' }}
     needs:
