@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var controller: SessionController
     private lateinit var retainedLogViewModel: RetainedLogViewModel
     private var startupDiagnosticsDisposed = false
-    private var firstFrameObserver: ViewTreeObserver? = null
+    private var firstFrameView: View? = null
     private var firstPreDrawListener: ViewTreeObserver.OnPreDrawListener? = null
     private var firstOnDrawListener: ViewTreeObserver.OnDrawListener? = null
     private var firstPreDrawSeen = false
@@ -284,6 +284,7 @@ class MainActivity : ComponentActivity() {
         val mainThread = Looper.myLooper() === Looper.getMainLooper()
         val observerBoundary = observation.operation.contains("Callback")
         val mainQueueReturn = observation.operation.endsWith("firstFrameMainQueueReturn")
+        val finishedNs = observation.finishedNs
         val message = buildString {
             append("operation=${observation.operation} phase=${observation.phase}")
             append(" outcome=${when (observation.phase) {
@@ -294,10 +295,10 @@ class MainActivity : ComponentActivity() {
             }}")
             append(" pid=${Process.myPid()} tid=${Process.myTid()} is_main_thread=$mainThread")
             append(" started_elapsed_realtime_ns=${observation.startedNs.takeIf { it >= 0 } ?: "unavailable"}")
-            if (observation.finishedNs != null) {
-                append(" finished_elapsed_realtime_ns=${observation.finishedNs}")
+            if (finishedNs != null) {
+                append(" finished_elapsed_realtime_ns=$finishedNs")
                 if (observation.startedNs >= 0) {
-                    append(" duration_ns=${observation.finishedNs - observation.startedNs}")
+                    append(" duration_ns=${finishedNs - observation.startedNs}")
                 } else {
                     append(" duration_ns=unavailable")
                 }
@@ -376,7 +377,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            firstFrameObserver = observer
+            firstFrameView = decor
             firstPreDrawListener = preDrawListener
             observer.addOnPreDrawListener(preDrawListener)
             firstOnDrawListener = onDrawListener
@@ -408,10 +409,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun removeFirstPreDrawListener() {
-        val observer = firstFrameObserver
+        val view = firstFrameView
         val listener = firstPreDrawListener
-        if (observer != null && listener != null) {
+        if (view != null && listener != null) {
             try {
+                val observer = view.viewTreeObserver
                 if (observer.isAlive) {
                     observer.removeOnPreDrawListener(listener)
                     firstPreDrawListener = null
@@ -423,10 +425,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun removeFirstOnDrawListener() {
-        val observer = firstFrameObserver
+        val view = firstFrameView
         val listener = firstOnDrawListener
-        if (observer != null && listener != null) {
+        if (view != null && listener != null) {
             try {
+                val observer = view.viewTreeObserver
                 if (observer.isAlive) {
                     observer.removeOnDrawListener(listener)
                     firstOnDrawListener = null
@@ -441,7 +444,7 @@ class MainActivity : ComponentActivity() {
         startupDiagnosticsDisposed = true
         removeFirstPreDrawListener()
         removeFirstOnDrawListener()
-        if (firstPreDrawListener == null && firstOnDrawListener == null) firstFrameObserver = null
+        firstFrameView = null
     }
 }
 
