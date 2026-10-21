@@ -599,9 +599,12 @@ jobs:
                   fi
                 fi
               fi
-              # Capture emulator ADB bridge diagnostics in the existing launch logs.
+              # The captured 67,072-byte adbd VSOCK write failed ENOMEM. Limit each
+              # upstream linear skb packet allocation to 16 KiB; fragmentation remains
+              # a hypothesis, and the guest readback below verifies this launch setting.
               "$emulator_bin" -avd dobbyvpn-release -debug adb,adbserver,adbclient,log \
                 -no-window -no-audio -no-boot-anim -no-snapshot \
+                -qemu -append 'vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size=16384' \
                 > "$RUN_DIR/android-emulator.stdout.log" \
                 2> "$RUN_DIR/android-emulator.stderr.log" &
               emulator_pid=$!
@@ -638,6 +641,37 @@ jobs:
                 if [ "$ANDROID_DIAGNOSTIC_SCENARIO" = android.n11-consent-grant-selection ]; then
                   exit "$adbd_trace_status"
                 fi
+              fi
+              # Verify the guest VSOCK packet limit requested at launch before installation.
+              vsock_limit_stdout="$RUN_DIR/android-vsock-packet-limit.stdout.log"
+              vsock_limit_stderr="$RUN_DIR/android-vsock-packet-limit.stderr.log"
+              if ! vsock_limit_timeout="$(python3 -c 'import os,time; remaining=float(os.environ["RUN_DEADLINE_EPOCH"])-time.time(); print(f"{remaining:.9f}" if remaining > 0 else "")')"; then
+                printf 'Android VSOCK packet limit readback cannot compute remaining qualification time; refusing to run tests.\n' >&2
+                exit 1
+              fi
+              if [ -z "$vsock_limit_timeout" ]; then
+                printf 'Android VSOCK packet limit readback skipped: qualification deadline has expired; refusing to run tests.\n' >&2
+                exit 1
+              fi
+              if run_timed android-vsock-packet-limit-readback timeout --signal=KILL "${vsock_limit_timeout}s" adb shell cat \
+                /sys/module/vmw_vsock_virtio_transport_common/parameters/virtio_transport_max_vsock_pkt_buf_size \
+                >"$vsock_limit_stdout" 2>"$vsock_limit_stderr"; then
+                vsock_limit_status=0
+              else
+                vsock_limit_status=$?
+              fi
+              cat "$vsock_limit_stdout"
+              cat "$vsock_limit_stderr" >&2
+              if [ "$vsock_limit_status" -ne 0 ]; then
+                printf 'Android VSOCK packet limit readback failed (status %s); refusing to run tests.\n' \
+                  "$vsock_limit_status" >&2
+                exit "$vsock_limit_status"
+              fi
+              vsock_limit_value="$(tr -d '\r' < "$vsock_limit_stdout")"
+              if [ "$vsock_limit_value" != 16384 ]; then
+                printf 'Android VSOCK packet limit mismatch: expected 16384, observed:\n' >&2
+                cat "$vsock_limit_stdout" >&2
+                exit 1
               fi
               signed="$signed_app"
               companion="$signed_companion"
