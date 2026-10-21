@@ -1,0 +1,52 @@
+name: Qualification reuse fixture
+on:
+  push:
+    branches: [codex/qualification-reuse-hosted-20261021]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  retained:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      value: ${{ steps.create.outputs.value }}
+      digest: ${{ steps.upload.outputs.artifact-digest }}
+    steps:
+      - id: create
+        run: |
+          echo 'value=retained-success' >> "$GITHUB_OUTPUT"
+          echo 'complete original bytes' > payload.txt
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: retained-payload
+          path: payload.txt
+          retention-days: 1
+          if-no-files-found: error
+  retry:
+    needs: retained
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Controlled failure on first attempt
+        run: |
+          if [ "$GITHUB_RUN_ATTEMPT" = 1 ]; then
+            echo 'Expected fixture failure; no product test failed.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: DobbyVPN/DobbyVPN
+          ref: ee8414850180446b448ebdc93cbbec881692ec8e
+          persist-credentials: false
+      - name: Verify preserved output and exact artifact bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RETAINED_VALUE: ${{ needs.retained.outputs.value }}
+          RETAINED_DIGEST: ${{ needs.retained.outputs.digest }}
+        run: |
+          test "$RETAINED_VALUE" = retained-success
+          python3 .github/scripts/release/download_artifact.py \
+            "$GITHUB_RUN_ID" retained-payload retained --expected-digest "$RETAINED_DIGEST"
+          test "$(cat retained/payload.txt)" = 'complete original bytes'
