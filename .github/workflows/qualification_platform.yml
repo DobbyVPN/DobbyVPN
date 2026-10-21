@@ -536,6 +536,15 @@ jobs:
               ;;
           esac
 
+      - name: Start Android live ADB diagnostics
+        if: inputs.platform == 'android'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/android/android_emulator_diagnostics.py start \
+            --adb "$ADB" --run-dir "$RUN_DIR" --deadline-epoch "$RUN_DEADLINE_EPOCH"
+
       - name: Record observed platform version
         shell: bash
         run: |
@@ -959,6 +968,15 @@ jobs:
             fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.desktop_platform "${release_args[@]}"
           fi
+
+      - name: Stop Android live ADB diagnostics
+        if: always() && inputs.platform == 'android' && env.RUN_DIR != ''
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/android/android_emulator_diagnostics.py stop \
+            --run-dir "$RUN_DIR"
 
       - name: Stop Linux qualification service
         if: always() && inputs.platform == 'linux'
