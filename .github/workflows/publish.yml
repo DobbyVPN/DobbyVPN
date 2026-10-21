@@ -623,12 +623,59 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$RELEASE_VERSION"
+          release_lookup_dir="$(mktemp -d "$RUNNER_TEMP/release-list.XXXXXX")"
+          trap 'rm -rf -- "$release_lookup_dir"' EXIT
+          release_lookup_stdout="$release_lookup_dir/stdout"
+          release_lookup_stderr="$release_lookup_dir/stderr"
           set +e
-          release_view="$(gh release view "$tag" 2>&1)"
-          release_view_status=$?
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            >"$release_lookup_stdout" 2>"$release_lookup_stderr"
+          release_lookup_status=$?
           set -e
-          printf '%s\n' "$release_view"
-          if [ "$release_view_status" -eq 0 ]; then
+          if [ "$release_lookup_status" -ne 0 ]; then
+            cat "$release_lookup_stdout"
+            cat "$release_lookup_stderr" >&2
+            printf 'Unable to list GitHub Releases before publication (gh api exited %s).\n' \
+              "$release_lookup_status" >&2
+            exit "$release_lookup_status"
+          fi
+          if exact_release_count="$(python3 - "$release_lookup_stdout" "$tag" <<'PYTHON'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as response_file:
+                  pages = json.load(response_file)
+          except (OSError, UnicodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"Invalid GitHub Releases response: {error}")
+
+          if not isinstance(pages, list) or not pages:
+              raise SystemExit("Invalid GitHub Releases response: expected a nonempty page array")
+          exact_matches = 0
+          for page in pages:
+              if not isinstance(page, list):
+                  raise SystemExit("Invalid GitHub Releases response: page is not an array")
+              for release in page:
+                  if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
+                      raise SystemExit("Invalid GitHub Releases response: release has no string tag_name")
+                  exact_matches += release["tag_name"] == sys.argv[2]
+
+          if exact_matches > 1:
+              raise SystemExit(f"GitHub Releases response contains duplicate exact tag {sys.argv[2]}")
+          print(exact_matches)
+          PYTHON
+          )"; then
+            :
+          else
+            release_parse_status=$?
+            cat "$release_lookup_stdout"
+            cat "$release_lookup_stderr" >&2
+            printf 'Unable to validate GitHub Releases before publication.\n' >&2
+            exit "$release_parse_status"
+          fi
+          cat "$release_lookup_stderr" >&2
+          if [ "$exact_release_count" -eq 1 ]; then
             echo "GitHub Release $tag already exists; checking its Build/Test/Release provenance."
             mkdir "$RUNNER_TEMP/existing-release"
             gh release download "$tag" --dir "$RUNNER_TEMP/existing-release"
@@ -651,6 +698,7 @@ jobs:
               --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
               --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
           else
+            echo "GitHub Release $tag is absent from the complete paginated list; checking the local tag."
             if git show-ref --verify --quiet "refs/tags/$tag"; then
               test "$(git rev-list -n1 "$tag^{commit}")" = "$RELEASE_SOURCE_SHA"
             else
