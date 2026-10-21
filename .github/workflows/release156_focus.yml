@@ -27,11 +27,11 @@ jobs:
       contents: read
       actions: read
     steps:
-      - name: Reject other diagnostic branches or rerun dispatches
+      - name: Reject non-main or rerun dispatches
         shell: bash
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = refs/heads/codex/release156-live-transfer-focus
+          test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_RUN_ATTEMPT" = 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -122,7 +122,7 @@ jobs:
       - name: Reject hosted mini reruns before package qualification
         shell: bash
         run: |
-          test "$GITHUB_REF" = refs/heads/codex/release156-live-transfer-focus
+          test "$GITHUB_REF" = refs/heads/main
           if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
             echo "Hosted mini reruns are unsupported; start a fresh calling workflow run." >&2
             exit 1
