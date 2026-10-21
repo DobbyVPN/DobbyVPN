@@ -16,6 +16,7 @@ on:
         type: choice
         default: functional.product-process-loss
         options:
+          - android.n11-consent-grant-selection
           - functional.product-process-loss
           - mini
 

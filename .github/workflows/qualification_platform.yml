@@ -7,7 +7,7 @@ on:
         value: ${{ jobs.qualification.outputs.android_pairing }}
     inputs:
       diagnostic_scenario:
-        description: Optional single Android scenario for focused diagnosis; Test leaves empty.
+        description: Optional Android scenario or isolated N11 diagnosis; Test leaves empty.
         type: string
         default: ''
       android_companion_manifest_sha256:
@@ -80,6 +80,7 @@ jobs:
       ARCHITECTURE: ${{ inputs.architecture }}
       DOBBYVPN_COMMIT_SHA: ${{ inputs.source_sha || github.sha }}
       SELECTED_BUILD_RUN_ID: ${{ inputs.build_run_id || github.run_id }}
+      ANDROID_DIAGNOSTIC_SCENARIO: ${{ inputs.diagnostic_scenario }}
     steps:
       - name: Initialize runner-local qualification paths
         shell: bash
@@ -605,6 +606,7 @@ jobs:
                 2> "$RUN_DIR/android-emulator.stderr.log" &
               emulator_pid=$!
               printf '%s\n' "$emulator_pid" > "$RUN_DIR/android-emulator.pid"
+              export ANDROID_EMULATOR_PID="$emulator_pid"
               printf 'ANDROID_EMULATOR_PID=%s\n' "$emulator_pid" >> "$GITHUB_ENV"
               if ! run_timed android-emulator-adb-ready timeout 120s adb wait-for-device; then
                 echo "Android emulator did not become visible to ADB" >&2
@@ -619,7 +621,24 @@ jobs:
                 test "$booted" = true
               }
               run_timed android-emulator-boot wait_for_android_boot
+              adbd_trace_status=0
+              adbd_setup_deadline="$(python3 -c 'import os,time; print(min(float(os.environ["RUN_DEADLINE_EPOCH"]), time.time() + 30))')"
+              run_timed android-adbd-trace-prepare python3 -m torturer_runner.android_adbd_diagnostics prepare \
+                --adb "$(command -v adb)" --run-dir "$RUN_DIR" --deadline-epoch "$adbd_setup_deadline" \
+                || adbd_trace_status=$?
               run_timed android-emulator-root timeout 120s bash .github/scripts/android/require_adb_root.sh "$RUN_DIR"
+              if [ "$adbd_trace_status" -eq 0 ]; then
+                adbd_verify_deadline="$(python3 -c 'import os,time; print(min(float(os.environ["RUN_DEADLINE_EPOCH"]), time.time() + 30))')"
+                run_timed android-adbd-trace-verify python3 -m torturer_runner.android_adbd_diagnostics verify \
+                  --adb "$(command -v adb)" --run-dir "$RUN_DIR" --deadline-epoch "$adbd_verify_deadline" \
+                  || adbd_trace_status=$?
+              fi
+              if [ "$adbd_trace_status" -ne 0 ]; then
+                printf 'Android daemon tracing unavailable (status %s); complete setup diagnostics are retained.\n' "$adbd_trace_status" >&2
+                if [ "$ANDROID_DIAGNOSTIC_SCENARIO" = android.n11-consent-grant-selection ]; then
+                  exit "$adbd_trace_status"
+                fi
+              fi
               signed="$signed_app"
               companion="$signed_companion"
               test -f "$signed"; test -f "$companion"
@@ -690,7 +709,7 @@ jobs:
           printf 'PLATFORM_VERSION=%s\n' "$platform_version" >> "$GITHUB_ENV"
 
       - name: Exercise the native Android UI
-        if: inputs.platform == 'android'
+        if: inputs.platform == 'android' && inputs.diagnostic_scenario != 'android.n11-consent-grant-selection'
         shell: bash
         run: |
           set -euo pipefail
@@ -813,7 +832,7 @@ jobs:
           fi
 
       - name: Retain Android native UI screenshots
-        if: always() && inputs.platform == 'android'
+        if: always() && inputs.platform == 'android' && inputs.diagnostic_scenario != 'android.n11-consent-grant-selection'
         shell: bash
         run: |
           set -euo pipefail
@@ -1056,7 +1075,9 @@ jobs:
           fi
           if [ "$PLATFORM" = android ]; then
             scenario_args=()
-            if [ -n "$DIAGNOSTIC_SCENARIO" ]; then
+            if [ "$DIAGNOSTIC_SCENARIO" = android.n11-consent-grant-selection ]; then
+              scenario_args=(--android-n11-only)
+            elif [ -n "$DIAGNOSTIC_SCENARIO" ]; then
               scenario_args=(--scenario "$DIAGNOSTIC_SCENARIO")
             fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted \
@@ -1336,6 +1357,18 @@ jobs:
           if errors:
               raise RuntimeError("\n".join(errors))
           PY
+
+      - name: Retain Android daemon transport diagnostics
+        if: always() && inputs.platform == 'android' && env.ANDROID_EMULATOR_PID != ''
+        continue-on-error: ${{ inputs.diagnostic_scenario != 'android.n11-consent-grant-selection' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # One optional collection budget covers snapshot, transfer and cleanup.
+          # Recovery collects diagnostics only; it cannot start another test.
+          collection_deadline="$(python3 -c 'import time; print(time.time() + 30)')"
+          python3 -m torturer_runner.android_adbd_diagnostics collect \
+            --adb "${ADB:-adb}" --run-dir "$RUN_DIR" --deadline-epoch "$collection_deadline"
 
       - name: Make qualification files readable for diagnostics
         if: always() && env.RUN_DIR != ''
