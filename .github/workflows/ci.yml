@@ -12,7 +12,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Inspect preinstalled Android emulator CLI
+      - name: Install only emulator and ADB command-line packages
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          cmdline-tools-version: '15859902'
+          packages: emulator platform-tools
+      - name: Inspect installed Android emulator CLI
         shell: bash
         run: |
           set +e; set -uo pipefail
@@ -27,7 +32,7 @@ jobs:
           fi
           emulator="$sdk/emulator/emulator"
           if [[ ! -x "$emulator" ]]; then
-            echo "Preinstalled emulator binary missing or not executable: $emulator" >&2
+            echo "Installed emulator binary missing or not executable: $emulator" >&2
             exit 1
           fi
           printf 'Emulator binary: %s\n' "$emulator"
@@ -47,7 +52,7 @@ jobs:
             printf 'ADB binary: %s\n' "$adb"
             "$adb" version; adb_status=$?
           else
-            echo "Preinstalled adb binary missing or not executable: $adb" >&2
+            echo "Installed adb binary missing or not executable: $adb" >&2
             adb_status=127
           fi
           printf 'Exit statuses: host=%s emulator-version=%s help-debug-tags=%s output-capture=%s adb-version=%s\n' \
