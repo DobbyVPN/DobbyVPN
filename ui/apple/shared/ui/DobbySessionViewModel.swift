@@ -63,6 +63,7 @@ public final class DobbySessionViewModel: ObservableObject {
 
     @Published public private(set) var loading = false
     @Published public private(set) var loadError = ""
+    @Published private var dismissedFailures = Set<String>()
     private let loadWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.configuration")
     private var loadInFlight = false
     private var loadRevision = 0
@@ -197,9 +198,37 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
-    public var failureDetail: String {
-        [importError, loadError, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
-            .first { !$0.isEmpty } ?? ""
+    private var failures: [String] {
+        var seen = Set<String>()
+        return [importError, loadError, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    public var failureDetail: String { failures.first ?? "" }
+
+    public var visibleFailure: String {
+        failures.first { !dismissedFailures.contains($0) } ?? ""
+    }
+
+    /// Import guidance is cleared; other failures stay set while their cause persists, so polling cannot reopen them.
+    public func closeFailure() {
+        let shown = visibleFailure
+        guard !shown.isEmpty else { return }
+        if shown == importError {
+            dismissError()
+        } else {
+            dismissedFailures.insert(shown)
+        }
+    }
+
+    /// A new attempt shows its failure again, even when it repeats one the user closed.
+    private func resetClosedFailures() {
+        if !dismissedFailures.isEmpty { dismissedFailures = [] }
+    }
+
+    private func pruneClosedFailures() {
+        let current = Set(failures)
+        if !dismissedFailures.isSubset(of: current) { dismissedFailures.formIntersection(current) }
     }
 
     /// Closes the error the popup shows first: import guidance, then the last command error.
@@ -219,6 +248,8 @@ public final class DobbySessionViewModel: ObservableObject {
         importError = ""
         setError("", origin: .other)
         loadError = ""
+        // Typing only forgets the closed failures it cleared; a persistent one must not reopen on every keystroke.
+        pruneClosedFailures()
         loadRevision += 1
         pendingLoad = nil
         debounce?.cancel()
@@ -239,9 +270,13 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func paste(_ value: String) {
+        resetClosedFailures()
         let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard validSubscription(source) else {
-            setError("Paste an HTTPS subscription URL with a host", origin: .other)
+            let message = "Paste an HTTPS subscription URL with a host"
+            // Closing the popup keeps the error, so a repeated rejection is logged here.
+            if error == message { recordError(message) }
+            setError(message, origin: .other)
             return
         }
         if source == sourceText && (loading || snapshot.configured && !sourceIsDirty) { return }
@@ -274,7 +309,10 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
-    public func retryLoad() { sourceChanged(sourceText, immediate: true) }
+    public func retryLoad() {
+        resetClosedFailures()
+        sourceChanged(sourceText, immediate: true)
+    }
 
     private func loadNext() {
         guard !loadInFlight, let source = pendingLoad, !snapshot.sessionID.isEmpty else { return }
@@ -367,6 +405,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     self.snapshotFailureMessage = failure.localizedDescription
                     self.setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
                 }
+                self.pruneClosedFailures()
             }
         }
     }
@@ -383,6 +422,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func performCommand(index: Int?, stopping: Bool) {
+        resetClosedFailures()
         busy = true
         setError("", origin: .other)
         let current = snapshot

@@ -59,7 +59,6 @@ public struct DobbyRootView: View {
     @State private var followingLogs = true
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
-    @State private var dismissedError = ""
     @State private var rowHeight: CGFloat = 0
 
     public init(model: DobbySessionViewModel) {
@@ -97,8 +96,6 @@ public struct DobbyRootView: View {
         .onAppear { model.setLogsVisible(true); refreshClipboard() }
         .onDisappear { model.setLogsVisible(false) }
         .onChange(of: model.status) { announceStatus($0) }
-        // A new attempt clears the error, so the same failure shows its popup again.
-        .onChange(of: model.failureDetail) { if $0.isEmpty { dismissedError = "" } }
         .onChange(of: scenePhase) { phase in model.setLogsVisible(phase == .active); refreshClipboard() }
 #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -324,20 +321,15 @@ public struct DobbyRootView: View {
         exportedLogsURL = nil
     }
 
-    private var showingError: Bool {
-        !model.failureDetail.isEmpty && model.failureDetail != dismissedError
-    }
+    private var showingError: Bool { !model.visibleFailure.isEmpty }
 
     @ViewBuilder
     private var errorPopup: some View {
-        let detail = model.failureDetail
-        if showingError {
-            let loadFailed = !model.loadError.isEmpty
-            let close = {
-                if detail == model.importError || detail == model.error { model.dismissError() } else { dismissedError = detail }
-            }
+        let detail = model.visibleFailure
+        if !detail.isEmpty {
+            let loadFailed = detail == model.loadError
             ZStack {
-                Color.black.opacity(0.32).ignoresSafeArea().onTapGesture(perform: close)
+                Color.black.opacity(0.32).ignoresSafeArea().onTapGesture(perform: model.closeFailure)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: pt(10)) {
                         SockIcon(holey: true).frame(width: pt(26), height: pt(32.5))
@@ -368,9 +360,9 @@ public struct DobbyRootView: View {
                     .overlay(RoundedRectangle(cornerRadius: pt(6)).stroke(Color.rule, lineWidth: 1))
                     .padding(.top, pt(10))
                     HStack(spacing: pt(8)) {
-                        DialogButton(title: "Close", filled: false, action: close)
+                        DialogButton(title: "Close", filled: false, action: model.closeFailure)
                         if loadFailed {
-                            DialogButton(title: "Retry", filled: true) { dismissedError = ""; model.retryLoad() }
+                            DialogButton(title: "Retry", filled: true) { model.retryLoad() }
                                 .accessibilityIdentifier("subscription.retry")
                         }
                     }
