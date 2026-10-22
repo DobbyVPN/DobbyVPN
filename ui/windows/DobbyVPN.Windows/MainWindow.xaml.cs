@@ -48,7 +48,7 @@ public sealed partial class MainWindow : Window
     private string _importError = "";
     private string _logsError = "";
     private string _exportError = "";
-    private string _dismissedError = "";
+    private readonly HashSet<string> _dismissedErrors = [];
     private string _lastSourceError = "";
     private bool _snapshotFailing;
     private bool _canPaste;
@@ -93,7 +93,11 @@ public sealed partial class MainWindow : Window
         SizeWindow();
         Column.SizeChanged += (_, _) => UpdateTrayHeight();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
-        Root.Loaded += (_, _) => ClearFocus();
+        Root.Loaded += (_, _) =>
+        {
+            if (ErrorShown) KeepFocusInError();
+            else ClearFocus();
+        };
         SourceEditor.KeyDown += (_, args) =>
         {
             if (args.Key == global::Windows.System.VirtualKey.Enter) ClearFocus();
@@ -645,7 +649,10 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetAutomationId(row, id);
         AutomationProperties.SetName(row, action);
         AutomationProperties.SetItemStatus(row, string.Join(" · ", new[] { name, detailText }.Where(value => value.Length > 0)));
-        row.Click += (_, _) => StartWindowWork(click);
+        row.Click += (_, _) =>
+        {
+            if (!ErrorShown) StartWindowWork(click);
+        };
         row.SizeChanged += (_, _) =>
         {
             if (row.ActualHeight <= _rowHeight) return;
@@ -655,46 +662,59 @@ public sealed partial class MainWindow : Window
         return row;
     }
 
-    private string ErrorDetailText
+    private List<string> Errors
     {
         get
         {
             var failure = _snapshot?.LastFailure is { } value ? $"{value.Message} ({value.Code})" : "";
-            return new[] { _importError, _loadError, _error, failure, _logsError, _exportError }.FirstOrDefault(text => text.Length > 0) ?? "";
+            return new[] { _importError, _loadError, _error, failure, _logsError, _exportError }
+                .Where(text => text.Length > 0).Distinct().ToList();
         }
     }
 
+    private string ShownError => Errors.FirstOrDefault(text => !_dismissedErrors.Contains(text)) ?? "";
+
+    private bool ErrorShown => ErrorOverlay.Visibility == Visibility.Visible;
+
     private void RenderError()
     {
-        var detail = ErrorDetailText;
-        // A new attempt clears the error, so the same failure shows its popup again.
-        if (detail.Length == 0) _dismissedError = "";
-        var visible = detail.Length > 0 && detail != _dismissedError;
-        var loadFailure = detail == _loadError;
+        _dismissedErrors.IntersectWith(Errors);
+        var detail = ShownError;
+        var visible = detail.Length > 0;
+        var loadFailure = visible && detail == _loadError;
         ErrorTitle.Text = loadFailure ? "Couldn't load the subscription" : "Something went wrong";
         AutomationProperties.SetName(ErrorCard, ErrorTitle.Text);
         ErrorHint.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
         ErrorDetail.Text = detail;
-        var shown = ErrorOverlay.Visibility == Visibility.Visible;
+        var shown = ErrorShown;
         ErrorOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        if (visible && !shown) ClearFocus();
+        if (visible) KeepFocusInError();
+        else if (shown) ClearFocus();
+    }
+
+    private void KeepFocusInError()
+    {
+        if (Root.XamlRoot is null) return;
+        for (var element = FocusManager.GetFocusedElement(Root.XamlRoot) as DependencyObject; element is not null; element = VisualTreeHelper.GetParent(element))
+            if (element == ErrorCard) return;
+        var target = RetryErrorButton.Visibility == Visibility.Visible ? RetryErrorButton : CloseErrorButton;
+        target.Focus(FocusState.Programmatic);
     }
 
     private void CloseError()
     {
-        var detail = ErrorDetailText;
+        var detail = ShownError;
+        if (detail.Length == 0) return;
         if (detail == _importError)
         {
             if (_error == _importError) _error = "";
             _importError = "";
         }
-        else if (detail == _error) _error = "";
         else if (detail == _exportError) _exportError = "";
-        else _dismissedError = detail;
+        else _dismissedErrors.Add(detail);
         Render();
-        ClearFocus();
     }
 
     private void CloseError_Click(object sender, RoutedEventArgs e) => CloseError();
@@ -703,7 +723,7 @@ public sealed partial class MainWindow : Window
 
     private void RetryError_Click(object sender, RoutedEventArgs e)
     {
-        _dismissedError = "";
+        _dismissedErrors.Clear();
         SourceChanged(SubscriptionInputKind.Retry);
     }
 
@@ -711,10 +731,14 @@ public sealed partial class MainWindow : Window
     {
         var package = new DataPackage();
         package.SetText(ErrorDetail.Text);
-        Clipboard.SetContent(package);
+        try { Clipboard.SetContent(package); }
+        catch (Exception error) { RecordError(error.ToString()); }
     }
 
-    private void ConnectionButton_Click(object sender, RoutedEventArgs e) => StartWindowWork(MainActionAsync);
+    private void ConnectionButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ErrorShown) StartWindowWork(MainActionAsync);
+    }
 
     private async Task PerformActionAsync(int? index, bool forceStop, CancellationToken cancellationToken)
     {
@@ -734,6 +758,7 @@ public sealed partial class MainWindow : Window
             finally
             {
                 _stopInFlight = false;
+                _dismissedErrors.Clear();
                 if (!_lifetime.IsClosing)
                 {
                     await RefreshSnapshotAsync(cancellationToken);
@@ -758,6 +783,7 @@ public sealed partial class MainWindow : Window
         finally
         {
             _busy = false;
+            _dismissedErrors.Clear();
             if (!_lifetime.IsClosing)
             {
                 await RefreshSnapshotAsync(cancellationToken);
@@ -817,6 +843,7 @@ public sealed partial class MainWindow : Window
     {
         if (_lifetime.IsClosing) return;
         ClearFocus();
+        _dismissedErrors.Clear();
         _diagnostics.RecordInfo("subscription.paste-click", "Started handling a Paste button click", new { session_id = _snapshot?.SessionId });
         try
         {
@@ -847,6 +874,7 @@ public sealed partial class MainWindow : Window
         {
             if (value.Equals("dobbyvpn://", StringComparison.OrdinalIgnoreCase) ||
                 value.Equals("dobbyvpn:///", StringComparison.OrdinalIgnoreCase)) return;
+            _dismissedErrors.Clear();
             if (System.Text.RegularExpressions.Regex.IsMatch(value, "%(?![0-9a-fA-F]{2})")) throw new FormatException("Invalid URL escape");
             var uri = new Uri(value);
             if (uri.Scheme != "dobbyvpn" || uri.Host != "import" || uri.AbsolutePath is not ("" or "/") || uri.UserInfo.Length > 0 || !uri.IsDefaultPort || uri.Fragment.Length > 0)
@@ -864,7 +892,11 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void Retry_Click(object sender, RoutedEventArgs e) => SourceChanged(SubscriptionInputKind.Retry);
+    private void Retry_Click(object sender, RoutedEventArgs e)
+    {
+        _dismissedErrors.Clear();
+        SourceChanged(SubscriptionInputKind.Retry);
+    }
 
     private TimeSpan LoadNow => Stopwatch.GetElapsedTime(_loadClockOrigin);
 

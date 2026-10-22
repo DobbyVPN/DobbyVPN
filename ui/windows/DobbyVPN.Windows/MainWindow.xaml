@@ -160,7 +160,7 @@
 
     <Grid x:Name="ErrorOverlay" Background="{StaticResource Scrim}" Visibility="Collapsed" Tapped="ErrorOverlay_Tapped">
       <UserControl x:Name="ErrorCard" MaxWidth="420" Margin="18" VerticalAlignment="Center" IsTabStop="False"
-                   Tapped="ErrorCard_Tapped" AutomationProperties.AutomationId="error.dialog" AutomationProperties.IsDialog="True">
+                   TabFocusNavigation="Cycle" Tapped="ErrorCard_Tapped" AutomationProperties.AutomationId="error.dialog" AutomationProperties.IsDialog="True">
       <Border Padding="12,12,12,9" CornerRadius="7.5" BorderThickness="1.5" BorderBrush="{StaticResource Ink}" Background="{StaticResource Surface}">
         <StackPanel>
           <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7.5">
