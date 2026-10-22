@@ -390,6 +390,7 @@ private fun ErrorDialog(controller: SessionController) {
     Dialog(onDismissRequest = close) {
         Column(
             Modifier.fillMaxWidth()
+                .semantics { testTagsAsResourceId = true }
                 .testTag("error.dialog")
                 .semantics { stateDescription = status }
                 .clip(ButtonShape)
