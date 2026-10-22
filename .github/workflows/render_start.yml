@@ -78,6 +78,8 @@ jobs:
           RENDER_IMAGE_OWNER_ID: ${{ vars.RENDER_IMAGE_OWNER_ID }}
           RENDER_IMAGE_PATH: ${{ vars.RENDER_IMAGE_PATH }}
           RENDER_IMAGE_DIGEST: ${{ vars.RENDER_IMAGE_DIGEST }}
+          RENDER_XRAY_IMAGE_PATH: ${{ vars.RENDER_XRAY_IMAGE_PATH }}
+          RENDER_XRAY_IMAGE_DIGEST: ${{ vars.RENDER_XRAY_IMAGE_DIGEST }}
           RENDER_REGION: ${{ vars.RENDER_REGION }}
         run: |
           set -euo pipefail
@@ -86,6 +88,8 @@ jobs:
           test -n "$RENDER_IMAGE_OWNER_ID"
           test -n "$RENDER_IMAGE_PATH"
           test -n "$RENDER_IMAGE_DIGEST"
+          test -n "$RENDER_XRAY_IMAGE_PATH"
+          test -n "$RENDER_XRAY_IMAGE_DIGEST"
           test -n "$RENDER_REGION"
           PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m disposable_vpn_server.render_service start \
             --run-id "$GITHUB_RUN_ID" \
@@ -95,6 +99,8 @@ jobs:
             --image-owner-id "$RENDER_IMAGE_OWNER_ID" \
             --image-path "$RENDER_IMAGE_PATH" \
             --image-digest "$RENDER_IMAGE_DIGEST" \
+            --xray-image-path "$RENDER_XRAY_IMAGE_PATH" \
+            --xray-image-digest "$RENDER_XRAY_IMAGE_DIGEST" \
             --region "$RENDER_REGION" \
             --output "$RUNNER_TEMP/render"
 

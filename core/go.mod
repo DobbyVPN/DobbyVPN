@@ -17,7 +17,7 @@ require (
 	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20251008121831-8fe75611866e
 	github.com/xtls/xray-core v1.260327.1-0.20260710210335-64fada32b5b9
 	golang.getoutline.org/sdk v0.0.23
-	golang.getoutline.org/sdk/x v0.1.0
+	golang.getoutline.org/sdk/x v0.2.2
 	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.49.0
 	golang.zx2c4.com/wireguard/windows v1.1.1
@@ -67,8 +67,9 @@ require (
 	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/pion/dtls/v3 v3.1.4 // indirect
 	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/stun/v3 v3.1.6 // indirect
+	github.com/pion/stun/v3 v3.1.6
 	github.com/pion/transport/v4 v4.0.2 // indirect
+	github.com/quic-go/quic-go v0.57.1 // indirect
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af // indirect
 	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
@@ -87,3 +88,6 @@ tool golang.org/x/mobile/cmd/gobind
 
 // Shared DobbyVPN extension; upstream module imports stay unchanged.
 replace golang.getoutline.org/sdk => github.com/DobbyVPN/outline-sdk v0.0.24-0.20261022143006-bace007bdf6f
+
+// SDK/x v0.2.2 with the HTTP/3 API update required by Xray's qpack version.
+replace golang.getoutline.org/sdk/x => github.com/DobbyVPN/outline-sdk/x v0.2.1-0.20261022164150-eea55cf572f7

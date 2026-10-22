@@ -1,0 +1,62 @@
+name: Check selected Render protocol fixtures
+description: Run the selected private protocol test with the provider deadline and retain both complete output streams in RUN_DIR.
+runs:
+  using: composite
+  steps:
+    - name: Exercise selected source against the Render profile
+      shell: bash
+      run: |
+        set -euo pipefail
+        fixture_stdout="$RUN_DIR/render-protocol-fixtures.stdout.log"
+        fixture_stderr="$RUN_DIR/render-protocol-fixtures.stderr.log"
+        fixture_status=0
+        # Root owns both supervision and tests so SO_MARK and timeout cleanup work.
+        sudo -n env \
+          "DOBBY_PRODUCT_ROOT=$DOBBY_PRODUCT_ROOT" \
+          "PYTHONPATH=$DOBBY_TESTS_ROOT" \
+          "DOBBY_RENDER_PROFILE=$GITHUB_WORKSPACE/render/profile.toml" \
+          "RUN_DEADLINE_EPOCH=$RUN_DEADLINE_EPOCH" \
+          GOTOOLCHAIN=local GOWORK=off PYTHONDONTWRITEBYTECODE=1 \
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory \
+          "GIT_CONFIG_VALUE_0=$DOBBY_PRODUCT_ROOT" \
+          python3 - <<'PYTHON' >"$fixture_stdout" 2>"$fixture_stderr" || fixture_status=$?
+        import os
+        from pathlib import Path
+        import sys
+        import time
+
+        product = Path(os.environ["DOBBY_PRODUCT_ROOT"])
+        sys.path.insert(0, str(product / ".github/scripts"))
+        from bounded_process import COMMAND_DEADLINE_ENV, command_deadline_remaining, run_streamed
+
+        profile = Path(os.environ["DOBBY_RENDER_PROFILE"])
+        if not profile.is_file() or profile.stat().st_size == 0:
+            raise RuntimeError("Render protocol fixtures require the selected nonempty profile")
+        # Preserve the functional lane's existing provider deadline and recovery reserve.
+        environment = os.environ.copy()
+        environment[COMMAND_DEADLINE_ENV] = str(
+            time.monotonic() + float(os.environ["RUN_DEADLINE_EPOCH"]) - time.time() - 300
+        )
+        command = [
+            sys.executable, "-m", "source_tests.checks", "go-unit",
+            "--product-root", str(product),
+            "--go-test-filter", "^TestRenderProtocolFixtures$",
+            "--go-package", "./sessionapi",
+        ]
+        result = run_streamed(
+            command, cwd=product, env=environment,
+            timeout_seconds=command_deadline_remaining(environment),
+        )
+        raise SystemExit(result.returncode)
+        PYTHON
+        stdout_status=0
+        stderr_status=0
+        cat "$fixture_stdout" || stdout_status=$?
+        cat "$fixture_stderr" >&2 || stderr_status=$?
+        if [ "$fixture_status" -ne 0 ]; then exit "$fixture_status"; fi
+        if [ "$stdout_status" -ne 0 ]; then exit "$stdout_status"; fi
+        if [ "$stderr_status" -ne 0 ]; then exit "$stderr_status"; fi
+        if ! grep -Eq '^--- PASS: TestRenderProtocolFixtures([[:space:]]|$)' "$fixture_stdout"; then
+          printf 'Selected Render protocol fixture test did not execute and pass\n' | tee -a "$fixture_stderr" >&2
+          exit 1
+        fi

@@ -209,6 +209,10 @@ jobs:
           [[ "$deadline" =~ ^[0-9]+$ ]]
           printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
 
+      - name: Verify Render protocol fixtures against selected source
+        if: inputs.platform == 'linux'
+        uses: ./.github/actions/render-protocol-check
+
       - name: Read Android SDK pins
         id: android_java
         if: inputs.platform == 'android'

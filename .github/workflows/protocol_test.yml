@@ -1,0 +1,168 @@
+name: Protocol fixture diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      torturer_sha:
+        description: Exact private Torturer revision to exercise against the selected main source.
+        type: string
+        required: true
+
+concurrency:
+  group: protocol-fixture-diagnostics
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  identity:
+    name: Bind selected source and private tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: release-tests
+    outputs:
+      torturer_sha: ${{ steps.identity.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ steps.identity.outputs.torturer_tree_sha256 }}
+    steps:
+      - name: Require main and an exact tests revision
+        env:
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Bind private tests identity
+        id: identity
+        env:
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard
+          product = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tests = subprocess.check_output(["git", "-C", "torturer", "rev-parse", "HEAD"], text=True).strip()
+          if product != os.environ["GITHUB_SHA"] or tests != os.environ["TORTURER_SHA"]:
+              raise SystemExit("source or private tests checkout differs from selected revision")
+          tree = release_guard.tests_tree_sha256(Path("torturer"))
+          print(f"Product={product}\nTorturer={tests}\nTorturer tree SHA-256={tree}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"torturer_sha={tests}\ntorturer_tree_sha256={tree}\n")
+          PYTHON
+
+  render_start:
+    needs: identity
+    uses: ./.github/workflows/render_start.yml
+    secrets: inherit
+    with:
+      torturer_sha: ${{ needs.identity.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
+      fixture_key: linux
+      retention_days: 1
+
+  proof:
+    name: Exercise selected protocol engines
+    needs: [identity, render_start]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release-tests
+    env:
+      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
+      DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
+    steps:
+      - name: Initialize runner-local diagnostic paths
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dobbyvpn-protocol-run"
+          {
+            echo "RUN_DIR=$RUNNER_TEMP/dobbyvpn-protocol-run"
+            echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-protocol-diagnostics"
+          } >> "$GITHUB_ENV"
+      - name: Check out selected main source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ needs.identity.outputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Verify selected source and tests identity
+        env:
+          TORTURER_SHA: ${{ needs.identity.outputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard
+          product = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tests = subprocess.check_output(["git", "-C", "torturer", "rev-parse", "HEAD"], text=True).strip()
+          tree = release_guard.tests_tree_sha256(Path("torturer"))
+          if (product != os.environ["GITHUB_SHA"] or tests != os.environ["TORTURER_SHA"]
+                  or tree != os.environ["TORTURER_TREE_SHA256"]):
+              raise SystemExit("source or private tests identity changed before protocol checks")
+          (Path(os.environ["RUN_DIR"]) / "source-identity.txt").write_text(
+              f"Product={product}\nTorturer={tests}\nTorturer tree SHA-256={tree}\n")
+          PYTHON
+      - name: Download selected Render profile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release/download_artifact.py \
+            "$GITHUB_RUN_ID" "render-vpn-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-linux" render
+          deadline="$(tr -d '[:space:]' < render/deadline_epoch.txt)"
+          [[ "$deadline" =~ ^[0-9]+$ ]]
+          printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
+      - name: Verify Render protocol fixtures against selected source
+        uses: ./.github/actions/render-protocol-check
+      - name: Collect complete protocol diagnostics
+        if: always() && env.RUN_DIR != ''
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/collect_diagnostics.py --source "$RUN_DIR" --output "$ARTIFACT_DIR"
+      - name: Retain complete protocol diagnostics
+        if: always() && env.ARTIFACT_DIR != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-protocol-diagnostics-attempt-${{ github.run_attempt }}
+          path: ${{ env.ARTIFACT_DIR }}
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 1
+      - name: Remove disposable protocol scratch and profile
+        if: always()
+        run: |
+          rm -f render/profile.toml
+          if [ -n "${RUN_DIR:-}" ]; then rm -rf "$RUN_DIR"; fi
+          if [ -n "${ARTIFACT_DIR:-}" ]; then rm -rf "$ARTIFACT_DIR"; fi
+
+  render_cleanup:
+    if: ${{ always() && needs.identity.result == 'success' }}
+    needs: [identity, render_start, proof]
+    uses: ./.github/workflows/render_cleanup.yml
+    secrets: inherit
+    with:
+      torturer_sha: ${{ needs.identity.outputs.torturer_sha }}
+      torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
+      fixture_key: linux
