@@ -43,7 +43,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -381,14 +380,11 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
 
 @Composable
 private fun ErrorDialog(controller: SessionController) {
-    val state = controller.state
-    val loadFailed = state.loadError.isNotEmpty()
-    val detail = listOf(state.loadError, state.error, state.session.failure, state.logsError).firstOrNull(String::isNotEmpty).orEmpty()
-    var dismissed by rememberSaveable { mutableStateOf("") }
-    // A new attempt clears the error, so the same failure shows its popup again.
-    LaunchedEffect(detail) { if (detail.isEmpty()) dismissed = "" }
-    if (detail.isEmpty() || detail == dismissed) return
-    val close = { if (detail == state.error) controller.dismissError() else dismissed = detail }
+    val errors = controller.errors
+    LaunchedEffect(errors) { controller.forgetClearedErrors() }
+    val detail = errors.firstOrNull { it !in controller.dismissedErrors } ?: return
+    val loadFailed = detail == controller.state.loadError
+    val close = { controller.dismissError(detail) }
     val status = controller.status
     Dialog(onDismissRequest = close) {
         Column(
@@ -454,7 +450,7 @@ private fun ErrorDialog(controller: SessionController) {
                         "Retry",
                         filled = true,
                         modifier = Modifier.weight(1f).testTag("subscription.retry"),
-                    ) { dismissed = ""; controller.retryLoad() }
+                    ) { controller.retryLoad() }
                 }
             }
         }

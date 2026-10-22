@@ -60,6 +60,7 @@ internal class RetainedLogViewModel : ViewModel() {
 class MainActivity : ComponentActivity() {
     companion object {
         private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
+        private const val DISMISSED_ERRORS = "com.dobby.ui.DISMISSED_ERRORS"
         internal const val CONNECTION_CONTROLS_DESCRIPTION = "Connection controls"
 
         @Volatile
@@ -199,6 +200,7 @@ class MainActivity : ComponentActivity() {
                     savedInstanceState?.getBundle(LOG_VIEW_STATE),
                     savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
                     retainedLogViewModel,
+                    savedInstanceState?.getStringArrayList(DISMISSED_ERRORS).orEmpty().toSet(),
                 )
                 if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) {
                     controller.importLink(intent.dataString.orEmpty())
@@ -217,6 +219,7 @@ class MainActivity : ComponentActivity() {
             controller.saveLogViewState()?.let { outState.putBundle(LOG_VIEW_STATE, it) }
             controller.saveSourceEditorState()?.let { outState.putBundle(SOURCE_EDITOR_STATE, it) }
                 ?: outState.remove(SOURCE_EDITOR_STATE)
+            outState.putStringArrayList(DISMISSED_ERRORS, ArrayList(controller.dismissedErrors))
         }
     }
 
@@ -496,12 +499,20 @@ internal class SessionController(
     private var restoredLogViewState: Bundle? = null,
     restoredSourceEditorState: Bundle? = null,
     private val retainedLogViewModel: RetainedLogViewModel,
+    restoredDismissedErrors: Set<String> = emptySet(),
 ) {
     var state by mutableStateOf(ScreenState(
         source = restoredSourceEditorState?.getString(SOURCE_TEXT).orEmpty(),
         sourceDirty = restoredSourceEditorState?.getBoolean(SOURCE_DIRTY) == true,
         loadError = restoredSourceEditorState?.getString(SOURCE_LOAD_ERROR).orEmpty(),
     ))
+        private set
+
+    val errors: List<String> get() =
+        listOf(state.loadError, state.error, state.session.failure, state.logsError).filter(String::isNotEmpty).distinct()
+
+    /** Messages the user closed; they stay hidden until they clear or the user makes a new attempt. */
+    var dismissedErrors by mutableStateOf(restoredDismissedErrors)
         private set
 
     private val main = Handler(Looper.getMainLooper())
@@ -551,6 +562,7 @@ internal class SessionController(
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
         restoredPendingSource = null
+        if (trigger != LoadTrigger.RESTORE) dismissedErrors = emptySet()
         val source = value.trim()
         val uri = runCatching { java.net.URI(source) }.getOrNull()
         val valid = uri?.scheme?.lowercase() == "https" && !uri.host.isNullOrEmpty()
@@ -725,7 +737,9 @@ internal class SessionController(
         }
     }
 
-    fun dismissError() { state = state.copy(error = "") }
+    fun dismissError(message: String) { dismissedErrors = dismissedErrors + message }
+
+    fun forgetClearedErrors() { dismissedErrors = dismissedErrors.intersect(errors.toSet()) }
 
     fun copyToClipboard(text: String) {
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DobbyVPN error", text))
@@ -734,6 +748,7 @@ internal class SessionController(
     fun connectOrDisconnect(index: Int? = null) {
         if (!canAct(index)) return
         if (isStopTarget(index)) { stop(); return }
+        dismissedErrors = emptySet()
         val current = latest
         state = state.copy(busy = true, error = "")
         permissionTarget = PendingPermissionAction(
@@ -754,6 +769,7 @@ internal class SessionController(
         permissionTarget = null
         val current = latest
         if (state.busy || current.primaryAction != "STOP") return
+        dismissedErrors = emptySet()
         state = state.copy(busy = true, error = "")
         worker.execute {
             runCatching { NativeGoSession.stop(current.sessionId, current.generation) }
@@ -1068,7 +1084,10 @@ internal class SessionController(
 
     private fun report(message: String, failure: Throwable? = null) {
         NativeVpnBridge.recordDiagnostic(activity, "ui.failure", message, failure)
-        main.post { state = state.copy(busy = false, error = message) }
+        main.post {
+            dismissedErrors = dismissedErrors - message
+            state = state.copy(busy = false, error = message)
+        }
     }
 }
 
