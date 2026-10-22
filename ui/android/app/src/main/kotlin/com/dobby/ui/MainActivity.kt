@@ -562,7 +562,7 @@ internal class SessionController(
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
         restoredPendingSource = null
-        if (trigger != LoadTrigger.RESTORE) dismissedErrors = emptySet()
+        if (trigger != LoadTrigger.RESTORE && trigger != LoadTrigger.TYPED) dismissedErrors = emptySet()
         val source = value.trim()
         val uri = runCatching { java.net.URI(source) }.getOrNull()
         val valid = uri?.scheme?.lowercase() == "https" && !uri.host.isNullOrEmpty()
