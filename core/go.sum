@@ -2,6 +2,8 @@ github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260927100020-f9950989d6b4 h1:9Nn0N0a9aVNQDAe7TN86z984jshDmpdFL1RAhXhtfuI=
 github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260927100020-f9950989d6b4/go.mod h1:wHOz/rb9oaA2ykOQ3OuMvUkrZJBQu8C/ck+eVlL6RB4=
+github.com/DobbyVPN/outline-sdk v0.0.24-0.20261022143006-bace007bdf6f h1:I2SOMEDTnUwu+MnpGepcjySpkqPHwpOZuBROWOneqYE=
+github.com/DobbyVPN/outline-sdk v0.0.24-0.20261022143006-bace007bdf6f/go.mod h1:Ig39Th+hP+5ZADLi+ZAZjHcBtKohljJsBU/pQ6DH1nQ=
 github.com/Microsoft/go-winio v0.6.4 h1:kJF2pamtYCWXf0xAT8sAkwKC0pMl2HYBrRPHAqyUc+g=
 github.com/Microsoft/go-winio v0.6.4/go.mod h1:1xl5JXG4ze/m74GH6Dc4Mwxfc3VL5siRVQjIAlHH07U=
 github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwToPjQ=
@@ -89,6 +91,8 @@ github.com/stretchr/objx v0.5.3 h1:jmXUvGomnU1o3W/V5h2VEradbpJDwGrzugQQvL0POH4=
 github.com/stretchr/objx v0.5.3/go.mod h1:rDQraq+vQZU7Fde9LOZLr8Tax6zZvy4kuNKF+QYS+U0=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
+github.com/tarantool/go-gostcrypto v0.1.1-0.20260728125122-3791d459e0c3 h1:VUlDVY9tfnbajea7ZCzuL4eld+0OCYnIYyOMZWhBhJg=
+github.com/tarantool/go-gostcrypto v0.1.1-0.20260728125122-3791d459e0c3/go.mod h1:oieRliQHLNWjZ5qrpIamIFNHJ3j7dEvU4evBr6HeEFc=
 github.com/things-go/go-socks5 v0.1.0 h1:4f5dz0iMQ6cA4wseFmyLmCHmg3SWJTW92ndrKS6oERg=
 github.com/things-go/go-socks5 v0.1.0/go.mod h1:Riabiyu52kLsla0YmJqunt1c1JEl6iXSr4bRd7swFEA=
 github.com/vishvananda/netlink v1.3.1 h1:3AEMt62VKqz90r0tmNhog0r/PpWKmrEShJU0wJW6bV0=

@@ -31,3 +31,8 @@ versions and source locations are recorded in core/go.mod, core/go.sum,
 ui/android/app/build.gradle.kts, and the platform dependency manifests.
 Xray-core source is available at https://github.com/XTLS/Xray-core; the version
 used by this release is recorded in core/go.mod.
+
+The optional Kuznyechik-MGM Shadowsocks method uses go-gostcrypto, copyright
+(c) 2026 Tarantool AUTHORS, under the BSD 2-Clause License. Its full notice and
+license are included in LICENSES/go-gostcrypto-BSD-2-Clause.txt. This dependency
+retains its own license; DobbyVPN's BSL terms do not replace it.

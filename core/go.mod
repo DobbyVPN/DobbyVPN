@@ -16,7 +16,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20251008121831-8fe75611866e
 	github.com/xtls/xray-core v1.260327.1-0.20260710210335-64fada32b5b9
-	golang.getoutline.org/sdk v0.0.21
+	golang.getoutline.org/sdk v0.0.23
 	golang.getoutline.org/sdk/x v0.1.0
 	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.49.0
@@ -40,8 +40,9 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/sagernet/sing v0.5.1 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
-	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
+	github.com/shadowsocks/go-shadowsocks2 v0.1.5
 	github.com/stretchr/objx v0.5.3 // indirect
+	github.com/tarantool/go-gostcrypto v0.1.1-0.20260728125122-3791d459e0c3 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
 	go.uber.org/atomic v1.11.0 // indirect
@@ -69,6 +70,7 @@ require (
 	github.com/pion/stun/v3 v3.1.6 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af // indirect
+	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
@@ -82,3 +84,6 @@ require (
 )
 
 tool golang.org/x/mobile/cmd/gobind
+
+// Shared DobbyVPN extension; upstream module imports stay unchanged.
+replace golang.getoutline.org/sdk => github.com/DobbyVPN/outline-sdk v0.0.24-0.20261022143006-bace007bdf6f
