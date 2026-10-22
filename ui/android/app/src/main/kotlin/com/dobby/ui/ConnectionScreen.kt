@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.core.view.ViewCompat
 
 internal val Paper = Color(0xFFD9D2C9)
 internal val Ink = Color(0xFF141414)
@@ -346,6 +347,8 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
                     controller.createLogView(context).apply {
                         with(density) { setPadding(12.dp.roundToPx(), 6.dp.roundToPx(), 12.dp.roundToPx(), 0) }
                         onDoubleTap = { x, y -> menuAt = IntOffset(x, y) }
+                        ViewCompat.addAccessibilityAction(this, "Send logs") { _, _ -> controller.exportLogs(); true }
+                        ViewCompat.addAccessibilityAction(this, "Clear") { _, _ -> controller.clearLogs(); true }
                     }
                 },
                 modifier = Modifier.fillMaxSize().clipToBounds(),
