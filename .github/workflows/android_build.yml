@@ -105,7 +105,7 @@ jobs:
           pinned-tools: 'true'
 
       # Go 1.24.6 is only the minimum bootstrap compiler used by make.bash to
-      # build the pinned Go 1.26.9 toolchain from source. It never compiles the
+      # build the pinned Go 1.26.10 toolchain from source. It never compiles the
       # application; the version and binary used for that are verified below.
       - name: Set up bootstrap Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
