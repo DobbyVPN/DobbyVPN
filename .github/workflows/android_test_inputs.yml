@@ -1,0 +1,185 @@
+name: Compile Android test inputs
+
+on:
+  workflow_call:
+    outputs:
+      manifest_sha256:
+        value: ${{ jobs.android_companion.outputs.manifest_sha256 }}
+      producer_attempt:
+        value: ${{ jobs.android_companion.outputs.producer_attempt }}
+    inputs:
+      retention_days:
+        type: number
+        default: 7
+      build_packages:
+        type: string
+        default: ''
+      torturer_sha:
+        type: string
+        required: true
+      torturer_tree_sha256:
+        type: string
+        required: true
+      build_run_id:
+        type: string
+        required: true
+      source_sha:
+        type: string
+        required: true
+
+env:
+  DOBBY_BUILD_PACKAGES: ${{ inputs.build_packages }}
+
+jobs:
+  android_companion:
+    name: Compile reusable Android test companion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: release-tests
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      manifest_sha256: ${{ steps.compile.outputs.manifest_sha256 }}
+      producer_attempt: ${{ github.run_attempt }}
+    env:
+      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
+      DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
+      DOBBY_TEST_SHA: ${{ inputs.torturer_sha }}
+      DOBBY_TEST_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+      DOBBYVPN_COMMIT_SHA: ${{ inputs.source_sha || github.sha }}
+      SELECTED_BUILD_RUN_ID: ${{ inputs.build_run_id || github.run_id }}
+      PYTHONPATH: ${{ github.workspace }}/torturer
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Verify selected source and test identities
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+          TEST_SHA: ${{ inputs.torturer_sha }}
+          TEST_TREE: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C torturer rev-parse HEAD)" = "$TEST_SHA"
+          python3 - <<'PY'
+          import os, runpy
+          from pathlib import Path
+          helper = runpy.run_path(".github/scripts/release/release_guard.py")
+          if helper["tests_tree_sha256"](Path("torturer")) != os.environ["TEST_TREE"]:
+              raise SystemExit("private test tree differs from selected fingerprint")
+          PY
+      - name: Restore Android Gradle dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-modules: 'false'
+          gradle: 'true'
+          gradle-extra-dependency-files: torturer/source_tests/product/ui/android/app/android-test-wiring.gradle.kts
+      - name: Download selected unsigned Android package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/release/download_artifact.py \
+            "$SELECTED_BUILD_RUN_ID" dobbyvpn-android-unsign.apk release-packages
+      - name: Read Android SDK pins
+        id: android_java
+        run: |
+          set -euo pipefail
+          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: ${{ steps.android_java.outputs.java_major }}
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          cmdline-tools-version: '15859902'
+          packages: platform-tools
+      - name: Install pinned Android companion toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
+          sdkmanager --install \
+            "platforms;${{ steps.android_java.outputs.android_sdk_platform }}" \
+            "build-tools;${{ steps.android_java.outputs.android_build_tools }}" \
+            "ndk;${{ steps.android_java.outputs.android_ndk }}"
+      - name: Compile and attest reusable companion APK
+        id: compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          from source_tests.android import build_test_companion
+          from torturer_runner.compiled_test_inputs import command_tool_identity, file_sha256, write_manifest
+
+          product = Path(os.environ["DOBBY_PRODUCT_ROOT"])
+          tests = Path(os.environ["DOBBY_TESTS_ROOT"])
+          version = (product / "VERSION").read_text().strip()
+          apk = product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk"
+          output = Path(os.environ["RUNNER_TEMP"]) / "private-android-companion"
+          result = build_test_companion(
+              product, tests / "source_tests/product", apk, output,
+              product_sha=os.environ["DOBBYVPN_COMMIT_SHA"],
+              torturer_sha=os.environ["DOBBY_TEST_SHA"],
+              torturer_tree_sha256=os.environ["DOBBY_TEST_TREE_SHA256"],
+          )
+          sdk = Path(os.environ.get("ANDROID_SDK_ROOT") or os.environ["ANDROID_HOME"])
+          sdk_platform = "${{ steps.android_java.outputs.android_sdk_platform }}"
+          build_tools = "${{ steps.android_java.outputs.android_build_tools }}"
+          ndk = "${{ steps.android_java.outputs.android_ndk }}"
+          gradlew = product / "ui/android/gradlew"
+          java = Path(os.environ["JAVA_HOME"]) / "bin/java"
+          tools = {
+              "gradle": command_tool_identity(
+                  "gradle", [str(gradlew), "--version", "--no-daemon"],
+                  executable_path=gradlew, cwd=product,
+              ),
+              "java": command_tool_identity(
+                  "java", [str(java), "-version"], executable_path=java, cwd=product,
+              ),
+          }
+          properties = lambda path: file_sha256(path / "source.properties")
+          compatibility = {
+              "product_apk_sha256": result["pairing"]["unsigned_product_apk_sha256"],
+              "sdk_platform": sdk_platform,
+              "sdk_platform_sha256": properties(sdk / "platforms" / sdk_platform),
+              "build_tools": build_tools,
+              "build_tools_sha256": properties(sdk / "build-tools" / build_tools),
+              "ndk": ndk,
+              "ndk_sha256": properties(sdk / "ndk" / ndk),
+          }
+          digest = write_manifest(
+              output, kind="android-test-companion",
+              source_sha=os.environ["DOBBYVPN_COMMIT_SHA"],
+              tests_sha=os.environ["DOBBY_TEST_SHA"],
+              tests_tree_sha256=os.environ["DOBBY_TEST_TREE_SHA256"],
+              producer_attempt=int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              tools=tools, compatibility=compatibility,
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+              stream.write(f"manifest_sha256={digest}\n")
+          PY
+      - name: Retain compiled Android test inputs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-android-test-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/private-android-companion
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+

@@ -54,7 +54,7 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 	}
 
 	ctx := context.Background()
-	providers := protected_dialer.NewOutlineProviders(dnsCache)
+	providers := protected_dialer.NewOutlineProviders(dnsCache, registerPendingStreamConn)
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {
@@ -177,7 +177,19 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	switch network {
 
 	case networkTCP:
+		scope := newPendingStreamConnScope(ctx)
+		ctx = context.WithValue(ctx, streamConnScopeContextKey{}, scope)
+		defer scope.discard()
+
 		conn, err := d.streamDialer.DialStream(ctx, addr)
+		if err == nil && !scope.handoff() {
+			_ = conn.Close()
+			err = ctx.Err()
+			if err == nil {
+				err = net.ErrClosed
+			}
+			err = fmt.Errorf("stream dial completed after its pending connection was canceled: %w", err)
+		}
 		if err != nil {
 			writeLog := log.Errorf
 			if errors.Is(ctx.Err(), context.Canceled) {

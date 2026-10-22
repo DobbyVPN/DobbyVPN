@@ -31,14 +31,15 @@ jobs:
     runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     timeout-minutes: 45
     steps:
-      - name: Reject Release reruns
-        shell: bash
-        run: test "$GITHUB_RUN_ATTEMPT" = 1
-
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+
+      - name: Restore Go modules and verified tool archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          pinned-tools: ${{ inputs.platform == 'linux' || inputs.platform == 'windows' }}
 
       - name: Build package with the local platform command
         id: build
@@ -72,9 +73,9 @@ jobs:
           printf 'artifact=%s\n' "$package" >> "$GITHUB_OUTPUT"
 
       - name: Upload exact package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ steps.build.outputs.artifact }}
+          name: ${{ steps.build.outputs.artifact }}${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
           path: ${{ steps.build.outputs.package }}
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}

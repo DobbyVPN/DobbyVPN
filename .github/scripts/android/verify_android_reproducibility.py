@@ -11,12 +11,14 @@ import sys
 import zipfile
 
 from android_dependency_provenance import (
+    ANDROID_COMPOSE_BOM_VERSION,
     ANDROID_BUILD_TOOLS,
     ANDROID_NDK,
     GO_SOURCE_COMMIT,
     GO_VERSION,
     GRADLE_VERSION,
     JAVA_MAJOR,
+    KOTLIN_VERSION,
 )
 
 
@@ -34,8 +36,8 @@ TOOLCHAIN = {
     "android_ndk": ANDROID_NDK,
     "go": f"go{GO_VERSION}",
     "go_source_commit": GO_SOURCE_COMMIT,
-    "kotlin": "2.2.0",
-    "compose_bom": "androidx.compose:compose-bom:2025.12.00",
+    "kotlin": KOTLIN_VERSION,
+    "compose_bom": f"androidx.compose:compose-bom:{ANDROID_COMPOSE_BOM_VERSION}",
     "gradle": GRADLE_VERSION,
     "java": str(JAVA_MAJOR),
 }

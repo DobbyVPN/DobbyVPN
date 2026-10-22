@@ -1,10 +1,10 @@
-name: Publish
+name: Release
 
 on:
   workflow_dispatch:
     inputs:
       build_run_id:
-        description: Successful Build workflow run whose packages should be published.
+        description: Successful Build workflow run whose packages should be signed for the GitHub Release and internal TestFlight.
         required: true
         type: string
       test_run_id:
@@ -42,6 +42,7 @@ jobs:
       apple_build_number: ${{ steps.selection.outputs.apple_build_number }}
       build_manifest_sha256: ${{ steps.selection.outputs.build_manifest_sha256 }}
       test_result_sha256: ${{ steps.selection.outputs.test_result_sha256 }}
+      qualified_unsigned_apk_sha256: ${{ steps.selection.outputs.qualified_unsigned_apk_sha256 }}
     steps:
       - name: Require production branch
         run: |
@@ -87,6 +88,7 @@ jobs:
               "apple_build_number": build["apple_build_number"],
               "build_manifest_sha256": build["manifest_sha256"],
               "test_result_sha256": test["manifest_sha256"],
+              "qualified_unsigned_apk_sha256": test["android_pairing"]["unsigned_product_apk_sha256"],
           }
           with open(sys.argv[3], "a", encoding="utf-8") as output:
               for key, value in values.items():
@@ -158,12 +160,13 @@ jobs:
           ref: ${{ needs.resolve_inputs.outputs.source_sha }}
           path: selected-source
           persist-credentials: false
-      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1
         with:
           ruby-version: '3.3'
-          bundler-cache: false
-      - name: Install Ruby dependencies
-        run: cd publishing && bundle install --jobs 4 --retry 3
+          bundler-cache: true
+          working-directory: publishing
+        env:
+          BUNDLE_RETRY: "3"
       - name: Set release metadata
         run: |
           set -euo pipefail
@@ -321,20 +324,22 @@ jobs:
                 break
               end
             end
-            abort "Timed out waiting for Apple build processing; retry Publish to resume" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+            abort "Timed out waiting for Apple build processing; retry Release to resume" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
             puts "Waiting for Apple to process #{version} (#{number})"
             sleep 30
           end
           RUBY
-  publish_github_release:
-    name: Sign and publish selected Build packages
-    needs: [resolve_inputs, upload_testflight]
+  prepare_release:
+    name: Prepare signed Android package and public Release assets
+    needs: resolve_inputs
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: release
     permissions:
       actions: read
-      contents: write
+      contents: read
+    outputs:
+      artifact_digest: ${{ steps.upload_prepared_release.outputs.artifact-digest }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_SOURCE_SHA: ${{ needs.resolve_inputs.outputs.source_sha }}
@@ -344,6 +349,7 @@ jobs:
       TEST_RUN_NUMBER: ${{ needs.resolve_inputs.outputs.test_run_number }}
       BUILD_MANIFEST_SHA256: ${{ needs.resolve_inputs.outputs.build_manifest_sha256 }}
       TEST_RESULT_SHA256: ${{ needs.resolve_inputs.outputs.test_result_sha256 }}
+      QUALIFIED_UNSIGNED_APK_SHA256: ${{ needs.resolve_inputs.outputs.qualified_unsigned_apk_sha256 }}
       PUBLISH_RUN_ID: ${{ github.run_id }}
       PUBLISH_RUN_NUMBER: ${{ github.run_number }}
       RELEASE_NOTES: ${{ inputs.release_notes }}
@@ -353,7 +359,7 @@ jobs:
         with:
           ref: ${{ needs.resolve_inputs.outputs.source_sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
       - name: Read release metadata
         id: metadata
         env:
@@ -371,6 +377,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          staging="$RUNNER_TEMP/selected-release-artifacts"
+          mkdir "$staging"
           for artifact in \
             dobbyVPN-linux-debug.deb \
             dobbyVPN-windows-amd64-debug.msi \
@@ -383,25 +391,72 @@ jobs:
             dobbyVPN-macos-aarch64.pkg \
             dobbyVPN-macos-amd64.pkg \
             dobbyvpn-android-unsign.apk; do
+            destination="$staging/$artifact"
+            mkdir "$destination"
             python3 .github/scripts/release/download_artifact.py \
-              "$BUILD_RUN_ID" "$artifact" release
+              "$BUILD_RUN_ID" "$artifact" "$destination"
           done
+          provenance="$staging/dobbyvpn-android-provenance"
+          mkdir "$provenance"
           python3 .github/scripts/release/download_artifact.py \
-            "$TEST_RUN_ID" dobbyvpn-android-provenance release
+            "$TEST_RUN_ID" dobbyvpn-android-provenance "$provenance"
+      - name: Assemble selected Release artifacts without collisions
+        run: |
+          python3 - "$RUNNER_TEMP/selected-release-artifacts" release <<'PYTHON'
+          import shutil, sys
+          from pathlib import Path
+
+          staging, release = map(Path, sys.argv[1:])
+          if staging.is_symlink() or not staging.is_dir():
+              raise SystemExit("selected Release artifact staging directory is invalid")
+          if release.exists() or release.is_symlink():
+              raise SystemExit("Release assembly destination already exists")
+
+          copies = []
+          names = set()
+          artifact_dirs = sorted(staging.iterdir())
+          if not artifact_dirs:
+              raise SystemExit("no selected Release artifacts were downloaded")
+          for artifact_dir in artifact_dirs:
+              if artifact_dir.is_symlink() or not artifact_dir.is_dir():
+                  raise SystemExit(f"selected Release artifact directory is invalid: {artifact_dir.name}")
+              files = []
+              for path in sorted(artifact_dir.rglob("*")):
+                  if path.is_symlink():
+                      raise SystemExit(f"selected Release artifact contains a symlink: {artifact_dir.name}")
+                  if path.is_dir():
+                      continue
+                  if not path.is_file():
+                      raise SystemExit(f"selected Release artifact contains a non-file: {artifact_dir.name}")
+                  files.append(path)
+              if len(files) != 1:
+                  raise SystemExit(f"selected Release artifact must contain one file: {artifact_dir.name}")
+              source = files[0]
+              if source.name in names:
+                  raise SystemExit(f"selected Release artifact filename collision: {source.name}")
+              names.add(source.name)
+              copies.append((source, source.name))
+
+          release.mkdir()
+          for source, name in copies:
+              with source.open("rb") as source_file, (release / name).open("xb") as destination_file:
+                  shutil.copyfileobj(source_file, destination_file)
+          PYTHON
       - name: Read Android dependency versions
         id: pins
         run: |
           set -euo pipefail
-          for pin in java_major android_build_tools; do
+          for pin in java_major android_build_tools android_cmdline_tools; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           java-version: ${{ steps.pins.outputs.java_major }}
           distribution: temurin
-      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
+          cmdline-tools-version: '15859902'
           packages: build-tools;${{ steps.pins.outputs.android_build_tools }}
       - name: Verify and production-sign selected Android package
         env:
@@ -414,16 +469,15 @@ jobs:
         run: |
           set -euo pipefail
           unsigned="release/DobbyVPN-v$RELEASE_VERSION-unsign.apk"
-          python3 .github/scripts/release/download_artifact.py "$TEST_RUN_ID" test-result "$RUNNER_TEMP/selected-test-result"
-          python3 - "$RUNNER_TEMP/selected-test-result/test-result.json" "$unsigned" <<'PYTHON'
-          import hashlib, json, os, sys
+          python3 - "$unsigned" <<'PYTHON'
+          import hashlib, os, re, sys
           from pathlib import Path
-          sys.path.insert(0, ".github/scripts/release")
-          import test_manifest
-          raw = Path(sys.argv[1]).read_bytes()
-          if hashlib.sha256(raw).hexdigest() != os.environ["TEST_RESULT_SHA256"]:
-              raise SystemExit("selected Test result changed before publication")
-          test_manifest.validate_android_pairing(json.loads(raw), hashlib.sha256(Path(sys.argv[2]).read_bytes()).hexdigest())
+          expected = os.environ.get("QUALIFIED_UNSIGNED_APK_SHA256", "")
+          if not re.fullmatch(r"[0-9a-f]{64}", expected):
+              raise SystemExit("validated Test unsigned APK digest is missing or invalid")
+          actual = hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit("selected Android package does not match the validated Test result")
           PYTHON
           provenance="release/DobbyVPN-v$RELEASE_VERSION-android-provenance.json"
           signed="release/DobbyVPN-v$RELEASE_VERSION-sign.apk"
@@ -433,11 +487,9 @@ jobs:
           test -n "$sdk_root"
           apksigner="$sdk_root/build-tools/${{ steps.pins.outputs.android_build_tools }}/apksigner"
           test -x "$apksigner"
-          apkanalyzer="$(command -v apkanalyzer || true)"
-          if [[ -z "$apkanalyzer" ]]; then
-            apkanalyzer="$(find "$sdk_root/cmdline-tools" -type f -name apkanalyzer -perm -u+x -print -quit)"
-          fi
-          test -n "$apkanalyzer" && test -x "$apkanalyzer"
+          export APKANALYZER="$sdk_root/cmdline-tools/${{ steps.pins.outputs.android_cmdline_tools }}/bin/apkanalyzer"
+          test -x "$APKANALYZER"
+          apkanalyzer="$(python3 .github/scripts/android/android_tool_selection.py --tool apkanalyzer)"
 
           python3 .github/scripts/android/verify_android_reproducibility.py verify-provenance \
             --apk "$unsigned" --provenance "$provenance" \
@@ -462,8 +514,7 @@ jobs:
             --source-sha "$RELEASE_SOURCE_SHA" --version-name "$RELEASE_VERSION" \
             --version-code "$ANDROID_VERSION_CODE" \
             --signer-certificate-sha256 "$EXPECTED_ANDROID_SIGNER_SHA256"
-      - name: Create Build/Test/Publish provenance
-        id: provenance
+      - name: Create Build/Test/Release provenance
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
           ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
@@ -474,7 +525,6 @@ jobs:
             --version "$RELEASE_VERSION" --update-file release/version.txt
           printf '%s' "$RELEASE_NOTES" > "$RUNNER_TEMP/release-notes.md"
           notes_sha256="$(sha256sum "$RUNNER_TEMP/release-notes.md" | cut -d' ' -f1)"
-          echo "release_notes_sha256=$notes_sha256" >> "$GITHUB_OUTPUT"
           python3 .github/scripts/release/release_provenance.py create-published \
             --directory release --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
             --source-sha "$RELEASE_SOURCE_SHA" \
@@ -492,20 +542,191 @@ jobs:
             --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
             --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
             --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
+      - name: Stage public assets and exact Release notes
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dobbyvpn-release-prepared"
+          cp -a release "$RUNNER_TEMP/dobbyvpn-release-prepared/release"
+          cp -- "$RUNNER_TEMP/release-notes.md" "$RUNNER_TEMP/dobbyvpn-release-prepared/release-notes.md"
+      - name: Upload prepared public Release assets
+        id: upload_prepared_release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-release-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dobbyvpn-release-prepared
+          if-no-files-found: error
+          retention-days: 7
+  publish_github_release:
+    name: Publish verified selected Build packages
+    needs: [resolve_inputs, prepare_release, upload_testflight]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SOURCE_SHA: ${{ needs.resolve_inputs.outputs.source_sha }}
+      BUILD_RUN_ID: ${{ inputs.build_run_id }}
+      BUILD_RUN_NUMBER: ${{ needs.resolve_inputs.outputs.build_run_number }}
+      TEST_RUN_ID: ${{ inputs.test_run_id }}
+      TEST_RUN_NUMBER: ${{ needs.resolve_inputs.outputs.test_run_number }}
+      BUILD_MANIFEST_SHA256: ${{ needs.resolve_inputs.outputs.build_manifest_sha256 }}
+      TEST_RESULT_SHA256: ${{ needs.resolve_inputs.outputs.test_result_sha256 }}
+      PUBLISH_RUN_ID: ${{ github.run_id }}
+      PUBLISH_RUN_NUMBER: ${{ github.run_number }}
+      PREPARED_ARTIFACT_NAME: dobbyvpn-release-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+      PREPARED_ARTIFACT_DIGEST: ${{ needs.prepare_release.outputs.artifact_digest }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.resolve_inputs.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tools
+          persist-credentials: false
+      - name: Read release metadata
+        id: metadata
+        env:
+          RELEASE_VERSION: ${{ needs.resolve_inputs.outputs.version_name }}
+          ANDROID_VERSION_CODE: ${{ needs.resolve_inputs.outputs.android_version_code }}
+        run: |
+          set -euo pipefail
+          {
+            echo "version=$RELEASE_VERSION"
+            echo "version_code=$ANDROID_VERSION_CODE"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download and verify prepared Release artifact digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 release-tools/.github/scripts/release/download_artifact.py \
+            "$PUBLISH_RUN_ID" "$PREPARED_ARTIFACT_NAME" "$RUNNER_TEMP/prepared-release" \
+            --expected-digest "$PREPARED_ARTIFACT_DIGEST"
+      - name: Verify prepared Release notes and asset inventory
+        id: prepared
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          RELEASE_VERSION: ${{ needs.resolve_inputs.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/prepared-release" "$RELEASE_VERSION" <<'PYTHON'
+          import hashlib, os, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import publish_selection
+          root = Path(sys.argv[1])
+          if root.is_symlink() or not root.is_dir():
+              raise SystemExit("prepared Release artifact root is not a regular directory")
+          expected_root = {"release", "release-notes.md"}
+          if {item.name for item in root.iterdir()} != expected_root:
+              raise SystemExit("prepared Release artifact contains unexpected or missing root entries")
+          release_dir = root / "release"
+          notes_path = root / "release-notes.md"
+          if release_dir.is_symlink() or not release_dir.is_dir():
+              raise SystemExit("prepared Release assets are missing or not a regular directory")
+          if notes_path.is_symlink() or not notes_path.is_file():
+              raise SystemExit("prepared Release notes are missing or not a regular file")
+          notes = notes_path.read_bytes()
+          if notes != os.environ["RELEASE_NOTES"].encode("utf-8"):
+              raise SystemExit("prepared Release notes differ from the approved workflow input")
+          publish_selection._release_assets(release_dir, sys.argv[2])
+          notes_sha256 = hashlib.sha256(notes).hexdigest()
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"release_notes_sha256={notes_sha256}\n")
+          PYTHON
+      - name: Verify prepared Release provenance bindings before publication
+        env:
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+          ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+          APPLE_BUILD_NUMBER: ${{ needs.resolve_inputs.outputs.apple_build_number }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release/release_provenance.py verify-published \
+            --directory "$RUNNER_TEMP/prepared-release/release" \
+            --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
+            --source-sha "$RELEASE_SOURCE_SHA" \
+            --build-run-id "$BUILD_RUN_ID" --build-run-number "$BUILD_RUN_NUMBER" \
+            --test-run-id "$TEST_RUN_ID" --test-run-number "$TEST_RUN_NUMBER" \
+            --publish-run-id "$PUBLISH_RUN_ID" --publish-run-number "$PUBLISH_RUN_NUMBER" \
+            --android-version-code "$ANDROID_VERSION_CODE" --apple-build-number "$APPLE_BUILD_NUMBER" \
+            --build-manifest-sha256 "$BUILD_MANIFEST_SHA256" \
+            --test-result-sha256 "$TEST_RESULT_SHA256" \
+            --release-notes-sha256 "${{ steps.prepared.outputs.release_notes_sha256 }}" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-android-provenance.json" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-sign.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-unsign.apk" \
+            --asset version.txt --asset dobbyVPN-linux.deb --asset dobbyVPN-macos-aarch64.pkg \
+            --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
+            --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
+            --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
+            --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
+          cp -a "$RUNNER_TEMP/prepared-release/release" release
       - name: Create tag and GitHub Release
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
-          RELEASE_NOTES_SHA256: ${{ steps.provenance.outputs.release_notes_sha256 }}
+          RELEASE_NOTES_SHA256: ${{ steps.prepared.outputs.release_notes_sha256 }}
         run: |
           set -euo pipefail
           tag="v$RELEASE_VERSION"
+          release_lookup_dir="$(mktemp -d "$RUNNER_TEMP/release-list.XXXXXX")"
+          trap 'rm -rf -- "$release_lookup_dir"' EXIT
+          release_lookup_stdout="$release_lookup_dir/stdout"
+          release_lookup_stderr="$release_lookup_dir/stderr"
           set +e
-          release_view="$(gh release view "$tag" 2>&1)"
-          release_view_status=$?
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            >"$release_lookup_stdout" 2>"$release_lookup_stderr"
+          release_lookup_status=$?
           set -e
-          printf '%s\n' "$release_view"
-          if [ "$release_view_status" -eq 0 ]; then
-            echo "GitHub Release $tag already exists; checking its Build/Test/Publish provenance."
+          if [ "$release_lookup_status" -ne 0 ]; then
+            cat "$release_lookup_stdout"
+            cat "$release_lookup_stderr" >&2
+            printf 'Unable to list GitHub Releases before publication (gh api exited %s).\n' \
+              "$release_lookup_status" >&2
+            exit "$release_lookup_status"
+          fi
+          if exact_release_count="$(python3 - "$release_lookup_stdout" "$tag" <<'PYTHON'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as response_file:
+                  pages = json.load(response_file)
+          except (OSError, UnicodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"Invalid GitHub Releases response: {error}")
+
+          if not isinstance(pages, list) or not pages:
+              raise SystemExit("Invalid GitHub Releases response: expected a nonempty page array")
+          exact_matches = 0
+          for page in pages:
+              if not isinstance(page, list):
+                  raise SystemExit("Invalid GitHub Releases response: page is not an array")
+              for release in page:
+                  if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
+                      raise SystemExit("Invalid GitHub Releases response: release has no string tag_name")
+                  exact_matches += release["tag_name"] == sys.argv[2]
+
+          if exact_matches > 1:
+              raise SystemExit(f"GitHub Releases response contains duplicate exact tag {sys.argv[2]}")
+          print(exact_matches)
+          PYTHON
+          )"; then
+            :
+          else
+            release_parse_status=$?
+            cat "$release_lookup_stdout"
+            cat "$release_lookup_stderr" >&2
+            printf 'Unable to validate GitHub Releases before publication.\n' >&2
+            exit "$release_parse_status"
+          fi
+          cat "$release_lookup_stderr" >&2
+          if [ "$exact_release_count" -eq 1 ]; then
+            echo "GitHub Release $tag already exists; checking its Build/Test/Release provenance."
             mkdir "$RUNNER_TEMP/existing-release"
             gh release download "$tag" --dir "$RUNNER_TEMP/existing-release"
             python3 .github/scripts/release/release_provenance.py verify-published \
@@ -527,19 +748,23 @@ jobs:
               --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
               --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
           else
-            tag_record="$(git show-ref --verify "refs/tags/$tag" 2>&1)"
-            tag_status=$?
-            printf '%s\n' "$tag_record"
-            if [ "$tag_status" -eq 0 ]; then
+            echo "GitHub Release $tag is absent from the complete paginated list; checking the local tag."
+            if git show-ref --verify --quiet "refs/tags/$tag"; then
               test "$(git rev-list -n1 "$tag^{commit}")" = "$RELEASE_SOURCE_SHA"
             else
+              tag_lookup_status=$?
+              if [ "$tag_lookup_status" -ne 1 ]; then
+                printf 'Unable to inspect exact release tag ref refs/tags/%s (git show-ref exited %s).\n' \
+                  "$tag" "$tag_lookup_status" >&2
+                exit "$tag_lookup_status"
+              fi
               git config user.name github-actions[bot]
               git config user.email 41898282+github-actions[bot]@users.noreply.github.com
               git tag --annotate "$tag" "$RELEASE_SOURCE_SHA" --message "DobbyVPN $tag"
               git push origin "refs/tags/$tag"
             fi
             gh release create "$tag" --verify-tag --title "$tag" \
-              --notes-file "$RUNNER_TEMP/release-notes.md" release/*
+              --notes-file "$RUNNER_TEMP/prepared-release/release-notes.md" release/*
           fi
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > "$RUNNER_TEMP/release.json"
           python3 - "$RUNNER_TEMP/release.json" <<'PYTHON'
@@ -550,14 +775,14 @@ jobs:
               raise SystemExit("GitHub Release body is missing or invalid")
           actual = hashlib.sha256(body.encode("utf-8")).hexdigest()
           if actual != os.environ["RELEASE_NOTES_SHA256"]:
-              raise SystemExit("GitHub Release notes do not match the reviewed Publish input")
+              raise SystemExit("GitHub Release notes do not match the reviewed Release input")
           PYTHON
       - name: Verify published GitHub Release assets
         env:
           RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
           ANDROID_VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
           APPLE_BUILD_NUMBER: ${{ needs.resolve_inputs.outputs.apple_build_number }}
-          RELEASE_NOTES_SHA256: ${{ steps.provenance.outputs.release_notes_sha256 }}
+          RELEASE_NOTES_SHA256: ${{ steps.prepared.outputs.release_notes_sha256 }}
         run: |
           set -euo pipefail
           mkdir -p published
@@ -585,10 +810,10 @@ jobs:
           release = json.load(open(sys.argv[1], encoding="utf-8"))
           body = release.get("body")
           if not isinstance(body, str) or hashlib.sha256(body.encode("utf-8")).hexdigest() != os.environ["RELEASE_NOTES_SHA256"]:
-              raise SystemExit("published GitHub Release notes do not match the reviewed Publish input")
+              raise SystemExit("published GitHub Release notes do not match the reviewed Release input")
           PYTHON
-      - name: Record the successful Publish identity for Release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - name: Record the successful Release identity for Delivery
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: publish-result
           path: published/release-provenance.json

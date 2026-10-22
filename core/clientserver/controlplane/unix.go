@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,8 +37,15 @@ func expectedPeerUID() (int, error) {
 }
 
 func ControlSocketPath() (string, error) {
+	return controlSocketPathForOS(runtime.GOOS)
+}
+
+func controlSocketPathForOS(goos string) (string, error) {
 	if path := os.Getenv("DOBBYVPN_CONTROL_SOCKET"); path != "" {
 		return path, nil
+	}
+	if goos == "darwin" {
+		return "/var/run/dobbyvpn/control.sock", nil
 	}
 	if currentUID() == 0 {
 		uid, err := expectedPeerUID()

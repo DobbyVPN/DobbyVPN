@@ -6,6 +6,23 @@ on:
       android_pairing:
         value: ${{ jobs.qualification.outputs.android_pairing }}
     inputs:
+      diagnostic_scenario:
+        description: Optional Android scenario or isolated N11 diagnosis; Test leaves empty.
+        type: string
+        default: ''
+      android_companion_manifest_sha256:
+        description: Digest of the separately compiled Android test input manifest.
+        type: string
+        default: ''
+      android_companion_producer_attempt:
+        description: Original compilation attempt retained across execution retries.
+        type: string
+        default: ''
+      build_packages:
+        description: Exact readiness-selected Build artifacts, when overlapping Build.
+        type: string
+        required: false
+        default: ''
       torturer_sha:
         required: true
         type: string
@@ -22,7 +39,7 @@ on:
         type: string
         default: ''
       render_artifact_name:
-        description: Artifact containing the shared Render VPN profile.
+        description: Artifact containing this platform’s Render VPN profile.
         required: true
         type: string
       build_run_id:
@@ -38,6 +55,9 @@ on:
       retention_days:
         default: 1
         type: number
+
+env:
+  DOBBY_BUILD_PACKAGES: ${{ inputs.build_packages }}
 
 jobs:
   qualification:
@@ -60,15 +80,30 @@ jobs:
       ARCHITECTURE: ${{ inputs.architecture }}
       DOBBYVPN_COMMIT_SHA: ${{ inputs.source_sha || github.sha }}
       SELECTED_BUILD_RUN_ID: ${{ inputs.build_run_id || github.run_id }}
+      ANDROID_DIAGNOSTIC_SCENARIO: ${{ inputs.diagnostic_scenario }}
     steps:
-      - name: Reject hosted mini reruns before package qualification
+      - name: Initialize runner-local qualification paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "RESULT_DIR=$RUNNER_TEMP/dobbyvpn-release-result"
+            echo "RUN_DIR=$RUNNER_TEMP/dobbyvpn-release-run"
+            echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-release-diagnostics"
+            echo "RESULT_PATH=$RUNNER_TEMP/dobbyvpn-release-result/functional-result.json"
+            echo "DESKTOP_PACKAGE_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/desktop-package.json"
+            echo "INSTALLED_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/installed.json"
+            echo "ANDROID_SIGNED_DIR=$RUNNER_TEMP/dobbyvpn-android-test-signed"
+          } >> "$GITHUB_ENV"
+          if [ "$PLATFORM" = linux ]; then
+            echo "CONTROL_DIR=$RUNNER_TEMP/dobbyvpn-release-control" >> "$GITHUB_ENV"
+          fi
+
+      - name: Require main before package qualification
         shell: bash
         run: |
           test "$GITHUB_REF" = refs/heads/main
-          if [[ "$GITHUB_RUN_ATTEMPT" != "1" ]]; then
-            echo "Hosted mini reruns are unsupported; start a fresh calling workflow run." >&2
-            exit 1
-          fi
+          test "$GITHUB_RUN_ATTEMPT" -ge 1
 
       - name: Check out selected source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -100,6 +135,14 @@ jobs:
               raise SystemExit("private test identity differs from reserved candidate")
           PYTHON
 
+      - name: Restore Android Gradle dependency archives
+        if: inputs.platform == 'android'
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-modules: 'false'
+          gradle: 'true'
+          gradle-extra-dependency-files: torturer/source_tests/product/ui/android/app/android-test-wiring.gradle.kts
+
       - name: Download qualification artifacts
         shell: bash
         env:
@@ -126,22 +169,12 @@ jobs:
           python3 .github/scripts/release/download_artifact.py \
             "$GITHUB_RUN_ID" "$RENDER_ARTIFACT_NAME" render
 
-      - name: Initialize runner-local qualification paths
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo "RESULT_DIR=$RUNNER_TEMP/dobbyvpn-release-result"
-            echo "RUN_DIR=$RUNNER_TEMP/dobbyvpn-release-run"
-            echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-release-diagnostics"
-            echo "RESULT_PATH=$RUNNER_TEMP/dobbyvpn-release-result/functional-result.json"
-            echo "DESKTOP_PACKAGE_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/desktop-package.json"
-            echo "INSTALLED_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/installed.json"
-            echo "ANDROID_SIGNED_DIR=$RUNNER_TEMP/dobbyvpn-android-test-signed"
-          } >> "$GITHUB_ENV"
-          if [ "$PLATFORM" = linux ]; then
-            echo "CONTROL_DIR=$RUNNER_TEMP/dobbyvpn-release-control" >> "$GITHUB_ENV"
-          fi
+      - name: Download producer's compiled Android companion
+        if: inputs.platform == 'android'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dobbyvpn-android-test-inputs-${{ github.run_id }}-${{ inputs.android_companion_producer_attempt }}
+          path: ${{ runner.temp }}/private-android-companion
 
       - name: Check package and prepare qualification directories
         shell: bash
@@ -176,55 +209,137 @@ jobs:
           [[ "$deadline" =~ ^[0-9]+$ ]]
           printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
 
-      - name: Read Android Java version
+      - name: Read Android SDK pins
         id: android_java
         if: inputs.platform == 'android'
         run: |
           set -euo pipefail
-          value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin java_major)"
-          echo "java_major=$value" >> "$GITHUB_OUTPUT"
+          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
 
       - name: Install pinned JDK for temporary Android test signing
         if: inputs.platform == 'android'
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ steps.android_java.outputs.java_major }}
 
       - name: Install Android tooling for selected package qualification
         if: inputs.platform == 'android'
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
+          cmdline-tools-version: '15859902'
           packages: platform-tools
 
-      - name: Build private Android companion for the selected product APK
+      - name: Validate reusable Android companion against current tools and package
         id: android_companion
         if: inputs.platform == 'android'
         shell: bash
-        env:
-          TMPDIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
-          compile_sdk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_compile_sdk)"
-          build_tools="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_build_tools)"
-          ndk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_ndk)"
-          sdkmanager --install "platforms;android-$compile_sdk" "build-tools;$build_tools" "ndk;$ndk"
+          sdk_platform="${{ steps.android_java.outputs.android_sdk_platform }}"
+          build_tools="${{ steps.android_java.outputs.android_build_tools }}"
+          ndk="${{ steps.android_java.outputs.android_ndk }}"
+          sdk_install_stdout="$RUN_DIR/android-companion-sdk-install.stdout.log"
+          sdk_install_stderr="$RUN_DIR/android-companion-sdk-install.stderr.log"
+          if sdkmanager --install "platforms;$sdk_platform" "build-tools;$build_tools" "ndk;$ndk" \
+            >"$sdk_install_stdout" 2>"$sdk_install_stderr"; then
+            sdk_install_status=0
+          else
+            sdk_install_status=$?
+          fi
+          sdk_stdout_forward_status=0
+          sdk_stderr_forward_status=0
+          if cat "$sdk_install_stdout"; then
+            :
+          else
+            sdk_stdout_forward_status=$?
+          fi
+          if cat "$sdk_install_stderr" >&2; then
+            :
+          else
+            sdk_stderr_forward_status=$?
+          fi
+          if [ "$sdk_install_status" -ne 0 ]; then
+            if [ "$sdk_stdout_forward_status" -ne 0 ]; then
+              printf 'could not forward Android companion SDK install stdout (exit %s)\n' \
+                "$sdk_stdout_forward_status" >&2 || true
+            fi
+            if [ "$sdk_stderr_forward_status" -ne 0 ]; then
+              printf 'could not forward Android companion SDK install stderr (exit %s)\n' \
+                "$sdk_stderr_forward_status" >&2 || true
+            fi
+            exit "$sdk_install_status"
+          fi
+          if [ "$sdk_stdout_forward_status" -ne 0 ] || [ "$sdk_stderr_forward_status" -ne 0 ]; then
+            printf 'could not forward Android companion SDK install output (stdout exit %s, stderr exit %s)\n' \
+              "$sdk_stdout_forward_status" "$sdk_stderr_forward_status" >&2 || true
+            if [ "$sdk_stdout_forward_status" -ne 0 ]; then
+              exit "$sdk_stdout_forward_status"
+            fi
+            exit "$sdk_stderr_forward_status"
+          fi
           python3 - <<'PYTHON'
           import json, os
           from pathlib import Path
-          from source_tests.android import build_test_companion
+          from torturer_runner.android_instrumentation import validate_reusable_test_companion
+          from torturer_runner.compiled_test_inputs import command_tool_identity, file_sha256
           product = Path(os.environ["DOBBY_PRODUCT_ROOT"])
           version = (product / "VERSION").read_text().strip()
-          result = build_test_companion(
-              product, Path(os.environ["DOBBY_TESTS_ROOT"]) / "source_tests/product",
-              product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk",
-              Path(os.environ["RUNNER_TEMP"]) / "private-android-companion",
-              product_sha=os.environ["DOBBYVPN_COMMIT_SHA"],
-              torturer_sha=os.environ["DOBBY_TEST_SHA"],
-              torturer_tree_sha256=os.environ["DOBBY_TEST_TREE_SHA256"],
+          sdk = Path(os.environ.get("ANDROID_SDK_ROOT") or os.environ["ANDROID_HOME"])
+          sdk_platform = "${{ steps.android_java.outputs.android_sdk_platform }}"
+          build_tools = "${{ steps.android_java.outputs.android_build_tools }}"
+          ndk = "${{ steps.android_java.outputs.android_ndk }}"
+          gradlew = product / "ui/android/gradlew"
+          java = Path(os.environ["JAVA_HOME"]) / "bin/java"
+          tools = {
+              "gradle": command_tool_identity(
+                  "gradle", [str(gradlew), "--version", "--no-daemon"],
+                  executable_path=gradlew, cwd=product,
+              ),
+              "java": command_tool_identity(
+                  "java", [str(java), "-version"], executable_path=java, cwd=product,
+              ),
+          }
+          properties = lambda path: file_sha256(path / "source.properties")
+          compatibility = {
+              "product_apk_sha256": file_sha256(
+                  product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk"
+              ),
+              "sdk_platform": sdk_platform,
+              "sdk_platform_sha256": properties(sdk / "platforms" / sdk_platform),
+              "build_tools": build_tools,
+              "build_tools_sha256": properties(sdk / "build-tools" / build_tools),
+              "ndk": ndk,
+              "ndk_sha256": properties(sdk / "ndk" / ndk),
+          }
+          root = Path(os.environ["RUNNER_TEMP"]) / "private-android-companion"
+          manifest_sha = "${{ inputs.android_companion_manifest_sha256 }}"
+          producer_attempt = int("${{ inputs.android_companion_producer_attempt }}")
+          source_sha = os.environ["DOBBYVPN_COMMIT_SHA"]
+          tests_sha = os.environ["DOBBY_TEST_SHA"]
+          tests_tree = os.environ["DOBBY_TEST_TREE_SHA256"]
+          companion_name = "dobbyvpn-test-companion-unsigned.apk"
+          companion = validate_reusable_test_companion(
+              root, companion_relative_path=companion_name,
+              expected_manifest_sha256=manifest_sha, source_sha=source_sha,
+              tests_sha=tests_sha, tests_tree_sha256=tests_tree,
+              producer_attempt=producer_attempt, tools=tools,
+              compatibility=compatibility,
           )
+          apk_sha = file_sha256(companion)
+          pairing = {
+              "product_sha": source_sha,
+              "unsigned_product_apk_sha256": compatibility["product_apk_sha256"],
+              "test_companion_sha256": apk_sha,
+              "torturer_repository": "DobbyVPN/Torturer",
+              "torturer_sha": tests_sha,
+              "torturer_tree_sha256": tests_tree,
+          }
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write("pairing=" + json.dumps(result["pairing"], separators=(",", ":")) + "\n")
+              output.write("pairing=" + json.dumps(pairing, separators=(",", ":")) + "\n")
           PYTHON
 
       - name: Validate and install the exact selected native package
@@ -296,6 +411,14 @@ jobs:
               --platform "$PLATFORM" --arch "$architecture" --version "$version" \
               --source-sha "$DOBBYVPN_COMMIT_SHA" --package "$package" \
               --output "$DESKTOP_PACKAGE_DESCRIPTOR"
+            if [ "$PLATFORM" = linux ]; then
+              # Exercise the selected DEB before functional setup stops/restarts it.
+              export DOBBYVPN_COMMAND_DEADLINE_MONOTONIC="$(python3 -c 'import os,time; print(time.monotonic() + max(0, float(os.environ["RUN_DEADLINE_EPOCH"]) - time.time()))')"
+              run_timed linux-installer-migration python3 -m torturer_runner.installer_migration \
+                --platform linux --package "$package" --current-version "$version" \
+                --package-sha256 "$(python3 -c 'import json,os; print(json.load(open(os.environ["DESKTOP_PACKAGE_DESCRIPTOR"]))["package_sha256"])')" \
+                --log-dir "$RUN_DIR/installer-migration" --temp-parent "$RUN_DIR"
+            fi
             install_arguments=(
               install
               --build-descriptor "$DESKTOP_PACKAGE_DESCRIPTOR"
@@ -345,9 +468,49 @@ jobs:
           case "$PLATFORM" in
             android)
               sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK root is unavailable}}"
-              compile_sdk="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_compile_sdk)"
+              sdk_platform="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_sdk_platform)"
               build_tools="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin android_build_tools)"
-              run_timed android-sdk-install sdkmanager --install 'platform-tools' "platforms;android-$compile_sdk" "build-tools;$build_tools" 'emulator' "system-images;android-$compile_sdk;google_apis;x86_64"
+              sdk_install_stdout="$RUN_DIR/android-sdk-install.stdout.log"
+              sdk_install_stderr="$RUN_DIR/android-sdk-install.stderr.log"
+              if run_timed android-sdk-install sdkmanager --install \
+                'platform-tools' "platforms;$sdk_platform" "build-tools;$build_tools" \
+                'emulator' 'system-images;android-35;google_apis;x86_64' \
+                >"$sdk_install_stdout" 2>"$sdk_install_stderr"; then
+                sdk_install_status=0
+              else
+                sdk_install_status=$?
+              fi
+              sdk_stdout_forward_status=0
+              sdk_stderr_forward_status=0
+              if cat "$sdk_install_stdout"; then
+                :
+              else
+                sdk_stdout_forward_status=$?
+              fi
+              if cat "$sdk_install_stderr" >&2; then
+                :
+              else
+                sdk_stderr_forward_status=$?
+              fi
+              if [ "$sdk_install_status" -ne 0 ]; then
+                if [ "$sdk_stdout_forward_status" -ne 0 ]; then
+                  printf 'could not forward Android SDK install stdout (exit %s)\n' \
+                    "$sdk_stdout_forward_status" >&2 || true
+                fi
+                if [ "$sdk_stderr_forward_status" -ne 0 ]; then
+                  printf 'could not forward Android SDK install stderr (exit %s)\n' \
+                    "$sdk_stderr_forward_status" >&2 || true
+                fi
+                exit "$sdk_install_status"
+              fi
+              if [ "$sdk_stdout_forward_status" -ne 0 ] || [ "$sdk_stderr_forward_status" -ne 0 ]; then
+                printf 'could not forward Android SDK install output (stdout exit %s, stderr exit %s)\n' \
+                  "$sdk_stdout_forward_status" "$sdk_stderr_forward_status" >&2 || true
+                if [ "$sdk_stdout_forward_status" -ne 0 ]; then
+                  exit "$sdk_stdout_forward_status"
+                fi
+                exit "$sdk_stderr_forward_status"
+              fi
               unsigned_app="$GITHUB_WORKSPACE/release-packages/DobbyVPN-v$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/VERSION")-unsign.apk"
               unsigned_companion="$RUNNER_TEMP/private-android-companion/dobbyvpn-test-companion-unsigned.apk"
               signed_app="$ANDROID_SIGNED_DIR/DobbyVPN-test.apk"
@@ -369,8 +532,9 @@ jobs:
               export ANDROID_USER_HOME="$android_sdk_home/.android"
               export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
               mkdir -p "$ANDROID_AVD_HOME"
+              printf 'ANDROID_AVD_HOME=%s\n' "$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
               printf 'Android AVD home: %s\n' "$ANDROID_AVD_HOME"
-              run_timed android-avd-create avdmanager create avd --force --name dobbyvpn-release --package "system-images;android-$compile_sdk;google_apis;x86_64" --device pixel_2
+              run_timed android-avd-create avdmanager create avd --force --name dobbyvpn-release --package 'system-images;android-35;google_apis;x86_64' --device pixel_2
               test -s "$ANDROID_AVD_HOME/dobbyvpn-release.ini"
               avd_list_stdout="$RUN_DIR/android-avds.stdout.log"
               avd_list_stderr="$RUN_DIR/android-avds.stderr.log"
@@ -388,9 +552,65 @@ jobs:
               test "$avd_found" = true
               sudo -n chown "$(id -un)" /dev/kvm
               run_timed android-emulator-acceleration-check "$emulator_bin" -accel-check
-              "$emulator_bin" -avd dobbyvpn-release -no-window -no-audio -no-boot-anim -no-snapshot \
+              adb_listener_stdout="$RUN_DIR/android-adb-listener-5037.stdout.log"
+              adb_listener_stderr="$RUN_DIR/android-adb-listener-5037.stderr.log"
+              if run_timed android-adb-listener-5037 ss -H -ltnp 'sport = :5037' \
+                >"$adb_listener_stdout" 2>"$adb_listener_stderr"; then
+                adb_listener_status=0
+              else
+                adb_listener_status=$?
+              fi
+              cat "$adb_listener_stdout" || printf 'could not forward Android ADB listener stdout: %s\n' "$adb_listener_stdout" >&2
+              cat "$adb_listener_stderr" >&2 || printf 'could not forward Android ADB listener stderr: %s\n' "$adb_listener_stderr" >&2
+              if [ "$adb_listener_status" -ne 0 ]; then
+                printf 'Host ADB tracing unavailable: listener inspection failed (status %s); leaving any existing ADB server untouched.\n' \
+                  "$adb_listener_status" >&2
+              elif [ -s "$adb_listener_stdout" ]; then
+                printf 'Host ADB tracing unavailable: an existing listener uses port 5037; leaving it untouched.\n' >&2
+              else
+                adb_start_stdout="$RUN_DIR/android-adb-start-server.stdout.log"
+                adb_start_stderr="$RUN_DIR/android-adb-start-server.stderr.log"
+                if run_timed android-adb-start-server env ADB_TRACE=transport,sockets \
+                  ANDROID_ADB_LOG_PATH="$RUN_DIR/android-adb-server.log" adb start-server \
+                  >"$adb_start_stdout" 2>"$adb_start_stderr"; then
+                  adb_start_status=0
+                else
+                  adb_start_status=$?
+                fi
+                cat "$adb_start_stdout" || printf 'could not forward Android ADB start-server stdout: %s\n' "$adb_start_stdout" >&2
+                cat "$adb_start_stderr" >&2 || printf 'could not forward Android ADB start-server stderr: %s\n' "$adb_start_stderr" >&2
+                if [ "$adb_start_status" -ne 0 ]; then
+                  printf 'Host ADB tracing unavailable: adb start-server failed (status %s); no retry or server restart attempted.\n' \
+                    "$adb_start_status" >&2
+                else
+                  adb_status_stdout="$RUN_DIR/android-adb-server-status.stdout.log"
+                  adb_status_stderr="$RUN_DIR/android-adb-server-status.stderr.log"
+                  if run_timed android-adb-server-status adb server-status \
+                    >"$adb_status_stdout" 2>"$adb_status_stderr"; then
+                    adb_status_status=0
+                  else
+                    adb_status_status=$?
+                  fi
+                  cat "$adb_status_stdout" || printf 'could not forward Android ADB server-status stdout: %s\n' "$adb_status_stdout" >&2
+                  cat "$adb_status_stderr" >&2 || printf 'could not forward Android ADB server-status stderr: %s\n' "$adb_status_stderr" >&2
+                  if [ "$adb_status_status" -ne 0 ]; then
+                    printf 'Host ADB server status unavailable: adb server-status failed (status %s).\n' \
+                      "$adb_status_status" >&2
+                  fi
+                fi
+              fi
+              # The captured 67,072-byte adbd VSOCK write failed ENOMEM. Limit each
+              # upstream linear skb packet allocation to 16 KiB; fragmentation remains
+              # a hypothesis, and the guest readback below verifies this launch setting.
+              "$emulator_bin" -avd dobbyvpn-release -debug adb,adbserver,adbclient,log \
+                -no-window -no-audio -no-boot-anim -no-snapshot \
+                -qemu -append 'vmw_vsock_virtio_transport_common.virtio_transport_max_vsock_pkt_buf_size=16384' \
                 > "$RUN_DIR/android-emulator.stdout.log" \
                 2> "$RUN_DIR/android-emulator.stderr.log" &
+              emulator_pid=$!
+              printf '%s\n' "$emulator_pid" > "$RUN_DIR/android-emulator.pid"
+              export ANDROID_EMULATOR_PID="$emulator_pid"
+              printf 'ANDROID_EMULATOR_PID=%s\n' "$emulator_pid" >> "$GITHUB_ENV"
               if ! run_timed android-emulator-adb-ready timeout 120s adb wait-for-device; then
                 echo "Android emulator did not become visible to ADB" >&2
                 exit 1
@@ -404,7 +624,55 @@ jobs:
                 test "$booted" = true
               }
               run_timed android-emulator-boot wait_for_android_boot
+              adbd_trace_status=0
+              adbd_setup_deadline="$(python3 -c 'import os,time; print(min(float(os.environ["RUN_DEADLINE_EPOCH"]), time.time() + 30))')"
+              run_timed android-adbd-trace-prepare python3 -m torturer_runner.android_adbd_diagnostics prepare \
+                --adb "$(command -v adb)" --run-dir "$RUN_DIR" --deadline-epoch "$adbd_setup_deadline" \
+                || adbd_trace_status=$?
               run_timed android-emulator-root timeout 120s bash .github/scripts/android/require_adb_root.sh "$RUN_DIR"
+              if [ "$adbd_trace_status" -eq 0 ]; then
+                adbd_verify_deadline="$(python3 -c 'import os,time; print(min(float(os.environ["RUN_DEADLINE_EPOCH"]), time.time() + 30))')"
+                run_timed android-adbd-trace-verify python3 -m torturer_runner.android_adbd_diagnostics verify \
+                  --adb "$(command -v adb)" --run-dir "$RUN_DIR" --deadline-epoch "$adbd_verify_deadline" \
+                  || adbd_trace_status=$?
+              fi
+              if [ "$adbd_trace_status" -ne 0 ]; then
+                printf 'Android daemon tracing unavailable (status %s); complete setup diagnostics are retained.\n' "$adbd_trace_status" >&2
+                if [ "$ANDROID_DIAGNOSTIC_SCENARIO" = android.n11-consent-grant-selection ]; then
+                  exit "$adbd_trace_status"
+                fi
+              fi
+              # Verify the guest VSOCK packet limit requested at launch before installation.
+              vsock_limit_stdout="$RUN_DIR/android-vsock-packet-limit.stdout.log"
+              vsock_limit_stderr="$RUN_DIR/android-vsock-packet-limit.stderr.log"
+              if ! vsock_limit_timeout="$(python3 -c 'import os,time; remaining=float(os.environ["RUN_DEADLINE_EPOCH"])-time.time(); print(f"{remaining:.9f}" if remaining > 0 else "")')"; then
+                printf 'Android VSOCK packet limit readback cannot compute remaining qualification time; refusing to run tests.\n' >&2
+                exit 1
+              fi
+              if [ -z "$vsock_limit_timeout" ]; then
+                printf 'Android VSOCK packet limit readback skipped: qualification deadline has expired; refusing to run tests.\n' >&2
+                exit 1
+              fi
+              if run_timed android-vsock-packet-limit-readback timeout --signal=KILL "${vsock_limit_timeout}s" adb shell cat \
+                /sys/module/vmw_vsock_virtio_transport_common/parameters/virtio_transport_max_vsock_pkt_buf_size \
+                >"$vsock_limit_stdout" 2>"$vsock_limit_stderr"; then
+                vsock_limit_status=0
+              else
+                vsock_limit_status=$?
+              fi
+              cat "$vsock_limit_stdout"
+              cat "$vsock_limit_stderr" >&2
+              if [ "$vsock_limit_status" -ne 0 ]; then
+                printf 'Android VSOCK packet limit readback failed (status %s); refusing to run tests.\n' \
+                  "$vsock_limit_status" >&2
+                exit "$vsock_limit_status"
+              fi
+              vsock_limit_value="$(tr -d '\r' < "$vsock_limit_stdout")"
+              if [ "$vsock_limit_value" != 16384 ]; then
+                printf 'Android VSOCK packet limit mismatch: expected 16384, observed:\n' >&2
+                cat "$vsock_limit_stdout" >&2
+                exit 1
+              fi
               signed="$signed_app"
               companion="$signed_companion"
               test -f "$signed"; test -f "$companion"
@@ -434,6 +702,15 @@ jobs:
               printf 'ADB=%s\n' "$(command -v adb)" >> "$GITHUB_ENV"
               ;;
           esac
+
+      - name: Start Android live ADB diagnostics
+        if: inputs.platform == 'android'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/android/android_emulator_diagnostics.py start \
+            --adb "$ADB" --run-dir "$RUN_DIR" --deadline-epoch "$RUN_DEADLINE_EPOCH"
 
       - name: Record observed platform version
         shell: bash
@@ -466,10 +743,23 @@ jobs:
           printf 'PLATFORM_VERSION=%s\n' "$platform_version" >> "$GITHUB_ENV"
 
       - name: Exercise the native Android UI
-        if: inputs.platform == 'android'
+        if: inputs.platform == 'android' && inputs.diagnostic_scenario != 'android.n11-consent-grant-selection'
         shell: bash
         run: |
           set -euo pipefail
+          # Start the 420-second UI allowance before setup diagnostics and
+          # method selection, and clip it to the inherited qualification end.
+          ui_deadline_monotonic="$(python3 - <<'PYTHON'
+          import os
+          import time
+
+          monotonic_now = time.monotonic()
+          wall_now = time.time()
+          inherited_remaining = max(0.0, float(os.environ["RUN_DEADLINE_EPOCH"]) - wall_now)
+          print(f"{min(monotonic_now + 420.0, monotonic_now + inherited_remaining):.9f}")
+          PYTHON
+          )"
+          export ANDROID_UI_SUPERVISION_DEADLINE_MONOTONIC="$ui_deadline_monotonic"
           # This is the same release APK installed for the functional lane,
           # not the renderer-only helper. UI Automator launches the production
           # Compose activity, enters synthetic invalid input through the native
@@ -478,16 +768,65 @@ jobs:
           # traffic, Connect, and Disconnect checks.
           ui_stdout="$RUN_DIR/android-native-ui.stdout.log"
           ui_stderr="$RUN_DIR/android-native-ui.stderr.log"
+          # Torturer owns serial lookup and the one bounded IME capture.
+          capture_android_ime_diagnostics() {
+            local phase="$1"
+            python3 - "$phase" <<'PYTHON'
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          from torturer_runner.local_vm_android import capture_android_ime_diagnostics
+
+          phase = sys.argv[1]
+          run_dir = Path(os.environ["RUN_DIR"])
+          logs = run_dir / f"android-native-ui-ime-{phase}"
+          if phase == "failure":
+              # Failure evidence may use bounded time left in the qualification
+              # recovery window; it never extends the UI allowance or starts tests.
+              global_remaining = max(0.0, float(os.environ["RUN_DEADLINE_EPOCH"]) - time.time())
+              owner_deadline = time.monotonic() + global_remaining
+          else:
+              owner_deadline = float(os.environ["ANDROID_UI_SUPERVISION_DEADLINE_MONOTONIC"])
+          for error in capture_android_ime_diagnostics(
+              os.environ["ADB"],
+              run_dir=run_dir,
+              logs=logs,
+              phase=phase,
+              owner_deadline=owner_deadline,
+              environment=os.environ.copy(),
+          ):
+              print(error, file=sys.stderr)
+          PYTHON
+          }
+          capture_android_ime_diagnostics setup || true
           ui_status=0
           ui_timed_out=false
           ui_methods="$(PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
             python3 -c 'from torturer_runner.native_cases import ANDROID_DEFAULT_UI_METHODS; print(",".join(ANDROID_DEFAULT_UI_METHODS))')"
-          # The 20 lifecycle cycles reached final reopen at the former 300s
-          # limit on hosted API 35; leave time for live-log/export assertions.
-          timeout --foreground 420s "$ADB" shell am instrument -w -r \
-            -e class "$ui_methods" \
-            com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
-            >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
+          # The lifecycle suite uses the remaining UI allowance for both the
+          # outer ADB process and the native watcher; neither timer restarts.
+          ui_timeout="$(python3 - <<'PYTHON'
+          import os
+          import time
+
+          remaining = max(0.0, float(os.environ["ANDROID_UI_SUPERVISION_DEADLINE_MONOTONIC"]) - time.monotonic())
+          print(repr(remaining) if remaining > 0 else "0")
+          PYTHON
+          )"
+          if [ "$ui_timeout" = 0 ]; then
+            ui_timed_out=true
+            ui_status=124
+            printf 'Android UI supervision expired before instrumentation started; no further test work was launched.\n' >&2
+          else
+            printf 'Android UI remaining supervision seconds: %s\n' "$ui_timeout" >&2
+            timeout --foreground "${ui_timeout}s" "$ADB" shell am instrument -w -r \
+              -e class "$ui_methods" \
+              -e dobbyvpn_native_timeout_seconds "$ui_timeout" \
+              com.dobby.vpn.test/androidx.test.runner.AndroidJUnitRunner \
+              >"$ui_stdout" 2>"$ui_stderr" || ui_status=$?
+          fi
           if [ "$ui_status" -eq 124 ]; then
             ui_timed_out=true
           fi
@@ -506,17 +845,28 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
             python3 -m torturer_runner.android_instrumentation \
             "${parser_args[@]}" || parser_status=$?
+          if [ "$parser_status" -ne 0 ]; then
+            capture_android_ime_diagnostics failure || true
+          fi
           printf '%s\n' '[android-native-ui stdout]' >&2
-          cat "$ui_stdout" >&2
+          if [ -f "$ui_stdout" ]; then
+            cat "$ui_stdout" >&2
+          else
+            printf 'Android native UI stdout was not created because instrumentation did not start.\n' >&2
+          fi
           printf '%s\n' '[android-native-ui stderr]' >&2
-          cat "$ui_stderr" >&2
+          if [ -f "$ui_stderr" ]; then
+            cat "$ui_stderr" >&2
+          else
+            printf 'Android native UI stderr was not created because instrumentation did not start.\n' >&2
+          fi
           printf 'ANDROID_UI_TEST_PARSER_STATUS=%s\n' "$parser_status" >> "$GITHUB_ENV"
           if [ "$parser_status" -ne 0 ]; then
             exit 1
           fi
 
       - name: Retain Android native UI screenshots
-        if: always() && inputs.platform == 'android'
+        if: always() && inputs.platform == 'android' && inputs.diagnostic_scenario != 'android.n11-consent-grant-selection'
         shell: bash
         run: |
           set -euo pipefail
@@ -611,9 +961,65 @@ jobs:
           $env:DOBBY_LOG_ROOT = $env:SERVICE_LOG_ROOT_WIN
           [Console]::Error.WriteLine("Starting qualification process")
           $process = Start-Process -FilePath $env:SERVICE_WIN -ArgumentList @("-mode", "normal") -RedirectStandardOutput $env:SERVICE_OUT_WIN -RedirectStandardError $env:SERVICE_ERR_WIN -PassThru
-          [Console]::Error.WriteLine("Qualification process started")
-          [System.IO.File]::WriteAllText($env:SERVICE_PID_FILE_WIN, [string]$process.Id)
-          [Console]::Error.WriteLine("Qualification PID saved")
+          $identityTemporaryFile = $null
+          $startupError = $null
+          try {
+            [Console]::Error.WriteLine("Qualification process started")
+            $service = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = {0}" -f $process.Id) -ErrorAction Stop
+            if ($null -eq $service) { throw "Qualification process exited before its identity was recorded: pid=$($process.Id)" }
+            if ($null -eq $service.CreationDate -or [string]::IsNullOrWhiteSpace($service.ExecutablePath)) {
+              throw "Qualification process identity is unavailable: pid=$($process.Id)"
+            }
+            $creationTicks = $service.CreationDate.ToUniversalTime().Ticks
+            $identity = "{0}|{1}|{2}" -f $service.ProcessId, $creationTicks, $service.ExecutablePath
+            $encoding = [System.Text.UTF8Encoding]::new($false)
+            $identityTemporaryFile = $env:SERVICE_PID_FILE_WIN + "." + [guid]::NewGuid().ToString("N") + ".tmp"
+            [System.IO.File]::WriteAllText($identityTemporaryFile, $identity + [Environment]::NewLine, $encoding)
+            [Console]::Error.WriteLine("Qualification process identity prepared: pid=$($process.Id) ticks=$creationTicks path=$($service.ExecutablePath)")
+            [System.IO.File]::Move($identityTemporaryFile, $env:SERVICE_PID_FILE_WIN)
+            $identityTemporaryFile = $null
+          } catch {
+            $startupError = $_
+            if ($null -ne $identityTemporaryFile -and [System.IO.File]::Exists($identityTemporaryFile)) {
+              try {
+                [System.IO.File]::Delete($identityTemporaryFile)
+              } catch {
+                $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+                [Console]::Error.WriteLine("Qualification process identity temporary-file cleanup failed: path=$identityTemporaryFile`n$cleanupDiagnostic")
+              }
+            }
+            $killRequired = $true
+            try {
+              $killRequired = -not $process.HasExited
+            } catch {
+              $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+              [Console]::Error.WriteLine("Qualification process state query failed after startup failure: pid=$($process.Id)`n$cleanupDiagnostic")
+            }
+            if ($killRequired) {
+              try {
+                $process.Kill()
+              } catch {
+                $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+                [Console]::Error.WriteLine("Qualification process termination failed after startup failure: pid=$($process.Id)`n$cleanupDiagnostic")
+              }
+            }
+            try {
+              if (-not $process.WaitForExit(30000)) { throw "Qualification process did not stop after startup failure: pid=$($process.Id)" }
+              [Console]::Error.WriteLine("Qualification process stopped after startup failure: pid=$($process.Id)")
+            } catch {
+              $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+              [Console]::Error.WriteLine("Qualification process reap failed after startup failure: pid=$($process.Id)`n$cleanupDiagnostic")
+            }
+            throw $startupError
+          } finally {
+            try {
+              $process.Dispose()
+            } catch {
+              $cleanupDiagnostic = $_ | Format-List * -Force | Out-String -Width 4096
+              [Console]::Error.WriteLine("Qualification process handle disposal failed: pid=$($process.Id)`n$cleanupDiagnostic")
+              if ($null -eq $startupError) { throw }
+            }
+          }
           ' > "$SERVICE_START_LOG" 2>&1 &
             launcher_pid=$!
             for _ in $(seq 1 30); do
@@ -630,8 +1036,10 @@ jobs:
             if [ ! -s "$SERVICE_PID_FILE" ]; then
               exit 1
             fi
-            service_pid="$(tr -d '\r\n' < "$SERVICE_PID_FILE")"
+            IFS='|' read -r service_pid service_creation_ticks service_executable_path < "$SERVICE_PID_FILE"
             [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
+            [[ "$service_creation_ticks" =~ ^[1-9][0-9]*$ ]]
+            [[ -n "$service_executable_path" ]]
             if kill "$launcher_pid"; then
               if ! wait "$launcher_pid"; then
                 printf 'Windows service launcher exited nonzero after publishing its PID\n' >&2
@@ -688,6 +1096,8 @@ jobs:
 
       - name: Run canonical test set against exact selected package
         id: functional
+        env:
+          DIAGNOSTIC_SCENARIO: ${{ inputs.diagnostic_scenario }}
         working-directory: torturer
         shell: bash
         run: |
@@ -698,11 +1108,17 @@ jobs:
             exit 1
           fi
           if [ "$PLATFORM" = android ]; then
+            scenario_args=()
+            if [ "$DIAGNOSTIC_SCENARIO" = android.n11-consent-grant-selection ]; then
+              scenario_args=(--android-n11-only)
+            elif [ -n "$DIAGNOSTIC_SCENARIO" ]; then
+              scenario_args=(--scenario "$DIAGNOSTIC_SCENARIO")
+            fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted \
               --platform android --suite mini --adb "$ADB" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
               --app-apk "$ANDROID_SIGNED_APP" --test-companion-apk "$ANDROID_SIGNED_COMPANION" \
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
-              --raw-log-dir "$RUN_DIR"
+              --raw-log-dir "$RUN_DIR" "${scenario_args[@]}"
           else
             release_args=(
               test
@@ -725,11 +1141,17 @@ jobs:
             if [ "$PLATFORM" = linux ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
             fi
-            if [ "$PLATFORM" = macos ]; then
-              export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
-            fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.desktop_platform "${release_args[@]}"
           fi
+
+      - name: Stop Android live ADB diagnostics
+        if: always() && inputs.platform == 'android' && env.RUN_DIR != ''
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/android/android_emulator_diagnostics.py stop \
+            --run-dir "$RUN_DIR"
 
       - name: Stop Linux qualification service
         if: always() && inputs.platform == 'linux'
@@ -760,22 +1182,104 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${SERVICE_PID:-}" ]; then
-            export QUALIFICATION_SERVICE_PID="$SERVICE_PID"
-            powershell.exe -NoLogo -NoProfile -NonInteractive -Command '
+          stop_status=0
+          service_identity_file="$RUN_DIR/windows-service.pid"
+          if [ -s "$service_identity_file" ]; then
+            if SERVICE_IDENTITY_FILE_WIN="$(cygpath -w "$service_identity_file")"; then
+              export SERVICE_IDENTITY_FILE_WIN
+              powershell.exe -NoLogo -NoProfile -NonInteractive -Command '
           $ErrorActionPreference = "Stop"
-          $process = Get-Process -Id ([int]$env:QUALIFICATION_SERVICE_PID) -ErrorAction SilentlyContinue
-          if ($null -eq $process) {
-            Write-Output "Windows qualification process was already stopped: pid=$env:QUALIFICATION_SERVICE_PID"
+          $record = [System.IO.File]::ReadAllText($env:SERVICE_IDENTITY_FILE_WIN).TrimEnd("`r", "`n")
+          $parts = $record -split "\|", 3
+          if ($parts.Count -ne 3) { throw "Windows qualification process identity record is malformed" }
+          $servicePid = 0
+          $expectedTicks = [long]0
+          if (-not [int]::TryParse($parts[0], [ref]$servicePid) -or $servicePid -le 0) {
+            throw "Windows qualification process identity record has an invalid PID"
+          }
+          if (-not [long]::TryParse($parts[1], [ref]$expectedTicks) -or $expectedTicks -le 0) {
+            throw "Windows qualification process identity record has invalid creation ticks"
+          }
+          $expectedPath = $parts[2]
+          if ([string]::IsNullOrWhiteSpace($expectedPath)) {
+            throw "Windows qualification process identity record has no executable path"
+          }
+          $preliminaryProcess = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = {0}" -f $servicePid) -ErrorAction Stop
+          if ($null -eq $preliminaryProcess) {
+            Write-Output "Windows qualification process was already stopped: pid=$servicePid"
             exit 0
           }
-          $process.Kill()
-          if (-not $process.WaitForExit(30000)) { throw "Windows qualification process did not stop" }
-          Write-Output "Windows qualification process stopped: pid=$env:QUALIFICATION_SERVICE_PID"
-          '
+          if ($null -eq $preliminaryProcess.CreationDate -or [string]::IsNullOrWhiteSpace($preliminaryProcess.ExecutablePath)) {
+            throw "Windows qualification process identity query returned incomplete data: pid=$servicePid"
+          }
+          if ($preliminaryProcess.CreationDate.ToUniversalTime().Ticks -ne $expectedTicks -or -not [System.StringComparer]::OrdinalIgnoreCase.Equals($preliminaryProcess.ExecutablePath, $expectedPath)) {
+            Write-Output "Windows qualification process identity changed; original instance already stopped: pid=$servicePid"
+            exit 0
+          }
+          $ownedProcess = Get-Process -Id $servicePid -ErrorAction Stop
+          try {
+            $nativeHandle = $ownedProcess.Handle
+            $process = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId = {0}" -f $servicePid) -ErrorAction Stop
+            if ($null -eq $process) {
+              Write-Output "Windows qualification process was already stopped: pid=$servicePid"
+            } elseif ($null -eq $process.CreationDate -or [string]::IsNullOrWhiteSpace($process.ExecutablePath)) {
+              throw "Windows qualification process identity query returned incomplete data: pid=$servicePid"
+            } else {
+              $actualTicks = $process.CreationDate.ToUniversalTime().Ticks
+              $pathMatches = [System.StringComparer]::OrdinalIgnoreCase.Equals($process.ExecutablePath, $expectedPath)
+              if ($actualTicks -ne $expectedTicks -or -not $pathMatches) {
+                Write-Output "Windows qualification process identity changed; original instance already stopped: pid=$servicePid"
+              } else {
+                $ownedProcess.Kill()
+                if (-not $ownedProcess.WaitForExit(30000)) { throw "Windows qualification process did not stop: pid=$servicePid" }
+                Write-Output "Windows qualification process stopped: pid=$servicePid"
+              }
+            }
+          } finally {
+            $ownedProcess.Dispose()
+          }
+          ' || stop_status=$?
+            else
+              stop_status=$?
+              printf 'Windows qualification process identity path conversion failed: status=%s\n' "$stop_status" >&2
+            fi
           fi
-          if [ -f "$RUN_DIR/service.log.stdout" ]; then cat "$RUN_DIR/service.log.stdout" >&2; fi
-          if [ -f "$RUN_DIR/service.log.stderr" ]; then cat "$RUN_DIR/service.log.stderr" >&2; fi
+          forward_status=0
+          if [ -f "$RUN_DIR/service.log.stdout" ]; then
+            cat "$RUN_DIR/service.log.stdout" || {
+              forward_status=$?
+              printf 'Windows qualification service stdout forwarding failed: status=%s\n' "$forward_status" >&2
+            }
+          fi
+          if [ -f "$RUN_DIR/service.log.stderr" ]; then
+            cat "$RUN_DIR/service.log.stderr" >&2 || {
+              cat_status=$?
+              printf 'Windows qualification service stderr forwarding failed: status=%s\n' "$cat_status" >&2
+              if [ "$forward_status" -eq 0 ]; then forward_status=$cat_status; fi
+            }
+          fi
+          if [ "$stop_status" -ne 0 ]; then exit "$stop_status"; fi
+          exit "$forward_status"
+
+      - name: Recover interrupted Linux installer migration
+        if: always() && inputs.platform == 'linux' && env.RUN_DIR != ''
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import time
+
+          run_dir = Path(os.environ["RUN_DIR"])
+          if any(run_dir.glob("dobbyvpn-installer-migration-*")):
+              # Share the existing command runner's standalone cleanup allowance
+              # across recovery operations instead of restarting it per command.
+              os.environ.setdefault("DOBBYVPN_COMMAND_DEADLINE_MONOTONIC", str(time.monotonic() + 300))
+              from torturer_runner.installer_migration import cleanup_interrupted_linux
+              cleanup_interrupted_linux(run_dir, log_dir=run_dir / "installer-migration-recovery")
+          else:
+              print("No interrupted Linux installer migration remains.")
+          PY
 
       - name: Remove exact installed desktop package
         if: always() && inputs.platform != 'android'
@@ -783,7 +1287,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -s "$INSTALLED_DESCRIPTOR" ]; then
-            printf 'No installed package descriptor was created; package removal was not needed.\n'
+            printf 'No functional-install descriptor was created; no package remains recorded by this step.\n'
             exit 0
           fi
           python3 .github/scripts/desktop/desktop_package.py uninstall \
@@ -888,6 +1392,18 @@ jobs:
               raise RuntimeError("\n".join(errors))
           PY
 
+      - name: Retain Android daemon transport diagnostics
+        if: always() && inputs.platform == 'android' && env.ANDROID_EMULATOR_PID != ''
+        continue-on-error: ${{ inputs.diagnostic_scenario != 'android.n11-consent-grant-selection' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # One optional collection budget covers snapshot, transfer and cleanup.
+          # Recovery collects diagnostics only; it cannot start another test.
+          collection_deadline="$(python3 -c 'import time; print(time.time() + 30)')"
+          python3 -m torturer_runner.android_adbd_diagnostics collect \
+            --adb "${ADB:-adb}" --run-dir "$RUN_DIR" --deadline-epoch "$collection_deadline"
+
       - name: Make qualification files readable for diagnostics
         if: always() && env.RUN_DIR != ''
         shell: bash
@@ -930,9 +1446,9 @@ jobs:
 
       - name: Retain complete qualification diagnostics
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dobbyvpn-qualification-${{ inputs.platform }}-${{ inputs.architecture || 'default' }}
+          name: dobbyvpn-qualification-${{ inputs.platform }}-${{ inputs.architecture || 'default' }}-attempt-${{ github.run_attempt }}
           path: ${{ env.ARTIFACT_DIR }}
           if-no-files-found: error
           include-hidden-files: true

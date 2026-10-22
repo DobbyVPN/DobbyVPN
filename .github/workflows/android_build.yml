@@ -3,6 +3,11 @@ name: Android Build
 on:
   workflow_call:
     inputs:
+      build_packages:
+        description: Exact readiness-selected Build artifacts, when overlapping Build.
+        type: string
+        required: false
+        default: ''
       single_build:
         description: Build one immutable APK without claiming reproducibility.
         type: boolean
@@ -30,6 +35,9 @@ on:
       retention_days:
         default: 1
         type: number
+
+env:
+  DOBBY_BUILD_PACKAGES: ${{ inputs.build_packages }}
 
 jobs:
   android_build:
@@ -89,11 +97,18 @@ jobs:
             "$GOPATH"
           sudo chown -R "$USER:$USER" /home/vagrant
 
+      - name: Restore dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-module-cache-path: /home/vagrant/go/pkg/mod
+          gradle: 'true'
+          pinned-tools: 'true'
+
       # Go 1.24.6 is only the minimum bootstrap compiler used by make.bash to
       # build the pinned Go 1.26.9 toolchain from source. It never compiles the
       # application; the version and binary used for that are verified below.
       - name: Set up bootstrap Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.24.6'
           # This Go only bootstraps make.bash; there is no root go.mod to cache.
@@ -107,11 +122,13 @@ jobs:
         run: |
           set -euo pipefail
           gradle_version="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin gradle_version)"
+          gradle_sha256="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin gradle_sha256)"
           download_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle.XXXXXX")"
           archive="$download_root/gradle-$gradle_version-bin.zip"
           gradle_url="$(python3 .github/scripts/android/android_dependency_provenance.py \
             --print-pin gradle_url)"
-          curl --fail --show-error --location --output "$archive" "$gradle_url"
+          python3 .github/scripts/dependency_fetch.py download \
+            --url "$gradle_url" --output "$archive" --sha256 "$gradle_sha256"
           extraction_root="$(mktemp -d "$RUNNER_TEMP/dobbyvpn-gradle-root.XXXXXX")"
           unzip "$archive" -d "$extraction_root"
           gradle_root="$extraction_root/gradle-$gradle_version"
@@ -154,26 +171,27 @@ jobs:
         id: pins
         run: |
           set -euo pipefail
-          for pin in java_major android_compile_sdk android_build_tools android_ndk; do
+          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
 
       - name: Set up pinned JDK (Temurin)
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           java-version: ${{ steps.pins.outputs.java_major }}
           distribution: 'temurin'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
+          cmdline-tools-version: '15859902'
           packages: >
-            platforms;android-${{ steps.pins.outputs.android_compile_sdk }}
+            platforms;${{ steps.pins.outputs.android_sdk_platform }}
             build-tools;${{ steps.pins.outputs.android_build_tools }}
             ndk;${{ steps.pins.outputs.android_ndk }}
 
-      - name: Select and verify pinned Android NDK
+      - name: Select and verify pinned Android NDK and APK analyzer
         run: |
           set -euo pipefail
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
@@ -182,6 +200,10 @@ jobs:
           test -f "$ndk_home/source.properties"
           grep -Fqx 'Pkg.Revision = ${{ steps.pins.outputs.android_ndk }}' "$ndk_home/source.properties"
           printf 'ANDROID_NDK_HOME=%s\n' "$ndk_home" >> "$GITHUB_ENV"
+          # setup-android leaves an older preinstalled cmdline-tools/latest intact.
+          analyzer="$sdk_root/cmdline-tools/${{ steps.pins.outputs.android_cmdline_tools }}/bin/apkanalyzer"
+          test -x "$analyzer"
+          printf 'APKANALYZER=%s\n' "$analyzer" | tee -a "$GITHUB_ENV"
 
       - name: Prepare reproducible Android source path
         run: |
@@ -251,11 +273,7 @@ jobs:
             --first-apk "$original" --second-apk "$reference" \
             --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-reference-reproducibility.json" \
             --source-sha "$APP_SOURCE_SHA" --version-name "$version" --version-code "$ANDROID_VERSION_CODE"
-          apkanalyzer="$(command -v apkanalyzer || true)"
-          if [[ -z "$apkanalyzer" ]]; then
-            apkanalyzer="$(find "${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools" -type f -name apkanalyzer -perm -u+x -print -quit)"
-          fi
-          test -n "$apkanalyzer" && test -x "$apkanalyzer"
+          apkanalyzer="$(python3 .github/scripts/android/android_tool_selection.py --tool apkanalyzer)"
           python3 .github/scripts/android/verify_android_apk_source.py \
             --apk "$original" --apk "$reference" --source-sha "$APP_SOURCE_SHA" \
             --repository "$APP_SOURCE_REPOSITORY" --version-name "$version" \
@@ -303,18 +321,18 @@ jobs:
 
       - name: Upload unsigned APK
         if: ${{ inputs.reference_build_run_id == '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dobbyvpn-android-unsign.apk
+          name: dobbyvpn-android-unsign.apk${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-unsign.apk
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 
       - name: Upload Android Build metadata
         if: ${{ inputs.single_build && inputs.reference_build_run_id == '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dobbyvpn-android-build-metadata
+          name: dobbyvpn-android-build-metadata${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
           path: |
             ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-build-driver-manifest.json
             ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-dependency-provenance.json
@@ -323,9 +341,9 @@ jobs:
 
       - name: Upload Android provenance
         if: ${{ inputs.reference_build_run_id != '' || !inputs.single_build }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dobbyvpn-android-provenance
+          name: dobbyvpn-android-provenance${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-android-provenance.json
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
@@ -340,9 +358,9 @@ jobs:
 
       - name: Upload Debug APK
         if: ${{ inputs.reference_build_run_id == '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dobbyvpn-android-debug.apk
+          name: dobbyvpn-android-debug.apk${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
           path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-debug.apk
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}

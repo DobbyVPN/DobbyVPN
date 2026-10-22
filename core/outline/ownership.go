@@ -11,6 +11,124 @@ import (
 	"core/log"
 )
 
+type streamConnScopeContextKey struct{}
+
+// pendingStreamConnScope owns the raw stream until the configured transport
+// finishes its TLS and WebSocket handshakes. The operation context can cancel
+// a TCP dial, but it cannot interrupt HTTP response reads after the dialer has
+// returned the socket, so the owner closes that pending socket directly.
+type pendingStreamConnScope struct {
+	ctx       context.Context
+	mu        sync.Mutex
+	pending   map[net.Conn]struct{}
+	aborted   bool
+	handedOff bool
+	stop      func() bool
+	done      chan struct{}
+	doneOnce  sync.Once
+}
+
+func newPendingStreamConnScope(ctx context.Context) *pendingStreamConnScope {
+	scope := &pendingStreamConnScope{
+		ctx:     ctx,
+		pending: make(map[net.Conn]struct{}),
+		done:    make(chan struct{}),
+	}
+	scope.stop = context.AfterFunc(ctx, func() {
+		defer scope.markDone()
+		scope.abort()
+	})
+	return scope
+}
+
+func (s *pendingStreamConnScope) markDone() {
+	s.doneOnce.Do(func() { close(s.done) })
+}
+
+func (s *pendingStreamConnScope) register(conn net.Conn) error {
+	s.mu.Lock()
+	if err := s.ctx.Err(); s.aborted || s.handedOff || err != nil {
+		if !s.handedOff {
+			s.aborted = true
+		}
+		pending := s.takePendingLocked()
+		s.mu.Unlock()
+		closeStreamConns(pending)
+		_ = conn.Close()
+		if err != nil {
+			return err
+		}
+		return net.ErrClosed
+	}
+	s.pending[conn] = struct{}{}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *pendingStreamConnScope) handoff() bool {
+	s.mu.Lock()
+	if s.aborted || s.ctx.Err() != nil {
+		s.aborted = true
+		pending := s.takePendingLocked()
+		s.mu.Unlock()
+		closeStreamConns(pending)
+		return false
+	}
+	s.handedOff = true
+	s.pending = nil
+	s.mu.Unlock()
+	s.stopAndWait()
+	return true
+}
+
+func (s *pendingStreamConnScope) abort() {
+	s.mu.Lock()
+	if s.handedOff {
+		s.mu.Unlock()
+		return
+	}
+	s.aborted = true
+	pending := s.takePendingLocked()
+	s.mu.Unlock()
+	closeStreamConns(pending)
+}
+
+func (s *pendingStreamConnScope) takePendingLocked() []net.Conn {
+	pending := make([]net.Conn, 0, len(s.pending))
+	for conn := range s.pending {
+		pending = append(pending, conn)
+	}
+	s.pending = nil
+	return pending
+}
+
+func closeStreamConns(conns []net.Conn) {
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
+func (s *pendingStreamConnScope) stopAndWait() {
+	if s.stop() {
+		s.markDone()
+		return
+	}
+	<-s.done
+}
+
+func (s *pendingStreamConnScope) discard() {
+	s.abort()
+	s.stopAndWait()
+}
+
+func registerPendingStreamConn(ctx context.Context, conn net.Conn) error {
+	scope, _ := ctx.Value(streamConnScopeContextKey{}).(*pendingStreamConnScope)
+	if scope == nil {
+		return nil
+	}
+	return scope.register(conn)
+}
+
 type ownedListener struct {
 	net.Listener
 	owner *OutlineDevice

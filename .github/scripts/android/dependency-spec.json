@@ -2,7 +2,9 @@
   "schema": 1,
   "kind": "dobbyvpn.android.dependency-spec",
   "android": {
-    "build_tools": "36.0.0"
+    "build_tools": "36.0.0",
+    "cmdline_tools": "22.0",
+    "cmdline_tools_archive": "15859902"
   },
   "go": {
     "source_commit": "2ae494ef9fb90e0da0073c31800ba38870249994"

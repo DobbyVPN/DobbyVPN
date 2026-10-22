@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_RUN_ATTEMPT" -ge 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.source_sha }}
@@ -62,6 +62,13 @@ jobs:
           assert actual == os.environ['DOBBY_TEST_SHA'], 'private revision changed'
           assert guard['tests_tree_sha256'](Path('torturer')) == os.environ['DOBBY_TEST_TREE_SHA256'], 'private tree changed'
           PY
+      - name: Restore dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          go-modules: ${{ contains(inputs.checks, 'go-') }}
+          gradle: ${{ contains(inputs.checks, 'android-') }}
+          pinned-tools: ${{ contains(inputs.checks, 'go-') && !startsWith(inputs.runner, 'macos-') }}
+          gradle-extra-dependency-files: torturer/source_tests/product/ui/android/presentation/unit-test-wiring.gradle.kts
       - name: Select Xcode
         if: runner.os == 'macOS'
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
@@ -75,22 +82,23 @@ jobs:
         id: android
         shell: bash
         run: |
-          for pin in java_major android_compile_sdk android_build_tools android_ndk; do
+          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
             value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
       - name: Install Android JDK
         if: contains(inputs.checks, 'android-')
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ steps.android.outputs.java_major }}
       - name: Install Android SDK
         if: contains(inputs.checks, 'android-')
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
+          cmdline-tools-version: '15859902'
           packages: >
-            platforms;android-${{ steps.android.outputs.android_compile_sdk }}
+            platforms;${{ steps.android.outputs.android_sdk_platform }}
             build-tools;${{ steps.android.outputs.android_build_tools }}
             ndk;${{ steps.android.outputs.android_ndk }}
       - name: Run private checks against selected production sources
@@ -111,9 +119,9 @@ jobs:
           exit "$status"
       - name: Retain source coverage
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: source-results-${{ inputs.runner }}-${{ inputs.checks }}
+          name: source-results-${{ inputs.runner }}-${{ inputs.checks }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/private-source-results
           if-no-files-found: ignore
           retention-days: 7

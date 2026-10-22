@@ -28,6 +28,9 @@ jobs:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
+      - name: Restore Go module download archives
+        uses: ./.github/actions/dependency-cache
+
       - name: Verify exact source checkout
         shell: bash
         env:
@@ -43,21 +46,21 @@ jobs:
           test "$(xcodebuild -version | tee /dev/stderr | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
           cache: false
 
       - name: Download Go modules
         working-directory: core
-        run: go mod download
+        run: python3 ../.github/scripts/dependency_fetch.py retry -- go mod download
 
       - name: Install pinned Go mobile runtime tools
         run: |
           set -euo pipefail
           mobile_version='v0.0.0-20260520154334-0e4426e1883d'
-          go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
-          go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
+          python3 .github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
+          python3 .github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
           gopath="$(go env GOPATH)"
           echo "$gopath/bin" >> "$GITHUB_PATH"
           for tool in gomobile gobind; do
@@ -79,7 +82,7 @@ jobs:
         working-directory: core
         run: |
           test "$(go list -m -f '{{.Version}}' golang.org/x/mobile)" = 'v0.0.0-20260520154334-0e4426e1883d'
-          go mod download golang.org/x/mobile
+          python3 ../.github/scripts/dependency_fetch.py retry -- go mod download golang.org/x/mobile
 
       - name: Build iOS Go runtime XCFramework
         working-directory: core
@@ -92,9 +95,9 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)"
 
       - name: Upload iOS runtime XCFramework
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: DobbyVPNRuntime${{ inputs.debug && '-debug' || '' }}.xcframework
+          name: DobbyVPNRuntime${{ inputs.debug && '-debug' || '' }}.xcframework${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
           path: core/DobbyVPNRuntime.xcframework
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}

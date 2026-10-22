@@ -7,6 +7,12 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.SystemClock
+import android.os.Trace
+import android.util.Log
+import android.view.View
+import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -27,6 +33,8 @@ import com.dobby.presentation.PermissionTarget
 import com.dobby.presentation.PermissionTargetFence
 import com.dobby.presentation.SubscriptionLoadCoordinator
 import com.dobby.presentation.SubscriptionRequest
+import com.dobby.presentation.UiOperationDiagnostics
+import com.dobby.vpn.BuildConfig
 import com.dobby.vpn.R
 import org.json.JSONObject
 import java.io.File
@@ -59,31 +67,148 @@ class MainActivity : ComponentActivity() {
         var current: MainActivity? = null
     }
 
+    private val startupDiagnostics = UiOperationDiagnostics(
+        clockNs = { SystemClock.elapsedRealtimeNanos() },
+        emit = ::recordStartupObservation,
+        beginTrace = { operation -> Trace.beginSection("DobbyVPN.$operation") },
+        endTrace = { Trace.endSection() },
+        reportFailure = ::reportStartupDiagnosticFailure,
+    )
     private lateinit var controller: SessionController
     private lateinit var retainedLogViewModel: RetainedLogViewModel
+    private var startupDiagnosticsDisposed = false
+    private var firstFrameView: View? = null
+    private var firstPreDrawListener: ViewTreeObserver.OnPreDrawListener? = null
+    private var firstOnDrawListener: ViewTreeObserver.OnDrawListener? = null
+    private var firstPreDrawSeen = false
+    private var firstOnDrawSeen = false
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         controller.permissionResult(result.resultCode == android.app.Activity.RESULT_OK)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        val startedNs = SystemClock.elapsedRealtimeNanos()
+        val pid = Process.myPid()
+        val tid = Process.myTid()
+        var traceStarted = false
+        try {
+            Trace.beginSection("DobbyVPN.onWindowFocusChanged hasFocus=$hasFocus")
+            traceStarted = true
+        } catch (diagnosticFailure: Exception) {
+            reportFocusDiagnosticFailure("Trace.beginSection", diagnosticFailure)
+        }
+
+        var callbackFailure: Throwable? = null
+        try {
+            recordWindowFocusDiagnostic("entry", hasFocus, pid, tid, startedNs)
+            super.onWindowFocusChanged(hasFocus)
+        } catch (failure: Throwable) {
+            callbackFailure = failure
+            throw failure
+        } finally {
+            val finishedNs = SystemClock.elapsedRealtimeNanos()
+            val failure = callbackFailure
+            try {
+                recordWindowFocusDiagnostic(
+                    if (failure == null) "complete" else "error",
+                    hasFocus,
+                    pid,
+                    tid,
+                    startedNs,
+                    finishedNs,
+                    failure,
+                )
+            } finally {
+                if (traceStarted) {
+                    try {
+                        Trace.endSection()
+                    } catch (diagnosticFailure: Exception) {
+                        reportFocusDiagnosticFailure("Trace.endSection", diagnosticFailure, failure)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun recordWindowFocusDiagnostic(
+        phase: String,
+        hasFocus: Boolean,
+        pid: Int,
+        tid: Int,
+        startedNs: Long,
+        finishedNs: Long? = null,
+        callbackFailure: Throwable? = null,
+    ) {
+        try {
+            val message = buildString {
+                append("callback=MainActivity.onWindowFocusChanged phase=$phase")
+                append(" has_focus=$hasFocus pid=$pid tid=$tid")
+                append(" started_elapsed_realtime_ns=$startedNs")
+                if (finishedNs != null) {
+                    append(" finished_elapsed_realtime_ns=$finishedNs")
+                    append(" duration_ns=${finishedNs - startedNs}")
+                }
+            }
+            NativeVpnBridge.recordDiagnostic(this, "ui.focus", message, callbackFailure)
+        } catch (diagnosticFailure: Exception) {
+            reportFocusDiagnosticFailure("ui.focus $phase", diagnosticFailure, callbackFailure)
+        }
+    }
+
+    private fun reportFocusDiagnosticFailure(
+        operation: String,
+        diagnosticFailure: Exception,
+        callbackFailure: Throwable? = null,
+    ) {
+        if (callbackFailure != null && callbackFailure !== diagnosticFailure) {
+            callbackFailure.addSuppressed(diagnosticFailure)
+        }
+        try {
+            Log.e("DobbyVPN", "Android window-focus diagnostic failed during $operation", diagnosticFailure)
+        } catch (loggingFailure: Exception) {
+            if (callbackFailure != null && callbackFailure !== loggingFailure) {
+                callbackFailure.addSuppressed(loggingFailure)
+            }
+            System.err.println(
+                "Android window-focus diagnostic failed during $operation: " +
+                    diagnosticFailure.stackTraceToString() + " (Logcat fallback failed: " +
+                    loggingFailure.stackTraceToString() + ")",
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
-        )
-        current = this
-        NativeGoSession.attach(this)
-        retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
-        controller = SessionController(
-            this,
-            savedInstanceState?.getBundle(LOG_VIEW_STATE),
-            savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
-            retainedLogViewModel,
-        )
-        if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) controller.importLink(intent.dataString.orEmpty())
-        setContent { DobbyApp(controller) }
+        startupDiagnostics.observe("MainActivity.onCreate") {
+            startupDiagnostics.observe("MainActivity.onCreate.super") {
+                super.onCreate(savedInstanceState)
+            }
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+                navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            )
+            current = this
+            startupDiagnostics.observe("MainActivity.onCreate.nativeGoSessionAttach") {
+                NativeGoSession.attach(this)
+            }
+            retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
+            startupDiagnostics.observe("MainActivity.onCreate.sessionControllerInitialization") {
+                controller = SessionController(
+                    this,
+                    savedInstanceState?.getBundle(LOG_VIEW_STATE),
+                    savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
+                    retainedLogViewModel,
+                )
+                if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) {
+                    controller.importLink(intent.dataString.orEmpty())
+                }
+            }
+            startupDiagnostics.observe("MainActivity.onCreate.setContent") {
+                setContent { DobbyApp(controller) }
+            }
+            installFirstFrameDiagnostics()
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -102,8 +227,16 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStart() {
-        super.onStart()
-        if (::controller.isInitialized) controller.setVisible(true)
+        startupDiagnostics.observe("MainActivity.onStart") {
+            super.onStart()
+            if (::controller.isInitialized) controller.setVisible(true)
+        }
+    }
+
+    override fun onResume() {
+        startupDiagnostics.observe("MainActivity.onResume") {
+            super.onResume()
+        }
     }
 
     override fun onStop() {
@@ -116,9 +249,180 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (::controller.isInitialized) controller.close()
-        if (current === this) current = null
-        super.onDestroy()
+        try {
+            if (::controller.isInitialized) controller.close()
+            if (current === this) current = null
+            super.onDestroy()
+        } finally {
+            cleanupFirstFrameDiagnostics()
+        }
+    }
+
+    private fun recordStartupObservation(observation: UiOperationDiagnostics.Observation) {
+        val mainThread = Looper.myLooper() === Looper.getMainLooper()
+        val observerBoundary = observation.operation.contains("Callback")
+        val mainQueueReturn = observation.operation.endsWith("firstFrameMainQueueReturn")
+        val finishedNs = observation.finishedNs
+        val message = buildString {
+            append("operation=${observation.operation} phase=${observation.phase}")
+            append(" outcome=${when (observation.phase) {
+                "entry" -> "running"
+                "complete" -> "complete"
+                "error" -> "error"
+                else -> observation.phase
+            }}")
+            append(" pid=${Process.myPid()} tid=${Process.myTid()} is_main_thread=$mainThread")
+            append(" started_elapsed_realtime_ns=${observation.startedNs.takeIf { it >= 0 } ?: "unavailable"}")
+            if (finishedNs != null) {
+                append(" finished_elapsed_realtime_ns=$finishedNs")
+                if (observation.startedNs >= 0) {
+                    append(" duration_ns=${finishedNs - observation.startedNs}")
+                } else {
+                    append(" duration_ns=unavailable")
+                }
+            } else if (observation.phase != "entry") {
+                append(" finished_elapsed_realtime_ns=unavailable duration_ns=unavailable")
+            }
+            if (observerBoundary) append(" measurement=observer_callback_boundary gpu_wait_included=false")
+            if (mainQueueReturn) append(" measurement=main_queue_return_boundary gpu_wait_included=false")
+        }
+        NativeVpnBridge.recordDiagnostic(this, "ui.startup", message, observation.failure)
+    }
+
+    private fun reportStartupDiagnosticFailure(
+        context: String,
+        diagnosticFailure: Throwable,
+        primaryFailure: Throwable?,
+    ) {
+        try {
+            Log.e("DobbyVPN", "Android startup diagnostic failed during $context", diagnosticFailure)
+        } catch (loggingFailure: Throwable) {
+            if (diagnosticFailure !== loggingFailure) {
+                try {
+                    diagnosticFailure.addSuppressed(loggingFailure)
+                } catch (_: Throwable) {
+                }
+            }
+            if (primaryFailure != null && primaryFailure !== loggingFailure) {
+                try {
+                    primaryFailure.addSuppressed(loggingFailure)
+                } catch (_: Throwable) {
+                }
+            }
+            try {
+                System.err.println(
+                    "Android startup diagnostic failed during $context: " +
+                        diagnosticFailure.stackTraceToString() + " (Log.e fallback failed: " +
+                        loggingFailure.stackTraceToString() + ")",
+                )
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun safelyObserveStartupCallback(operation: String, callback: () -> Unit) {
+        try {
+            startupDiagnostics.observe(operation, callback)
+        } catch (failure: Throwable) {
+            reportStartupDiagnosticFailure("observer callback $operation", failure, null)
+        }
+    }
+
+    private fun installFirstFrameDiagnostics() {
+        if (startupDiagnosticsDisposed) return
+        try {
+            val decor = window.decorView
+            val observer = decor.viewTreeObserver
+            if (!observer.isAlive) {
+                reportStartupDiagnosticFailure(
+                    "installing first-frame callbacks",
+                    IllegalStateException("decor ViewTreeObserver is not alive"),
+                    null,
+                )
+                return
+            }
+            val preDrawListener = ViewTreeObserver.OnPreDrawListener {
+                if (startupDiagnosticsDisposed || firstPreDrawSeen) return@OnPreDrawListener true
+                firstPreDrawSeen = true
+                safelyObserveStartupCallback("MainActivity.firstPreDrawCallback") { removeFirstPreDrawListener() }
+                true
+            }
+            val onDrawListener = ViewTreeObserver.OnDrawListener {
+                if (!startupDiagnosticsDisposed && !firstOnDrawSeen) {
+                    firstOnDrawSeen = true
+                    safelyObserveStartupCallback("MainActivity.firstOnDrawCallback") {
+                        postFirstFrameMainQueueReturn(decor)
+                    }
+                }
+            }
+            firstFrameView = decor
+            firstPreDrawListener = preDrawListener
+            observer.addOnPreDrawListener(preDrawListener)
+            firstOnDrawListener = onDrawListener
+            observer.addOnDrawListener(onDrawListener)
+        } catch (failure: Throwable) {
+            cleanupFirstFrameDiagnostics()
+            reportStartupDiagnosticFailure("installing first-frame callbacks", failure, null)
+        }
+    }
+
+    private fun postFirstFrameMainQueueReturn(decor: View) {
+        try {
+            val posted = decor.post {
+                if (!startupDiagnosticsDisposed) {
+                    safelyObserveStartupCallback("MainActivity.firstFrameMainQueueReturn") { }
+                }
+                removeFirstOnDrawListener()
+            }
+            if (!posted) {
+                reportStartupDiagnosticFailure(
+                    "posting first main-queue-return callback",
+                    IllegalStateException("decor.post returned false"),
+                    null,
+                )
+            }
+        } catch (failure: Throwable) {
+            reportStartupDiagnosticFailure("posting first main-queue-return callback", failure, null)
+        }
+    }
+
+    private fun removeFirstPreDrawListener() {
+        val view = firstFrameView
+        val listener = firstPreDrawListener
+        if (view != null && listener != null) {
+            try {
+                val observer = view.viewTreeObserver
+                if (observer.isAlive) {
+                    observer.removeOnPreDrawListener(listener)
+                    firstPreDrawListener = null
+                }
+            } catch (failure: Throwable) {
+                reportStartupDiagnosticFailure("removing first pre-draw listener", failure, null)
+            }
+        }
+    }
+
+    private fun removeFirstOnDrawListener() {
+        val view = firstFrameView
+        val listener = firstOnDrawListener
+        if (view != null && listener != null) {
+            try {
+                val observer = view.viewTreeObserver
+                if (observer.isAlive) {
+                    observer.removeOnDrawListener(listener)
+                    firstOnDrawListener = null
+                }
+            } catch (failure: Throwable) {
+                reportStartupDiagnosticFailure("removing first on-draw listener", failure, null)
+            }
+        }
+    }
+
+    private fun cleanupFirstFrameDiagnostics() {
+        startupDiagnosticsDisposed = true
+        removeFirstPreDrawListener()
+        removeFirstOnDrawListener()
+        firstFrameView = null
     }
 }
 
@@ -251,8 +555,8 @@ internal class SessionController(
         val uri = runCatching { java.net.URI(source) }.getOrNull()
         val valid = uri?.scheme?.lowercase() == "https" && !uri.host.isNullOrEmpty()
         val alreadyAccepted = trigger == LoadTrigger.TYPED && valid &&
-            latest.configured && latest.sourceUrl == source &&
-            !sourceLoads.inFlight
+            state.loadError.isEmpty() && !sourceLoads.inFlight &&
+            sourceLoads.isAlreadyAccepted(source, latest.configured, latest.sourceUrl)
         sourceLoads.change(source, trigger, valid, alreadyAccepted)
         if (alreadyAccepted) {
             if (permissionTarget != null) state = state.copy(busy = false)
@@ -287,10 +591,10 @@ internal class SessionController(
                 configured.getJSONObject("result").getLong("sequence")
             }
             main.post {
-                sourceLoads.complete(request) { current ->
+                sourceLoads.complete(request, succeeded = outcome.isSuccess) { current ->
                     state = state.copy(loading = false)
+                    if (outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
                     if (current) {
-                        if (outcome.isSuccess) acceptedSequence = outcome.getOrThrow()
                         state = if (outcome.isSuccess) state.copy(sourceDirty = false, loadError = "")
                         else state.copy(loadError = outcome.exceptionOrNull()?.message ?: "Subscription could not be loaded")
                     }
@@ -579,7 +883,9 @@ internal class SessionController(
         val source = value.trim()
         if (source == state.source && sourceLoads.hasOutstanding(source)) return
         val noOutstandingLoad = !sourceLoads.hasWork
-        if (noOutstandingLoad && state.loadError.isEmpty() && latest.configured && latest.sourceUrl == source) {
+        if (noOutstandingLoad && state.loadError.isEmpty() &&
+            sourceLoads.isAlreadyAccepted(source, latest.configured, latest.sourceUrl)
+        ) {
             state = state.copy(source = source, sourceDirty = false, loadError = "", error = "")
             return
         }
@@ -698,6 +1004,7 @@ internal class SessionController(
             main.post {
                 if (current.sessionId == state.session.sessionId && current.sequence < maxOf(state.session.sequence, acceptedSequence)) return@post
                 if (current.sessionId != state.session.sessionId) acceptedSequence = 0
+                sourceLoads.snapshotObserved()
                 val displayedSession = if (state.sourceDirty && current.sessionId == state.session.sessionId) {
                     current.copy(
                         configured = state.session.configured,

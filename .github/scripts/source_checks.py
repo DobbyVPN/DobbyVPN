@@ -18,7 +18,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -26,11 +25,19 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parents[2]
 GO_MODULE = ROOT / "core"
 SCRIPT_DIR = ROOT / ".github" / "scripts"
+sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR / "desktop"))
 sys.path.insert(0, str(SCRIPT_DIR / "android"))
+from bounded_process import (
+    command_deadline_remaining,
+    exception_output,
+    run_finite_capture,
+    run_streamed,
+)
+from dependency_fetch import download_file, run_dependency_command
 from android_dependency_provenance import (
     ANDROID_BUILD_TOOLS,
-    ANDROID_COMPILE_SDK,
+    ANDROID_SDK_PLATFORM,
     JAVA_MAJOR,
 )
 
@@ -84,6 +91,7 @@ NATIVE_GO_PACKAGES = [
     "./diagnostics",
     "./log",
     "./cmd/dobbyvpn",
+    "./clientserver/controlplane",
     "./clientserver/executor",
     "./routing",
     "./sessionapi",
@@ -104,12 +112,38 @@ def log(message: str) -> None:
     print(f"[source-checks] {message}", flush=True)
 
 
+def _forward(stream, payload: bytes | None) -> None:
+    if not payload:
+        return
+    binary = getattr(stream, "buffer", None)
+    if binary is not None:
+        binary.write(payload)
+        binary.flush()
+    else:
+        stream.write(payload.decode("utf-8", errors="backslashreplace"))
+        stream.flush()
+
+
 def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
     log("$ " + " ".join(command))
     try:
-        result = subprocess.run(command, cwd=cwd, env=env, check=False)
+        timeout = command_deadline_remaining(env)
+        if timeout is None:
+            result = subprocess.run(command, cwd=cwd, env=env, check=False)
+        else:
+            result = run_streamed(command, timeout_seconds=timeout, cwd=cwd, env=env)
     except FileNotFoundError as error:
         raise CheckError(f"required command is missing: {error.filename}") from error
+    if result.returncode:
+        raise SystemExit(result.returncode)
+
+
+def run_dependency_fetch(
+    command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None,
+) -> None:
+    """Retry only a standalone dependency download or resolution command."""
+    log("$ " + " ".join(command))
+    result = run_dependency_command(command, cwd=cwd, env=env)
     if result.returncode:
         raise SystemExit(result.returncode)
 
@@ -126,26 +160,48 @@ def capture(
 ) -> str:
     log("$ " + " ".join(command))
     try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+        timeout = command_deadline_remaining(env)
+        if timeout is None:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            stdout = result.stdout
+            stderr = result.stderr
+        else:
+            result = run_finite_capture(
+                command, cwd=cwd, env=env, timeout_seconds=timeout,
+            )
+            stdout = result.stdout or b""
+            stderr = result.stderr or b""
+            if emit_stdout:
+                _forward(sys.stdout, stdout)
+            _forward(sys.stderr, stderr)
     except FileNotFoundError as error:
         raise CheckError(f"required command is missing: {error.filename}") from error
-    if result.stdout and emit_stdout:
-        sys.stdout.write(result.stdout)
+    except subprocess.TimeoutExpired as error:
+        stdout_bytes, stderr_bytes = exception_output(error)
+        _forward(sys.stdout, stdout_bytes)
+        _forward(sys.stderr, stderr_bytes)
+        raise
+    if stdout and emit_stdout and timeout is None:
+        sys.stdout.write(stdout)
         sys.stdout.flush()
-    if result.stderr:
-        sys.stderr.write(result.stderr)
+    if stderr and timeout is None:
+        sys.stderr.write(stderr)
         sys.stderr.flush()
     if result.returncode:
         raise SystemExit(result.returncode)
-    return result.stdout
+    if isinstance(stdout, bytes):
+        import locale
+
+        return stdout.decode(locale.getpreferredencoding(False) or "utf-8")
+    return stdout
 
 
 def host_os() -> str:
@@ -166,12 +222,10 @@ def require_command(name: str, purpose: str) -> str:
     return command
 
 
-def download(url: str, destination: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "DobbyVPN-source-checks"})
+def download(url: str, destination: Path, expected_sha256: str) -> None:
     log(f"Downloading pinned tool asset: {url}")
     try:
-        with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
-            shutil.copyfileobj(response, output)
+        download_file(url, destination, expected_sha256=expected_sha256, default_timeout=120)
     except Exception as error:
         raise CheckError(f"could not download {url}: {error}") from error
 
@@ -232,7 +286,7 @@ class Tools:
         spec = TOOL_ASSETS[name]
         require_platform(spec["platform"])
         archive = self.root / f"{name}.{spec['archive']}"
-        download(spec["url"], archive)
+        download(spec["url"], archive, spec["sha256"])
         verify_sha256(archive, spec["sha256"])
         executable = extract_executable(archive, self.root / f"{name}-unpacked", spec["archive"], spec["member"])
         if not executable.is_file():
@@ -321,9 +375,9 @@ def require_android_sdk() -> Path:
     sdk = next((Path(value).expanduser() for value in candidates if value and value.strip()), None)
     if sdk is None or not sdk.is_dir():
         raise CheckError("Android Lint requires ANDROID_SDK_ROOT/ANDROID_HOME or ui/android/local.properties")
-    platform_dir = sdk / "platforms" / f"android-{ANDROID_COMPILE_SDK}"
+    platform_dir = sdk / "platforms" / ANDROID_SDK_PLATFORM
     if not platform_dir.is_dir():
-        raise CheckError(f"Android Lint requires Android SDK platform {ANDROID_COMPILE_SDK} at {platform_dir}")
+        raise CheckError(f"Android Lint requires Android SDK platform {ANDROID_SDK_PLATFORM} at {platform_dir}")
     return sdk
 
 
@@ -345,6 +399,14 @@ def lint_android(tools: Tools) -> None:
     gradle = ROOT / "ui" / "android" / "gradlew"
     if not gradle.is_file():
         raise CheckError(f"Android Gradle wrapper is missing: {gradle}")
+    resolver = SCRIPT_DIR / "android" / "resolve_dependencies.gradle"
+    run_dependency_fetch(
+        [
+            str(gradle), f"-PdobbyGoBinary={go}", "--init-script", str(resolver),
+            "resolveDobbyDependencies", "--no-daemon", "--stacktrace",
+        ],
+        cwd=ROOT / "ui" / "android",
+    )
     run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "ui" / "android")
 
     lock_file = tools.root / "gradle.lockfile"

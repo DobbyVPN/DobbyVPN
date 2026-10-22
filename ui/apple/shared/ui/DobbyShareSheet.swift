@@ -146,7 +146,7 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         layoutManager.ensureLayout(for: textContainer)
         let point = CGPoint(
             x: textContainerInset.left + 1,
-            y: contentOffset.y + textContainerInset.top + 1
+            y: contentOffset.y - textContainerInset.top + 1
         )
         let topGlyph = layoutManager.glyphIndex(for: point, in: textContainer)
         var character = min(layoutManager.characterIndexForGlyph(at: topGlyph), textStorage.length - 1)
@@ -169,8 +169,10 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         layoutManager.ensureLayout(for: textContainer)
         let glyph = layoutManager.glyphIndexForCharacter(at: min(character, textStorage.length - 1))
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        // Keep the captured line's partially clipped top position across a size change.
+        let minimumAnchorViewportY = -line.height
         let maximumAnchorViewportY = max(0, bounds.height - adjustedContentInset.bottom - line.height)
-        let restoredAnchorViewportY = min(max(viewportY, 0), maximumAnchorViewportY)
+        let restoredAnchorViewportY = min(max(viewportY, minimumAnchorViewportY), maximumAnchorViewportY)
         let requestedY = line.minY + textContainerInset.top - restoredAnchorViewportY
         let maximumY = max(-adjustedContentInset.top, contentSize.height - bounds.height + adjustedContentInset.bottom)
         let restoredY = min(max(requestedY, -adjustedContentInset.top), maximumY)

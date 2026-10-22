@@ -5,7 +5,12 @@ import DobbyDiagnosticFiles
 import IOSIntegration
 #endif
 
-func appendUIDiagnostic(_ message: String, event: String, level: String, to url: URL) throws {
+func appendUIDiagnostic(
+    _ message: String,
+    to url: URL,
+    event: String = "ui.failure",
+    level: String = "ERROR"
+) throws {
     try DiagnosticFiles.append(message, event: event, level: level, source: "native-ui", to: url)
 }
 

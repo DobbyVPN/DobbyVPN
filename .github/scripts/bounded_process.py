@@ -13,6 +13,44 @@ from pathlib import Path
 from typing import Any
 
 PROCESS_CLEANUP_GRACE_SECONDS = 5
+COMMAND_DEADLINE_ENV = "DOBBYVPN_COMMAND_DEADLINE_MONOTONIC"
+
+
+class CommandDeadlineError(RuntimeError):
+    """The inherited platform command deadline is malformed or exhausted."""
+
+
+def command_deadline_remaining(
+    environment: Mapping[str, str] | None = None,
+) -> float | None:
+    """Return the live remaining time from the optional guest deadline contract."""
+    source = os.environ if environment is None else environment
+    value = source.get(COMMAND_DEADLINE_ENV)
+    if value is None:
+        return None
+    try:
+        deadline = float(value)
+    except (TypeError, ValueError) as error:
+        raise CommandDeadlineError(
+            f"{COMMAND_DEADLINE_ENV} must be a finite monotonic timestamp"
+        ) from error
+    if not math.isfinite(deadline):
+        raise CommandDeadlineError(
+            f"{COMMAND_DEADLINE_ENV} must be a finite monotonic timestamp"
+        )
+    remaining = deadline - time.monotonic()
+    if not math.isfinite(remaining) or remaining <= 0:
+        raise CommandDeadlineError(f"{COMMAND_DEADLINE_ENV} has expired")
+    return remaining
+
+
+def command_timeout(
+    default_seconds: float,
+    environment: Mapping[str, str] | None = None,
+) -> float:
+    """Use the inherited platform deadline, or the standalone default."""
+    remaining = command_deadline_remaining(environment)
+    return default_seconds if remaining is None else remaining
 
 
 def output_text(output: str | bytes | None) -> str:
@@ -128,8 +166,12 @@ def terminate_process_group(
     """Stop the command's process group, escalating to a forced stop."""
     group_id = getattr(process, "_dobby_process_group_id", process.pid)
     if os.name == "nt":
-        if process.poll() is None:
-            _run_windows_taskkill(process.pid, grace_seconds)
+        if process.poll() is not None:
+            # Once the owned root exits, its PID no longer identifies the
+            # original tree. Do not risk targeting a reused PID or claim that
+            # descendants have stopped without an observable process group.
+            return "process-group=unknown"
+        _run_windows_taskkill(process.pid, grace_seconds)
         return "process-group=terminated"
 
     try:
@@ -138,10 +180,12 @@ def terminate_process_group(
         pass
     except OSError as error:
         raise ProcessCleanupError(
-            f"could not terminate process group={group_id}: {error}"
+            f"could not terminate process group={group_id}: {error}; "
+            "process-group-final-state=unknown"
         ) from error
 
     deadline = time.monotonic() + max(grace_seconds, 0)
+    forced = False
     while True:
         try:
             os.killpg(group_id, 0)
@@ -149,7 +193,8 @@ def terminate_process_group(
             break
         except OSError as error:
             raise ProcessCleanupError(
-                f"could not inspect process group={group_id}: {error}"
+                f"could not inspect process group={group_id}: {error}; "
+                "process-group-final-state=unknown"
             ) from error
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -159,8 +204,10 @@ def terminate_process_group(
                 pass
             except OSError as error:
                 raise ProcessCleanupError(
-                    f"could not kill process group={group_id}: {error}"
+                    f"could not kill process group={group_id}: {error}; "
+                    "process-group-final-state=unknown"
                 ) from error
+            forced = True
             break
         wait_slice = min(remaining, 0.05)
         if process.poll() is None:
@@ -170,17 +217,105 @@ def terminate_process_group(
                 pass
         else:
             time.sleep(wait_slice)
+    wait_error: subprocess.TimeoutExpired | None = None
     try:
         process.wait(timeout=max(grace_seconds, 0))
     except subprocess.TimeoutExpired as error:
+        wait_error = error
+    if forced:
+        try:
+            os.killpg(group_id, 0)
+        except ProcessLookupError:
+            if wait_error is not None:
+                raise ProcessCleanupError(
+                    f"process group={group_id} disappeared after SIGKILL, but the "
+                    f"owned child could not be reaped: {wait_error}; "
+                    "process-group-final-state=unknown"
+                ) from wait_error
+        except OSError as error:
+            wait_detail = (
+                f"; owned child wait also timed out: {wait_error}"
+                if wait_error is not None
+                else ""
+            )
+            raise ProcessCleanupError(
+                f"could not verify process group={group_id} after SIGKILL: {error}"
+                f"{wait_detail}; "
+                "process-group-final-state=unknown"
+            ) from error
+        else:
+            wait_detail = (
+                f"; owned child wait also timed out: {wait_error}"
+                if wait_error is not None
+                else ""
+            )
+            raise ProcessCleanupError(
+                f"process group={group_id} still exists after SIGKILL; "
+                f"final probe confirmed members remain{wait_detail}; "
+                "process-group-final-state=unknown"
+            )
+    elif wait_error is not None:
         raise ProcessCleanupError(
-            f"process group {group_id} did not terminate after escalation"
-        ) from error
+            f"process group={group_id} disappeared, but the owned child could not "
+            f"be reaped: {wait_error}; process-group-final-state=unknown"
+        ) from wait_error
     return "process-group=terminated"
 
 
 def _remaining(deadline: float) -> float:
     return max(0.0, deadline - time.monotonic())
+
+
+def _stop_direct_child(
+    process: subprocess.Popen[bytes],
+    *,
+    deadline: float,
+) -> list[BaseException]:
+    """Bounded fallback to stop and reap the owned child when its group fails."""
+    errors: list[BaseException] = []
+    try:
+        if process.poll() is not None:
+            process.wait(timeout=0)
+            return errors
+    except (OSError, subprocess.SubprocessError) as error:
+        errors.append(error)
+
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        errors.append(error)
+
+    graceful_wait = min(0.25, _remaining(deadline))
+    try:
+        process.wait(timeout=graceful_wait)
+        return errors
+    except subprocess.TimeoutExpired:
+        pass
+    except (OSError, subprocess.SubprocessError) as error:
+        errors.append(error)
+
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        errors.append(error)
+
+    try:
+        process.wait(timeout=_remaining(deadline))
+    except subprocess.TimeoutExpired as error:
+        errors.append(
+            ProcessCleanupError(
+                f"owned direct child process={process.pid} could not be reaped "
+                "before the cleanup deadline"
+            )
+        )
+        errors.append(error)
+    except (OSError, subprocess.SubprocessError) as error:
+        errors.append(error)
+    return errors
 
 
 def _drain_after_cleanup(
@@ -318,19 +453,23 @@ def run_finite_capture(
             cleanup_started + max(termination_grace_seconds, 0),
         )
         cleanup_errors: list[BaseException] = []
+        termination_outcome: object | None = None
         try:
             if terminate is None:
-                terminate_process_group(
+                termination_outcome = terminate_process_group(
                     process,
                     grace_seconds=max(termination_deadline - cleanup_started, 0),
                 )
             else:
-                terminate(process, termination_deadline)
+                termination_outcome = terminate(process, termination_deadline)
         except BaseException as cleanup_error:
             cleanup_errors.append(cleanup_error)
             cleanup_stdout, cleanup_stderr = exception_output(cleanup_error)
             stdout = merge_output_fragments(stdout, cleanup_stdout)
             stderr = merge_output_fragments(stderr, cleanup_stderr)
+            cleanup_errors.extend(
+                _stop_direct_child(process, deadline=cleanup_deadline)
+            )
         if close_boundary is not None and not detached:
             try:
                 close_boundary(process, cleanup_deadline)
@@ -347,6 +486,25 @@ def run_finite_capture(
         )
         cleanup_errors.extend(drain_errors)
         set_exception_output(original_error, stdout, stderr)
+        if isinstance(original_error, subprocess.TimeoutExpired):
+            group_id = getattr(process, "_dobby_process_group_id", process.pid)
+            try:
+                owned_child_reaped = process.poll() is not None
+            except BaseException as state_error:
+                owned_child_reaped = None
+                original_error.add_note(
+                    f"owned child reap state could not be read: {type(state_error).__name__}: {state_error}"
+                )
+            if termination_outcome == "process-group=terminated":
+                group_final_state = "terminated"
+            else:
+                group_final_state = "unknown"
+            original_error.add_note(
+                "process timeout cleanup: "
+                f"owned_pid={process.pid}; process_group={group_id}; "
+                f"owned_child_reaped={'yes' if owned_child_reaped else 'unknown' if owned_child_reaped is None else 'no'}; "
+                f"process_group_final_state={group_final_state}"
+            )
         if cleanup_errors:
             for error in cleanup_errors:
                 original_error.add_note(
@@ -371,6 +529,87 @@ def run_finite_capture(
                 )
             raise
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+
+
+def run_streamed(
+    command: Sequence[str],
+    *,
+    timeout_seconds: float,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    stdin: int | None = None,
+    termination_grace_seconds: float = PROCESS_CLEANUP_GRACE_SECONDS,
+    cleanup_timeout_seconds: float = 2 * PROCESS_CLEANUP_GRACE_SECONDS,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a command with inherited output and bounded process-group cleanup."""
+    if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+        raise ValueError("subprocess timeout must be positive")
+    if (
+        not math.isfinite(termination_grace_seconds)
+        or termination_grace_seconds < 0
+        or not math.isfinite(cleanup_timeout_seconds)
+        or cleanup_timeout_seconds < 0
+    ):
+        raise ValueError("subprocess cleanup timeouts must be finite and non-negative")
+
+    argv = tuple(command)
+    operation_deadline = time.monotonic() + timeout_seconds
+    arguments: dict[str, Any] = process_group_options()
+    if cwd is not None:
+        arguments["cwd"] = str(cwd)
+    if env is not None:
+        arguments["env"] = dict(env)
+    if stdin is not None:
+        arguments["stdin"] = stdin
+    process = subprocess.Popen(list(argv), **arguments)
+    process._dobby_process_group_id = process.pid  # type: ignore[attr-defined]
+    try:
+        returncode = process.wait(timeout=_remaining(operation_deadline))
+    except BaseException as original_error:
+        cleanup_started = time.monotonic()
+        cleanup_deadline = cleanup_started + cleanup_timeout_seconds
+        termination_deadline = min(
+            cleanup_deadline,
+            cleanup_started + termination_grace_seconds,
+        )
+        cleanup_errors: list[BaseException] = []
+        termination_outcome: object | None = None
+        try:
+            termination_outcome = terminate_process_group(
+                process,
+                grace_seconds=max(termination_deadline - time.monotonic(), 0),
+            )
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+            cleanup_errors.extend(_stop_direct_child(process, deadline=cleanup_deadline))
+
+        if isinstance(original_error, subprocess.TimeoutExpired):
+            group_id = getattr(process, "_dobby_process_group_id", process.pid)
+            try:
+                owned_child_reaped = process.poll() is not None
+            except BaseException as state_error:
+                owned_child_reaped = None
+                original_error.add_note(
+                    f"owned child reap state could not be read: {type(state_error).__name__}: {state_error}"
+                )
+            group_final_state = (
+                "terminated" if termination_outcome == "process-group=terminated" else "unknown"
+            )
+            original_error.add_note(
+                "process timeout cleanup: "
+                f"owned_pid={process.pid}; process_group={group_id}; "
+                f"owned_child_reaped={'yes' if owned_child_reaped else 'unknown' if owned_child_reaped is None else 'no'}; "
+                f"process_group_final_state={group_final_state}"
+            )
+        for error in cleanup_errors:
+            original_error.add_note(
+                f"process cleanup failed: {type(error).__name__}: {error}"
+            )
+            for note in getattr(error, "__notes__", ()):
+                original_error.add_note(f"process cleanup: {note}")
+        raise
+
+    return subprocess.CompletedProcess(argv, returncode)
 
 
 def run_bounded_capture(

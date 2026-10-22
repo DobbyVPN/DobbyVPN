@@ -18,20 +18,24 @@ import sys
 import tarfile
 import tempfile
 import time
-import urllib.request
 import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bounded_process import (
+    COMMAND_DEADLINE_ENV,
+    CommandDeadlineError,
     PROCESS_CLEANUP_GRACE_SECONDS,
+    command_deadline_remaining,
+    command_timeout,
     exception_output as _exception_output,
     output_text,
     process_group_options,
     run_bounded_capture as _run_bounded_capture,
     terminate_process_group,
 )
+from dependency_fetch import download_file, run_dependency_command
 
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -179,11 +183,12 @@ def run_bounded_capture(
     cwd: Path = ROOT_DIR,
     timeout_seconds: int = PROBE_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
+    child_env = child_environment(command)
     return _run_bounded_capture(
         command,
         cwd=cwd,
-        env=child_environment(command),
-        timeout_seconds=timeout_seconds,
+        env=child_env,
+        timeout_seconds=command_timeout(timeout_seconds, child_env),
         cleanup_grace_seconds=PROCESS_CLEANUP_GRACE_SECONDS,
     )
 
@@ -232,6 +237,12 @@ def run_capture(command: list[str], cwd: Path = ROOT_DIR) -> str | None:
             stdout,
         )
         emit_process_diagnostic("[!] Probe stderr:", stderr)
+        if COMMAND_DEADLINE_ENV in os.environ:
+            details = "; ".join(getattr(error, "__notes__", ()))
+            suffix = f"; {details}" if details else ""
+            raise CommandDeadlineError(
+                f"{COMMAND_DEADLINE_ENV} expired during probe: {printable}{suffix}"
+            ) from error
         return None
     except OSError as error:
         stdout, stderr = _exception_output(error)
@@ -285,33 +296,16 @@ def prepend_path(path: Path) -> None:
 
 
 def download(url: str, output: Path) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
     log(f"Downloading {url}")
-    if shutil.which("curl"):
-        run(
-            [
-                "curl",
-                "--fail",
-                "--location",
-                "--show-error",
-                "--http1.1",
-                "--connect-timeout",
-                "60",
-                "--max-time",
-                "900",
-                "--continue-at",
-                "-",
-                url,
-                "-o",
-                str(output),
-            ]
-        )
-        return
+    download_file(url, output, default_timeout=900, overall_timeout=900)
 
-    request = urllib.request.Request(url, headers={"User-Agent": "DobbyVPN desktop_build.py"})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        with open(output, "wb") as handle:
-            shutil.copyfileobj(response, handle)
+
+def download_verified(url: str, output: Path, expected_sha256: str) -> None:
+    log(f"Downloading verified archive {url}")
+    download_file(
+        url, output, expected_sha256=expected_sha256,
+        default_timeout=900, overall_timeout=900,
+    )
 
 
 def host_platform() -> str:
@@ -637,10 +631,11 @@ def install_windows_bridge(skip_deps: bool) -> None:
         if skip_deps:
             fail("dobby_bridge.dll is required for the Windows Go backend")
         archive = TOOLS_DIR / "downloads" / f"{Path(release.asset_name).stem}-v{release.version}.zip"
-        download(
+        download_verified(
             "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
             f"v{release.version}/{release.asset_name}",
             archive,
+            release.archive_sha256,
         )
         if sha256_file(archive) != release.archive_sha256:
             fail("Windows native bridge archive checksum mismatch")
@@ -732,10 +727,11 @@ def install_linux_trusttunnel_bridge(skip_deps: bool) -> None:
             / f"{Path(release.asset_name).stem}-v{release.version}.zip"
         )
         if not archive.exists():
-            download(
+            download_verified(
                 "https://github.com/DobbyVPN/go-go-tunnel/releases/download/"
                 f"v{release.version}/{release.asset_name}",
                 archive,
+                release.archive_sha256,
             )
         if sha256_file(archive) != release.archive_sha256:
             fail("TrustTunnel Linux bridge archive checksum mismatch")
@@ -800,10 +796,11 @@ def install_linux_libcxx_runtime(skip_deps: bool) -> Path:
             for filename, expected_digest in LLVM_LIBCXX_PACKAGES:
                 archive = TOOLS_DIR / "downloads" / filename
                 if not archive.exists():
-                    download(
+                    download_verified(
                         "https://apt.llvm.org/noble/pool/main/l/"
                         f"llvm-toolchain-21/{filename}",
                         archive,
+                        expected_digest,
                     )
                 if hashlib.sha256(archive.read_bytes()).hexdigest() != expected_digest:
                     fail(f"LLVM runtime archive checksum mismatch: {filename}")
@@ -853,7 +850,14 @@ def prepare_toolchain(target_platform: str, skip_deps: bool) -> Path:
 def go_mod_download(go_executable: Path, run_tidy: bool) -> None:
     if run_tidy:
         run([str(go_executable), "mod", "tidy"], cwd=GO_MODULE_DIR)
-    run([str(go_executable), "mod", "download"], cwd=GO_MODULE_DIR)
+    command = [str(go_executable), "mod", "download"]
+    result = run_dependency_command(
+        command,
+        cwd=GO_MODULE_DIR,
+        env=child_environment(command),
+    )
+    if result.returncode:
+        fail(f"Dependency download failed with exit code {result.returncode}: {' '.join(command)}")
 
 
 def prepare_go_test_dependencies(skip_deps: bool, run_go_mod_tidy: bool) -> Path:

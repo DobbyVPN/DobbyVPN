@@ -1,7 +1,84 @@
 #!/bin/sh
 set -e
-if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload || true
-    systemctl enable dobbyvpn.service || true
+
+case "${1:-}" in
+    configure) ;;
+    *) exit 0 ;;
+esac
+
+unit=dobbyvpn.service
+admin_masked() {
+    root=${DPKG_ROOT:-}
+    for directory in etc/systemd/system run/systemd/system; do
+        path="$root/$directory/$unit"
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            [ -L "$path" ] && [ "$(readlink "$path")" = /dev/null ]
+            return $?
+        fi
+    done
+    if [ -z "$root" ] && [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+        state_status=0
+        if state=$(systemctl is-enabled "$unit"); then
+            :
+        else
+            state_status=$?
+        fi
+        case "$state" in
+            masked|masked-runtime) return 0 ;;
+            enabled|enabled-runtime|disabled|static|indirect|generated|transient|linked|linked-runtime|alias|not-found|bad)
+                return 1
+                ;;
+            *)
+                echo "cannot determine whether $unit is administratively masked (systemctl is-enabled status ${state_status:-0}, output: $state)" >&2
+                return 2
+                ;;
+        esac
+    fi
+    return 1
+}
+
+if deb-systemd-helper debian-installed "$unit"; then
+    # Preserve a recorded administrator choice across upgrades. enable restores
+    # links only for a service that was enabled; update-state records the new
+    # unit without enabling one that the administrator disabled.
+    if deb-systemd-helper --quiet was-enabled "$unit"; then
+        deb-systemd-helper enable "$unit"
+    else
+        deb-systemd-helper update-state "$unit"
+    fi
+    fresh_install=no
+else
+    # The v1.5.4 maintainer scripts did not record helper state. Treat the
+    # first fixed-package upgrade as a fresh install; an unmasked legacy
+    # administrator-disabled service can be enabled once by this transition.
+    if admin_masked; then
+        # enable invokes systemctl preset on first use, which fails for a
+        # masked unit. Record the disabled choice without disturbing the mask.
+        deb-systemd-helper update-state "$unit"
+    else
+        mask_status=$?
+        [ "$mask_status" -eq 1 ] || exit "$mask_status"
+        deb-systemd-helper enable "$unit"
+    fi
+    fresh_install=yes
 fi
-exit 0
+
+# Helper bookkeeping supports DPKG_ROOT. Runtime actions apply only to the
+# live system root with systemd running.
+if [ -d /run/systemd/system ] && [ -z "${DPKG_ROOT:-}" ]; then
+    systemctl daemon-reload
+    if admin_masked; then
+        echo "$unit is administratively masked; preserving its runtime state" >&2
+    else
+        mask_status=$?
+        [ "$mask_status" -eq 1 ] || exit "$mask_status"
+        if [ "$fresh_install" = yes ]; then
+            deb-systemd-invoke start "$unit"
+        else
+            # deb-systemd-invoke restarts enabled services and services that
+            # are already active, while leaving disabled inactive services
+            # alone. The old v1.5.4 prerm stopped services on upgrade.
+            deb-systemd-invoke restart "$unit"
+        fi
+    fi
+fi

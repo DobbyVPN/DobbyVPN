@@ -1,0 +1,72 @@
+name: Cache dependency archives
+description: Cache Go module download archives, Gradle module downloads and verified tool archives.
+inputs:
+  go-module-cache-path:
+    description: Go module cache root, if GOPATH is not the runner default.
+    required: false
+    default: ~/go/pkg/mod
+  go-modules:
+    description: Cache only Go module download archives.
+    required: false
+    default: 'true'
+  gradle:
+    description: Cache Gradle module metadata and downloaded artifacts.
+    required: false
+    default: 'false'
+  gradle-extra-dependency-files:
+    description: Optional dependency files from a checked-out private test tree.
+    required: false
+    default: ''
+  pinned-tools:
+    description: Cache verified pinned tool archives.
+    required: false
+    default: 'false'
+  pinned-tools-scope:
+    description: Caller-specific tool set name for an independent archive cache.
+    required: false
+    default: default
+runs:
+  using: composite
+  steps:
+    - name: Prepare archive cache directories
+      shell: bash
+      env:
+        GO_MODULE_CACHE_PATH: ${{ inputs.go-module-cache-path }}
+        CACHE_GO_MODULES: ${{ inputs.go-modules }}
+        CACHE_GRADLE: ${{ inputs.gradle }}
+        CACHE_PINNED_TOOLS: ${{ inputs.pinned-tools }}
+      run: |
+        set -euo pipefail
+        if [[ "$CACHE_GO_MODULES" == true ]]; then
+          module_cache="$GO_MODULE_CACHE_PATH"
+          if [[ "$module_cache" == '~/'* ]]; then module_cache="$HOME/${module_cache:2}"; fi
+          mkdir -p "$module_cache/cache/download"
+        fi
+        if [[ "$CACHE_GRADLE" == true ]]; then
+          mkdir -p "$HOME/.gradle/caches/modules-2"
+        fi
+        if [[ "$CACHE_PINNED_TOOLS" == true ]]; then
+          mkdir -p "$HOME/.cache/dobbyvpn/pinned-tool-archives"
+          echo "DOBBYVPN_PINNED_TOOL_CACHE=$HOME/.cache/dobbyvpn/pinned-tool-archives" >> "$GITHUB_ENV"
+        fi
+    - name: Cache Go module download archives
+      if: inputs.go-modules == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ${{ inputs.go-module-cache-path }}/cache/download
+        key: dobbyvpn-go-modules-v1-${{ runner.os }}-${{ runner.arch }}-go-${{ hashFiles('.go-version') }}-${{ hashFiles('core/go.mod', 'core/go.sum', '.github/scripts/android/dependency-spec.json', '.github/scripts/android/android_dependency_provenance.py') }}
+    - name: Cache Gradle module downloads
+      if: inputs.gradle == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ~/.gradle/caches/modules-2
+        key: dobbyvpn-gradle-v3-${{ runner.os }}-${{ runner.arch }}-gradle-${{ hashFiles('ui/android/gradle/wrapper/gradle-wrapper.properties', 'ui/android/gradle/wrapper/gradle-wrapper.jar', 'ui/android/**/*.gradle', 'ui/android/**/*.gradle.kts', 'ui/android/**/gradle.lockfile', 'ui/android/**/libs.versions.toml', 'ui/android/gradle.properties', 'ui/android/gradle/verification-metadata.xml', '.github/scripts/android/resolve_dependencies.gradle') }}-${{ hashFiles(inputs.gradle-extra-dependency-files) || 'none' }}
+        restore-keys: |
+          dobbyvpn-gradle-v3-${{ runner.os }}-${{ runner.arch }}-gradle-${{ hashFiles('ui/android/gradle/wrapper/gradle-wrapper.properties', 'ui/android/gradle/wrapper/gradle-wrapper.jar', 'ui/android/**/*.gradle', 'ui/android/**/*.gradle.kts', 'ui/android/**/gradle.lockfile', 'ui/android/**/libs.versions.toml', 'ui/android/gradle.properties', 'ui/android/gradle/verification-metadata.xml', '.github/scripts/android/resolve_dependencies.gradle') }}-
+    - name: Cache verified pinned tool archives
+      if: inputs.pinned-tools == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.cache/dobbyvpn/pinned-tool-archives
+        key: dobbyvpn-pinned-tools-v2-${{ github.workflow }}-${{ github.job }}-${{ inputs.pinned-tools-scope }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.go-version', '.github/scripts/source_checks.py', '.github/scripts/desktop/desktop_build.py', '.github/scripts/dependency_fetch.py', '.github/scripts/android/dependency-spec.json', '.github/scripts/android/android_dependency_provenance.py', 'ui/android/gradle/wrapper/gradle-wrapper.properties') }}

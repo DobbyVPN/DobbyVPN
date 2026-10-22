@@ -1,6 +1,16 @@
 import Combine
 import Foundation
 
+private enum DobbySessionErrorOrigin: Equatable {
+    case sourceSnapshot
+    case other
+}
+
+private struct DobbySourceErrorIdentity: Equatable {
+    let sessionID: String
+    let message: String
+}
+
 @MainActor
 protocol DobbySessionScheduledWork: AnyObject {
     func cancel()
@@ -39,9 +49,7 @@ public enum DobbyProfileStatus: String {
 public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
     @Published public private(set) var busy = false
-    @Published public private(set) var error = "" {
-        didSet { if !error.isEmpty && error != oldValue { recordError(error) } }
-    }
+    @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
     @Published var clearRevision = 0
@@ -76,24 +84,40 @@ public final class DobbySessionViewModel: ObservableObject {
     private var logsClearInFlight = false
     private var logsRevision = 0
     private var lastFailure = ""
+    private var errorOrigin: DobbySessionErrorOrigin?
+    private var lastSourceErrorIdentity: DobbySourceErrorIdentity?
+    private var snapshotFailureMessage: String?
     private var diagnosticWriteError = ""
     private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
 
     public convenience init(client: DobbySessionClient) {
-        self.init(client: client, debounceScheduler: SystemSessionDebounceScheduler())
+        self.init(client: client, debounceScheduler: SystemSessionDebounceScheduler(), automaticallyPoll: true)
     }
 
-    init(client: DobbySessionClient, debounceScheduler: any DobbySessionDebounceScheduling) {
+    convenience init(client: DobbySessionClient, automaticallyPoll: Bool) {
+        self.init(client: client, debounceScheduler: SystemSessionDebounceScheduler(), automaticallyPoll: automaticallyPoll)
+    }
+
+    init(
+        client: DobbySessionClient,
+        debounceScheduler: any DobbySessionDebounceScheduling,
+        automaticallyPoll: Bool = true
+    ) {
         self.client = client
         self.debounceScheduler = debounceScheduler
         recordAppStarted()
         refreshSnapshot()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshSnapshot()
-                if self?.logsVisible == true { self?.refreshLogs() }
+        if automaticallyPoll {
+            timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.refreshForTimerTick() }
             }
         }
+    }
+
+    @MainActor
+    func refreshForTimerTick() {
+        refreshSnapshot()
+        if logsVisible { refreshLogs() }
     }
 
     deinit {
@@ -193,7 +217,7 @@ public final class DobbySessionViewModel: ObservableObject {
         sourceText = value
         sourceIsDirty = true
         importError = ""
-        error = ""
+        setError("", origin: .other)
         loadError = ""
         loadRevision += 1
         pendingLoad = nil
@@ -216,9 +240,23 @@ public final class DobbySessionViewModel: ObservableObject {
 
     public func paste(_ value: String) {
         let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard validSubscription(source) else { error = "Paste an HTTPS subscription URL with a host"; return }
+        guard validSubscription(source) else {
+            setError("Paste an HTTPS subscription URL with a host", origin: .other)
+            return
+        }
         if source == sourceText && (loading || snapshot.configured && !sourceIsDirty) { return }
         sourceChanged(source, immediate: true)
+    }
+
+    func pasteCallback(_ values: [String]) {
+        let outcome = values.isEmpty ? "empty" : "dispatch_first"
+        recordDiagnostic(
+            "Paste callback received; item_count=\(values.count); outcome=\(outcome)",
+            event: "ui.paste_callback",
+            level: "INFO"
+        )
+        guard let first = values.first else { return }
+        paste(first)
     }
 
     public func importLink(_ url: URL) {
@@ -226,13 +264,13 @@ public final class DobbySessionViewModel: ObservableObject {
             let source = try subscriptionFromLink(url.absoluteString)
             guard let source else { return }
             if !importError.isEmpty {
-                if error == importError { error = "" }
+                if error == importError { setError("", origin: .other) }
                 importError = ""
             }
             paste(source)
         } catch {
             importError = error.localizedDescription
-            self.error = error.localizedDescription
+            setError(error.localizedDescription, origin: .other)
         }
     }
 
@@ -278,7 +316,7 @@ public final class DobbySessionViewModel: ObservableObject {
         guard !snapshotInFlight else { return }
         snapshotInFlight = true
         let currentID = snapshot.sessionID
-        let recoveringFromSnapshotFailure = currentID.isEmpty && !error.isEmpty
+        let recoveringFromSnapshotFailure = currentID.isEmpty && snapshotFailureMessage != nil
         let client = client
         worker.async { [weak self, client] in
             let decoded = readSnapshot(client: client, sessionID: currentID)
@@ -289,7 +327,10 @@ public final class DobbySessionViewModel: ObservableObject {
                 case let .success((value, reattached)):
                     if value.sessionID == self.snapshot.sessionID && value.sequence < max(self.snapshot.sequence, self.acceptedSequence) { return }
                     let sameSession = value.sessionID == self.snapshot.sessionID
-                    if !sameSession { self.acceptedSequence = 0 }
+                    if !sameSession {
+                        self.acceptedSequence = 0
+                        self.clearError(from: .sourceSnapshot)
+                    }
                     var displayedValue = value
                     if sameSession && self.sourceIsDirty {
                         displayedValue.configured = self.snapshot.configured
@@ -319,14 +360,12 @@ public final class DobbySessionViewModel: ObservableObject {
                         self.sourceChanged(self.sourceText, immediate: true)
                     }
                     self.loadNext()
-                    if !value.sourceError.isEmpty {
-                        self.error = value.sourceError
-                    } else if reattached || recoveringFromSnapshotFailure {
-                        self.error = ""
-                    }
+                    if reattached || recoveringFromSnapshotFailure { self.clearSnapshotFailure() }
+                    self.observeSourceError(value.sourceError, sessionID: value.sessionID)
                 case let .failure(failure):
                     self.snapshot = .empty
-                    self.error = failure.localizedDescription
+                    self.snapshotFailureMessage = failure.localizedDescription
+                    self.setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
                 }
             }
         }
@@ -345,7 +384,7 @@ public final class DobbySessionViewModel: ObservableObject {
 
     private func performCommand(index: Int?, stopping: Bool) {
         busy = true
-        error = ""
+        setError("", origin: .other)
         let current = snapshot
         let client = client
         worker.async { [weak self, client] in
@@ -363,7 +402,9 @@ public final class DobbySessionViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.busy = false
-                if case let .failure(failure) = outcome { self.error = failure.localizedDescription }
+                if case let .failure(failure) = outcome {
+                    self.setError(failure.localizedDescription, origin: .other)
+                }
                 self.refreshSnapshot()
             }
         }
@@ -373,6 +414,55 @@ public final class DobbySessionViewModel: ObservableObject {
         acceptedSource = source
         sourceIsDirty = false
         sourceText = source
+    }
+
+    private func setError(
+        _ message: String,
+        origin: DobbySessionErrorOrigin,
+        record: Bool = true,
+        preservingSnapshotFailure: Bool = false
+    ) {
+        if !preservingSnapshotFailure { snapshotFailureMessage = nil }
+        if error == message {
+            if message.isEmpty {
+                errorOrigin = nil
+            } else if origin == .other || errorOrigin == nil {
+                // Source observations must not take ownership of an identical unrelated banner.
+                errorOrigin = origin
+            }
+            return
+        }
+        errorOrigin = message.isEmpty ? nil : origin
+        error = message
+        if record && !message.isEmpty { recordError(message) }
+    }
+
+    private func clearError(from origin: DobbySessionErrorOrigin) {
+        guard errorOrigin == origin else { return }
+        setError("", origin: origin)
+    }
+
+    private func clearSnapshotFailure() {
+        guard let failure = snapshotFailureMessage else { return }
+        snapshotFailureMessage = nil
+        guard errorOrigin == .other, error == failure else { return }
+        setError("", origin: .other)
+    }
+
+    private func observeSourceError(_ message: String, sessionID: String) {
+        guard !message.isEmpty else {
+            lastSourceErrorIdentity = nil
+            if !sourceIsDirty { clearError(from: .sourceSnapshot) }
+            return
+        }
+
+        let identity = DobbySourceErrorIdentity(sessionID: sessionID, message: message)
+        if lastSourceErrorIdentity != identity {
+            lastSourceErrorIdentity = identity
+            recordError("Source snapshot error for session \(sessionID): \(message)")
+        }
+        guard !sourceIsDirty else { return }
+        setError(message, origin: .sourceSnapshot, record: false)
     }
 
     public func setLogsVisible(_ visible: Bool) {
@@ -387,14 +477,18 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func recordError(_ message: String) {
-        recordDiagnostic(message, event: "ui.failure", level: "ERROR")
+        recordDiagnostic(message)
     }
 
-    private func recordDiagnostic(_ message: String, event: String, level: String) {
+    private func recordDiagnostic(
+        _ message: String,
+        event: String = "ui.failure",
+        level: String = "ERROR"
+    ) {
         let path = client.uiDiagnosticPath
         logWorker.async { [weak self] in
             do {
-                try appendUIDiagnostic(message, event: event, level: level, to: path)
+                try appendUIDiagnostic(message, to: path, event: event, level: level)
                 Task { @MainActor [weak self] in
                     guard let self, self.logsVisible else { return }
                     self.refreshLogs()

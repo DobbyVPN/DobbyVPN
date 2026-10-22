@@ -1,0 +1,35 @@
+def resolveProjectConfigurations = { project ->
+    project.configurations
+        .findAll { configuration -> configuration.canBeResolved }
+        .sort { left, right -> left.name <=> right.name }
+        .each { configuration ->
+            project.logger.lifecycle("Resolving external artifacts for ${project.path}:${configuration.name}")
+            def files = configuration.incoming.artifactView {
+                componentFilter { componentId ->
+                    !(componentId instanceof org.gradle.api.artifacts.component.ProjectComponentIdentifier)
+                }
+            }.files.files
+            project.logger.lifecycle("Resolved ${files.size()} external artifact(s) for ${project.path}:${configuration.name}")
+        }
+}
+
+gradle.projectsEvaluated {
+    def projectTasks = rootProject.subprojects.collect { project ->
+        project.tasks.register("resolveDobbyProjectDependencies") {
+            group = "verification"
+            description = "Download all resolvable dependencies for this project without running build tasks."
+            doLast {
+                resolveProjectConfigurations(project)
+            }
+        }
+    }
+
+    rootProject.tasks.register("resolveDobbyDependencies") {
+        group = "verification"
+        description = "Download all resolvable project dependencies without running build tasks."
+        dependsOn projectTasks
+        doLast {
+            resolveProjectConfigurations(rootProject)
+        }
+    }
+}

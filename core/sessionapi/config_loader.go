@@ -103,11 +103,18 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		drainedBytes, drainErr := io.Copy(io.Discard, io.LimitReader(response.Body, maxConfigBytes+1))
+		if drainedBytes > maxConfigBytes {
+			drainErr = errors.Join(
+				drainErr,
+				fmt.Errorf("configuration error response exceeded the %d-byte drain limit", maxConfigBytes),
+			)
+		}
 		closeErr := response.Body.Close()
 		return LoadedConfig{}, failureWithCause(
 			FailureInvalidArgument,
 			"configuration URL returned a non-success response",
-			errors.Join(fmt.Errorf("configuration URL returned HTTP %d", response.StatusCode), closeErr),
+			errors.Join(fmt.Errorf("configuration URL returned HTTP %d", response.StatusCode), drainErr, closeErr),
 		)
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxConfigBytes+1))

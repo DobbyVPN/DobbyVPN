@@ -378,7 +378,7 @@ def _build_recipe(source_root: Path, source_sha: str, version_name: str, version
 
     go_version = str(pins["go_version"])
     go_source_commit = str(pins["go_source_commit"])
-    compile_sdk = int(pins["android_compile_sdk"])
+    sdk_platform = str(pins["android_sdk_platform"])
     build_tools = str(pins["android_build_tools"])
     ndk = str(pins["android_ndk"])
     package_name = _android_package_name(source_root)
@@ -396,7 +396,7 @@ export SOURCE_DATE_EPOCH=0
 export ANDROID_HOME="$$SDK$$"
 export ANDROID_SDK_ROOT="$$SDK$$"
 export ANDROID_NDK_HOME="$$NDK$$"
-sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platforms;android-{compile_sdk}" "build-tools;{build_tools}"
+sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platforms;{sdk_platform}" "build-tools;{build_tools}"
 java_output="$(java -version 2>&1)"
 printf '%s\\n' "$java_output"
 case "$java_output" in *'version "17.'*) ;; *) exit 1 ;; esac
@@ -408,7 +408,7 @@ cd "$GOROOT/src"
 ./make.bash
 "$GOROOT/bin/go" version
 cd "$product_root/core"
-"$GOROOT/bin/go" mod download
+python3 ../.github/scripts/dependency_fetch.py retry -- "$GOROOT/bin/go" mod download
 # F-Droid adds legacy ndk.dir; the Android project owns the pinned android.ndkPath.
 sed -i '/^[[:space:]]*ndk[.]dir[[:space:]]*=/d' "$product_root/ui/android/local.properties"
 '''
@@ -420,7 +420,7 @@ sed -i '/^[[:space:]]*ndk[.]dir[[:space:]]*=/d' "$product_root/ui/android/local.
         "sudo": [
             "apt-get install -y -t trixie-backports golang-1.27-go",
         ],
-        "target": f"android-{compile_sdk}",
+        "target": sdk_platform,
         "ndk": ndk,
         "build": [build_script],
         "gradleprops": [

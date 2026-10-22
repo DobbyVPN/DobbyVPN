@@ -161,7 +161,7 @@ public struct DobbyRootView: View {
         if #available(iOS 16.0, *) {
             // The system button pastes without the "Allow Paste" prompt.
             PasteButton(payloadType: String.self) { values in
-                if let value = values.first { model.paste(value) }
+                model.pasteCallback(values)
             }
             .labelStyle(.titleOnly)
             .buttonBorderShape(.roundedRectangle(radius: pt(6)))
@@ -170,8 +170,10 @@ public struct DobbyRootView: View {
             .font(.system(size: 14, weight: .semibold))
             // The system control draws past its frame at accessibility sizes, so it stops growing at Large.
             .dynamicTypeSize(...DynamicTypeSize.large)
+            .accessibilityIdentifier("subscription.paste")
         } else if canPaste {
-            PlainPasteButton { if let value = UIPasteboard.general.string { model.paste(value) } }
+            PlainPasteButton { if let value = UIPasteboard.general.string { model.pasteCallback([value]) } }
+                .accessibilityIdentifier("subscription.paste")
         }
 #elseif os(macOS)
         if canPaste {

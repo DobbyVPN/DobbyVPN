@@ -192,10 +192,6 @@ if [[ -n "$gradle_archive" || -n "$gradle_root" ]]; then
   gradle_bin=${GRADLE_BIN:-"$gradle_root/bin/gradle"}
   gradle_distribution_source='external_verified_archive'
 fi
-gradle_proof_args=()
-if [[ -n "$gradle_archive" ]]; then
-  gradle_proof_args=(--gradle-archive "$gradle_archive" --gradle-root "$gradle_root")
-fi
 [[ -x "$gradle_bin" ]] || { echo "Gradle entry point is not executable: $gradle_bin" >&2; exit 2; }
 
 cat "$source_root/ui/android/gradle.properties" >&2
@@ -254,6 +250,8 @@ else
 fi
 
 mobile_version=$(python3 "$dependency_helper" --spec "$dependency_spec" --print-pin mobile_version | tee_stderr)
+GOTOOLCHAIN=local python3 "$source_root/.github/scripts/dependency_fetch.py" retry \
+  --cwd "$source_root/core" -- "$go_bin" mod download
 observed_mobile_version=$(cd "$source_root/core" && "$go_bin" list -m -f '{{.Version}}' golang.org/x/mobile | tee_stderr)
 [[ "$observed_mobile_version" == "$mobile_version" ]] || {
   echo 'Go module graph is not pinned to the approved x/mobile revision' >&2
@@ -296,14 +294,20 @@ fi
 export GOMODCACHE="$build_mod_cache"
 
 write_dependency_manifest() {
-  local go_origin_args=(--go-build-origin "$go_build_origin")
-  if [[ -n "$go_binary_sha256" ]]; then
-    go_origin_args+=(--go-binary-sha256 "$go_binary_sha256")
+  local dependency_manifest_args=(
+    --source-root "$source_root" --source-commit "$source_commit"
+    --source-tree "$source_tree" --spec "$dependency_spec"
+    --java-version "$java_version"
+  )
+  if [[ -n "$gradle_archive" ]]; then
+    dependency_manifest_args+=(--gradle-archive "$gradle_archive" --gradle-root "$gradle_root")
   fi
-  python3 "$dependency_helper" --source-root "$source_root" --source-commit "$source_commit" \
-    --source-tree "$source_tree" --spec "$dependency_spec" \
-    --java-version "$java_version" "${gradle_proof_args[@]}" "${go_origin_args[@]}" \
-    --output "$dependency_manifest"
+  dependency_manifest_args+=(--go-build-origin "$go_build_origin")
+  if [[ -n "$go_binary_sha256" ]]; then
+    dependency_manifest_args+=(--go-binary-sha256 "$go_binary_sha256")
+  fi
+  dependency_manifest_args+=(--output "$dependency_manifest")
+  python3 "$dependency_helper" "${dependency_manifest_args[@]}"
 }
 java_bin=${JAVA_BIN:-"$(command -v java || true)"}
 [[ -n "$java_bin" && -x "$java_bin" ]] || { echo 'Java executable is required' >&2; exit 2; }
@@ -348,6 +352,13 @@ verify_source_integrity_after_build() {
 }
 
 gradle_flags=(--no-build-cache --no-daemon --rerun-tasks --stacktrace --warning-mode=all)
+python3 "$source_root/.github/scripts/dependency_fetch.py" retry --cwd "$source_root" -- \
+  "$gradle_bin" -p ui/android -PdobbyGoBinary="$go_bin" \
+  -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
+  -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name" \
+  --init-script "$source_root/.github/scripts/android/resolve_dependencies.gradle" \
+  resolveDobbyDependencies --no-daemon --stacktrace
+
 run_unsigned_build() {
   local cache=$1 tmp=$2 destination=$3 built
   export GOCACHE="$cache" GOTMPDIR="$tmp"
@@ -433,7 +444,7 @@ verify_source_integrity_after_build
 write_dependency_manifest
 
 [[ -f "$reproducibility_verifier" ]] || { echo 'reproducibility verifier is missing' >&2; exit 2; }
-reproducibility_profile_args=()
+reproducibility_profile_args=(--profile release)
 if [[ "$trusted_archive_source" == 1 ]]; then
   reproducibility_profile_args=(
     --profile local-complete
@@ -448,14 +459,8 @@ python3 "$reproducibility_verifier" create --first-apk "$first_output" --second-
   --output "$reproducibility" --source-sha "$source_commit" --version-name "$version_name" --version-code "$version_code" \
   "${reproducibility_profile_args[@]}"
 [[ -f "$source_verifier" ]] || { echo 'APK source verifier is missing' >&2; exit 2; }
-apkanalyzer_bin=${APKANALYZER:-"$(command -v apkanalyzer || true)"}
-if [[ -z "$apkanalyzer_bin" ]]; then
-  sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
-  if [[ -n "$sdk_root" && -x "$sdk_root/cmdline-tools/latest/bin/apkanalyzer" ]]; then
-    apkanalyzer_bin="$sdk_root/cmdline-tools/latest/bin/apkanalyzer"
-  fi
-fi
-[[ -n "$apkanalyzer_bin" && -x "$apkanalyzer_bin" ]] || { echo 'apkanalyzer is required for source identity verification' >&2; exit 2; }
+apkanalyzer_bin=$(python3 "$source_root/.github/scripts/android/android_tool_selection.py" \
+  --tool apkanalyzer)
 source_verifier_args=(
   --apk "$first_output" --apk "$output"
   --source-sha "$source_commit" --repository "$source_repository"
@@ -466,20 +471,8 @@ python3 "$source_verifier" "${source_verifier_args[@]}"
 
 # Verify the final Go backend libraries against the ABI policy. Both packaged
 # ABIs include the TrustTunnel bridge and resolve its native runtime symbols.
-readelf_bin=${ANDROID_READELF:-}
-if [[ -z "$readelf_bin" ]]; then
-  mapfile -t ndk_toolchains < <(
-    find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print
-  )
-  printf '%s\n' "${ndk_toolchains[@]}" >&2
-  [[ "${#ndk_toolchains[@]}" -eq 1 ]] || {
-    echo 'Android NDK must contain exactly one host toolchain' >&2
-    exit 2
-  }
-  ndk_toolchain=${ndk_toolchains[0]}
-  readelf_bin="$ndk_toolchain/bin/llvm-readelf"
-fi
-[[ -x "$readelf_bin" ]] || { echo "Android NDK llvm-readelf is required: $readelf_bin" >&2; exit 2; }
+readelf_bin=$(python3 "$source_root/.github/scripts/android/android_tool_selection.py" \
+  --tool readelf --ndk-root "$ANDROID_NDK_HOME")
 python3 "$source_root/.github/scripts/android/verify_android_native_payloads.py" \
   --apk "$output" --readelf "$readelf_bin"
 
