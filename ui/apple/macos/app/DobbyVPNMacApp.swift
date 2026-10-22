@@ -20,9 +20,28 @@ struct DobbyVPNMacApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Opens phone-sized the first time, then keeps the size the user picked.
+    private var windowObserver: NSObjectProtocol?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let window = NSApp.windows.first else { return }
+        if let window = NSApp.keyWindow {
+            restoreFrame(window)
+            return
+        }
+        // SwiftUI may create the WindowGroup window after launch finishes.
+        windowObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let window = notification.object as? NSWindow, !(window is NSPanel) else { return }
+            self?.restoreFrame(window)
+        }
+    }
+
+    /// Opens phone-sized the first time, then keeps the size the user picked.
+    private func restoreFrame(_ window: NSWindow) {
+        if let windowObserver {
+            NotificationCenter.default.removeObserver(windowObserver)
+            self.windowObserver = nil
+        }
         if !window.setFrameUsingName("doBBYVPN") {
             window.setContentSize(NSSize(width: 380, height: 680))
             window.center()
