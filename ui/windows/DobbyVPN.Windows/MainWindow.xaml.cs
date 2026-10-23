@@ -48,6 +48,7 @@ public sealed partial class MainWindow : Window
     private string _importError = "";
     private string _logsError = "";
     private string _exportError = "";
+    private string _clearLogsError = "";
     private readonly HashSet<string> _dismissedErrors = [];
     private string _lastSourceError = "";
     private bool _snapshotFailing;
@@ -369,9 +370,13 @@ public sealed partial class MainWindow : Window
             await LoadNextAsync(cancellationToken);
             if (_lifetime.IsClosing) return;
             // Report a backend error once, so Close keeps the popup closed between polls.
+            if (_snapshotFailing)
+            {
+                _error = "";
+                _lastSourceError = "";
+            }
             if (result.SourceError != _lastSourceError && result.SourceError.Length > 0) SetError(result.SourceError, result.SourceError, "source.failure");
             else if (result.SourceError.Length == 0) _diagnostics.Record("", "source.failure");
-            if (_snapshotFailing && result.SourceError.Length == 0) _error = "";
             _lastSourceError = result.SourceError;
             _snapshotFailing = false;
             Render();
@@ -667,7 +672,7 @@ public sealed partial class MainWindow : Window
         get
         {
             var failure = _snapshot?.LastFailure is { } value ? $"{value.Message} ({value.Code})" : "";
-            return new[] { _importError, _loadError, _error, failure, _logsError, _exportError }
+            return new[] { _importError, _loadError, _error, failure, _logsError, _clearLogsError, _exportError }
                 .Where(text => text.Length > 0).Distinct().ToList();
         }
     }
@@ -713,6 +718,7 @@ public sealed partial class MainWindow : Window
             _importError = "";
         }
         else if (detail == _exportError) _exportError = "";
+        else if (detail == _clearLogsError) _clearLogsError = "";
         else _dismissedErrors.Add(detail);
         Render();
     }
@@ -1297,6 +1303,7 @@ public sealed partial class MainWindow : Window
         {
             if (_clearingLogs) return;
             _clearingLogs = true;
+            _clearLogsError = "";
             ++_logRevision;
             ++_logRenderGeneration;
             _updatingLogs = false;
@@ -1318,7 +1325,7 @@ public sealed partial class MainWindow : Window
             _clearingLogs = false;
             await RefreshLogsAsync(cancellationToken);
         }
-        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _logsError = error.Message; Render(); }
+        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _clearLogsError = error.Message; Render(); }
         finally { _clearingLogs = false; }
     }
 
