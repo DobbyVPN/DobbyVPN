@@ -318,6 +318,12 @@ object NativeVpnBridge {
     private fun diagnosticsDirectory(context: Context): File =
         File(context.applicationContext.filesDir, DIAGNOSTIC_DIRECTORY).also { it.mkdirs() }
 
+    internal fun recordAppStarted(context: Context) {
+        val version = com.dobby.vpn.BuildConfig.VERSION_NAME
+        val commit = com.dobby.vpn.BuildConfig.PROJECT_REPOSITORY_COMMIT.take(8)
+        recordDiagnostic(context, "app.started", "app started · doBBYVPN $version · $commit")
+    }
+
     internal fun recordDiagnostic(context: Context, event: String, message: String) {
         recordDiagnostic(context, event, message, null)
     }

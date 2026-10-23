@@ -3,18 +3,24 @@ using System.IO;
 using System.Diagnostics;
 using Windows.ApplicationModel.DataTransfer;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.IO.Pipes;
+using Microsoft.UI.Text;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Windowing;
 using Microsoft.Windows.Storage.Pickers;
+using Windows.Graphics;
 
 namespace DobbyVPN.Windows;
 
@@ -36,7 +42,18 @@ public sealed partial class MainWindow : Window
     private string? _renderedSource;
     private bool _sourceInitialized;
     private long _acceptedSequence;
-    private string _actionsKey = "";
+    private string _trayKey = "";
+    private string _status = "";
+    private string _error = "";
+    private string _importError = "";
+    private string _logsError = "";
+    private string _exportError = "";
+    private string _clearLogsError = "";
+    private readonly HashSet<string> _dismissedErrors = [];
+    private string _lastSourceError = "";
+    private bool _snapshotFailing;
+    private bool _canPaste;
+    private double _rowHeight;
     private string _loadError = "";
     private string _restoredLoad = "";
     private CancellationTokenSource? _debounce;
@@ -60,7 +77,6 @@ public sealed partial class MainWindow : Window
     private readonly LogPresentationState _logPresentation = new();
     private readonly Dictionary<LogRowKey, RenderedLogRow> _logRowCache = [];
     private List<RenderedLogRow> _renderedLogRows = [];
-    private ContentDialog? _aboutDialog;
     private global::Windows.Foundation.IAsyncInfo? _savePickerOperation;
     private bool _allowFinalClose;
     private bool _shutdownDrainCompleted;
@@ -75,19 +91,18 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Root.LayoutUpdated += (_, _) => UpdateContentLayout();
-        foreach (var details in new[] { LoadStatus, ProfileText, FailureText, ErrorText, LogsErrorText })
+        SizeWindow();
+        Column.SizeChanged += (_, _) => UpdateTrayHeight();
+        FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
+        Root.Loaded += (_, _) =>
         {
-            details.Visibility = Visibility.Collapsed;
-            details.RegisterPropertyChangedCallback(TextBlock.TextProperty, (sender, _) =>
-            {
-                var text = (TextBlock)sender;
-                text.Visibility = string.IsNullOrEmpty(text.Text) ? Visibility.Collapsed : Visibility.Visible;
-            });
-        }
-        SetConnectionAction("Connect");
-        SetConnectionStatus("Disconnected");
-        ConnectionButton.IsEnabled = false;
+            if (ErrorShown) KeepFocusInError();
+            else ClearFocus();
+        };
+        SourceEditor.KeyDown += (_, args) =>
+        {
+            if (args.Key == global::Windows.System.VirtualKey.Enter) ClearFocus();
+        };
         var assembly = Assembly.GetExecutingAssembly();
         _version = assembly.GetName().Version?.ToString(3) ?? "Unknown";
         var commit = assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -103,6 +118,8 @@ public sealed partial class MainWindow : Window
         Closed += MainWindow_Closed;
         Clipboard.ContentChanged += ClipboardChanged;
         Activated += MainWindow_Activated;
+        RecordAppStarted();
+        Render();
         StartWindowWork(PollSnapshotsAsync);
         StartWindowWork(RefreshSnapshotAsync);
     }
@@ -196,8 +213,6 @@ public sealed partial class MainWindow : Window
 
     private void CancelPendingModalOperations()
     {
-        try { _aboutDialog?.Hide(); }
-        catch (Exception error) { _diagnostics.Record(error.ToString(), "window.about-dialog.cancel.failure"); }
         var pickerOperation = _savePickerOperation;
         if (pickerOperation is null) return;
         RecordSavePickerOperationState("before-cancel", pickerOperation);
@@ -231,7 +246,11 @@ public sealed partial class MainWindow : Window
     private void ReportWindowWorkFailure(Exception error)
     {
         _diagnostics.Record(error.ToString(), "window.async.failure");
-        EnqueueUiCallback(() => ShowError(error.ToString(), "Could not complete the request. Check your configuration and logs."));
+        EnqueueUiCallback(() =>
+        {
+            SetError(error.ToString(), "Could not complete the request. Check your configuration and logs.");
+            Render();
+        });
     }
 
     private bool EnqueueUiCallback(Action callback, Microsoft.UI.Dispatching.DispatcherQueuePriority priority =
@@ -243,28 +262,51 @@ public sealed partial class MainWindow : Window
 
     internal bool TryActivate() => _lifetime.TryRunCallback(Activate);
 
-    private void UpdateContentLayout()
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr window);
+
+    private void SizeWindow()
+    {
+        var scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
+        if (AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.PreferredMinimumWidth = (int)(320 * scale);
+            presenter.PreferredMinimumHeight = (int)(460 * scale);
+        }
+        AppWindow.ResizeClient(new SizeInt32((int)(380 * scale), (int)(680 * scale)));
+        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
+        AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + (area.Height - AppWindow.Size.Height) / 2));
+    }
+
+    // Four connections when there is room; on short windows the logs keep a quarter of the height.
+    private void UpdateTrayHeight()
     {
         if (_lifetime.IsClosing) return;
-        var height = Root.ActualHeight;
+        var height = Column.ActualHeight;
         if (height <= 0) return;
-        var logChrome = LogsGrid.RowDefinitions[0].ActualHeight +
-            LogsGrid.RowDefinitions[1].ActualHeight +
-            LogsGrid.RowSpacing * (LogsGrid.RowDefinitions.Count - 1);
-        var controlsHeight = Math.Max(0, Math.Min(height * 0.6,
-            height - Root.RowSpacing - logChrome - LogsScroll.MinHeight));
-        var fixedControls = ControlsContent.RowDefinitions[0].ActualHeight +
-            ControlsContent.RowDefinitions[1].ActualHeight +
-            ControlsContent.RowSpacing * (ControlsContent.RowDefinitions.Count - 1);
-        var profileHeight = Math.Max(0, Math.Min(Math.Min(180, height * 0.2),
-            controlsHeight - fixedControls));
+        var fourRows = 4 * Math.Max(_rowHeight, 42) + 5 * 6;
+        ConnectionsTray.Height = Math.Min(Math.Max(height - 135 - height / 4, 54), fourRows);
+    }
 
-        // Header/error rows grow with the OS text size. Cap only the scrolling
-        // controls so the log viewport keeps its usable minimum at that size.
-        if (Math.Abs(ControlsScroll.MaxHeight - controlsHeight) > 0.5)
-            ControlsScroll.MaxHeight = controlsHeight;
-        if (Math.Abs(ProfilesScroll.MaxHeight - profileHeight) > 0.5)
-            ProfilesScroll.MaxHeight = profileHeight;
+    private void RecordAppStarted()
+    {
+        var commit = _commit == "N/A" ? "" : _commit[..Math.Min(8, _commit.Length)];
+        var line = string.Join(" · ", new[] { "app started", $"doBBYVPN {_version}", commit }.Where(part => part.Length > 0));
+        _diagnostics.RecordInfo("app.started", line, new { version = _version, commit = _commit });
+    }
+
+    private void ClearFocus()
+    {
+        FocusSink.IsTabStop = true;
+        FocusSink.Focus(FocusState.Programmatic);
+    }
+
+    private void Root_Tapped(object sender, TappedRoutedEventArgs e)
+    {
+        if (!ReferenceEquals(FocusManager.GetFocusedElement(Root.XamlRoot), SourceEditor)) return;
+        for (var element = e.OriginalSource as DependencyObject; element is not null; element = VisualTreeHelper.GetParent(element))
+            if (element == SourceField) return;
+        ClearFocus();
     }
 
     private async Task PollSnapshotsAsync(CancellationToken cancellationToken)
@@ -292,7 +334,6 @@ public sealed partial class MainWindow : Window
             if (_lifetime.IsClosing) return;
             var previous = _snapshot;
             if (result.SessionId == previous?.SessionId && result.Sequence < Math.Max(previous.Sequence, _acceptedSequence)) return;
-            var recoveringFromSnapshotError = previous is null || StatusText.Text == "Error";
             if (result.SessionId != previous?.SessionId) _acceptedSequence = 0;
             else if (_subscriptionLoad.SourceDirty && previous is not null)
             {
@@ -302,24 +343,6 @@ public sealed partial class MainWindow : Window
                 result.Profiles = previous.Profiles;
             }
             _snapshot = result;
-            SetConnectionStatus(result.Recovering ? "Reconnecting" : result.State switch
-            {
-                "CONNECTED" => "Connected",
-                "PROBING" or "PREPARING" => "Connecting",
-                "STOPPING" => "Stopping",
-                "FAILED" => "Failed",
-                _ => "Disconnected"
-            });
-            RenderActions();
-            var progressing = _busy || _stopInFlight || result.State is "PROBING" or "PREPARING" or "STOPPING";
-            ConnectionProgress.IsActive = progressing;
-            ConnectionProgress.Visibility = progressing ? Visibility.Visible : Visibility.Collapsed;
-            ProfileText.Text = result.ActiveProfile is null
-                ? ""
-                : string.Join(" · ", new[] { result.ActiveProfile.Protocol, result.ActiveProfile.Description }.Where(value => !string.IsNullOrWhiteSpace(value)));
-            FailureText.Text = result.LastFailure is null
-                ? ""
-                : "Connection failed. See logs for details.";
             _diagnostics.Record(result.LastFailure is null ? "" : $"{result.LastFailure.Message} ({result.LastFailure.Code})", "backend.failure");
             if (!_subscriptionLoad.SourceDirty && SourceEditor.FocusState == FocusState.Unfocused &&
                 (!_sourceInitialized || string.Equals(NormalizeSource(SourceEditor.Text), _renderedSource, StringComparison.Ordinal)))
@@ -346,12 +369,17 @@ public sealed partial class MainWindow : Window
             }
             await LoadNextAsync(cancellationToken);
             if (_lifetime.IsClosing) return;
-            if (!string.IsNullOrEmpty(result.SourceError)) ShowError(result.SourceError, "Check the subscription URL or configuration. See logs for details.", "source.failure");
-            else
+            // Report a backend error once, so Close keeps the popup closed between polls.
+            if (_snapshotFailing)
             {
-                _diagnostics.Record("", "source.failure");
-                if (recoveringFromSnapshotError) ErrorText.Text = string.Empty;
+                _error = "";
+                _lastSourceError = "";
             }
+            if (result.SourceError != _lastSourceError && result.SourceError.Length > 0) SetError(result.SourceError, result.SourceError, "source.failure");
+            else if (result.SourceError.Length == 0) _diagnostics.Record("", "source.failure");
+            _lastSourceError = result.SourceError;
+            _snapshotFailing = false;
+            Render();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -361,10 +389,9 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing)
         {
             _snapshot = null;
-            ShowError(error.ToString(), _snapshot is null ? "VPN service is unavailable. See logs for details." : "Could not complete the request. Check your configuration and logs.");
-            SetConnectionStatus("Error");
-            SetConnectionAction("Connect");
-            ConnectionButton.IsEnabled = false;
+            if (!_snapshotFailing) SetError(error.ToString(), "VPN service is unavailable. See logs for details.");
+            _snapshotFailing = true;
+            Render();
         }
         finally
         {
@@ -415,70 +442,309 @@ public sealed partial class MainWindow : Window
         ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Disconnect" : "Stop")
         : (index is null ? "Auto connect" : "Connect");
 
-    private void RenderActions()
+    private bool Busy => _busy || _stopInFlight;
+    private bool Connected => _snapshot?.PrimaryAction == "STOP";
+
+    private string Status
+    {
+        get
+        {
+            if (_error.Length > 0 || _snapshotFailing) return "Error";
+            if (_snapshot is not { } s) return "Disconnected";
+            if (s.Recovering) return "Reconnecting";
+            return s.State switch
+            {
+                "CONNECTED" => "Connected",
+                "PROBING" or "PREPARING" => "Connecting",
+                "STOPPING" => "Stopping",
+                "FAILED" => "Failed",
+                _ => "Disconnected"
+            };
+        }
+    }
+
+    private string? SessionStatus => _snapshot is not { } s ? null : s.Recovering ? "reconnecting" : s.State switch
+    {
+        "CONNECTED" => "connected",
+        "PROBING" or "PREPARING" => "connecting",
+        "STOPPING" => "stopping",
+        _ => s.LastFailure is null ? null : "failed"
+    };
+
+    private string? ProfileStatus(int index)
+    {
+        if (_snapshot is not { } s || s.ActiveDigest != s.Digest) return null;
+        var active = s.ActiveProfile is { } profile ? profile.Index == index : s.ActiveMode == "PROFILE_INDEX" && s.ActiveIndex == index;
+        return active ? SessionStatus : null;
+    }
+
+    private string MainTitle
+    {
+        get
+        {
+            if (!Connected) return Busy ? "Connecting…" : "Auto connect";
+            return _snapshot!.State is "CONNECTED" or "STOPPING" && _snapshot.PendingTarget is null ? "Disconnect" : "Connecting…";
+        }
+    }
+
+    private bool MainEnabled => Connected ? !Busy : CanAct(null);
+
+    private Task MainActionAsync(CancellationToken cancellationToken) =>
+        Connected ? PerformActionAsync(null, true, cancellationToken) : PerformActionAsync(null, false, cancellationToken);
+
+    private string ProfileTitle(int index)
+    {
+        var title = ActionTitle(index);
+        return ProfileStatus(index) == "connecting" || title == "Stop" ? "Connecting…" : title;
+    }
+
+    private Profile? Orphan => Connected && _snapshot!.ActiveDigest != _snapshot.Digest ? _snapshot.ActiveProfile : null;
+
+    private static string ProfileName(Profile profile) =>
+        profile.Description.Length == 0 ? $"Profile {profile.Index + 1}" : profile.Description;
+
+    private static string? ProtocolName(string value) => value switch
+    {
+        "" => null,
+        "OUTLINE" => "Outline",
+        "XRAY" => "Xray",
+        "TRUST_TUNNEL" => "TrustTunnel",
+        _ => value
+    };
+
+    private static bool IsOn(string? status) => status is "connected" or "reconnecting";
+
+    private Brush Palette(string name) => (Brush)Root.Resources[name];
+
+    private void Render()
     {
         if (_lifetime.IsClosing) return;
-        SetConnectionAction(ActionTitle(null));
-        ConnectionButton.IsEnabled = CanAct(null);
-        if (_snapshot is not { } current) return;
-        var actionsKey = JsonSerializer.Serialize(new
+        RenderSourceField();
+        RenderMainButton();
+        RenderTray();
+        RenderError();
+    }
+
+    private void RenderSourceField()
+    {
+        var loading = _subscriptionLoad.IsLoading;
+        var showPaste = SourceEditor.Text.Length == 0 && !loading && _canPaste;
+        LoadingText.Visibility = loading ? Visibility.Visible : Visibility.Collapsed;
+        PasteButton.Visibility = showPaste ? Visibility.Visible : Visibility.Collapsed;
+        SourceField.Padding = new Thickness(9, 0, showPaste ? 3.75 : 9, 0);
+    }
+
+    private void RenderMainButton()
+    {
+        var title = MainTitle;
+        var enabled = MainEnabled;
+        var idle = title == "Auto connect";
+        var filled = enabled && idle;
+        var outlined = enabled || !idle;
+        ConnectionButton.Content = title;
+        AutomationProperties.SetName(ConnectionButton, title);
+        ConnectionButton.IsEnabled = enabled;
+        ConnectionButton.Background = Palette(filled ? "Ink" : "Clear");
+        ConnectionButton.Foreground = Palette(filled ? "Surface" : outlined ? "Ink" : "Muted");
+        ConnectionButton.BorderBrush = Palette(outlined ? "Ink" : "Rule");
+        ConnectionButton.BorderThickness = new Thickness(filled ? 0 : outlined ? 2 : 1.5);
+
+        var status = Status;
+        AutomationProperties.SetItemStatus(ConnectionButton, status);
+        AutomationProperties.SetItemStatus(ErrorCard, status);
+        if (status == _status) return;
+        var announce = _status.Length > 0;
+        _status = status;
+        if (announce)
+            FrameworkElementAutomationPeer.FromElement(ConnectionButton)?.RaiseNotificationEvent(
+                AutomationNotificationKind.ActionCompleted, AutomationNotificationProcessing.MostRecent, status, "connection.status");
+    }
+
+    private void RenderTray()
+    {
+        var current = _snapshot;
+        var orphan = Orphan;
+        var empty = (current?.Profiles.Length ?? 0) == 0 && orphan is null;
+        var failed = empty && _loadError.Length > 0;
+        LoadFailed.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
+        EmptySock.Visibility = empty && !failed ? Visibility.Visible : Visibility.Collapsed;
+        ProfilesScroll.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+        if (current is null) return;
+
+        var trayKey = JsonSerializer.Serialize(new
         {
             current.Sequence,
+            current.Generation,
+            current.State,
+            current.PrimaryAction,
+            current.Recovering,
+            current.ActiveDigest,
+            current.ActiveMode,
+            current.ActiveIndex,
+            Active = current.ActiveProfile?.Index,
+            Pending = current.PendingTarget is { } pending ? $"{pending.Digest}:{pending.Mode}:{pending.Index}" : "",
+            current.CanSwitch,
+            Failed = current.LastFailure is not null,
             _busy,
             _stopInFlight,
             _subscriptionLoad.SourceDirty,
             _subscriptionLoad.IsLoading,
             _subscriptionLoad.Revision,
             _loadError,
+            _acceptedSequence,
             current.Digest,
         });
-        if (actionsKey == _actionsKey) return;
-        _actionsKey = actionsKey;
+        if (trayKey == _trayKey) return;
+        _trayKey = trayKey;
         ProfileList.Children.Clear();
-        ActiveStopButton.Visibility = current.PrimaryAction == "STOP" && !IsStopTarget(null) && !current.Profiles.Any(profile => IsStopTarget(profile.Index)) ? Visibility.Visible : Visibility.Collapsed;
-        ActiveStopButton.Content = current.State == "CONNECTED" ? "Disconnect" : "Stop";
-        ActiveStopButton.IsEnabled = !_stopInFlight;
+        if (orphan is not null)
+            ProfileList.Children.Add(CreateRow("profile.active", ProfileName(orphan),
+                [ProtocolName(orphan.Protocol), SessionStatus, "not in subscription"],
+                IsOn(SessionStatus), MainTitle, MainEnabled, MainActionAsync));
         foreach (var profile in current.Profiles)
         {
-            var row = new Grid { ColumnSpacing = 0 };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var descriptionText = profile.Description.Length == 0 ? $"Profile {profile.Index + 1}" : profile.Description;
-            var description = new TextBlock
-            {
-                Text = descriptionText,
-                TextWrapping = TextWrapping.Wrap
-            };
-            AutomationProperties.SetAutomationId(description, ProfileAutomationIds.Create(current.Digest, profile.Index, "description"));
-            row.Children.Add(description);
-            var separator = new TextBlock { Text = " · " };
-            Grid.SetColumn(separator, 1);
-            row.Children.Add(separator);
-            var protocol = new TextBlock { Text = profile.Protocol, TextWrapping = TextWrapping.Wrap };
-            AutomationProperties.SetAutomationId(protocol, ProfileAutomationIds.Create(current.Digest, profile.Index, "protocol"));
-            Grid.SetColumn(protocol, 2);
-            row.Children.Add(protocol);
-            var button = new Button
-            {
-                Content = ActionTitle(profile.Index),
-                IsEnabled = CanAct(profile.Index),
-                Margin = new Thickness(12, 0, 0, 0)
-            };
-            AutomationProperties.SetAutomationId(button, ProfileAutomationIds.Create(current.Digest, profile.Index, "action"));
-            button.Click += (_, _) => StartWindowWork(token => PerformActionAsync(profile.Index, false, token));
-            Grid.SetColumn(button, 3);
-            row.Children.Add(button);
-            ProfileList.Children.Add(row);
+            var index = profile.Index;
+            var status = ProfileStatus(index);
+            ProfileList.Children.Add(CreateRow(ProfileAutomationIds.Create(current.Digest, index, "action"), ProfileName(profile),
+                [ProtocolName(profile.Protocol), status], IsOn(status), ProfileTitle(index), CanAct(index),
+                token => PerformActionAsync(index, false, token)));
         }
     }
 
-    private void ConnectionButton_Click(object sender, RoutedEventArgs e) =>
-        StartWindowWork(token => PerformActionAsync(null, false, token));
+    private Button CreateRow(string id, string name, string?[] details, bool on, string action, bool enabled, Func<CancellationToken, Task> click)
+    {
+        var detailText = string.Join(" · ", details.Where(value => !string.IsNullOrEmpty(value)));
+        var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        labels.Children.Add(new TextBlock
+        {
+            Text = name, FontSize = 14.45, FontWeight = FontWeights.Medium, Foreground = Palette("Ink"),
+            TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        labels.Children.Add(new TextBlock
+        {
+            Text = detailText, FontSize = 11.05, FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal,
+            Foreground = Palette(on ? "Ink" : "Muted"), TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        var actionText = new TextBlock
+        {
+            Text = action, FontSize = 12.75, FontWeight = FontWeights.SemiBold, Foreground = Palette("Ink"),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var content = new Grid { ColumnSpacing = 9 };
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        content.Children.Add(labels);
+        Grid.SetColumn(actionText, 1);
+        content.Children.Add(actionText);
 
-    private void ActiveStop_Click(object sender, RoutedEventArgs e) =>
-        StartWindowWork(token => PerformActionAsync(null, true, token));
+        var inset = on ? 9 : 10.5;
+        var row = new Button
+        {
+            Style = (Style)Root.Resources["PlainButton"],
+            Content = content,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            MinHeight = 42,
+            Padding = new Thickness(inset, 6, inset, 6),
+            CornerRadius = new CornerRadius(7.5),
+            Background = Palette("Surface"),
+            BorderBrush = Palette("Ink"),
+            BorderThickness = new Thickness(on ? 3 : 1.5),
+            IsEnabled = enabled,
+        };
+        AutomationProperties.SetAutomationId(row, id);
+        AutomationProperties.SetName(row, action);
+        AutomationProperties.SetItemStatus(row, string.Join(" · ", new[] { name, detailText }.Where(value => value.Length > 0)));
+        row.Click += (_, _) =>
+        {
+            if (!ErrorShown) StartWindowWork(click);
+        };
+        row.SizeChanged += (_, _) =>
+        {
+            if (row.ActualHeight <= _rowHeight) return;
+            _rowHeight = row.ActualHeight;
+            UpdateTrayHeight();
+        };
+        return row;
+    }
+
+    private List<string> Errors
+    {
+        get
+        {
+            var failure = _snapshot?.LastFailure is { } value ? $"{value.Message} ({value.Code})" : "";
+            return new[] { _importError, _loadError, _error, failure, _logsError, _clearLogsError, _exportError }
+                .Where(text => text.Length > 0).Distinct().ToList();
+        }
+    }
+
+    private string ShownError => Errors.FirstOrDefault(text => !_dismissedErrors.Contains(text)) ?? "";
+
+    private bool ErrorShown => ErrorOverlay.Visibility == Visibility.Visible;
+
+    private void RenderError()
+    {
+        _dismissedErrors.IntersectWith(Errors);
+        var detail = ShownError;
+        var visible = detail.Length > 0;
+        var loadFailure = visible && detail == _loadError;
+        ErrorTitle.Text = loadFailure ? "Couldn't load the subscription" : "Something went wrong";
+        AutomationProperties.SetName(ErrorCard, ErrorTitle.Text);
+        ErrorHint.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
+        RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
+        Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
+        ErrorDetail.Text = detail;
+        var shown = ErrorShown;
+        ErrorOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        if (visible) KeepFocusInError();
+        else if (shown) ClearFocus();
+    }
+
+    private void KeepFocusInError()
+    {
+        if (Root.XamlRoot is null) return;
+        for (var element = FocusManager.GetFocusedElement(Root.XamlRoot) as DependencyObject; element is not null; element = VisualTreeHelper.GetParent(element))
+            if (element == ErrorCard) return;
+        var target = RetryErrorButton.Visibility == Visibility.Visible ? RetryErrorButton : CloseErrorButton;
+        target.Focus(FocusState.Programmatic);
+    }
+
+    private void CloseError()
+    {
+        var detail = ShownError;
+        if (detail.Length == 0) return;
+        if (detail == _importError)
+        {
+            if (_error == _importError) _error = "";
+            _importError = "";
+        }
+        else if (detail == _exportError) _exportError = "";
+        else if (detail == _clearLogsError) _clearLogsError = "";
+        else _dismissedErrors.Add(detail);
+        Render();
+    }
+
+    private void CloseError_Click(object sender, RoutedEventArgs e) => CloseError();
+    private void ErrorOverlay_Tapped(object sender, TappedRoutedEventArgs e) => CloseError();
+    private void ErrorCard_Tapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+
+    private void RetryError_Click(object sender, RoutedEventArgs e)
+    {
+        _dismissedErrors.Clear();
+        SourceChanged(SubscriptionInputKind.Retry);
+    }
+
+    private void CopyError_Click(object sender, RoutedEventArgs e)
+    {
+        var package = new DataPackage();
+        package.SetText(ErrorDetail.Text);
+        try { Clipboard.SetContent(package); }
+        catch (Exception error) { RecordError(error.ToString()); }
+    }
+
+    private void ConnectionButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ErrorShown) StartWindowWork(MainActionAsync);
+    }
 
     private async Task PerformActionAsync(int? index, bool forceStop, CancellationToken cancellationToken)
     {
@@ -488,28 +754,29 @@ public sealed partial class MainWindow : Window
         {
             if (_stopInFlight || current.PrimaryAction != "STOP") return;
             _stopInFlight = true;
-            RenderActions();
-            ErrorText.Text = "";
+            _error = "";
+            Render();
             try
             {
                 await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation }, cancellationToken);
             }
-            catch (Exception error) when (!_lifetime.IsClosing) { ShowError(error.ToString(), error.Message); }
+            catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); }
             finally
             {
                 _stopInFlight = false;
+                _dismissedErrors.Clear();
                 if (!_lifetime.IsClosing)
                 {
                     await RefreshSnapshotAsync(cancellationToken);
-                    RenderActions();
+                    Render();
                 }
             }
             return;
         }
         if (_busy || !CanAct(index)) return;
         _busy = true;
-        RenderActions();
-        ErrorText.Text = "";
+        _error = "";
+        Render();
         try
         {
             await CallAsync<JsonElement>("Start", new {
@@ -518,14 +785,15 @@ public sealed partial class MainWindow : Window
                 digest = current.Digest, replace_current = true
             }, cancellationToken);
         }
-        catch (Exception error) when (!_lifetime.IsClosing) { ShowError(error.ToString(), error.Message); }
+        catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); }
         finally
         {
             _busy = false;
+            _dismissedErrors.Clear();
             if (!_lifetime.IsClosing)
             {
                 await RefreshSnapshotAsync(cancellationToken);
-                RenderActions();
+                Render();
             }
         }
     }
@@ -542,15 +810,15 @@ public sealed partial class MainWindow : Window
         var valid = ValidSubscription(source);
         var revision = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
         _loadError = "";
-        ErrorText.Text = "";
-        RetryButton.Visibility = Visibility.Collapsed;
+        _error = "";
+        _importError = "";
         _debounce?.Cancel();
         _debounce?.Dispose();
         var debounce = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _debounce = debounce;
         var cancellation = debounce.Token;
-        RenderActions();
-        if (!valid) { LoadStatus.Text = "Enter an HTTPS subscription URL"; return; }
+        Render();
+        if (!valid) return;
         try
         {
             if (kind == SubscriptionInputKind.Typed)
@@ -571,23 +839,27 @@ public sealed partial class MainWindow : Window
     private void RefreshClipboard()
     {
         if (_lifetime.IsClosing) return;
-        try { PasteButton.Visibility = Clipboard.GetContent().Contains(StandardDataFormats.Text) ? Visibility.Visible : Visibility.Collapsed; }
-        catch (Exception error) { RecordError(error.ToString()); PasteButton.Visibility = Visibility.Collapsed; }
+        try { _canPaste = Clipboard.GetContent().Contains(StandardDataFormats.Text); }
+        catch (Exception error) { RecordError(error.ToString()); _canPaste = false; }
+        RenderSourceField();
     }
     private void Paste_Click(object sender, RoutedEventArgs e) => StartWindowWork(PasteAsync);
 
     private async Task PasteAsync(CancellationToken cancellationToken)
     {
         if (_lifetime.IsClosing) return;
+        ClearFocus();
+        _dismissedErrors.Clear();
         _diagnostics.RecordInfo("subscription.paste-click", "Started handling a Paste button click", new { session_id = _snapshot?.SessionId });
         try
         {
             var pastedText = (await Clipboard.GetContent().GetTextAsync()).Trim();
             if (cancellationToken.IsCancellationRequested) return;
             _diagnostics.RecordInfo("subscription.paste-clipboard-text-returned", "Clipboard text returned to the Paste handler", new { session_id = _snapshot?.SessionId, text_length = pastedText.Length });
+            if (!ValidSubscription(pastedText)) throw new InvalidOperationException("Paste an HTTPS subscription URL with a host");
             ImportSubscription(pastedText, SubscriptionInputKind.Paste);
         }
-        catch (Exception error) when (!_lifetime.IsClosing) { ShowError(error.ToString(), error.Message); }
+        catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); Render(); }
     }
     private void ImportSubscription(string source, SubscriptionInputKind kind)
     {
@@ -608,6 +880,7 @@ public sealed partial class MainWindow : Window
         {
             if (value.Equals("dobbyvpn://", StringComparison.OrdinalIgnoreCase) ||
                 value.Equals("dobbyvpn:///", StringComparison.OrdinalIgnoreCase)) return;
+            _dismissedErrors.Clear();
             if (System.Text.RegularExpressions.Regex.IsMatch(value, "%(?![0-9a-fA-F]{2})")) throw new FormatException("Invalid URL escape");
             var uri = new Uri(value);
             if (uri.Scheme != "dobbyvpn" || uri.Host != "import" || uri.AbsolutePath is not ("" or "/") || uri.UserInfo.Length > 0 || !uri.IsDefaultPort || uri.Fragment.Length > 0)
@@ -617,10 +890,19 @@ public sealed partial class MainWindow : Window
             if (query.Length != 1 || pair.Length != 2 || pair[0] != "url") throw new FormatException("The import link requires one url parameter");
             ImportSubscription(Uri.UnescapeDataString(pair[1]), SubscriptionInputKind.Import);
         }
-        catch (Exception error) { ShowError(error.ToString(), "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL"); }
+        catch (Exception error)
+        {
+            SetError(error.ToString(), "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL");
+            _importError = _error;
+            Render();
+        }
     }
 
-    private void Retry_Click(object sender, RoutedEventArgs e) => SourceChanged(SubscriptionInputKind.Retry);
+    private void Retry_Click(object sender, RoutedEventArgs e)
+    {
+        _dismissedErrors.Clear();
+        SourceChanged(SubscriptionInputKind.Retry);
+    }
 
     private TimeSpan LoadNow => Stopwatch.GetElapsedTime(_loadClockOrigin);
 
@@ -637,8 +919,7 @@ public sealed partial class MainWindow : Window
     {
         if (_lifetime.IsClosing) return;
         var source = request.Source;
-        LoadStatus.Text = "Loading profiles…";
-        RenderActions();
+        Render();
         try
         {
             var snapshotBeforeConfigure = _snapshot;
@@ -656,7 +937,6 @@ public sealed partial class MainWindow : Window
             {
                 _acceptedSequence = configured.GetProperty("sequence").GetInt64();
                 MarkSourceAccepted(source);
-                LoadStatus.Text = "";
             }
         }
         catch (Exception error) when (!_lifetime.IsClosing)
@@ -664,8 +944,6 @@ public sealed partial class MainWindow : Window
             if (_subscriptionLoad.IsCurrent(request))
             {
                 _loadError = error.Message;
-                LoadStatus.Text = _loadError;
-                RetryButton.Visibility = Visibility.Visible;
                 RecordError(error.ToString());
             }
         }
@@ -679,7 +957,7 @@ public sealed partial class MainWindow : Window
             finally
             {
                 next = _subscriptionLoad.Finish(request, LoadNow);
-                if (!_lifetime.IsClosing) RenderActions();
+                if (!_lifetime.IsClosing) Render();
             }
             if (!_lifetime.IsClosing && next is not null) await ExecuteLoadAsync(next, cancellationToken);
         }
@@ -736,65 +1014,16 @@ public sealed partial class MainWindow : Window
         _renderedSource = source;
     }
 
-    private void SetConnectionAction(string value)
-    {
-        ConnectionButton.Content = value;
-        AutomationProperties.SetName(ConnectionButton, value);
-    }
-
     private static string NormalizeSource(string value) =>
         value.Replace("\r\n", "\n").Replace("\r", "\n");
 
-    private void About_Click(object sender, RoutedEventArgs e) => StartWindowWork(ShowAboutAsync);
-
-    private async Task ShowAboutAsync(CancellationToken cancellationToken)
-    {
-        if (cancellationToken.IsCancellationRequested) return;
-        var details = new StackPanel { Spacing = 12 };
-        var version = new TextBlock { Text = $"Version: {_version}", IsTextSelectionEnabled = true };
-        AutomationProperties.SetAutomationId(version, "About version metadata");
-        details.Children.Add(version);
-        var compactCommit = new TextBlock { Text = $"Commit: {_commit[..Math.Min(12, _commit.Length)]}" };
-        AutomationProperties.SetAutomationId(compactCommit, "About compact commit metadata");
-        details.Children.Add(compactCommit);
-        var sourceCommit = new TextBlock { Text = $"Source commit: {_commit}", TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
-        AutomationProperties.SetAutomationId(sourceCommit, "About source commit metadata");
-        details.Children.Add(sourceCommit);
-        if (_commit.Length == 40 && _commit.All(Uri.IsHexDigit))
-        {
-            var sourceUrl = $"https://github.com/DobbyVPN/DobbyVPN/tree/{_commit}";
-            var sourceLink = new HyperlinkButton { Content = "Source code", NavigateUri = new Uri(sourceUrl) };
-            AutomationProperties.SetAutomationId(sourceLink, "About source link");
-            AutomationProperties.SetHelpText(sourceLink, sourceUrl);
-            details.Children.Add(sourceLink);
-        }
-        var dialog = new ContentDialog
-        {
-            Title = "About DobbyVPN", Content = details, CloseButtonText = "Done", XamlRoot = Root.XamlRoot,
-        };
-        _aboutDialog = dialog;
-        try { await dialog.ShowAsync(); }
-        finally
-        {
-            if (ReferenceEquals(_aboutDialog, dialog)) _aboutDialog = null;
-        }
-    }
-
     private void RecordError(string message) => _diagnostics.Record(message, "ui.failure");
 
-    private void ShowError(string details, string message, string category = "ui.failure")
+    private void SetError(string details, string message, string category = "ui.failure")
     {
         if (_lifetime.IsClosing) return;
         _diagnostics.Record(details, category);
-        ErrorText.Text = message;
-    }
-
-    private void SetConnectionStatus(string value)
-    {
-        if (_lifetime.IsClosing) return;
-        StatusText.Text = value;
-        AutomationProperties.SetAutomationId(StatusText, "connection.status");
-        AutomationProperties.SetName(StatusText, value);
+        _error = message;
     }
 
     private void LogsText_Loaded(object sender, RoutedEventArgs e)
@@ -802,6 +1031,11 @@ public sealed partial class MainWindow : Window
         if (_lifetime.IsClosing) return;
         _logScroll = LogsScroll;
         CaptureLogScrollPosition();
+        LogsScroll.AddHandler(UIElement.DoubleTappedEvent, new DoubleTappedEventHandler((_, args) =>
+        {
+            args.Handled = true;
+            LogsMenu.ShowAt(LogsScroll, new FlyoutShowOptions { Position = args.GetPosition(LogsScroll) });
+        }), true);
         LogsScroll.SizeChanged += (_, _) =>
         {
             if (!_logPresentation.FollowsTail) ClearPendingLogDownScrollIntent();
@@ -1069,6 +1303,7 @@ public sealed partial class MainWindow : Window
         {
             if (_clearingLogs) return;
             _clearingLogs = true;
+            _clearLogsError = "";
             ++_logRevision;
             ++_logRenderGeneration;
             _updatingLogs = false;
@@ -1081,6 +1316,7 @@ public sealed partial class MainWindow : Window
             _lastLogScrollGestureDirection = null;
             await _diagnostics.ClearViewAsync();
             if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
+            RecordAppStarted();
             _logPresentation.ClearAfterBoundary();
             _logRowCache.Clear();
             _renderedLogRows = [];
@@ -1089,7 +1325,7 @@ public sealed partial class MainWindow : Window
             _clearingLogs = false;
             await RefreshLogsAsync(cancellationToken);
         }
-        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _clearLogsError = error.Message; Render(); }
         finally { _clearingLogs = false; }
     }
 
@@ -1109,16 +1345,23 @@ public sealed partial class MainWindow : Window
                     backend_entry_id = entry.EntryId,
                     follows_tail = entry.FollowsTail,
                 });
-            LogsErrorText.Text = preview.Error;
+            if (preview.Error != _logsError)
+            {
+                _logsError = preview.Error;
+                RenderError();
+            }
             if (_logPresentation.FollowsTail) RenderLogs();
         }
-        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); LogsErrorText.Text = error.Message; }
+        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _logsError = error.Message; RenderError(); }
     }
+
+    private static List<NativeDiagnostics.Entry> Shown(IEnumerable<NativeDiagnostics.Entry> entries) =>
+        entries.Where(entry => !entry.Raw.Contains("\"event\":\"logs.backend-ingested\"", StringComparison.Ordinal)).ToList();
 
     private void RenderLogs()
     {
         if (_lifetime.IsClosing) return;
-        var entries = _logPresentation.VisibleEntries;
+        var entries = Shown(_logPresentation.VisibleEntries);
         var keys = entries.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
         if (_updatingLogs || keys.SequenceEqual(_renderedLogRows.Select(row => row.Key))) return;
 
@@ -1176,7 +1419,7 @@ public sealed partial class MainWindow : Window
             if (renderGeneration != _logRenderGeneration) return;
             _updatingLogs = false;
             CaptureLogScrollPosition();
-            var latestKeys = _logPresentation.LatestEntries.Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
+            var latestKeys = Shown(_logPresentation.LatestEntries).Select(entry => new LogRowKey(entry.Id, entry.Raw)).ToArray();
             if (_logPresentation.FollowsTail && !latestKeys.SequenceEqual(_renderedLogRows.Select(row => row.Key)))
             {
                 RenderLogs();
@@ -1188,17 +1431,19 @@ public sealed partial class MainWindow : Window
 
     private RenderedLogRow CreateLogRow(NativeDiagnostics.Entry entry, LogRowKey key)
     {
-        var resource = entry.Level switch
+        var text = new RichTextBlock
         {
-            "ERROR" or "FATAL" or "PANIC" => "SystemFillColorCriticalBrush",
-            "WARN" or "WARNING" => "SystemFillColorCautionBrush",
-            "DEBUG" or "TRACE" => "TextFillColorSecondaryBrush",
-            _ => "TextFillColorPrimaryBrush"
+            IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap,
+            FontFamily = (FontFamily)Root.Resources["Mono"], FontSize = 11, LineHeight = 16,
+            Foreground = Palette("Ink"), ContextFlyout = LogsMenu, SelectionFlyout = null,
         };
-        var text = new RichTextBlock { IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap,
-            Foreground = (Brush)Application.Current.Resources[resource] };
         var paragraph = new Paragraph();
-        paragraph.Inlines.Add(new Run { Text = string.Join(" · ", new[] { entry.Timestamp, entry.Level, entry.Source }.Where(value => value.Length > 0)) + "\n" + entry.Message });
+        var time = entry.Time?.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture) ?? entry.Timestamp;
+        if (time.Length > 0) paragraph.Inlines.Add(new Run { Text = time + "  ", Foreground = Palette("Muted") });
+        var message = new Run { Text = entry.Message };
+        if (entry.Level is "ERROR" or "FATAL" or "PANIC" or "WARN" or "WARNING") message.FontWeight = FontWeights.Bold;
+        else if (entry.Level is "DEBUG" or "TRACE") message.Foreground = Palette("Muted");
+        paragraph.Inlines.Add(message);
         text.Blocks.Add(paragraph);
         return new RenderedLogRow(key, [text]);
     }
@@ -1302,13 +1547,14 @@ public sealed partial class MainWindow : Window
     private string ExportHeader =>
         $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n";
 
-    private void SaveLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(SaveLogsAsync);
+    private void SendLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(SendLogsAsync);
 
-    private async Task SaveLogsAsync(CancellationToken cancellationToken)
+    private async Task SendLogsAsync(CancellationToken cancellationToken)
     {
         if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
         if (_exportingLogs) return;
         _exportingLogs = true;
+        SendLogsItem.IsEnabled = false;
         global::Windows.Foundation.IAsyncInfo? pickerOperation = null;
         try
         {
@@ -1335,13 +1581,14 @@ public sealed partial class MainWindow : Window
                 await _diagnostics.SaveAsync(file.Path, ExportHeader);
             }
         }
-        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); LogsErrorText.Text = "Logs could not be saved. Try another location."; }
+        catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _exportError = "Logs could not be saved. Try another location."; RenderError(); }
         finally
         {
             if (pickerOperation is not null)
                 RecordSavePickerOperationState("await-finally", pickerOperation);
             _savePickerOperation = null;
             _exportingLogs = false;
+            if (!_lifetime.IsClosing) SendLogsItem.IsEnabled = true;
         }
     }
 

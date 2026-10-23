@@ -18,6 +18,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[3]
 SERVICES = ROOT / "runtime" / "services"
 LOGO = ROOT / "publishing" / "assets" / "logo.png"
+MACOS_ICON = ROOT / "ui" / "apple" / "macos" / "AppIcon.icns"
 LINUX_INSTALLER = ROOT / "ui" / "linux" / "installer"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
@@ -118,12 +119,14 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
         copy_file(source / "DobbyVPNMacApp", executable, executable=True)
         copy_file(source / "dobbyvpn-backend", resources / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", resources / "dobby-cli", executable=True)
+        copy_file(MACOS_ICON, resources / "AppIcon.icns")
         copy_license_documents(resources / "licenses")
         if debug:
             copy_directory(source / "DebugSymbols", resources / "DebugSymbols")
         info = {
             "CFBundleDisplayName": "Dobby VPN",
             "CFBundleExecutable": "DobbyVPNMacApp",
+            "CFBundleIconFile": "AppIcon",
             "CFBundleIdentifier": "vpn.dobby.desktop",
             "CFBundleName": "Dobby VPN",
             "CFBundleURLTypes": [{"CFBundleURLName": "DobbyVPN", "CFBundleURLSchemes": ["dobbyvpn"]}],

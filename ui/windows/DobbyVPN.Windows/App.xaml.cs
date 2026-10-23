@@ -14,21 +14,6 @@ public partial class App : Application
         try
         {
             InitializeComponent();
-
-            // The Windows native UI journey uses two cold launches to verify the
-            // rendered light and dark log palettes. Ordinary launches leave this
-            // unset and continue to use the Windows app-mode preference.
-            var testTheme = Environment.GetEnvironmentVariable("DOBBYVPN_TEST_REQUESTED_THEME");
-            if (testTheme is not null)
-            {
-                RequestedTheme = testTheme switch
-                {
-                    "Light" => ApplicationTheme.Light,
-                    "Dark" => ApplicationTheme.Dark,
-                    _ => throw new InvalidOperationException(
-                        "DOBBYVPN_TEST_REQUESTED_THEME must be Light or Dark"),
-                };
-            }
         }
         catch (Exception error)
         {

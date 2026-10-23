@@ -41,6 +41,10 @@ private struct SystemSessionDebounceScheduler: DobbySessionDebounceScheduling {
     }
 }
 
+public enum DobbyProfileStatus: String {
+    case connecting, connected, reconnecting, stopping, failed
+}
+
 @MainActor
 public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
@@ -59,6 +63,7 @@ public final class DobbySessionViewModel: ObservableObject {
 
     @Published public private(set) var loading = false
     @Published public private(set) var loadError = ""
+    @Published private var dismissedFailures = Set<String>()
     private let loadWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.configuration")
     private var loadInFlight = false
     private var loadRevision = 0
@@ -101,6 +106,7 @@ public final class DobbySessionViewModel: ObservableObject {
     ) {
         self.client = client
         self.debounceScheduler = debounceScheduler
+        recordAppStarted()
         refreshSnapshot()
         if automaticallyPoll {
             timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
@@ -154,6 +160,15 @@ public final class DobbySessionViewModel: ObservableObject {
         !busy && !snapshot.sessionID.isEmpty && (isStopTarget(index) || inventoryReady && (snapshot.primaryAction == "START" || snapshot.canSwitch))
     }
 
+    public func dismissError() {
+        if importError.isEmpty {
+            error = ""
+            return
+        }
+        if error == importError { error = "" }
+        importError = ""
+    }
+
     public func sourceChanged(_ value: String, immediate: Bool = false) {
         if !immediate && value == sourceText { return }
         sourceText = value
@@ -161,6 +176,8 @@ public final class DobbySessionViewModel: ObservableObject {
         importError = ""
         setError("", origin: .other)
         loadError = ""
+        // Typing only forgets the closed failures it cleared; a persistent one must not reopen on every keystroke.
+        pruneClosedFailures()
         loadRevision += 1
         pendingLoad = nil
         debounce?.cancel()
@@ -181,9 +198,13 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func paste(_ value: String) {
+        resetClosedFailures()
         let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard validSubscription(source) else {
-            setError("Paste an HTTPS subscription URL with a host", origin: .other)
+            let message = "Paste an HTTPS subscription URL with a host"
+            // Closing the popup keeps the error, so a repeated rejection is logged here.
+            if error == message { recordError(message) }
+            setError(message, origin: .other)
             return
         }
         if source == sourceText && (loading || snapshot.configured && !sourceIsDirty) { return }
@@ -216,7 +237,10 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
-    public func retryLoad() { sourceChanged(sourceText, immediate: true) }
+    public func retryLoad() {
+        resetClosedFailures()
+        sourceChanged(sourceText, immediate: true)
+    }
 
     private func loadNext() {
         guard !loadInFlight, let source = pendingLoad, !snapshot.sessionID.isEmpty else { return }
@@ -309,6 +333,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     self.snapshotFailureMessage = failure.localizedDescription
                     self.setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
                 }
+                self.pruneClosedFailures()
             }
         }
     }
@@ -325,6 +350,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func performCommand(index: Int?, stopping: Bool) {
+        resetClosedFailures()
         busy = true
         setError("", origin: .other)
         let current = snapshot
@@ -412,6 +438,12 @@ public final class DobbySessionViewModel: ObservableObject {
         if visible { refreshLogs() }
     }
 
+    private func recordAppStarted() {
+        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
+        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
+        recordDiagnostic(line, event: "app.started", level: "INFO")
+    }
+
     private func recordError(_ message: String) {
         recordDiagnostic(message)
     }
@@ -483,6 +515,7 @@ public final class DobbySessionViewModel: ObservableObject {
                 case .success:
                     self.logEntries = []
                     self.clearRevision += 1
+                    self.recordAppStarted()
                 case let .failure(error): self.reportLogsError(error.localizedDescription)
                 }
                 self.refreshLogs()
@@ -517,6 +550,81 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
+}
+
+extension DobbySessionViewModel {
+    private var connected: Bool { snapshot.primaryAction == "STOP" }
+
+    public var mainActionTitle: String {
+        if !connected { return busy ? "Connecting…" : "Auto connect" }
+        return ["CONNECTED", "STOPPING"].contains(snapshot.state) && snapshot.pendingTarget == nil ? "Disconnect" : "Connecting…"
+    }
+
+    public var mainActionEnabled: Bool { connected ? !busy : canAct() }
+
+    public func mainAction() { connected ? stop() : performPrimaryAction() }
+
+    public func profileStatus(_ index: Int) -> DobbyProfileStatus? {
+        guard snapshot.activeDigest == snapshot.digest else { return nil }
+        let active = snapshot.activeProfile.map { $0.index == index }
+            ?? (snapshot.activeMode == "PROFILE_INDEX" && snapshot.activeIndex == index)
+        return active ? sessionStatus : nil
+    }
+
+    public func profileActionTitle(_ index: Int) -> String {
+        let title = actionTitle(index)
+        return profileStatus(index) == .connecting || title == "Stop" ? "Connecting…" : title
+    }
+
+    /// The connection still running from a subscription that has since been replaced.
+    public var orphanProfile: DobbyProfile? {
+        connected && snapshot.activeDigest != snapshot.digest ? snapshot.activeProfile : nil
+    }
+
+    public var sessionStatus: DobbyProfileStatus? {
+        if snapshot.recovering { return .reconnecting }
+        switch snapshot.state {
+        case "CONNECTED": return .connected
+        case "PROBING", "PREPARING": return .connecting
+        case "STOPPING": return .stopping
+        default: return snapshot.lastFailure == nil ? nil : .failed
+        }
+    }
+
+    private var failures: [String] {
+        var seen = Set<String>()
+        return [importError, loadError, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    public var failureDetail: String { failures.first ?? "" }
+
+    public var visibleFailure: String {
+        failures.first { !dismissedFailures.contains($0) } ?? ""
+    }
+
+    /// Import guidance is cleared; other failures stay set while their cause persists, so polling cannot reopen them.
+    public func closeFailure() {
+        let shown = visibleFailure
+        guard !shown.isEmpty else { return }
+        if shown == importError {
+            dismissError()
+        } else {
+            dismissedFailures.insert(shown)
+        }
+    }
+
+    /// A new attempt shows its failure again, even when it repeats one the user closed.
+    private func resetClosedFailures() {
+        if !dismissedFailures.isEmpty { dismissedFailures = [] }
+    }
+
+    private func pruneClosedFailures() {
+        let current = Set(failures)
+        if !dismissedFailures.isSubset(of: current) { dismissedFailures.formIntersection(current) }
+    }
+
+    /// Closes the error the popup shows first: import guidance, then the last command error.
 }
 
 private func readSnapshot(

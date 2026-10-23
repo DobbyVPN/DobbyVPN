@@ -51,13 +51,73 @@ struct DobbyShareSheet: NSViewRepresentable {
 #endif
 
 #if os(iOS)
-private final class DobbyLogTextView: UITextView {
+private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
+    var onSendLogs: () -> Void = {}
+    var onClear: () -> Void = {}
+    private var editMenu: AnyObject?
+    private var editMenuDelegate: AnyObject?
+    private var showingLegacyMenu = false
     var preservesReadingPosition = false
     private(set) var isRestoringReadingPosition = false
     private(set) var readingPositionRestoreCount = 0
     private var lastLayoutSize: CGSize?
     private var anchorCharacterIndex: Int?
     private var anchorViewportY: CGFloat?
+
+    func installLogsMenu() {
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(showLogsMenu(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.delegate = self
+        addGestureRecognizer(doubleTap)
+        if #available(iOS 16.0, *) {
+            let delegate = LogsEditMenu(self)
+            let interaction = UIEditMenuInteraction(delegate: delegate)
+            addInteraction(interaction)
+            editMenu = interaction
+            editMenuDelegate = delegate
+        }
+        accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "Send logs") { [weak self] _ in self?.onSendLogs(); return true },
+            UIAccessibilityCustomAction(name: "Clear") { [weak self] _ in self?.onClear(); return true },
+        ]
+    }
+
+    // The double tap opens the logs menu instead of selecting a word; a long press still selects text.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        other is UITapGestureRecognizer && other.view === self
+    }
+
+    @objc private func showLogsMenu(_ gesture: UITapGestureRecognizer) {
+        let point = gesture.location(in: self)
+        if #available(iOS 16.0, *), let interaction = editMenu as? UIEditMenuInteraction {
+            interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
+        } else {
+            showingLegacyMenu = true
+            becomeFirstResponder()
+            UIMenuController.shared.menuItems = [
+                UIMenuItem(title: "Send logs", action: #selector(sendLogsFromMenu)),
+                UIMenuItem(title: "Clear", action: #selector(clearFromMenu)),
+            ]
+            UIMenuController.shared.showMenu(from: self, rect: CGRect(origin: point, size: .zero))
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(legacyMenuHidden), name: UIMenuController.willHideMenuNotification, object: nil
+            )
+        }
+    }
+
+    @objc private func sendLogsFromMenu() { onSendLogs() }
+    @objc private func clearFromMenu() { onClear() }
+
+    @objc private func legacyMenuHidden() {
+        showingLegacyMenu = false
+        UIMenuController.shared.menuItems = nil
+        NotificationCenter.default.removeObserver(self, name: UIMenuController.willHideMenuNotification, object: nil)
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(sendLogsFromMenu) || action == #selector(clearFromMenu) { return showingLegacyMenu }
+        return !showingLegacyMenu && super.canPerformAction(action, withSender: sender)
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -88,9 +148,16 @@ private final class DobbyLogTextView: UITextView {
             x: textContainerInset.left + 1,
             y: contentOffset.y - textContainerInset.top + 1
         )
-        let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
-        let character = min(layoutManager.characterIndexForGlyph(at: glyph), textStorage.length - 1)
-        let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let topGlyph = layoutManager.glyphIndex(for: point, in: textContainer)
+        var character = min(layoutManager.characterIndexForGlyph(at: topGlyph), textStorage.length - 1)
+        // Anchor the first record shown in full, from its start: records above may wrap differently after a resize.
+        let record = (textStorage.string as NSString).paragraphRange(for: NSRange(location: character, length: 0))
+        let topLine = layoutManager.lineFragmentRect(forGlyphAt: topGlyph, effectiveRange: nil)
+        let cutByTopEdge = topLine.minY + textContainerInset.top < contentOffset.y
+        if (record.location < character || cutByTopEdge) && NSMaxRange(record) < textStorage.length {
+            character = NSMaxRange(record)
+        }
+        let line = layoutManager.lineFragmentRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: character), effectiveRange: nil)
         anchorCharacterIndex = character
         anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
     }
@@ -116,9 +183,27 @@ private final class DobbyLogTextView: UITextView {
     }
 }
 
+@available(iOS 16.0, *)
+private final class LogsEditMenu: NSObject, UIEditMenuInteractionDelegate {
+    private weak var view: DobbyLogTextView?
+
+    init(_ view: DobbyLogTextView) { self.view = view }
+
+    func editMenuInteraction(
+        _ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]
+    ) -> UIMenu? {
+        UIMenu(children: [
+            UIAction(title: "Send logs") { [weak view] _ in view?.onSendLogs() },
+            UIAction(title: "Clear") { [weak view] _ in view?.onClear() },
+        ])
+    }
+}
+
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     let clear: Int
+    let onSendLogs: () -> Void
+    let onClear: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -132,9 +217,11 @@ struct DobbyLogView: UIViewRepresentable {
         }
         view.isEditable = false
         view.isSelectable = true
-        view.backgroundColor = .secondarySystemBackground
-        view.font = UIFont.preferredFont(forTextStyle: .caption1)
+        view.backgroundColor = DobbyPalette.surface
+        view.textContainerInset = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        view.textContainer.lineFragmentPadding = 0
         view.adjustsFontForContentSizeCategory = true
+        view.installLogsMenu()
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
         view.updateFollowingAccessibilityHint(isFollowing: true)
@@ -143,6 +230,10 @@ struct DobbyLogView: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         let coordinator = context.coordinator
+        if let logView = view as? DobbyLogTextView {
+            logView.onSendLogs = onSendLogs
+            logView.onClear = onClear
+        }
         coordinator.latestEntries = entries
         let cleared = clear != coordinator.lastClear
         if cleared { coordinator.followingState.resetForClear() }
@@ -277,16 +368,63 @@ struct DobbyLogView: UIViewRepresentable {
     }
 }
 #elseif os(macOS)
+private final class DobbyLogTextView: NSTextView {
+    var onSendLogs: () -> Void = {}
+    var onClear: () -> Void = {}
+
+    private var logsMenu: NSMenu {
+        let menu = NSMenu()
+        menu.addItem(LogsMenuItem("Send logs") { [weak self] in self?.onSendLogs() })
+        menu.addItem(LogsMenuItem("Clear") { [weak self] in self?.onClear() })
+        return menu
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? { logsMenu }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            NSMenu.popUpContextMenu(logsMenu, with: event, for: self)
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+}
+
+private final class LogsMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(_ title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(run), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    @objc private func run() { handler() }
+}
+
 struct DobbyLogView: NSViewRepresentable {
     let entries: [DobbyLogEntry]
     @Binding var following: Bool
     let clear: Int
+    /// Off while a popup covers the logs, so the text cursor does not show through it.
+    let interactive: Bool
+    let onSendLogs: () -> Void
+    let onClear: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
-        guard let view = scroll.documentView as? NSTextView else { return scroll }
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        let view = DobbyLogTextView(frame: .zero)
+        view.autoresizingMask = [.width]
+        view.isVerticallyResizable = true
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        view.textContainer?.widthTracksTextView = true
+        scroll.documentView = view
         configureLogTextView(view)
         view.delegate = context.coordinator
         scroll.contentView.postsBoundsChangedNotifications = true
@@ -313,7 +451,13 @@ struct DobbyLogView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage else { return }
+        guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
+        view.onSendLogs = onSendLogs
+        view.onClear = onClear
+        if view.isSelectable != interactive {
+            view.isSelectable = interactive
+            view.window?.invalidateCursorRects(for: view)
+        }
         let coordinator = context.coordinator
         coordinator.parent = self
         if clear != coordinator.lastClear { resetLogFollowingForClear(following: $following) }
@@ -378,37 +522,74 @@ func configureLogTextView(_ view: NSTextView) {
     view.isEditable = false
     view.isSelectable = true
     view.isRichText = true
-    view.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-    view.textColor = .textColor
-    view.backgroundColor = .textBackgroundColor
+    view.font = logFont
+    view.textColor = DobbyPalette.ink
+    view.backgroundColor = DobbyPalette.surface
+    view.textContainerInset = NSSize(width: 12, height: 6)
+    view.textContainer?.lineFragmentPadding = 0
     view.setAccessibilityIdentifier("Connection logs")
 }
 #endif
 
 #if os(iOS)
-private typealias LogColor = UIColor
-private let logFont = UIFont.preferredFont(forTextStyle: .caption1)
-private var normalLogColor: LogColor { .label }
-private var mutedLogColor: LogColor { .secondaryLabel }
+typealias PlatformColor = UIColor
+typealias PlatformFont = UIFont
 #elseif os(macOS)
-private typealias LogColor = NSColor
-private let logFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-private var normalLogColor: LogColor { .textColor }
-private var mutedLogColor: LogColor { .secondaryLabelColor }
+typealias PlatformColor = NSColor
+typealias PlatformFont = NSFont
 #endif
+
+// The palette lives beside the log renderer: the iOS renderer tests compile this file on its own.
+enum DobbyPalette {
+    static let paper = PlatformColor(red: 0xD9 / 255, green: 0xD2 / 255, blue: 0xC9 / 255, alpha: 1)
+    static let ink = PlatformColor(red: 0x14 / 255, green: 0x14 / 255, blue: 0x14 / 255, alpha: 1)
+    static let surface = PlatformColor(red: 0xF6 / 255, green: 0xF3 / 255, blue: 0xEE / 255, alpha: 1)
+    static let muted = PlatformColor(red: 0x55 / 255, green: 0x50 / 255, blue: 0x4A / 255, alpha: 1)
+    static let rule = PlatformColor(red: 0xB9 / 255, green: 0xB1 / 255, blue: 0xA6 / 255, alpha: 1)
+    static let tray = PlatformColor(red: 0xCC / 255, green: 0xC4 / 255, blue: 0xB9 / 255, alpha: 1)
+}
+
+#if os(iOS)
+private var logFont: UIFont {
+    UIFontMetrics(forTextStyle: .caption1).scaledFont(for: .monospacedSystemFont(ofSize: 11.5, weight: .regular))
+}
+private var boldLogFont: UIFont {
+    UIFontMetrics(forTextStyle: .caption1).scaledFont(for: .monospacedSystemFont(ofSize: 11.5, weight: .bold))
+}
+#elseif os(macOS)
+private let logFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+private let boldLogFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
+#endif
+
+private let logTimeFormat: DateFormatter = {
+    let format = DateFormatter()
+    format.locale = Locale(identifier: "en_US_POSIX")
+    format.dateFormat = "HH:mm:ss"
+    return format
+}()
 
 func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     let output = NSMutableAttributedString(string: "")
+    let paragraph = NSMutableParagraphStyle()
+    // Extra space goes below each line so a line's text starts at the top of its fragment.
+    paragraph.lineSpacing = 3
     for entry in entries {
-        let color: LogColor
-        switch entry.level {
-        case "ERROR", "FATAL", "PANIC": color = .systemRed
-        case "WARN", "WARNING": color = .systemOrange
-        case "DEBUG", "TRACE": color = mutedLogColor
-        default: color = normalLogColor
+        let time = entry.date.map(logTimeFormat.string) ?? entry.timestamp
+        if !time.isEmpty {
+            output.append(NSAttributedString(string: time + "  ", attributes: [
+                .font: logFont, .foregroundColor: DobbyPalette.muted, .paragraphStyle: paragraph,
+            ]))
         }
-        let header = [entry.timestamp, entry.level, entry.source].filter { !$0.isEmpty }.joined(separator: " · ")
-        output.append(NSAttributedString(string: header + "\n" + entry.message + "\n", attributes: [.font: logFont, .foregroundColor: color]))
+        let font: PlatformFont
+        let color: PlatformColor
+        switch entry.level {
+        case "ERROR", "FATAL", "PANIC", "WARN", "WARNING": font = boldLogFont; color = DobbyPalette.ink
+        case "DEBUG", "TRACE": font = logFont; color = DobbyPalette.muted
+        default: font = logFont; color = DobbyPalette.ink
+        }
+        output.append(NSAttributedString(string: entry.message + "\n", attributes: [
+            .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
+        ]))
     }
     return output
 }
