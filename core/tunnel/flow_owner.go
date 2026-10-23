@@ -39,7 +39,7 @@ func (o *flowOwner) beginDial() error {
 
 // pendingTCPContext links a caller's dial to the engine generation. The raw
 // local SOCKS connection uses this context through its complete handshake.
-func (o *flowOwner) pendingTCPContext(parent context.Context) (context.Context, func()) {
+func (o *flowOwner) pendingTCPContext(parent context.Context) (dialCtx context.Context, finish func()) {
 	o.mu.Lock()
 	if o.tcpContext == nil {
 		o.tcpContext, o.cancelTCP = context.WithCancel(context.Background())
