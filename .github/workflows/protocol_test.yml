@@ -64,19 +64,21 @@ jobs:
               output.write(f"torturer_sha={tests}\ntorturer_tree_sha256={tree}\n")
           PYTHON
 
-  render_start:
+  fixture_host:
     needs: identity
-    uses: ./.github/workflows/render_start.yml
+    uses: ./.github/workflows/fixture_host.yml
     secrets: inherit
     with:
       torturer_sha: ${{ needs.identity.outputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
       fixture_key: linux
+      consumer_names: '["Exercise selected protocol engines"]'
+      freshness_jobs: '["Bind selected source and private tests"]'
       retention_days: 1
 
   proof:
     name: Exercise selected protocol engines
-    needs: [identity, render_start]
+    needs: identity
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: release-tests
@@ -91,6 +93,7 @@ jobs:
           {
             echo "RUN_DIR=$RUNNER_TEMP/dobbyvpn-protocol-run"
             echo "ARTIFACT_DIR=$RUNNER_TEMP/dobbyvpn-protocol-diagnostics"
+            echo "RUN_DEADLINE_EPOCH=$(( $(date +%s) + 2700 ))"
           } >> "$GITHUB_ENV"
       - name: Check out selected main source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -124,18 +127,13 @@ jobs:
           (Path(os.environ["RUN_DIR"]) / "source-identity.txt").write_text(
               f"Product={product}\nTorturer={tests}\nTorturer tree SHA-256={tree}\n")
           PYTHON
-      - name: Download selected Render profile
+      - name: Wait for live current-attempt fixture readiness
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          python3 .github/scripts/release/download_artifact.py \
-            "$GITHUB_RUN_ID" "render-vpn-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-linux" render
-          deadline="$(tr -d '[:space:]' < render/deadline_epoch.txt)"
-          [[ "$deadline" =~ ^[0-9]+$ ]]
-          printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
-      - name: Verify Render protocol fixtures against selected source
-        uses: ./.github/actions/render-protocol-check
+          python3 .github/scripts/fixture_jobs.py ready --key linux --producer-name "fixture_host / Serve fixtures / linux" --output fixtures
+      - name: Verify disposable protocol fixtures against selected source
+        uses: ./.github/actions/fixture-protocol-check
       - name: Collect complete protocol diagnostics
         if: always() && env.RUN_DIR != ''
         run: |
@@ -153,16 +151,6 @@ jobs:
       - name: Remove disposable protocol scratch and profile
         if: always()
         run: |
-          rm -f render/profile.toml
+          rm -rf fixtures
           if [ -n "${RUN_DIR:-}" ]; then rm -rf "$RUN_DIR"; fi
           if [ -n "${ARTIFACT_DIR:-}" ]; then rm -rf "$ARTIFACT_DIR"; fi
-
-  render_cleanup:
-    if: ${{ always() && needs.identity.result == 'success' }}
-    needs: [identity, render_start, proof]
-    uses: ./.github/workflows/render_cleanup.yml
-    secrets: inherit
-    with:
-      torturer_sha: ${{ needs.identity.outputs.torturer_sha }}
-      torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
-      fixture_key: linux

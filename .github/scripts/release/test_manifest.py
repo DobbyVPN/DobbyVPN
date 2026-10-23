@@ -28,8 +28,8 @@ ANDROID_PAIRING_FIELDS = frozenset({
 })
 REQUIRED_CHECKS = frozenset({
     "resolve_build", "ios_analysis", "android_reproducibility", "fdroid_preflight",
-    "migrate_windows", "migrate_macos_arm", "migrate_macos_intel", "render_start",
-    "qualify_linux", "qualify_windows", "qualify_macos", "qualify_android", "render_cleanup",
+    "migrate_windows", "migrate_macos_arm", "migrate_macos_intel", "fixture_hosts",
+    "qualify_linux", "qualify_windows", "qualify_macos", "qualify_android",
     "source_linux", "source_linux_arm", "source_windows", "source_macos",
     "source_android", "ios_simulator",
 })

@@ -1,0 +1,134 @@
+name: Serve disposable functional VPN fixtures
+
+on:
+  workflow_call:
+    inputs:
+      torturer_sha:
+        required: true
+        type: string
+      torturer_tree_sha256:
+        required: true
+        type: string
+      fixture_key:
+        required: true
+        type: string
+      consumer_names:
+        description: JSON array of exact consumer job names in this workflow run.
+        required: true
+        type: string
+      freshness_jobs:
+        description: Exact prerequisite names whose current-attempt execution requires fresh consumers.
+        default: '[]'
+        type: string
+      retention_days:
+        default: 1
+        type: number
+
+jobs:
+  serve:
+    name: Serve fixtures / ${{ inputs.fixture_key }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    environment: release-tests
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Require main before private checkout and fixture exposure
+        env:
+          FIXTURE_KEY: ${{ inputs.fixture_key }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          case "$FIXTURE_KEY" in linux|windows|macos|android) ;; *) exit 1 ;; esac
+          echo "RUN_DEADLINE_EPOCH=$(( $(date +%s) + 3600 ))" >> "$GITHUB_ENV"
+          echo "FIXTURE_ROOT=$RUNNER_TEMP/dobbyvpn-fixtures" >> "$GITHUB_ENV"
+          echo "FIXTURE_TOOLS=$RUNNER_TEMP/dobbyvpn-fixture-tools" >> "$GITHUB_ENV"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check out exact private tests
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Verify source and private tests identity
+        env:
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, ".github/scripts/release")
+          import release_guard
+          product = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tests = subprocess.check_output(["git", "-C", "torturer", "rev-parse", "HEAD"], text=True).strip()
+          tree = release_guard.tests_tree_sha256(Path("torturer"))
+          if product != os.environ["GITHUB_SHA"] or tests != os.environ["TORTURER_SHA"] or tree != os.environ["TORTURER_TREE_SHA256"]:
+              raise SystemExit("fixture source or private test identity differs from selected revision")
+          print(f"Product={product}\nTorturer={tests}\nTorturer tree SHA-256={tree}")
+          PYTHON
+      - name: Prepare immutable server images and checksum-pinned tunnel tools
+        working-directory: torturer
+        run: |
+          python3 - <<'PYTHON'
+          import os, time
+          from pathlib import Path
+          from disposable_vpn_server.prepare import prepare
+          os.environ["DOBBYVPN_COMMAND_DEADLINE_MONOTONIC"] = str(time.monotonic() + int(os.environ["RUN_DEADLINE_EPOCH"]) - time.time())
+          prepare(Path(os.environ["FIXTURE_TOOLS"]))
+          PYTHON
+      - name: Start supervised disposable fixtures and verify public ingress
+        run: |
+          python3 .github/scripts/fixture_jobs.py start --root "$FIXTURE_ROOT" --tools "$FIXTURE_TOOLS" --tests torturer
+      - name: Publish current-attempt readiness while servers remain alive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vpn-fixtures-${{ github.run_id }}-${{ inputs.fixture_key }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ env.FIXTURE_ROOT }}/public/profile.toml
+            ${{ env.FIXTURE_ROOT }}/public/websocket-profile.toml
+            ${{ env.FIXTURE_ROOT }}/public/trusttunnel-profile.toml
+            ${{ env.FIXTURE_ROOT }}/public/deadline_epoch.txt
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+      - name: Keep fixtures alive through every consumer and propagate failures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONSUMER_NAMES: ${{ inputs.consumer_names }}
+          FRESHNESS_JOBS: ${{ inputs.freshness_jobs }}
+        run: |
+          python3 .github/scripts/fixture_jobs.py monitor --root "$FIXTURE_ROOT" --consumers "$CONSUMER_NAMES" --freshness-jobs "$FRESHNESS_JOBS"
+      - name: Stop fixtures after success, failure or cancellation
+        if: always() && env.FIXTURE_ROOT != ''
+        run: |
+          python3 .github/scripts/fixture_jobs.py stop --root "$FIXTURE_ROOT"
+      - name: Forward complete service output
+        if: always() && env.FIXTURE_ROOT != ''
+        run: |
+          set -euo pipefail
+          if [ -f "$FIXTURE_ROOT/logs/service.stdout.log" ]; then cat "$FIXTURE_ROOT/logs/service.stdout.log"; fi
+          if [ -f "$FIXTURE_ROOT/logs/service.stderr.log" ]; then cat "$FIXTURE_ROOT/logs/service.stderr.log" >&2; fi
+      - name: Retain complete fixture diagnostics and tool provenance
+        if: always() && env.FIXTURE_ROOT != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vpn-fixture-diagnostics-${{ inputs.fixture_key }}-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ env.FIXTURE_ROOT }}/public
+            ${{ env.FIXTURE_ROOT }}/logs
+            ${{ env.FIXTURE_TOOLS }}/provenance.json
+            ${{ env.FIXTURE_TOOLS }}/preparation-logs
+            ${{ env.FIXTURE_TOOLS }}/licenses
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: ${{ inputs.retention_days }}
+      - name: Remove disposable fixture keys, binaries and scratch
+        if: always() && env.FIXTURE_ROOT != ''
+        run: |
+          rm -rf "$FIXTURE_ROOT" "$FIXTURE_TOOLS"

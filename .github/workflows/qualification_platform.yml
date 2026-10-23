@@ -38,8 +38,12 @@ on:
         required: false
         type: string
         default: ''
-      render_artifact_name:
-        description: Artifact containing this platform’s Render VPN profile.
+      fixture_artifact_name:
+        description: Artifact containing this platform’s disposable VPN profiles.
+        required: true
+        type: string
+      fixture_host_name:
+        description: Exact reusable fixture producer job name in this run.
         required: true
         type: string
       build_run_id:
@@ -94,6 +98,7 @@ jobs:
             echo "DESKTOP_PACKAGE_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/desktop-package.json"
             echo "INSTALLED_DESCRIPTOR=$RUNNER_TEMP/dobbyvpn-release-run/installed.json"
             echo "ANDROID_SIGNED_DIR=$RUNNER_TEMP/dobbyvpn-android-test-signed"
+            echo "RUN_DEADLINE_EPOCH=$(( $(date +%s) + 45 * 60 ))"
           } >> "$GITHUB_ENV"
           if [ "$PLATFORM" = linux ]; then
             echo "CONTROL_DIR=$RUNNER_TEMP/dobbyvpn-release-control" >> "$GITHUB_ENV"
@@ -143,11 +148,10 @@ jobs:
           gradle: 'true'
           gradle-extra-dependency-files: torturer/source_tests/product/ui/android/app/android-test-wiring.gradle.kts
 
-      - name: Download qualification artifacts
+      - name: Download selected qualification packages
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RENDER_ARTIFACT_NAME: ${{ inputs.render_artifact_name }}
         run: |
           case "$PLATFORM" in
             linux) artifacts=(dobbyVPN-linux.deb) ;;
@@ -166,8 +170,16 @@ jobs:
             python3 .github/scripts/release/download_artifact.py \
               "$SELECTED_BUILD_RUN_ID" "$artifact" release-packages
           done
-          python3 .github/scripts/release/download_artifact.py \
-            "$GITHUB_RUN_ID" "$RENDER_ARTIFACT_NAME" render
+
+      - name: Wait for disposable fixture readiness
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIXTURE_ARTIFACT_NAME: ${{ inputs.fixture_artifact_name }}
+          FIXTURE_HOST_NAME: ${{ inputs.fixture_host_name }}
+        run: |
+          python3 .github/scripts/fixture_jobs.py ready \
+            --key "$PLATFORM" --producer-name "$FIXTURE_HOST_NAME" --output fixtures
 
       - name: Download producer's compiled Android companion
         if: inputs.platform == 'android'
@@ -187,7 +199,9 @@ jobs:
           case "$PLATFORM" in linux|windows|macos|android) ;; *) exit 1 ;; esac
           [[ "$DOBBYVPN_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$DOBBYVPN_COMMIT_SHA"
-          test -s "$GITHUB_WORKSPACE/render/profile.toml"
+          test -s "$GITHUB_WORKSPACE/fixtures/profile.toml"
+          test -s "$GITHUB_WORKSPACE/fixtures/websocket-profile.toml"
+          test -s "$GITHUB_WORKSPACE/fixtures/trusttunnel-profile.toml"
           case "$PLATFORM" in
             linux) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-linux.deb" ;;
             windows) test -f "$GITHUB_WORKSPACE/release-packages/dobbyVPN-windows-amd64.msi" ;;
@@ -205,13 +219,11 @@ jobs:
               ;;
             *) exit 1 ;;
           esac
-          deadline="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/render/deadline_epoch.txt")"
-          [[ "$deadline" =~ ^[0-9]+$ ]]
-          printf 'RUN_DEADLINE_EPOCH=%s\n' "$deadline" >> "$GITHUB_ENV"
+          [[ "$RUN_DEADLINE_EPOCH" =~ ^[0-9]+$ ]]
 
-      - name: Verify Render protocol fixtures against selected source
+      - name: Verify fixture protocols against selected source
         if: inputs.platform == 'linux'
-        uses: ./.github/actions/render-protocol-check
+        uses: ./.github/actions/fixture-protocol-check
 
       - name: Read Android SDK pins
         id: android_java
@@ -1119,7 +1131,7 @@ jobs:
               scenario_args=(--scenario "$DIAGNOSTIC_SCENARIO")
             fi
             env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted \
-              --platform android --suite mini --adb "$ADB" --profile "$GITHUB_WORKSPACE/render/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
+              --platform android --suite mini --adb "$ADB" --profile "$GITHUB_WORKSPACE/fixtures/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
               --app-apk "$ANDROID_SIGNED_APP" --test-companion-apk "$ANDROID_SIGNED_COMPANION" \
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
               --raw-log-dir "$RUN_DIR" "${scenario_args[@]}"
@@ -1129,7 +1141,7 @@ jobs:
               --mode hosted
               --platform "$PLATFORM"
               --installed-descriptor "$INSTALLED_DESCRIPTOR"
-              --profile "$GITHUB_WORKSPACE/render/profile.toml"
+              --profile "$GITHUB_WORKSPACE/fixtures/profile.toml"
               --suite mini
               --platform-version "$PLATFORM_VERSION"
               --lane-timeout-seconds "$lane_timeout"
@@ -1435,10 +1447,13 @@ jobs:
             --source "$RUN_DIR" \
             --output "$ARTIFACT_DIR"
 
-      - name: Remove shared profile from runner
+      - name: Remove disposable profiles from runner
         if: always()
         shell: bash
-        run: rm -f "$GITHUB_WORKSPACE/render/profile.toml"
+        run: |
+          rm -f "$GITHUB_WORKSPACE/fixtures/profile.toml" \
+            "$GITHUB_WORKSPACE/fixtures/websocket-profile.toml" \
+            "$GITHUB_WORKSPACE/fixtures/trusttunnel-profile.toml"
 
       - name: Inventory complete qualification diagnostics
         if: always()

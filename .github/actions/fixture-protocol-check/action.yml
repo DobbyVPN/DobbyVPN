@@ -1,20 +1,21 @@
-name: Check selected Render protocol fixtures
+name: Check selected disposable protocol fixtures
 description: Run the selected private protocol test with the provider deadline and retain both complete output streams in RUN_DIR.
 runs:
   using: composite
   steps:
-    - name: Exercise selected source against the Render profile
+    - name: Exercise selected source against the disposable profile
       shell: bash
       run: |
         set -euo pipefail
-        fixture_stdout="$RUN_DIR/render-protocol-fixtures.stdout.log"
-        fixture_stderr="$RUN_DIR/render-protocol-fixtures.stderr.log"
+        fixture_stdout="$RUN_DIR/protocol-fixtures.stdout.log"
+        fixture_stderr="$RUN_DIR/protocol-fixtures.stderr.log"
         fixture_status=0
         # Root owns both supervision and tests so SO_MARK and timeout cleanup work.
         sudo -n env \
           "DOBBY_PRODUCT_ROOT=$DOBBY_PRODUCT_ROOT" \
           "PYTHONPATH=$DOBBY_TESTS_ROOT" \
-          "DOBBY_RENDER_PROFILE=$GITHUB_WORKSPACE/render/profile.toml" \
+          "DOBBY_WEBSOCKET_FIXTURE_PROFILE=$GITHUB_WORKSPACE/fixtures/websocket-profile.toml" \
+          "DOBBY_TRUSTTUNNEL_PROFILE=$GITHUB_WORKSPACE/fixtures/trusttunnel-profile.toml" \
           "RUN_DEADLINE_EPOCH=$RUN_DEADLINE_EPOCH" \
           GOTOOLCHAIN=local GOWORK=off PYTHONDONTWRITEBYTECODE=1 \
           GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory \
@@ -29,9 +30,9 @@ runs:
         sys.path.insert(0, str(product / ".github/scripts"))
         from bounded_process import COMMAND_DEADLINE_ENV, command_deadline_remaining, run_streamed
 
-        profile = Path(os.environ["DOBBY_RENDER_PROFILE"])
+        profile = Path(os.environ["DOBBY_WEBSOCKET_FIXTURE_PROFILE"])
         if not profile.is_file() or profile.stat().st_size == 0:
-            raise RuntimeError("Render protocol fixtures require the selected nonempty profile")
+            raise RuntimeError("disposable protocol fixtures require the selected nonempty profile")
         # Preserve the functional lane's existing provider deadline and recovery reserve.
         environment = os.environ.copy()
         environment[COMMAND_DEADLINE_ENV] = str(
@@ -40,7 +41,7 @@ runs:
         command = [
             sys.executable, "-m", "source_tests.checks", "go-unit",
             "--product-root", str(product),
-            "--go-test-filter", "^TestRenderProtocolFixtures$",
+            "--go-test-filter", "^(TestWebSocketProtocolFixtures|TestTrustTunnelProtocolFixture)$",
             "--go-package", "./sessionapi",
         ]
         result = run_streamed(
@@ -56,7 +57,9 @@ runs:
         if [ "$fixture_status" -ne 0 ]; then exit "$fixture_status"; fi
         if [ "$stdout_status" -ne 0 ]; then exit "$stdout_status"; fi
         if [ "$stderr_status" -ne 0 ]; then exit "$stderr_status"; fi
-        if ! grep -Eq '^--- PASS: TestRenderProtocolFixtures([[:space:]]|$)' "$fixture_stdout"; then
-          printf 'Selected Render protocol fixture test did not execute and pass\n' | tee -a "$fixture_stderr" >&2
-          exit 1
-        fi
+        for test_name in TestWebSocketProtocolFixtures TestTrustTunnelProtocolFixture; do
+          if ! grep -Eq "^--- PASS: ${test_name}([[:space:]]|$)" "$fixture_stdout"; then
+            printf 'Selected protocol fixture test %s did not execute and pass\n' "$test_name" | tee -a "$fixture_stderr" >&2
+            exit 1
+          fi
+        done

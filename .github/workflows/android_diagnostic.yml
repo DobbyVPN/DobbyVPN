@@ -97,18 +97,20 @@ jobs:
       torturer_sha: ${{ inputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
 
-  fixture:
-    needs: identity
-    uses: ./.github/workflows/render_start.yml
+  fixture_host:
+    needs: [identity, companion]
+    uses: ./.github/workflows/fixture_host.yml
     secrets: inherit
     with:
       torturer_sha: ${{ inputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
       fixture_key: android
+      freshness_jobs: '["companion / Compile reusable Android test companion"]'
+      consumer_names: '["android / Hosted mini / android / default"]'
       retention_days: 1
 
   android:
-    needs: [identity, companion, fixture]
+    needs: [identity, companion]
     uses: ./.github/workflows/qualification_platform.yml
     secrets: inherit
     with:
@@ -121,15 +123,6 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
       torturer_sha: ${{ inputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}-android
+      fixture_artifact_name: vpn-fixtures-${{ github.run_id }}-android-attempt-${{ github.run_attempt }}
+      fixture_host_name: fixture_host / Serve fixtures / android
       retention_days: 1
-
-  cleanup:
-    if: ${{ always() && needs.identity.result == 'success' }}
-    needs: [identity, fixture, android]
-    uses: ./.github/workflows/render_cleanup.yml
-    secrets: inherit
-    with:
-      torturer_sha: ${{ inputs.torturer_sha }}
-      torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
-      fixture_key: android

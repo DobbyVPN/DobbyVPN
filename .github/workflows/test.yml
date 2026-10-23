@@ -398,10 +398,10 @@ jobs:
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
       build_run_id: ${{ inputs.build_run_id }}
 
-  render_start_linux:
+  fixture_host_linux:
     if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_linux.result == 'success' }}
     needs: [resolve_build, ready_linux]
-    uses: ./.github/workflows/render_start.yml
+    uses: ./.github/workflows/fixture_host.yml
     permissions:
       contents: read
       actions: read
@@ -410,12 +410,14 @@ jobs:
       torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       fixture_key: linux
+      freshness_jobs: '["ready_linux"]'
+      consumer_names: '["qualify_linux / Hosted mini / linux / default"]'
       retention_days: 7
 
-  render_start_windows:
+  fixture_host_windows:
     if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_windows.result == 'success' }}
     needs: [resolve_build, ready_windows]
-    uses: ./.github/workflows/render_start.yml
+    uses: ./.github/workflows/fixture_host.yml
     permissions:
       contents: read
       actions: read
@@ -424,12 +426,14 @@ jobs:
       torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       fixture_key: windows
+      freshness_jobs: '["ready_windows"]'
+      consumer_names: '["qualify_windows / Hosted mini / windows / default"]'
       retention_days: 7
 
-  render_start_macos:
+  fixture_host_macos:
     if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_macos.result == 'success' }}
     needs: [resolve_build, ready_macos]
-    uses: ./.github/workflows/render_start.yml
+    uses: ./.github/workflows/fixture_host.yml
     permissions:
       contents: read
       actions: read
@@ -438,12 +442,14 @@ jobs:
       torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       fixture_key: macos
+      freshness_jobs: '["ready_macos"]'
+      consumer_names: '["qualify_macos (arm64) / Hosted mini / macos / arm64","qualify_macos (amd64) / Hosted mini / macos / amd64"]'
       retention_days: 7
 
-  render_start_android:
-    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_android.result == 'success' }}
-    needs: [resolve_build, ready_android]
-    uses: ./.github/workflows/render_start.yml
+  fixture_host_android:
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_android.result == 'success' && needs.android_test_inputs.result == 'success' }}
+    needs: [resolve_build, ready_android, android_test_inputs]
+    uses: ./.github/workflows/fixture_host.yml
     permissions:
       contents: read
       actions: read
@@ -452,20 +458,22 @@ jobs:
       torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       fixture_key: android
+      freshness_jobs: '["ready_android", "android_test_inputs / Compile reusable Android test companion"]'
+      consumer_names: '["qualify_android / Hosted mini / android / default"]'
       retention_days: 7
 
-  render_start:
-    name: Aggregate Render fixture startup
+  fixture_hosts:
+    name: Require all fixture hosts and cleanup
     if: ${{ always() && needs.resolve_build.result == 'success' }}
-    needs: [resolve_build, render_start_linux, render_start_windows, render_start_macos, render_start_android]
+    needs: [resolve_build, fixture_host_linux, fixture_host_windows, fixture_host_macos, fixture_host_android]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every platform fixture
         env:
-          LINUX: ${{ needs.render_start_linux.result }}
-          WINDOWS: ${{ needs.render_start_windows.result }}
-          MACOS: ${{ needs.render_start_macos.result }}
-          ANDROID: ${{ needs.render_start_android.result }}
+          LINUX: ${{ needs.fixture_host_linux.result }}
+          WINDOWS: ${{ needs.fixture_host_windows.result }}
+          MACOS: ${{ needs.fixture_host_macos.result }}
+          ANDROID: ${{ needs.fixture_host_android.result }}
         run: |
           test "$LINUX" = success
           test "$WINDOWS" = success
@@ -473,8 +481,8 @@ jobs:
           test "$ANDROID" = success
 
   qualify_linux:
-    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_linux.result == 'success' && needs.render_start_linux.result == 'success' }}
-    needs: [resolve_build, ready_linux, render_start_linux]
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_linux.result == 'success' }}
+    needs: [resolve_build, ready_linux]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
       contents: read
@@ -488,11 +496,12 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
       retention_days: 7
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}-linux
+      fixture_artifact_name: vpn-fixtures-${{ github.run_id }}-linux-attempt-${{ github.run_attempt }}
+      fixture_host_name: fixture_host_linux / Serve fixtures / linux
 
   qualify_windows:
-    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_windows.result == 'success' && needs.render_start_windows.result == 'success' }}
-    needs: [resolve_build, ready_windows, render_start_windows]
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_windows.result == 'success' }}
+    needs: [resolve_build, ready_windows]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
       contents: read
@@ -506,11 +515,12 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
       retention_days: 7
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}-windows
+      fixture_artifact_name: vpn-fixtures-${{ github.run_id }}-windows-attempt-${{ github.run_attempt }}
+      fixture_host_name: fixture_host_windows / Serve fixtures / windows
 
   qualify_macos:
-    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_macos.result == 'success' && needs.render_start_macos.result == 'success' }}
-    needs: [resolve_build, ready_macos, render_start_macos]
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_macos.result == 'success' }}
+    needs: [resolve_build, ready_macos]
     strategy:
       fail-fast: false
       matrix:
@@ -529,7 +539,8 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
       retention_days: 7
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}-macos
+      fixture_artifact_name: vpn-fixtures-${{ github.run_id }}-macos-attempt-${{ github.run_attempt }}
+      fixture_host_name: fixture_host_macos / Serve fixtures / macos
 
   android_test_inputs:
     needs: [resolve_build, ready_android]
@@ -546,8 +557,8 @@ jobs:
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
 
   qualify_android:
-    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_android.result == 'success' && needs.render_start_android.result == 'success' && needs.android_test_inputs.result == 'success' }}
-    needs: [resolve_build, ready_android, render_start_android, android_test_inputs]
+    if: ${{ always() && !cancelled() && needs.resolve_build.result == 'success' && needs.ready_android.result == 'success' && needs.android_test_inputs.result == 'success' }}
+    needs: [resolve_build, ready_android, android_test_inputs]
     uses: ./.github/workflows/qualification_platform.yml
     permissions:
       contents: read
@@ -563,78 +574,13 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
       retention_days: 7
-      render_artifact_name: render-vpn-${{ github.run_id }}-${{ github.run_attempt }}-android
-
-  render_cleanup_linux:
-    if: ${{ always() && needs.resolve_build.result == 'success' }}
-    needs: [resolve_build, render_start_linux, qualify_linux]
-    uses: ./.github/workflows/render_cleanup.yml
-    permissions:
-      contents: read
-    secrets: inherit
-    with:
-      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
-      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
-      fixture_key: linux
-
-  render_cleanup_windows:
-    if: ${{ always() && needs.resolve_build.result == 'success' }}
-    needs: [resolve_build, render_start_windows, qualify_windows]
-    uses: ./.github/workflows/render_cleanup.yml
-    permissions:
-      contents: read
-    secrets: inherit
-    with:
-      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
-      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
-      fixture_key: windows
-
-  render_cleanup_macos:
-    if: ${{ always() && needs.resolve_build.result == 'success' }}
-    needs: [resolve_build, render_start_macos, qualify_macos]
-    uses: ./.github/workflows/render_cleanup.yml
-    permissions:
-      contents: read
-    secrets: inherit
-    with:
-      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
-      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
-      fixture_key: macos
-
-  render_cleanup_android:
-    if: ${{ always() && needs.resolve_build.result == 'success' }}
-    needs: [resolve_build, render_start_android, qualify_android]
-    uses: ./.github/workflows/render_cleanup.yml
-    permissions:
-      contents: read
-    secrets: inherit
-    with:
-      torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
-      torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
-      fixture_key: android
-
-  render_cleanup:
-    name: Aggregate Render fixture cleanup
-    if: ${{ always() && needs.resolve_build.result == 'success' }}
-    needs: [resolve_build, render_cleanup_linux, render_cleanup_windows, render_cleanup_macos, render_cleanup_android]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Require every platform cleanup
-        env:
-          LINUX: ${{ needs.render_cleanup_linux.result }}
-          WINDOWS: ${{ needs.render_cleanup_windows.result }}
-          MACOS: ${{ needs.render_cleanup_macos.result }}
-          ANDROID: ${{ needs.render_cleanup_android.result }}
-        run: |
-          test "$LINUX" = success
-          test "$WINDOWS" = success
-          test "$MACOS" = success
-          test "$ANDROID" = success
+      fixture_artifact_name: vpn-fixtures-${{ github.run_id }}-android-attempt-${{ github.run_attempt }}
+      fixture_host_name: fixture_host_android / Serve fixtures / android
 
   qualification_result:
     name: Record final verification and release stop
     if: ${{ always() }}
-    needs: [resolve_build, final_build, ready_linux, ready_windows, ready_macos, ready_android, ready_ios, source_linux, source_linux_arm, source_windows, source_macos, source_android, ios_simulator, render_start, qualify_linux, qualify_windows, qualify_macos, qualify_android, render_cleanup, ios_analysis, android_reproducibility, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight]
+    needs: [resolve_build, final_build, ready_linux, ready_windows, ready_macos, ready_android, ready_ios, source_linux, source_linux_arm, source_windows, source_macos, source_android, ios_simulator, fixture_hosts, qualify_linux, qualify_windows, qualify_macos, qualify_android, ios_analysis, android_reproducibility, migrate_windows, migrate_macos_arm, migrate_macos_intel, fdroid_preflight]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
