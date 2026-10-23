@@ -2,6 +2,9 @@ name: Serve disposable functional VPN fixtures
 
 on:
   workflow_call:
+    secrets:
+      TORTURER_READ_KEY:
+        required: false
     inputs:
       torturer_sha:
         required: true

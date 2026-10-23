@@ -11,9 +11,11 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "release"))
 from bounded_process import run_streamed
+from dependency_fetch import MAX_ATTEMPTS, RETRY_DELAYS, retryable_transport_failure
 
 
 def remaining() -> float:
@@ -37,26 +39,39 @@ def identity() -> tuple[str, int, int]:
 
 
 def api(endpoint: str, field: str) -> list[dict]:
+    # This helper only issues metadata GETs. Never apply transport retries to
+    # workflow dispatch, cancellation, publication or other mutations.
     command = ["gh", "api", "--method", "GET", "--paginate", "--slurp", endpoint]
-    try:
-        result = subprocess.run(command, check=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, timeout=remaining())
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        for stream, data in ((sys.stdout, error.stdout), (sys.stderr, error.stderr)):
-            if data:
-                stream.buffer.write(data)
-                stream.buffer.flush()
-        raise
-    # Preserve complete provider output, including scheduling diagnostics.
-    sys.stdout.buffer.write(result.stdout)
-    sys.stdout.buffer.flush()
-    sys.stderr.buffer.write(result.stderr)
-    sys.stderr.buffer.flush()
-    pages = json.loads(result.stdout)
-    if not isinstance(pages, list) or any(not isinstance(page, dict)
-            or not isinstance(page.get(field), list) for page in pages):
-        raise ValueError(f"invalid GitHub {field} response")
-    return [item for page in pages for item in page[field]]
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            result = subprocess.run(command, check=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=min(60, remaining()))
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            for stream, data in ((sys.stdout, error.stdout), (sys.stderr, error.stderr)):
+                if data:
+                    stream.buffer.write(data)
+                    stream.buffer.flush()
+            traceback.print_exception(error, file=sys.stderr)
+            retryable = (isinstance(error, subprocess.TimeoutExpired)
+                         or retryable_transport_failure(error.stdout, error.stderr, error=error))
+            if attempt == MAX_ATTEMPTS or not retryable:
+                raise
+            delay = min(RETRY_DELAYS[attempt - 1], remaining())
+            print(f"[fixture-metadata] transport failure; retrying attempt {attempt + 1}/{MAX_ATTEMPTS} "
+                  f"after {delay:g}s", file=sys.stderr, flush=True)
+            time.sleep(delay)
+            continue
+        # Preserve complete provider output, including scheduling diagnostics.
+        sys.stdout.buffer.write(result.stdout)
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.write(result.stderr)
+        sys.stderr.buffer.flush()
+        pages = json.loads(result.stdout)
+        if not isinstance(pages, list) or any(not isinstance(page, dict)
+                or not isinstance(page.get(field), list) for page in pages):
+            raise ValueError(f"invalid GitHub {field} response")
+        return [item for page in pages for item in page[field]]
+    raise AssertionError("fixture metadata retry loop exhausted unexpectedly")
 
 
 def latest_jobs(jobs: list[dict], attempt: int) -> dict[str, dict]:
@@ -108,11 +123,14 @@ def ready(key: str, producer: str, output: Path) -> None:
         job = jobs_snapshot().get(producer)
         if job is not None and job["run_attempt"] == attempt and job["status"] == "completed":
             raise RuntimeError(f"fixture producer stopped before consumption: {job}")
+        if job is None or job["run_attempt"] != attempt or job["status"] != "in_progress":
+            pause(30)
+            continue
         artifacts = api(f"repos/{repo}/actions/runs/{run}/artifacts?per_page=100", "artifacts")
         matches = [item for item in artifacts if item.get("name") == expected and item.get("expired") is False]
         if len(matches) > 1:
             raise ValueError("duplicate fixture readiness artifacts")
-        if matches and job is not None and job["run_attempt"] == attempt and job["status"] == "in_progress":
+        if matches:
             result = run_streamed(
                 [sys.executable, str(Path(__file__).parent / "release" / "download_artifact.py"),
                  str(run), expected, str(output)], timeout_seconds=remaining())
@@ -131,7 +149,7 @@ def ready(key: str, producer: str, output: Path) -> None:
             with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
                 stream.write(f"RUN_DEADLINE_EPOCH={deadline}\n")
             return
-        pause()
+        pause(30)
 
 
 def start(root: Path, tools: Path, tests: Path) -> None:

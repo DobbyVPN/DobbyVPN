@@ -67,7 +67,8 @@ jobs:
   fixture_host:
     needs: identity
     uses: ./.github/workflows/fixture_host.yml
-    secrets: inherit
+    secrets:
+      TORTURER_READ_KEY: ${{ secrets.TORTURER_READ_KEY }}
     with:
       torturer_sha: ${{ needs.identity.outputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.identity.outputs.torturer_tree_sha256 }}
