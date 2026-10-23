@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
@@ -102,6 +103,7 @@ internal fun DobbyApp(controller: SessionController) {
     MaterialTheme(colorScheme = lightColorScheme(primary = Ink, background = Paper)) {
         BoxWithConstraints(
             Modifier.fillMaxSize()
+                .imePadding()
                 // Takes focus when the field gives it up, so the keyboard does not come back.
                 .focusable()
                 // A tap outside the subscription field hides the keyboard; buttons and the field handle their own taps.
@@ -358,7 +360,11 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
             )
             menuAt?.let { position ->
                 Box(Modifier.offset { position }) {
-                    DropdownMenu(expanded = true, onDismissRequest = { menuAt = null }) {
+                    DropdownMenu(
+                        expanded = true,
+                        onDismissRequest = { menuAt = null },
+                        modifier = Modifier.semantics { testTagsAsResourceId = true },
+                    ) {
                         DropdownMenuItem(
                             text = { Text("Send logs", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
                             onClick = { menuAt = null; controller.exportLogs() },
