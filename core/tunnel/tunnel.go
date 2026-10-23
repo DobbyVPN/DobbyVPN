@@ -252,6 +252,8 @@ func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, rou
 		return nil, err
 	}
 	defer p.flows.endDial()
+	ctx, finish := p.flows.pendingTCPContext(ctx)
+	defer finish()
 	active := p.activeTCP.Add(1)
 	release := func() int64 { return p.activeTCP.Add(-1) }
 	updatePeakInt64(&p.peakTCP, active)
@@ -387,6 +389,11 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 		direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: dnsCache},
 		bypass: bypass,
 	}
+	cancellableVPN, err := newSocksTCPProxy(vpnOutbound, cfg.ProxyAddr, &wrapper.flows)
+	if err != nil {
+		return handle, true, err
+	}
+	wrapper.vpn = cancellableVPN
 	handle.proxy = wrapper
 	t.SetDialer(wrapper)
 

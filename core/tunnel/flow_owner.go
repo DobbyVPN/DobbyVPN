@@ -20,6 +20,8 @@ type flowOwner struct {
 	connections map[io.Closer]error
 	pending     int
 	settled     chan struct{}
+	tcpContext  context.Context
+	cancelTCP   context.CancelFunc
 }
 
 func (o *flowOwner) beginDial() error {
@@ -33,6 +35,33 @@ func (o *flowOwner) beginDial() error {
 	}
 	o.pending++
 	return nil
+}
+
+// pendingTCPContext links a caller's dial to the engine generation. The raw
+// local SOCKS connection uses this context through its complete handshake.
+func (o *flowOwner) pendingTCPContext(parent context.Context) (context.Context, func()) {
+	o.mu.Lock()
+	if o.tcpContext == nil {
+		o.tcpContext, o.cancelTCP = context.WithCancel(context.Background())
+	}
+	generation, cancelGeneration, closed := o.tcpContext, o.cancelTCP, o.closed
+	o.mu.Unlock()
+	// Stop may seal the owner between beginDial and context registration.
+	if closed {
+		cancelGeneration()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	stop := context.AfterFunc(generation, func() {
+		cancel()
+		close(done)
+	})
+	return ctx, func() {
+		if !stop() {
+			<-done
+		}
+		cancel()
+	}
 }
 
 func (o *flowOwner) endDial() {
@@ -90,8 +119,11 @@ func (o *flowOwner) sealAndClose() {
 	for conn := range o.connections {
 		connections = append(connections, conn)
 	}
-	pending := o.pending
+	pending, cancelTCP := o.pending, o.cancelTCP
 	o.mu.Unlock()
+	if cancelTCP != nil {
+		cancelTCP()
+	}
 	log.Debugf(Category, "[Router] closing route flows completed=%d pendingDials=%d", len(connections), pending)
 	for _, conn := range connections {
 		// Each tracked handle records its latest error and unregisters only
