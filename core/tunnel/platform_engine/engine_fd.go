@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strconv"
 
+	"core/log"
+
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 )
@@ -21,5 +23,17 @@ func startPlatformEngine(cfg EngineConfig) (bool, error) {
 	})
 }
 
-func stopPlatformEngine(_ context.Context, stopDevice func()) error { stopDevice(); return nil }
-func platformInterfaceName() string                                 { return "" }
+func stopPlatformEngine(_ context.Context, stopDevice func()) error {
+	// Linux's fd endpoint borrows the descriptor. Stop its packet writers and
+	// interruptible readers before device.Close releases that descriptor for
+	// reuse. iOS's io endpoint instead needs device.Close to unblock its reader.
+	if (runtime.GOOS == "linux" || runtime.GOOS == "android") && ownedStack != nil {
+		ownedStack.Close()
+		ownedStack.Wait()
+		ownedStack = nil
+		log.Debugf(Category, "[Engine][FD] stack_drained=true device_release=starting")
+	}
+	stopDevice()
+	return nil
+}
+func platformInterfaceName() string { return "" }
