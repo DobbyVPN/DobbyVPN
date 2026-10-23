@@ -531,14 +531,14 @@ private struct SockIcon: View {
     }()
 
     private static let rays: Path = {
-        let rays: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
-            (5.6, 39.6, -1.5, -0.7), (6.4, 43.8, -1.2, 1.1), (9.8, 45.5, -0.3, 1.6), (13.6, 44.6, 1, 1.3),
-            (15.6, 41.2, 1.6, 0.2), (14, 37.6, 1.1, -1.3), (10.2, 36.6, -0.2, -1.6), (7, 37.2, -1, -1.2),
+        let rays: [[CGFloat]] = [
+            [5.6, 39.6, -1.5, -0.7], [6.4, 43.8, -1.2, 1.1], [9.8, 45.5, -0.3, 1.6], [13.6, 44.6, 1, 1.3],
+            [15.6, 41.2, 1.6, 0.2], [14, 37.6, 1.1, -1.3], [10.2, 36.6, -0.2, -1.6], [7, 37.2, -1, -1.2],
         ]
         var path = Path()
-        for (x, y, dx, dy) in rays {
-            path.move(to: CGPoint(x: x, y: y))
-            path.addLine(to: CGPoint(x: x + dx, y: y + dy))
+        for ray in rays {
+            path.move(to: CGPoint(x: ray[0], y: ray[1]))
+            path.addLine(to: CGPoint(x: ray[0] + ray[2], y: ray[1] + ray[3]))
         }
         return path
     }()
