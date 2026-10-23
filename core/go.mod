@@ -2,7 +2,7 @@ module core
 
 go 1.26.10
 
-replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260927100020-f9950989d6b4
+replace trusttunnel-go => github.com/DobbyVPN/go-go-tunnel v1.0.2
 
 require (
 	github.com/BurntSushi/toml v1.6.0

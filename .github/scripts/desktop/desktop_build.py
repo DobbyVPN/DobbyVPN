@@ -72,18 +72,18 @@ class BridgeRelease:
 
 BRIDGE_RELEASES = {
     "windows": BridgeRelease(
-        version="1.0.1",
+        version="1.0.2",
         asset_name="dobby_bridge-windows-x86_64.zip",
-        archive_sha256="a7e64db0568547d395bc45e33787f22c7303dca6f5c575c84439e73a70124331",
+        archive_sha256="c79f08183ba6fbf8d902990ea10fef0666b40fff5217dc8912279b74ad09508d",
         member_name="dobby_bridge.dll",
-        member_sha256="10e2f921aaa949060bed936e3c361b0967b2ad8b7a71dd983d36abd94c903063",
+        member_sha256="b7158369a81b8c4ac35a54bd9c10cb018e1d22e215afdb43cf76a69bf96ec437",
     ),
     "linux": BridgeRelease(
-        version="1.0.1",
+        version="1.0.2",
         asset_name="libdobby_bridge-linux-x86_64.zip",
-        archive_sha256="67536090d74212a5635739d297f5a78fbabda1966d161b12a16bfe487a8c68b9",
+        archive_sha256="5db37496484fc53df80905fb0983691e4eb953e2687a61ba298f1dcec01fd3eb",
         member_name="libdobby_bridge.so",
-        member_sha256="2fff96d2631df43168196e222bc2205157d23a2449475364c5b135fbf0aaa0ce",
+        member_sha256="014b44f7055a727b6521e94e982a6d927f100b08982fe1e953587f45b469d418",
     ),
 }
 

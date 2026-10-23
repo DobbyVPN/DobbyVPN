@@ -1,7 +1,7 @@
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260927100020-f9950989d6b4 h1:9Nn0N0a9aVNQDAe7TN86z984jshDmpdFL1RAhXhtfuI=
-github.com/DobbyVPN/go-go-tunnel v1.0.2-0.20260927100020-f9950989d6b4/go.mod h1:wHOz/rb9oaA2ykOQ3OuMvUkrZJBQu8C/ck+eVlL6RB4=
+github.com/DobbyVPN/go-go-tunnel v1.0.2 h1:GgOkIiR8+iTEk+yO+gge3BM92e3CMbX1natuZ+txqSA=
+github.com/DobbyVPN/go-go-tunnel v1.0.2/go.mod h1:wHOz/rb9oaA2ykOQ3OuMvUkrZJBQu8C/ck+eVlL6RB4=
 github.com/DobbyVPN/outline-sdk-fork v0.0.24-0.20261022143006-bace007bdf6f h1:BKvRK11yifHCYvsL7AAWSmKS4jW8YvK0VDvb+P8/ZG8=
 github.com/DobbyVPN/outline-sdk-fork v0.0.24-0.20261022143006-bace007bdf6f/go.mod h1:Ig39Th+hP+5ZADLi+ZAZjHcBtKohljJsBU/pQ6DH1nQ=
 github.com/DobbyVPN/outline-sdk-fork/x v0.2.1-0.20261022164150-eea55cf572f7 h1:CF2Kwal+siTXBz7aLGdIe/lLVfUZBtut/pZPC/6xbnw=
