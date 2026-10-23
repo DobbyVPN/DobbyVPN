@@ -44,14 +44,13 @@ public sealed partial class MainWindow : Window
     private long _acceptedSequence;
     private string _trayKey = "";
     private string _status = "";
-    private string _error = "";
+    private readonly WindowErrorState _errors = new();
     private string _importError = "";
     private string _logsError = "";
     private string _exportError = "";
     private string _clearLogsError = "";
     private readonly HashSet<string> _dismissedErrors = [];
     private string _lastSourceError = "";
-    private bool _snapshotFailing;
     private bool _canPaste;
     private double _rowHeight;
     private string _loadError = "";
@@ -370,15 +369,10 @@ public sealed partial class MainWindow : Window
             await LoadNextAsync(cancellationToken);
             if (_lifetime.IsClosing) return;
             // Report a backend error once, so Close keeps the popup closed between polls.
-            if (_snapshotFailing)
-            {
-                _error = "";
-                _lastSourceError = "";
-            }
+            if (_errors.RecoverSnapshot()) _lastSourceError = "";
             if (result.SourceError != _lastSourceError && result.SourceError.Length > 0) SetError(result.SourceError, result.SourceError, "source.failure");
             else if (result.SourceError.Length == 0) _diagnostics.Record("", "source.failure");
             _lastSourceError = result.SourceError;
-            _snapshotFailing = false;
             Render();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -389,8 +383,8 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing)
         {
             _snapshot = null;
-            if (!_snapshotFailing) SetError(error.ToString(), "VPN service is unavailable. See logs for details.");
-            _snapshotFailing = true;
+            if (_errors.FailSnapshot("VPN service is unavailable. See logs for details."))
+                RecordError(error.ToString());
             Render();
         }
         finally
@@ -449,7 +443,7 @@ public sealed partial class MainWindow : Window
     {
         get
         {
-            if (_error.Length > 0 || _snapshotFailing) return "Error";
+            if (_errors.Operation.Length > 0 || _errors.SnapshotFailed) return "Error";
             if (_snapshot is not { } s) return "Disconnected";
             if (s.Recovering) return "Reconnecting";
             return s.State switch
@@ -615,16 +609,21 @@ public sealed partial class MainWindow : Window
     {
         var detailText = string.Join(" · ", details.Where(value => !string.IsNullOrEmpty(value)));
         var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        labels.Children.Add(new TextBlock
+        var description = new TextBlock
         {
             Text = name, FontSize = 14.45, FontWeight = FontWeights.Medium, Foreground = Palette("Ink"),
             TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis
-        });
-        labels.Children.Add(new TextBlock
+        };
+        var protocol = new TextBlock
         {
             Text = detailText, FontSize = 11.05, FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal,
             Foreground = Palette(on ? "Ink" : "Muted"), TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis
-        });
+        };
+        var labelPrefix = id.EndsWith(".action", StringComparison.Ordinal) ? id[..^7] : id;
+        AutomationProperties.SetAutomationId(description, labelPrefix + ".description");
+        AutomationProperties.SetAutomationId(protocol, labelPrefix + ".protocol");
+        labels.Children.Add(description);
+        labels.Children.Add(protocol);
         var actionText = new TextBlock
         {
             Text = action, FontSize = 12.75, FontWeight = FontWeights.SemiBold, Foreground = Palette("Ink"),
@@ -672,7 +671,7 @@ public sealed partial class MainWindow : Window
         get
         {
             var failure = _snapshot?.LastFailure is { } value ? $"{value.Message} ({value.Code})" : "";
-            return new[] { _importError, _loadError, _error, failure, _logsError, _clearLogsError, _exportError }
+            return new[] { _importError, _loadError, _errors.Operation, _errors.Snapshot, failure, _logsError, _clearLogsError, _exportError }
                 .Where(text => text.Length > 0).Distinct().ToList();
         }
     }
@@ -714,7 +713,7 @@ public sealed partial class MainWindow : Window
         if (detail.Length == 0) return;
         if (detail == _importError)
         {
-            if (_error == _importError) _error = "";
+            if (_errors.Operation == _importError) _errors.Operation = "";
             _importError = "";
         }
         else if (detail == _exportError) _exportError = "";
@@ -754,7 +753,7 @@ public sealed partial class MainWindow : Window
         {
             if (_stopInFlight || current.PrimaryAction != "STOP") return;
             _stopInFlight = true;
-            _error = "";
+            _errors.Operation = "";
             Render();
             try
             {
@@ -775,7 +774,7 @@ public sealed partial class MainWindow : Window
         }
         if (_busy || !CanAct(index)) return;
         _busy = true;
-        _error = "";
+        _errors.Operation = "";
         Render();
         try
         {
@@ -810,7 +809,7 @@ public sealed partial class MainWindow : Window
         var valid = ValidSubscription(source);
         var revision = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
         _loadError = "";
-        _error = "";
+        _errors.Operation = "";
         _importError = "";
         _debounce?.Cancel();
         _debounce?.Dispose();
@@ -893,7 +892,7 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             SetError(error.ToString(), "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL");
-            _importError = _error;
+            _importError = _errors.Operation;
             Render();
         }
     }
@@ -1023,7 +1022,7 @@ public sealed partial class MainWindow : Window
     {
         if (_lifetime.IsClosing) return;
         _diagnostics.Record(details, category);
-        _error = message;
+        _errors.Operation = message;
     }
 
     private void LogsText_Loaded(object sender, RoutedEventArgs e)

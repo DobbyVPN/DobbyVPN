@@ -85,6 +85,7 @@ public struct DobbyRootView: View {
             .frame(maxWidth: 480)
             .frame(maxWidth: .infinity)
         }
+        .disabled(showingError)
         .background(Color.paper.ignoresSafeArea().onTapGesture { sourceFocused = false })
         .ignoresSafeArea(.keyboard)
         .overlay { errorPopup }
@@ -96,6 +97,7 @@ public struct DobbyRootView: View {
         .onAppear { model.setLogsVisible(true); refreshClipboard() }
         .onDisappear { model.setLogsVisible(false) }
         .onChange(of: model.status) { announceStatus($0) }
+        .onChange(of: showingError) { if $0 { sourceFocused = false } }
         .onChange(of: scenePhase) { phase in model.setLogsVisible(phase == .active); refreshClipboard() }
 #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
