@@ -41,6 +41,7 @@ type Engine struct {
 	stopped   bool
 	stopErr   error
 	ifaceName string
+	proxy     *DobbyProxy
 
 	// stopPlatform exists so ownership bookkeeping can be tested without a
 	// real TUN device. Production handles use platform_engine.EngineStop.
@@ -53,6 +54,7 @@ type DobbyProxy struct {
 	vpn    proxy.Proxy
 	direct proxy.Proxy
 	bypass *BypassPolicy
+	flows  flowOwner
 
 	activeTCP atomic.Int64
 	activeUDP atomic.Int64
@@ -66,40 +68,79 @@ type DobbyProxy struct {
 
 type trackedConn struct {
 	net.Conn
-	route   string
-	dest    string
-	started time.Time
-	release func() int64
-	once    sync.Once
+	route    string
+	dest     string
+	started  time.Time
+	release  func() int64
+	mu       sync.Mutex
+	closed   bool
+	owner    *flowOwner
+	closeErr error
 }
 
 func (c *trackedConn) Close() error {
-	var err error
-	c.once.Do(func() {
-		active := c.release()
-		log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d", c.route, c.dest, time.Since(c.started), active)
-		err = c.Conn.Close()
-	})
-	return err
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closeErr = c.Conn.Close()
+	if c.closeErr != nil && !errors.Is(c.closeErr, net.ErrClosed) {
+		if c.owner != nil {
+			c.owner.release(c, c.closeErr)
+		}
+		log.Errorf(Category, "[Router] TCP close failed route=%s dest=%s lifetime=%s err=%v", c.route, c.dest, time.Since(c.started), c.closeErr)
+		return c.closeErr
+	}
+	c.closed, c.closeErr = true, nil
+	active := c.release()
+	if c.owner != nil {
+		c.owner.release(c, nil)
+	}
+	log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d", c.route, c.dest, time.Since(c.started), active)
+	return nil
+}
+
+func (c *trackedConn) CloseRead() error {
+	if conn, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return conn.CloseRead()
+	}
+	return errors.ErrUnsupported
+}
+
+func (c *trackedConn) CloseWrite() error {
+	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return conn.CloseWrite()
+	}
+	return errors.ErrUnsupported
 }
 
 type trackedPacketConn struct {
 	net.PacketConn
-	route   string
-	dest    string
-	started time.Time
-	release func() int64
-	once    sync.Once
+	route    string
+	dest     string
+	started  time.Time
+	release  func() int64
+	mu       sync.Mutex
+	closed   bool
+	closeErr error
 }
 
 func (c *trackedPacketConn) Close() error {
-	var err error
-	c.once.Do(func() {
-		active := c.release()
-		log.Debugf(Category, "[Router] UDP closed route=%s dest=%s lifetime=%s activeUDP=%d", c.route, c.dest, time.Since(c.started), active)
-		err = c.PacketConn.Close()
-	})
-	return err
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closeErr = c.PacketConn.Close()
+	if c.closeErr != nil && !errors.Is(c.closeErr, net.ErrClosed) {
+		log.Errorf(Category, "[Router] UDP close failed route=%s dest=%s lifetime=%s err=%v", c.route, c.dest, time.Since(c.started), c.closeErr)
+		return c.closeErr
+	}
+	c.closed, c.closeErr = true, nil
+	active := c.release()
+	log.Debugf(Category, "[Router] UDP closed route=%s dest=%s lifetime=%s activeUDP=%d", c.route, c.dest, time.Since(c.started), active)
+	return nil
 }
 
 type idlePacketConn struct {
@@ -112,15 +153,18 @@ type idlePacketConn struct {
 	mu            sync.Mutex
 	lastTouch     time.Time
 	closed        bool
+	closeErr      error
+	owner         *flowOwner
 }
 
-func newIdlePacketConn(conn net.PacketConn, timeout time.Duration, route, dest string, onIdleTimeout func() uint64) *idlePacketConn {
+func newIdlePacketConn(conn net.PacketConn, timeout time.Duration, route, dest string, onIdleTimeout func() uint64, owner *flowOwner) *idlePacketConn {
 	c := &idlePacketConn{
 		PacketConn:    conn,
 		timeout:       timeout,
 		route:         route,
 		dest:          dest,
 		onIdleTimeout: onIdleTimeout,
+		owner:         owner,
 	}
 	c.timer = time.AfterFunc(timeout, c.closeAfterIdleTimeout)
 	return c
@@ -144,31 +188,36 @@ func (c *idlePacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 
 func (c *idlePacketConn) Close() error {
 	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
+	defer c.mu.Unlock()
+	if c.closed && c.closeErr == nil {
 		return nil
 	}
 	c.closed = true
 	c.timer.Stop()
-	c.mu.Unlock()
-	return c.PacketConn.Close()
+	c.closeErr = c.PacketConn.Close()
+	if c.owner != nil {
+		c.owner.release(c, c.closeErr)
+	}
+	return c.closeErr
 }
 
 func (c *idlePacketConn) closeAfterIdleTimeout() {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closed {
-		c.mu.Unlock()
 		return
 	}
 	c.closed = true
-	c.mu.Unlock()
 
 	var count uint64
 	if c.onIdleTimeout != nil {
 		count = c.onIdleTimeout()
 	}
 	log.Debugf(Category, "[Router] UDP idle timeout route=%s dest=%s timeout=%s count=%d", c.route, c.dest, c.timeout, count)
-	_ = c.PacketConn.Close()
+	c.closeErr = c.PacketConn.Close()
+	if c.owner != nil {
+		c.owner.release(c, c.closeErr)
+	}
 }
 
 func (c *idlePacketConn) touch() {
@@ -199,6 +248,10 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 }
 
 func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.Conn, error) {
+	if err := p.flows.beginDial(); err != nil {
+		return nil, err
+	}
+	defer p.flows.endDial()
 	active := p.activeTCP.Add(1)
 	release := func() int64 { return p.activeTCP.Add(-1) }
 	updatePeakInt64(&p.peakTCP, active)
@@ -209,7 +262,13 @@ func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, rou
 		return nil, err
 	}
 	log.Debugf(Category, "[Router] %s TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
-	return &trackedConn{Conn: conn, release: release, route: route, dest: dest, started: time.Now()}, nil
+	tracked := &trackedConn{Conn: conn, release: release, route: route, dest: dest, started: time.Now(), owner: &p.flows}
+	if !p.flows.track(tracked) {
+		closeErr := tracked.Close()
+		log.Debugf(Category, "[Router] late TCP dial closed route=%s dest=%s elapsed=%s err=%v", route, dest, time.Since(start), closeErr)
+		return nil, errors.Join(net.ErrClosed, closeErr)
+	}
+	return tracked, nil
 }
 
 func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
@@ -230,6 +289,10 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 }
 
 func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.PacketConn, error) {
+	if err := p.flows.beginDial(); err != nil {
+		return nil, err
+	}
+	defer p.flows.endDial()
 	active := p.activeUDP.Add(1)
 	release := func() int64 { return p.activeUDP.Add(-1) }
 	updatePeakInt64(&p.peakUDP, active)
@@ -241,9 +304,18 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 	}
 	log.Debugf(Category, "[Router] %s UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
 	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, started: time.Now()}
-	return newIdlePacketConn(tracked, udpAssociationIdleTimeout, route, dest, func() uint64 {
+	owned := newIdlePacketConn(tracked, udpAssociationIdleTimeout, route, dest, func() uint64 {
 		return p.udpIdleTimeout.Add(1)
-	}), nil
+	}, &p.flows)
+	owned.mu.Lock()
+	accepted := !owned.closed && p.flows.track(owned)
+	owned.mu.Unlock()
+	if !accepted {
+		closeErr := owned.Close()
+		log.Debugf(Category, "[Router] late UDP dial closed route=%s dest=%s elapsed=%s err=%v", route, dest, time.Since(start), closeErr)
+		return nil, errors.Join(net.ErrClosed, closeErr)
+	}
+	return owned, nil
 }
 
 func (p *DobbyProxy) Addr() string {
@@ -315,6 +387,7 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 		direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: dnsCache},
 		bypass: bypass,
 	}
+	handle.proxy = wrapper
 	t.SetDialer(wrapper)
 
 	log.Debugf(Category, "[Engine] DobbyProxy installed; owner is active")
@@ -336,19 +409,35 @@ func (e *Engine) Stop(ctx context.Context) error {
 	stopPlatform := e.stopPlatform
 
 	engineMu.Lock()
-	defer engineMu.Unlock()
 	if activeEngine != e {
+		engineMu.Unlock()
 		return nil
 	}
+	// Keep the reservation while cleanup runs, without making other sessions
+	// wait on a proxy handshake merely to discover that this owner is busy.
+	engineMu.Unlock()
 	log.Debugf(Category, "[Engine] stopping owned tun2socks engine")
-	if stopPlatform != nil {
-		e.stopErr = stopPlatform(ctx)
+	if e.proxy != nil {
+		e.proxy.flows.sealAndClose()
 	}
+	var platformErr error
+	if stopPlatform != nil {
+		platformErr = stopPlatform(ctx)
+	}
+	var flowErr error
+	if e.proxy != nil {
+		flowErr = e.proxy.flows.wait(ctx)
+	}
+	e.stopErr = errors.Join(platformErr, flowErr)
 	if e.stopErr != nil {
 		return e.stopErr
 	}
 	e.stopped = true
-	activeEngine = nil
+	engineMu.Lock()
+	if activeEngine == e {
+		activeEngine = nil
+	}
+	engineMu.Unlock()
 	log.Debugf(Category, "[Engine] owned tun2socks engine stopped")
 	return e.stopErr
 }
