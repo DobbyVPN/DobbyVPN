@@ -151,7 +151,7 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 		return fail(errors.New("mobile session connect canceled after protocol startup"))
 	}
 
-	log.Debugf(nativeLogCategory, "starting tun2socks engine proxy_ready=true")
+	log.Debugf(nativeLogCategory, "starting tun2socks engine proxy_endpoint_configured=true local_socks_listener_readiness=unobserved")
 	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
 		ProxyAddr:   c.device.GetProxyAddr(),
 		FD:          fd,

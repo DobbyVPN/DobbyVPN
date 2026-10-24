@@ -14,7 +14,10 @@ import (
 
 // BypassPolicy is resolved once for one runtime attempt and is immutable after
 // construction.
-type BypassPolicy struct{ cidrs []*net.IPNet }
+type BypassPolicy struct {
+	cidrs      []*net.IPNet
+	entryCount int
+}
 
 func (p *BypassPolicy) IsBypass(metadata *M.Metadata) bool {
 	if p == nil {
@@ -48,11 +51,48 @@ func ResolveBypassPolicy(ctx context.Context, entries []string) (*BypassPolicy, 
 	if err != nil {
 		return nil, err
 	}
-	if err := log.SetPolicyDetail("resolved_bypass_cidrs", summarizeCIDRs(cidrs)); err != nil {
+	policy := &BypassPolicy{cidrs: cidrs, entryCount: len(entries)}
+	policy.recordResolved()
+	return policy, nil
+}
+
+// WithNumericIPs returns a policy copy that also bypasses only the supplied
+// numeric addresses. Hostnames and CIDR strings are deliberately not accepted.
+func (p *BypassPolicy) WithNumericIPs(ips []net.IP) (*BypassPolicy, error) {
+	if p == nil {
+		return nil, errors.New("cannot copy a nil bypass policy")
+	}
+	cidrs := append([]*net.IPNet(nil), p.cidrs...)
+	for index, ip := range ips {
+		var normalized net.IP
+		var mask net.IPMask
+		if ipv4 := ip.To4(); ipv4 != nil {
+			normalized = append(net.IP(nil), ipv4...)
+			mask = net.CIDRMask(32, 32)
+		} else if ipv6 := ip.To16(); ipv6 != nil {
+			normalized = append(net.IP(nil), ipv6...)
+			mask = net.CIDRMask(128, 128)
+		} else {
+			return nil, fmt.Errorf("numeric bypass address[%d] is invalid", index)
+		}
+		cidrs = append(cidrs, &net.IPNet{IP: normalized, Mask: mask})
+	}
+	policy := &BypassPolicy{
+		cidrs:      cidrs,
+		entryCount: p.entryCount,
+	}
+	policy.recordResolved()
+	return policy, nil
+}
+
+func (p *BypassPolicy) recordResolved() {
+	if err := log.SetPolicyDetail("resolved_bypass_cidrs", summarizeCIDRs(p.cidrs)); err != nil {
 		log.Errorf(Category, "retain resolved bypass policy: %v", err)
 	}
-	log.Debug(Category, "attempt bypass policy resolved", map[string]any{"entry_count": len(entries), "resolved_cidr_count": len(cidrs)})
-	return &BypassPolicy{cidrs: cidrs}, nil
+	log.Debug(Category, "attempt bypass policy resolved", map[string]any{
+		"entry_count":         p.entryCount,
+		"resolved_cidr_count": len(p.cidrs),
+	})
 }
 
 func resolveRoutingEntries(ctx context.Context, entries []string) ([]*net.IPNet, error) {

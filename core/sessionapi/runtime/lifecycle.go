@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -46,6 +47,12 @@ type InputProvider interface {
 // DeviceFactory receives only the normalized config for every protocol and
 // the DNS cache owned by this start attempt.
 type DeviceFactory func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector, *dnscache.Cache) (protocol.ProtocolDevice, error)
+
+// numericUpstreamIPProvider is an optional capability for protocol devices
+// whose native bootstrap connection uses exact numeric endpoint addresses.
+type numericUpstreamIPProvider interface {
+	UpstreamIPs() []net.IP
+}
 
 type SocketProtector func(context.Context, int) error
 
@@ -273,8 +280,18 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	}
 	device, err := r.options.NewDevice(ctx, ref, profile, protect, dnsCache)
 	if device != nil {
-		device = &ownedDevice{ProtocolDevice: device}
-		owned.push(func(context.Context) error { return device.Close() })
+		deviceWithCapabilities := device
+		ownedDevice := &ownedDevice{ProtocolDevice: deviceWithCapabilities}
+		device = ownedDevice
+		owned.push(func(context.Context) error { return ownedDevice.Close() })
+		if err == nil {
+			if upstreams, ok := deviceWithCapabilities.(numericUpstreamIPProvider); ok {
+				bypassPolicy, err = bypassPolicy.WithNumericIPs(upstreams.UpstreamIPs())
+				if err != nil {
+					return fail(fmt.Errorf("extend bypass policy with numeric protocol upstreams: %w", err))
+				}
+			}
+		}
 	}
 	if err != nil {
 		return fail(fmt.Errorf("create protocol device: %w", err))
