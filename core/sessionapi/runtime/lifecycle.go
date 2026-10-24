@@ -279,12 +279,13 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		return nil
 	}
 	device, err := r.options.NewDevice(ctx, ref, profile, protect, dnsCache)
-	device, bypassPolicy, policyErr := ownProtocolDevice(device, err, owned, bypassPolicy)
-	if policyErr != nil {
-		return fail(policyErr)
-	}
 	if err != nil {
+		_, _, err = ownProtocolDevice(device, err, owned, bypassPolicy)
 		return fail(fmt.Errorf("create protocol device: %w", err))
+	}
+	device, bypassPolicy, err = ownProtocolDevice(device, nil, owned, bypassPolicy)
+	if err != nil {
+		return fail(err)
 	}
 	if device == nil {
 		return fail(errors.New("create protocol device returned nil"))
@@ -330,13 +331,13 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 
 func ownProtocolDevice(device protocol.ProtocolDevice, creationErr error, owned *lease, bypassPolicy *tunnel.BypassPolicy) (protocol.ProtocolDevice, *tunnel.BypassPolicy, error) {
 	if device == nil {
-		return nil, bypassPolicy, nil
+		return nil, bypassPolicy, creationErr
 	}
 	deviceWithCapabilities := device
 	ownedProtocolDevice := &ownedDevice{ProtocolDevice: deviceWithCapabilities}
 	owned.push(func(context.Context) error { return ownedProtocolDevice.Close() })
 	if creationErr != nil {
-		return ownedProtocolDevice, bypassPolicy, nil
+		return ownedProtocolDevice, bypassPolicy, creationErr
 	}
 	upstreams, ok := deviceWithCapabilities.(numericUpstreamIPProvider)
 	if !ok {
