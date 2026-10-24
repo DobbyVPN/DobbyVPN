@@ -34,61 +34,81 @@ func PrepareEndpointAddresses(endpoint map[string]any, lookupIPAddr func(context
 		if !ok {
 			return nil, nil, fmt.Errorf("endpoint address[%d] is not a string", index)
 		}
-		host, port, hasPort, literal, err := splitEndpointAddress(address)
+		resolved, addressIPv4, err := prepareEndpointAddress(ctx, index, address, lookupIPAddr)
 		if err != nil {
-			return nil, nil, fmt.Errorf("invalid endpoint address[%d] %q: %w", index, address, err)
+			return nil, nil, err
 		}
-		if literal.IsValid() {
-			if index == 0 {
-				primaryIP = ipv4(literal)
-				if primaryIP == nil {
-					return nil, nil, fmt.Errorf("endpoint address[0] %q: IPv6 address not supported; routing requires IPv4", address)
-				}
-			}
-			prepared = append(prepared, address)
-			continue
-		}
-
-		resolved, err := lookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to resolve endpoint address[%d] %q (host %q): %w", index, address, host, err)
-		}
-		if len(resolved) == 0 {
-			return nil, nil, fmt.Errorf("endpoint address[%d] %q (host %q) resolved to no addresses", index, address, host)
-		}
-
-		var addressIPv4 net.IP
-		for _, result := range resolved {
-			resolvedAddress := ""
-			if ip4 := result.IP.To4(); ip4 != nil {
-				if addressIPv4 == nil {
-					addressIPv4 = append(net.IP(nil), ip4...)
-				}
-				resolvedAddress = ip4.String()
-			} else {
-				ip, ok := netip.AddrFromSlice(result.IP)
-				if !ok {
-					return nil, nil, fmt.Errorf("endpoint address[%d] %q (host %q) resolved to an invalid IP address", index, address, host)
-				}
-				if result.Zone != "" && ip.Is6() {
-					ip = ip.WithZone(result.Zone)
-				}
-				resolvedAddress = ip.String()
-			}
-			if hasPort {
-				resolvedAddress = net.JoinHostPort(resolvedAddress, port)
-			}
-			prepared = append(prepared, resolvedAddress)
-		}
+		prepared = append(prepared, resolved...)
 		if index == 0 {
 			primaryIP = addressIPv4
-			if primaryIP == nil {
-				return nil, nil, fmt.Errorf("endpoint address[0] %q: no IPv4 address found for domain", address)
-			}
 		}
 	}
 
 	return prepared, primaryIP, nil
+}
+
+func prepareEndpointAddress(ctx context.Context, index int, address string, lookupIPAddr func(context.Context, string) ([]net.IPAddr, error)) ([]any, net.IP, error) {
+	host, port, hasPort, literal, err := splitEndpointAddress(address)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid endpoint address[%d] %q: %w", index, address, err)
+	}
+	if literal.IsValid() {
+		primaryIP := ipv4(literal)
+		if index == 0 && primaryIP == nil {
+			return nil, nil, fmt.Errorf("endpoint address[0] %q: IPv6 address not supported; routing requires IPv4", address)
+		}
+		return []any{address}, primaryIP, nil
+	}
+
+	resolved, err := lookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to resolve endpoint address[%d] %q (host %q): %w", index, address, host, err)
+	}
+	if len(resolved) == 0 {
+		return nil, nil, fmt.Errorf("endpoint address[%d] %q (host %q) resolved to no addresses", index, address, host)
+	}
+
+	prepared, addressIPv4, err := prepareResolvedEndpointAddresses(resolved, port, hasPort)
+	if err != nil {
+		return nil, nil, fmt.Errorf("endpoint address[%d] %q (host %q) resolved to an invalid IP address", index, address, host)
+	}
+	if index == 0 && addressIPv4 == nil {
+		return nil, nil, fmt.Errorf("endpoint address[0] %q: no IPv4 address found for domain", address)
+	}
+	return prepared, addressIPv4, nil
+}
+
+func prepareResolvedEndpointAddresses(resolved []net.IPAddr, port string, hasPort bool) ([]any, net.IP, error) {
+	prepared := make([]any, 0, len(resolved))
+	var addressIPv4 net.IP
+	for _, result := range resolved {
+		resolvedAddress, ip4, err := resolvedEndpointAddress(result)
+		if err != nil {
+			return nil, nil, err
+		}
+		if addressIPv4 == nil && ip4 != nil {
+			addressIPv4 = ip4
+		}
+		if hasPort {
+			resolvedAddress = net.JoinHostPort(resolvedAddress, port)
+		}
+		prepared = append(prepared, resolvedAddress)
+	}
+	return prepared, addressIPv4, nil
+}
+
+func resolvedEndpointAddress(result net.IPAddr) (string, net.IP, error) {
+	if ip4 := result.IP.To4(); ip4 != nil {
+		return ip4.String(), append(net.IP(nil), ip4...), nil
+	}
+	ip, ok := netip.AddrFromSlice(result.IP)
+	if !ok {
+		return "", nil, errors.New("invalid IP address")
+	}
+	if result.Zone != "" && ip.Is6() {
+		ip = ip.WithZone(result.Zone)
+	}
+	return ip.String(), nil, nil
 }
 
 func splitEndpointAddress(address string) (host, port string, hasPort bool, literal netip.Addr, err error) {

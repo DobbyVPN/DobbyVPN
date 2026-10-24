@@ -279,19 +279,9 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		return nil
 	}
 	device, err := r.options.NewDevice(ctx, ref, profile, protect, dnsCache)
-	if device != nil {
-		deviceWithCapabilities := device
-		ownedDevice := &ownedDevice{ProtocolDevice: deviceWithCapabilities}
-		device = ownedDevice
-		owned.push(func(context.Context) error { return ownedDevice.Close() })
-		if err == nil {
-			if upstreams, ok := deviceWithCapabilities.(numericUpstreamIPProvider); ok {
-				bypassPolicy, err = bypassPolicy.WithNumericIPs(upstreams.UpstreamIPs())
-				if err != nil {
-					return fail(fmt.Errorf("extend bypass policy with numeric protocol upstreams: %w", err))
-				}
-			}
-		}
+	device, bypassPolicy, policyErr := ownProtocolDevice(device, err, owned, bypassPolicy)
+	if policyErr != nil {
+		return fail(policyErr)
 	}
 	if err != nil {
 		return fail(fmt.Errorf("create protocol device: %w", err))
@@ -336,6 +326,27 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	// This preserves the tun2socks/device dependency chain.
 	log.Debugf(category, "runtime connected protocol=%s generation=%d", profile.Summary.Protocol, ref.Generation)
 	return owned, nil
+}
+
+func ownProtocolDevice(device protocol.ProtocolDevice, creationErr error, owned *lease, bypassPolicy *tunnel.BypassPolicy) (protocol.ProtocolDevice, *tunnel.BypassPolicy, error) {
+	if device == nil {
+		return nil, bypassPolicy, nil
+	}
+	deviceWithCapabilities := device
+	ownedProtocolDevice := &ownedDevice{ProtocolDevice: deviceWithCapabilities}
+	owned.push(func(context.Context) error { return ownedProtocolDevice.Close() })
+	if creationErr != nil {
+		return ownedProtocolDevice, bypassPolicy, nil
+	}
+	upstreams, ok := deviceWithCapabilities.(numericUpstreamIPProvider)
+	if !ok {
+		return ownedProtocolDevice, bypassPolicy, nil
+	}
+	updatedPolicy, err := bypassPolicy.WithNumericIPs(upstreams.UpstreamIPs())
+	if err != nil {
+		return ownedProtocolDevice, bypassPolicy, fmt.Errorf("extend bypass policy with numeric protocol upstreams: %w", err)
+	}
+	return ownedProtocolDevice, updatedPolicy, nil
 }
 
 func waitForInitialReadiness(
