@@ -1199,7 +1199,7 @@ public sealed partial class MainWindow : Window
         }
         if (directManipulation || scrollbarInteraction)
             ObserveLogPresentationForScroll(directManipulation ? "direct-manipulation" : "scrollbar-interaction",
-                isIntermediate);
+                isIntermediate, movedTowardEarlierEntries: offsetDelta < 0);
         if (!_updatingLogs && _logPresentation.FollowsTail) RenderLogs();
     }
 
@@ -1222,10 +1222,10 @@ public sealed partial class MainWindow : Window
         });
 
     private void ObserveLogPresentationForScroll(string cause, bool isIntermediate,
-        long? gestureId = null, string? direction = null)
+        bool movedTowardEarlierEntries, long? gestureId = null, string? direction = null)
     {
         var wasFollowingTail = _logPresentation.FollowsTail;
-        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
+        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom(), movedTowardEarlierEntries);
         RecordLogFollowTransition(cause, wasFollowingTail, gestureId, direction, isIntermediate);
     }
 
