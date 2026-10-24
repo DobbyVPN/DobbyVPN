@@ -435,10 +435,11 @@ struct DobbyLogView: NSViewRepresentable {
         coordinator.observers.append(NotificationCenter.default.addObserver(
             forName: NSScrollView.didEndLiveScrollNotification, object: scroll, queue: .main
         ) { [weak coordinator] _ in coordinator?.userScrolling = false })
-        coordinator.observers.append(NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
-        ) { [weak coordinator = context.coordinator, weak scroll] _ in
-            guard let coordinator, let scroll, !coordinator.updating, coordinator.userScrolling else { return }
+        scroll.postsFrameChangedNotifications = true
+        let handleBoundsChange: (Notification) -> Void = { [weak coordinator = context.coordinator, weak scroll] _ in
+            guard let coordinator, let scroll else { return }
+            coordinator.handleViewportChange(scroll)
+            guard !coordinator.updating, coordinator.userScrolling else { return }
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: scroll.contentView.bounds.maxY,
                 contentHeight: scroll.documentView?.bounds.height ?? 0
@@ -446,7 +447,15 @@ struct DobbyLogView: NSViewRepresentable {
             if coordinator.parent.following != atBottom {
                 DispatchQueue.main.async { coordinator.parent.following = atBottom }
             }
-        })
+        }
+        coordinator.observers.append(NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main,
+            using: handleBoundsChange
+        ))
+        coordinator.observers.append(NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: scroll, queue: .main,
+            using: handleBoundsChange
+        ))
         return scroll
     }
 
@@ -481,6 +490,7 @@ struct DobbyLogView: NSViewRepresentable {
         }
         coordinator.lastClear = clear
         coordinator.updating = false
+        coordinator.handleViewportChange(scroll)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -490,7 +500,29 @@ struct DobbyLogView: NSViewRepresentable {
         var observers: [NSObjectProtocol] = []
         var userScrolling = false
         var entries: [DobbyLogEntry] = []
+        var lastViewportHeight: CGFloat = 0
         init(_ parent: DobbyLogView) { self.parent = parent }
+
+        // AppKit keeps the old content offset when the viewport shrinks. If the
+        // reader is following the tail, realign after the new layout settles.
+        func handleViewportChange(_ scroll: NSScrollView) {
+            guard !updating, !userScrolling, parent.following else { return }
+            let viewportHeight = scroll.contentView.bounds.height
+            guard abs(viewportHeight - lastViewportHeight) > 0.5 else { return }
+            lastViewportHeight = viewportHeight
+            DispatchQueue.main.async { [weak self, weak scroll] in
+                guard let self, let scroll, !self.updating, !self.userScrolling,
+                      self.parent.following else { return }
+                self.scrollToBottom(scroll)
+            }
+        }
+
+        func scrollToBottom(_ scroll: NSScrollView) {
+            guard let document = scroll.documentView else { return }
+            let maximumY = max(0, document.bounds.height - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: maximumY))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
         deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
     }
 }
