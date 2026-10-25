@@ -8,7 +8,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/go-ole/go-ole v1.3.0
-	github.com/godbus/dbus/v5 v5.2.2
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/jackpal/gateway v1.1.1
 	github.com/sirupsen/logrus v1.10.2
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
