@@ -8,7 +8,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/go-ole/go-ole v1.3.0
-	github.com/godbus/dbus/v5 v5.2.2
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/jackpal/gateway v1.1.1
 	github.com/sirupsen/logrus v1.10.2
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
@@ -40,7 +40,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/sagernet/sing v0.5.1 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
-	github.com/shadowsocks/go-shadowsocks2 v0.1.5
+	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tarantool/go-gostcrypto v0.1.1-0.20260728125122-3791d459e0c3 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
@@ -67,11 +67,10 @@ require (
 	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/pion/dtls/v3 v3.1.4 // indirect
 	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/stun/v3 v3.1.6
+	github.com/pion/stun/v3 v3.1.6 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/quic-go/quic-go v0.57.1 // indirect
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af // indirect
-	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
