@@ -90,6 +90,32 @@ func protectRawConn(network, address string, c syscall.RawConn) error {
 	return protectErr
 }
 
+func socketNetwork(family, socketType int) (string, error) {
+	var network string
+	switch family {
+	case syscall.AF_INET:
+		switch socketType {
+		case syscall.SOCK_STREAM:
+			network = networkTCP4
+		case syscall.SOCK_DGRAM:
+			network = networkUDP4
+		}
+	case syscall.AF_INET6:
+		switch socketType {
+		case syscall.SOCK_STREAM:
+			network = networkTCP6
+		case syscall.SOCK_DGRAM:
+			network = networkUDP6
+		}
+	default:
+		return "", fmt.Errorf("unsupported socket family %d", family)
+	}
+	if network == "" {
+		return "", fmt.Errorf("unsupported socket type %d for family %d", socketType, family)
+	}
+	return network, nil
+}
+
 // Use the server address resolved before tunnel routing changes. Resolving it
 // again through the tunnel would make connecting depend on an already working VPN.
 func cachedDialAddress(cache *dnscache.Cache, address string) (string, error) {
@@ -287,8 +313,21 @@ func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, er
 // to their transport. Such callers must propagate this error instead of
 // claiming the socket was protected.
 func ProtectSocketIntErr(fd int) error {
-	if protector == nil {
-		return ErrSocketProtectionUnavailable
+	if fd < 0 {
+		err := fmt.Errorf("invalid socket descriptor %d", fd)
+		log.Errorf(Category, "[Protect] external socket inspection failed fd=%d err=%v", fd, err)
+		return fmt.Errorf("%w: %w", ErrSocketProtectionUnavailable, err)
 	}
-	return protectFD(uintptr(fd), networkTCP4, "external-socket")
+
+	network, err := socketNetworkFromDescriptor(fd)
+	if err != nil {
+		log.Errorf(Category, "[Protect] external socket inspection failed fd=%d err=%v", fd, err)
+		return fmt.Errorf("%w: inspect external socket fd=%d: %w", ErrSocketProtectionUnavailable, fd, err)
+	}
+	log.Debugf(Category, "[Protect] external socket identified fd=%d network=%s", fd, network)
+	if err := protectFD(uintptr(fd), network, "external-socket"); err != nil {
+		log.Errorf(Category, "[Protect] external socket protection failed fd=%d network=%s err=%v", fd, network, err)
+		return err
+	}
+	return nil
 }

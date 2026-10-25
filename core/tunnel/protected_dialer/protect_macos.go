@@ -93,22 +93,33 @@ func ResetDefaultRoute() {
 
 type macosProtector struct{}
 
+func macOSInterfaceOption(network string) (level, option int, err error) {
+	switch network {
+	case networkTCP4, networkUDP4:
+		return syscall.IPPROTO_IP, ipBoundIf, nil
+	case networkTCP6, networkUDP6:
+		return syscall.IPPROTO_IPV6, ipv6BoundIf, nil
+	default:
+		return 0, 0, fmt.Errorf("unsupported protected network %q", network)
+	}
+}
+
 func (m *macosProtector) Protect(fd uintptr, network string) error {
 	if defaultInterfaceIndex == 0 {
 		return ErrSocketProtectionUnavailable
 	}
 
-	switch network {
-	case networkTCP4, networkUDP4:
-		if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IP, ipBoundIf, defaultInterfaceIndex); err != nil {
-			log.Errorf(Category, "[Darwin-Protect] IP_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
-			return err
+	level, option, err := macOSInterfaceOption(network)
+	if err != nil {
+		return err
+	}
+	if err := syscall.SetsockoptInt(int(fd), level, option, defaultInterfaceIndex); err != nil {
+		optionName := "IPV6_BOUND_IF"
+		if level == syscall.IPPROTO_IP {
+			optionName = "IP_BOUND_IF"
 		}
-	case networkTCP6, networkUDP6:
-		if err := syscall.SetsockoptInt(int(fd), syscall.IPPROTO_IPV6, ipv6BoundIf, defaultInterfaceIndex); err != nil {
-			log.Errorf(Category, "[Darwin-Protect] IPV6_BOUND_IF failed fd=%d iface=%d network=%s err=%v", fd, defaultInterfaceIndex, network, err)
-			return err
-		}
+		log.Errorf(Category, "[Darwin-Protect] %s failed fd=%d iface=%d network=%s err=%v", optionName, fd, defaultInterfaceIndex, network, err)
+		return err
 	}
 	return nil
 }
