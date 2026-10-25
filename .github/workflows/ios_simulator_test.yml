@@ -34,12 +34,12 @@ jobs:
       manifest_sha256: ${{ steps.build_inputs.outputs.manifest_sha256 }}
       producer_attempt: ${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - name: Check out exact private tests
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: DobbyVPN/Torturer
           ref: ${{ inputs.torturer_sha }}
@@ -148,13 +148,13 @@ jobs:
           [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$TORTURER_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]
 
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
       - name: Check out exact private tests
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: DobbyVPN/Torturer
           ref: ${{ inputs.torturer_sha }}

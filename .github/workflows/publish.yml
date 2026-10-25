@@ -48,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -95,7 +95,7 @@ jobs:
                   output.write(f"{key}={value}\n")
           PYTHON
       - name: Check selected source version and stable tag
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.selection.outputs.source_sha }}
           path: selected-source
@@ -150,12 +150,12 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Check out selected source entitlements
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_inputs.outputs.source_sha }}
           path: selected-source
@@ -355,7 +355,7 @@ jobs:
       RELEASE_NOTES: ${{ inputs.release_notes }}
       EXPECTED_ANDROID_SIGNER_SHA256: c3f0414a74012060d7c6aa3a3d9dac0aa13c1bd23b7512eefd860fb865e67933
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_inputs.outputs.source_sha }}
           fetch-depth: 0
@@ -579,12 +579,12 @@ jobs:
       PREPARED_ARTIFACT_NAME: dobbyvpn-release-prepared-${{ github.run_id }}-${{ github.run_attempt }}
       PREPARED_ARTIFACT_DIGEST: ${{ needs.prepare_release.outputs.artifact_digest }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_inputs.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: true
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: release-tools
