@@ -31,6 +31,7 @@ type windowsAdapterState struct {
 	lastIface        string
 	lastLUID         winipcfg.LUID
 	luidKnown        bool
+	dnsGuard         windowsDNSGuard
 	prevDNS          []netip.Addr
 	prevDNSStatic    bool
 	dnsKnown         bool
@@ -63,10 +64,11 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("create owned Wintun identity: %w", err)
 	}
-	adapter.ownedAdapterName = adapterName
-
 	resetTun2SocksInterfaceBinding()
 	accepted, err := startStack(c.ProxyAddr, func() (device.Device, error) { return tun.Open(adapterName, windowsTunMTU) })
+	if accepted {
+		adapter.ownedAdapterName = adapterName
+	}
 	if err != nil {
 		return accepted, err
 	}
@@ -88,6 +90,9 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 		return true, (fmt.Errorf("resolve interface %q LUID: %w", ifName, err))
 	}
 	adapter.luidKnown = true
+	if err := acquireWindowsDNSGuard(uint64(adapter.lastLUID)); err != nil {
+		return true, err
+	}
 
 	// This is an application-owned adapter, but it can survive a crash. Never
 	// overwrite a pre-existing address or try to reconstruct it from an
@@ -154,20 +159,64 @@ func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
 	configurationErr := cleanupWindowsState()
 	stopDevice()
 	removalErr := waitForWindowsAdapterRemoval(ctx, adapterName)
-	err := errors.Join(configurationErr, removalErr)
+	var guardCloseErr error
+	if removalErr == nil && adapter.dnsGuard != nil {
+		if err := adapter.dnsGuard.Close(); err != nil {
+			guardCloseErr = fmt.Errorf("close Windows DNS leak guard: %w", err)
+			log.Errorf(Category, "[Engine][Windows] DNS leak guard close failed; owner retained for retry iface=%s err=%v", adapter.lastIface, err)
+		} else {
+			adapter.dnsGuard = nil
+			log.Infof(Category, "[Engine][Windows] DNS leak guard closed after owned adapter removal iface=%s", adapter.lastIface)
+		}
+	} else if removalErr != nil && adapter.dnsGuard != nil {
+		log.Errorf(Category, "[Engine][Windows] retaining DNS leak guard until owned adapter removal is confirmed iface=%s err=%v", adapter.lastIface, removalErr)
+	}
+	err := errors.Join(configurationErr, removalErr, guardCloseErr)
 	if err != nil {
 		log.Errorf(Category, "[Engine][Windows] platform cleanup: %v", err)
 	}
 	// DNS, DAD, and the tunnel address belong to this uniquely named adapter.
-	// Once Windows removes it, failed per-adapter restoration no longer needs a retry.
-	if removalErr == nil {
+	// Once Windows removes it and the leak guard closes, failed per-adapter
+	// restoration no longer needs a retry. Keep ownership state if closing the
+	// guard fails so the next Stop can retry that cleanup.
+	if removalErr == nil && adapter.dnsGuard == nil {
 		resetWindowsState()
 	}
 	return err
 }
 
+type windowsDNSGuard interface {
+	Close() error
+}
+
+var openWindowsDNSGuard = func(tunnelLUID uint64) (windowsDNSGuard, error) {
+	guard, err := routing.OpenWindowsDNSGuard(tunnelLUID)
+	if guard == nil {
+		return nil, err
+	}
+	return guard, err
+}
+
+func acquireWindowsDNSGuard(tunnelLUID uint64) error {
+	guard, err := openWindowsDNSGuard(tunnelLUID)
+	// Open may return a partial owner alongside an installation error. Retain it
+	// before propagating that error so Stop can remove partial WFP state.
+	adapter.dnsGuard = guard
+	if err != nil {
+		log.Errorf(Category, "[Engine][Windows] DNS leak guard acquisition failed tunnel_luid=%d partial_owner_retained=%t err=%v", tunnelLUID, guard != nil, err)
+		return fmt.Errorf("install Windows DNS leak guard: %w", err)
+	}
+	if guard == nil {
+		err := errors.New("Windows DNS leak guard returned no owner")
+		log.Errorf(Category, "[Engine][Windows] DNS leak guard acquisition failed tunnel_luid=%d err=%v", tunnelLUID, err)
+		return err
+	}
+	log.Infof(Category, "[Engine][Windows] DNS leak guard acquired tunnel_luid=%d", tunnelLUID)
+	return nil
+}
+
 func prepareWindowsStateForStart() error {
-	if adapter.ownedAdapterName != "" {
+	if adapter.ownedAdapterName != "" || adapter.dnsGuard != nil {
 		return errors.New("previous Windows adapter cleanup is pending")
 	}
 	return nil
@@ -176,7 +225,7 @@ func prepareWindowsStateForStart() error {
 // RecoverStaleWindowsIPv6FirewallRules runs at backend startup, before it
 // accepts desktop control requests.
 func RecoverStaleWindowsIPv6FirewallRules() error {
-	if adapter.ownedAdapterName != "" || adapter.lastIface != "" {
+	if adapter.ownedAdapterName != "" || adapter.lastIface != "" || adapter.dnsGuard != nil {
 		return fmt.Errorf("cannot run Windows startup recovery while adapter %q is active", adapter.ownedAdapterName)
 	}
 	return routing.CleanupStaleWindowsIPv6FirewallRules()
