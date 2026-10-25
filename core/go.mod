@@ -8,11 +8,11 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/go-ole/go-ole v1.3.0
-	github.com/godbus/dbus/v5 v5.2.2
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/jackpal/gateway v1.1.1
 	github.com/sirupsen/logrus v1.10.2
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
-	github.com/things-go/go-socks5 v0.1.0
+	github.com/things-go/go-socks5 v0.1.3
 	github.com/vishvananda/netlink v1.3.1
 	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20251008121831-8fe75611866e
 	github.com/xtls/xray-core v1.260327.1-0.20260710210335-64fada32b5b9
@@ -21,7 +21,7 @@ require (
 	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.49.0
 	golang.zx2c4.com/wireguard/windows v1.1.1
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	trusttunnel-go v0.0.0-00010101000000-000000000000
 )
 
@@ -40,14 +40,14 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/sagernet/sing v0.5.1 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
-	github.com/shadowsocks/go-shadowsocks2 v0.1.5
+	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tarantool/go-gostcrypto v0.1.1-0.20260728125122-3791d459e0c3 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.0
+	go.uber.org/zap v1.28.0
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
@@ -55,7 +55,7 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.50.0 // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gvisor.dev/gvisor v0.0.0-20260831225305-3eeb02c3689d
 	lukechampine.com/blake3 v1.4.1 // indirect
@@ -65,13 +65,12 @@ require (
 	github.com/apernet/quic-go v0.59.1-0.20260425001925-6c6cc9bcb716 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
-	github.com/pion/dtls/v3 v3.1.4 // indirect
+	github.com/pion/dtls/v3 v3.1.5 // indirect
 	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/stun/v3 v3.1.6
-	github.com/pion/transport/v4 v4.0.2 // indirect
+	github.com/pion/stun/v3 v3.1.7 // indirect
+	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/quic-go/quic-go v0.57.1 // indirect
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af // indirect
-	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect

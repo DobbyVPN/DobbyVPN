@@ -54,12 +54,12 @@ jobs:
           [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ -z "$RELEASE_ATTEMPT_ID" || "$RELEASE_ATTEMPT_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Check out exact private tests
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: DobbyVPN/Torturer
           ref: ${{ inputs.torturer_sha }}
@@ -105,7 +105,7 @@ jobs:
     outputs:
       packages: ${{ steps.ready.outputs.packages }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -123,7 +123,7 @@ jobs:
     outputs:
       packages: ${{ steps.ready.outputs.packages }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -141,7 +141,7 @@ jobs:
     outputs:
       packages: ${{ steps.ready.outputs.packages }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -159,7 +159,7 @@ jobs:
     outputs:
       packages: ${{ steps.ready.outputs.packages }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -177,7 +177,7 @@ jobs:
     outputs:
       packages: ${{ steps.ready.outputs.packages }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -203,11 +203,11 @@ jobs:
       release_attempt_id: ${{ steps.claim.outputs.release_attempt_id }}
       claimed: ${{ steps.claim.outputs.claimed }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: DobbyVPN/Torturer
           ref: ${{ inputs.torturer_sha }}
@@ -599,7 +599,7 @@ jobs:
       TORTURER_SHA: ${{ needs.resolve_build.outputs.torturer_sha }}
       TORTURER_TREE_SHA256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false

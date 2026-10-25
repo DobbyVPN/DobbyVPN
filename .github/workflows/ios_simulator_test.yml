@@ -34,12 +34,12 @@ jobs:
       manifest_sha256: ${{ steps.build_inputs.outputs.manifest_sha256 }}
       producer_attempt: ${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - name: Check out exact private tests
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: DobbyVPN/Torturer
           ref: ${{ inputs.torturer_sha }}
@@ -148,13 +148,13 @@ jobs:
           [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$TORTURER_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]
 
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
       - name: Check out exact private tests
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: DobbyVPN/Torturer
           ref: ${{ inputs.torturer_sha }}
@@ -199,7 +199,7 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
       - name: Download the producer's compiled test products
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dobbyvpn-ios-simulator-inputs-${{ github.run_id }}-${{ needs.ios_simulator_build.outputs.producer_attempt }}
           path: ${{ runner.temp }}/ios-simulator-mini-contract/compiled-inputs
