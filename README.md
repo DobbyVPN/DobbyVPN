@@ -15,6 +15,10 @@ DobbyVPN has native apps for Windows, macOS, Android and iOS. Linux uses the
 command-line interface. Desktop installations include a background VPN service
 and the `dobby-cli` command.
 
+Android permits installation on Android 8.0 (API 26) and later. Current testing
+uses Android 15 (API 35), and support is limited to Android 15 and later.
+Android 8–14 are not currently tested or supported.
+
 After installing a desktop package, `dobby-cli snapshot` connects to the
 installed background service. On macOS it uses the packaged socket without
 an environment override. `DOBBYVPN_CONTROL_SOCKET` can still select an
