@@ -99,6 +99,7 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 		socks5.WithResolver(od),
 		socks5.WithCredential(socks5.StaticCredentials{username: password}),
 		socks5.WithDial(od.handleDial),
+		socks5.WithAssociateHandle(od.handleAssociate),
 		socks5.WithLogger(socksLogger{device: od}),
 	)
 
