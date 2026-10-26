@@ -17,6 +17,29 @@ import (
 	"github.com/jackpal/gateway"
 )
 
+// directPathProbeTarget is reserved for documentation (TEST-NET-1) and is
+// reached through the default route like any off-link address. Only connect(2)
+// is called on it, which sends nothing, so the probe reports the routing table
+// rather than whether some host answers.
+const directPathProbeTarget = "192.0.2.1:9"
+
+// logDirectPathState records once per generation whether connections that
+// bypass the tunnel can leave at all. Without it such a session reports only
+// one bare ENETUNREACH per connection, naming neither the interface nor the
+// cause.
+func (app *App) logDirectPathState(ctx context.Context, ifaceName string, idx int) {
+	conn, err := protected_dialer.DialUDPConnWithProtect(ctx, app.DNSCache, "udp", directPathProbeTarget)
+	if err != nil {
+		log.Errorf(Category, "[Darwin][Routing] direct path unusable iface=%s index=%d probe=%s err=%v — every connection outside the tunnel will fail the same way", ifaceName, idx, directPathProbeTarget, err)
+		return
+	}
+	local := conn.LocalAddr()
+	if closeErr := conn.Close(); closeErr != nil {
+		log.Debugf(Category, "[Darwin][Routing] direct path probe close failed: %v", closeErr)
+	}
+	log.Debugf(Category, "[Darwin][Routing] direct path ready iface=%s index=%d probe=%s local=%s", ifaceName, idx, directPathProbeTarget, local)
+}
+
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
 	log.Debugf(Category, "[Darwin][Init] VPN initialization started")
@@ -80,8 +103,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	if directInterfaceKnown {
 		protected_dialer.SetDefaultRoute(gatewayIP.String(), ifaceName, idx)
 		log.Debugf(Category, "[Darwin][Routing] acquiring scoped physical default for direct traffic")
-		// Protected sockets resolve inside this interface's scope, so they need
-		// a route there before anything dials outside the tunnel.
+		// Direct traffic needs its route before anything dials outside the tunnel.
 		if _, scopeErr := routePlan.AcquireMacOSPhysicalDefault(ctx, gatewayIP.String(), ifaceName); scopeErr != nil {
 			scopeErr = fmt.Errorf("failed to acquire scoped physical default route: %w", scopeErr)
 			signalInit(initResult, scopeErr)
@@ -142,6 +164,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	log.Debugf(Category, "[Darwin][Routing] generation-owned IPv4, IPv6, and protected routes ready")
+
+	if directInterfaceKnown {
+		app.logDirectPathState(ctx, ifaceName, idx)
+	}
 
 	log.Debugf(Category, "[Darwin][Lifecycle] VPN initialization completed successfully")
 
