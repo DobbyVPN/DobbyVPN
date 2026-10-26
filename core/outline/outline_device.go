@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	socks5 "github.com/things-go/go-socks5"
@@ -126,6 +127,29 @@ type socksLogger struct {
 	device *OutlineDevice
 }
 
+// windowsRoutineEndings are how Windows words the same conditions: its errors
+// carry Winsock codes that do not match the portable syscall values.
+var windowsRoutineEndings = []string{
+	"forcibly closed by the remote host",
+	"aborted by the software in your host machine",
+}
+
+// endsConnectionRoutinely reports whether err is the ordinary end of a proxied
+// connection, where the peer or the socket goes away mid-transfer. Browsing
+// produces these constantly and they say nothing about the tunnel's health.
+func endsConnectionRoutinely(err error) bool {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	message := err.Error()
+	for _, ending := range windowsRoutineEndings {
+		if strings.Contains(message, ending) {
+			return true
+		}
+	}
+	return false
+}
+
 func (l socksLogger) Errorf(format string, args ...interface{}) {
 	// The upstream logger has only Errorf and also uses it for normal UDP
 	// association creation. Classify at this adapter, retaining the exact text.
@@ -134,7 +158,7 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 		return
 	}
 	for _, arg := range args {
-		if err, ok := arg.(error); ok && errors.Is(err, net.ErrClosed) {
+		if err, ok := arg.(error); ok && endsConnectionRoutinely(err) {
 			log.Debugf(Category, "[SOCKS5 internal] "+format, args...)
 			return
 		}
