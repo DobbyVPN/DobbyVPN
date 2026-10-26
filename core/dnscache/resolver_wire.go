@@ -113,25 +113,7 @@ func queryCapturedDNSServer(ctx context.Context, host string, kind uint16, serve
 			return nil, fmt.Errorf("DNS response code %d", response.Rcode)
 		}
 		for {
-			var addresses []net.IPAddr
-			var alias string
-			for _, record := range response.Answer {
-				if !strings.EqualFold(record.Header().Name, name) {
-					continue
-				}
-				switch record := record.(type) {
-				case *dns.A:
-					if kind == dns.TypeA {
-						addresses = append(addresses, net.IPAddr{IP: append(net.IP(nil), record.A...)})
-					}
-				case *dns.AAAA:
-					if kind == dns.TypeAAAA {
-						addresses = append(addresses, net.IPAddr{IP: append(net.IP(nil), record.AAAA...)})
-					}
-				case *dns.CNAME:
-					alias = strings.ToLower(dns.Fqdn(record.Target))
-				}
-			}
+			addresses, alias := capturedDNSAnswerRecords(response, name, kind)
 			if len(addresses) > 0 || alias == "" {
 				return addresses, nil
 			}
@@ -156,6 +138,27 @@ func queryCapturedDNSServer(ctx context.Context, host string, kind uint16, serve
 	}
 }
 
+func capturedDNSAnswerRecords(response *dns.Msg, name string, kind uint16) (addresses []net.IPAddr, alias string) {
+	for _, record := range response.Answer {
+		if !strings.EqualFold(record.Header().Name, name) {
+			continue
+		}
+		switch record := record.(type) {
+		case *dns.A:
+			if kind == dns.TypeA {
+				addresses = append(addresses, net.IPAddr{IP: append(net.IP(nil), record.A...)})
+			}
+		case *dns.AAAA:
+			if kind == dns.TypeAAAA {
+				addresses = append(addresses, net.IPAddr{IP: append(net.IP(nil), record.AAAA...)})
+			}
+		case *dns.CNAME:
+			alias = strings.ToLower(dns.Fqdn(record.Target))
+		}
+	}
+	return addresses, alias
+}
+
 func exchangeCapturedDNS(ctx context.Context, question *dns.Msg, server, protocol string, dialer *net.Dialer) (_ *dns.Msg, resultErr error) {
 	host, _, err := net.SplitHostPort(server)
 	if err != nil {
@@ -178,8 +181,8 @@ func exchangeCapturedDNS(ctx context.Context, question *dns.Msg, server, protoco
 	stop := context.AfterFunc(ctx, func() { _ = connection.Close() })
 	defer func() {
 		stop()
-		if err := connection.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			resultErr = errors.Join(resultErr, err)
+		if closeErr := connection.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			resultErr = errors.Join(resultErr, closeErr)
 		}
 	}()
 	response, _, err := client.ExchangeWithConnContext(ctx, question, connection)

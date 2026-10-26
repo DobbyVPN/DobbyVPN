@@ -102,6 +102,12 @@ linters:
         text: "is unused"
         linters:
           - unused
+      # Captured-server DNS is the Windows resolver adapter. Linux production
+      # uses systemd-resolved; platform-neutral receiver tests cover this helper.
+      - path: ^dnscache/resolver_wire\.go$
+        text: "is unused"
+        linters:
+          - unused
       # The panic-recovery helper is called by native_runtime_mobile.go
       # (android || ios); desktop uses the lifecycle state definitions here.
       - path: ^sessionapi/runtime/native_lifecycle\.go$
