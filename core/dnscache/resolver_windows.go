@@ -4,7 +4,6 @@ package dnscache
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -15,13 +14,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
+
+	"core/log"
 
 	"golang.org/x/sys/windows"
 )
 
 // These are the documented 64-bit DNS_QUERY_REQUEST, DNS_QUERY_RESULT and
-// DNS_ADDR_ARRAY layouts. Both supported Windows architectures use this ABI.
+// DNS_RECORD layouts. Both supported Windows architectures use this ABI.
 type dnsQueryRequest struct {
 	version    uint32
 	name       *uint16
@@ -53,7 +55,6 @@ type windowsResolver struct {
 	index    uint32
 	identity string
 	servers  []net.IPAddr
-	native   []byte
 }
 
 var dnsAPI = windows.NewLazySystemDLL("dnsapi.dll")
@@ -161,24 +162,6 @@ func captureWindowsResolver(index uint32) (*windowsResolver, error) {
 				return nil, errors.New("physical interface has no non-loopback DNS servers")
 			}
 			resolver.identity = fmt.Sprintf("windows:%d:%d:%v:%v", index, adapter.Luid, local, resolver.servers)
-			// DNS_ADDR has 32 sockaddr bytes followed by eight reserved DWORDs.
-			resolver.native = make([]byte, 32+64*len(resolver.servers))
-			binary.NativeEndian.PutUint32(resolver.native[0:4], uint32(len(resolver.servers)))
-			binary.NativeEndian.PutUint32(resolver.native[4:8], uint32(len(resolver.servers)))
-			for i, server := range resolver.servers {
-				address := resolver.native[32+i*64 : 32+(i+1)*64]
-				binary.BigEndian.PutUint16(address[2:4], 53)
-				if ip4 := server.IP.To4(); ip4 != nil {
-					binary.NativeEndian.PutUint16(address[0:2], windows.AF_INET)
-					copy(address[4:8], ip4)
-				} else {
-					binary.NativeEndian.PutUint16(address[0:2], windows.AF_INET6)
-					copy(address[8:24], server.IP.To16())
-					if server.Zone != "" {
-						binary.NativeEndian.PutUint32(address[24:28], adapter.Ipv6IfIndex)
-					}
-				}
-			}
 			runtime.KeepAlive(buffer)
 			return resolver, nil
 		}
@@ -193,7 +176,15 @@ func (r *windowsResolver) lookup(ctx context.Context, host string) ([]net.IPAddr
 	}
 	results := make(chan response, 2)
 	for _, recordType := range []uint16{28, 1} {
-		go func(kind uint16) { addresses, err := r.query(ctx, host, kind); results <- response{addresses, err} }(recordType)
+		go func(kind uint16) {
+			started := time.Now()
+			addresses, err := r.query(ctx, host, kind)
+			log.Debugf(Category, "native Windows lookup interface=%d host=%s type=%d servers=%v addresses=%v elapsed=%s err=%v", r.index, host, kind, r.servers, addresses, time.Since(started), err)
+			if err != nil {
+				err = fmt.Errorf("native Windows DNS interface=%d type=%d host=%s: %w", r.index, kind, host, err)
+			}
+			results <- response{addresses, err}
+		}(recordType)
 	}
 	var addresses []net.IPAddr
 	var failures []error
@@ -223,9 +214,13 @@ func (r *windowsResolver) query(ctx context.Context, host string, kind uint16) (
 	completed := make(chan struct{})
 	dnsRequests.Store(owner, completed)
 	defer dnsRequests.Delete(owner)
-	request := dnsQueryRequest{version: 1, name: name, recordType: kind, servers: &r.native[0], index: r.index, callback: dnsQueryCallback, owner: owner}
+	// InterfaceIndex selects the physical adapter's native DNS configuration.
+	// Passing an explicit server list as well is rejected by DnsQueryEx. The
+	// before/after capture fence ensures this configuration still matches the
+	// retained resolver and its authorized bootstrap server addresses.
+	request := dnsQueryRequest{version: 1, name: name, recordType: kind, index: r.index, callback: dnsQueryCallback, owner: owner}
 	result := dnsQueryResult{version: 1}
-	var cancellation [32]byte
+	var cancellation [4]uint64 // DNS_QUERY_CANCEL is 32 bytes, aligned to 8.
 	status, _, _ := dnsQueryEx.Call(uintptr(unsafe.Pointer(&request)), uintptr(unsafe.Pointer(&result)), uintptr(unsafe.Pointer(&cancellation)))
 	if status == 9506 { // DNS_REQUEST_PENDING
 		select {

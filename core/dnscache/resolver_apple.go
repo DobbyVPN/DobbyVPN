@@ -49,7 +49,9 @@ static dobby_dns_query *dobby_dns_start(const char *host, unsigned int index, un
  dobby_dns_query *query = calloc(1,sizeof(*query));
  if (query == NULL) return NULL;
  query->tail = &query->addresses;
- query->error = DNSServiceGetAddrInfo(&query->service,0,index,protocol,host,dobby_dns_reply,query);
+ // Negative A/AAAA answers otherwise leave the subscription open indefinitely.
+ // GetAddrInfo reports address results only, even with intermediate replies on.
+ query->error = DNSServiceGetAddrInfo(&query->service,kDNSServiceFlagsReturnIntermediates,index,protocol,host,dobby_dns_reply,query);
  return query;
 }
 static void dobby_dns_close(dobby_dns_query *query) {
@@ -71,7 +73,10 @@ import (
 	"math"
 	"net"
 	"strconv"
+	"time"
 	"unsafe"
+
+	"core/log"
 
 	"golang.org/x/sys/unix"
 )
@@ -117,7 +122,12 @@ func resolveAppleLink(ctx context.Context, index int, host string) ([]net.IPAddr
 	// for both prevents a fast A reply from hiding a usable IPv6/DNS64 path.
 	for _, protocol := range []C.uint{C.kDNSServiceProtocol_IPv6, C.kDNSServiceProtocol_IPv4} {
 		go func(protocol C.uint) {
+			started := time.Now()
 			addresses, err := queryAppleLink(ctx, index, host, protocol)
+			log.Debugf(Category, "native Apple lookup interface=%d host=%s protocol=%d addresses=%v elapsed=%s err=%v", index, host, uint32(protocol), addresses, time.Since(started), err)
+			if err != nil {
+				err = fmt.Errorf("native Apple DNS interface=%d protocol=%d host=%s: %w", index, uint32(protocol), host, err)
+			}
 			results <- response{addresses, err}
 		}(protocol)
 	}
