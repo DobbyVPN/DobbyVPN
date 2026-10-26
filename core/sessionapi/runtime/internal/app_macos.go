@@ -49,6 +49,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	log.Debugf(Category, "[Routing] VPN server address resolved")
 
 	ifaceName, idx, err := protected_dialer.GetDefaultInterfaceNameDarwin(gatewayIP)
+	directInterfaceKnown := err == nil
 	if err != nil {
 		log.Errorf(Category, "[Darwin-Protect] failed to detect default interface for protected sockets: %v", err)
 	} else {
@@ -76,8 +77,16 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			protected_dialer.ResetDefaultRoute()
 			return nil
 		})
-	if err == nil {
+	if directInterfaceKnown {
 		protected_dialer.SetDefaultRoute(gatewayIP.String(), ifaceName, idx)
+		log.Debugf(Category, "[Darwin][Routing] acquiring scoped physical default for direct traffic")
+		// Protected sockets resolve inside this interface's scope, so they need
+		// a route there before anything dials outside the tunnel.
+		if _, scopeErr := routePlan.AcquireMacOSPhysicalDefault(ctx, gatewayIP.String(), ifaceName); scopeErr != nil {
+			scopeErr = fmt.Errorf("failed to acquire scoped physical default route: %w", scopeErr)
+			signalInit(initResult, scopeErr)
+			return scopeErr
+		}
 	}
 
 	if serverIP.String() != "127.0.0.1" {

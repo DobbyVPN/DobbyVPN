@@ -13,6 +13,8 @@ import (
 
 var ipv4DefaultSubnets = []string{"0.0.0.0/1", "128.0.0.0/1"}
 
+var ipv4DefaultRoute = netip.MustParsePrefix("0.0.0.0/0")
+
 func (p *Plan) AcquireMacOSProxyRoute(ctx context.Context, proxyIP, gatewayIP, interfaceName string) (*Lease, error) {
 	if isLoopbackIP(proxyIP) {
 		return nil, nil
@@ -30,6 +32,25 @@ func (p *Plan) AcquireMacOSProxyRoute(ctx context.Context, proxyIP, gatewayIP, i
 		return nil, err
 	}
 	return p.acquireMacOSRoute(ctx, macOSRoute{prefix, gateway, iface.Index, unix.RTF_UP | unix.RTF_STATIC | unix.RTF_GATEWAY | unix.RTF_HOST})
+}
+
+// AcquireMacOSPhysicalDefault owns a default route scoped to the physical
+// interface for this session. Protected sockets are bound to that interface
+// with IP_BOUND_IF, so the kernel resolves them inside its scope, where this
+// session's own 0.0.0.0/1 and 128.0.0.0/1 shadow the unscoped default without
+// belonging to the scope. Darwin creates such a scoped route only for routes
+// it manages itself, so without this lease every direct connection outside the
+// tunnel fails immediately with ENETUNREACH.
+func (p *Plan) AcquireMacOSPhysicalDefault(ctx context.Context, gatewayIP, interfaceName string) (*Lease, error) {
+	gateway, err := netip.ParseAddr(gatewayIP)
+	if err != nil {
+		return nil, err
+	}
+	iface, err := macOSInterface(interfaceName)
+	if err != nil {
+		return nil, err
+	}
+	return p.acquireMacOSRoute(ctx, macOSRoute{ipv4DefaultRoute, gateway, iface.Index, unix.RTF_UP | unix.RTF_STATIC | unix.RTF_GATEWAY | unix.RTF_IFSCOPE})
 }
 
 func (p *Plan) AcquireMacOSIPv4Default(ctx context.Context, tunName string) error {
@@ -67,6 +88,10 @@ func findMacOSRoute(want macOSRoute) (*macOSRoute, error) {
 		}
 		// Ignore OS-generated neighbour clones; they do not own static policy.
 		if row.flags&(unix.RTF_WASCLONED|unix.RTF_LLINFO) != 0 {
+			continue
+		}
+		// A route in a different lookup namespace is not competing policy.
+		if !want.sameScope(row) {
 			continue
 		}
 		if !want.same(row) {

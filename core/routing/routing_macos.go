@@ -88,6 +88,17 @@ func (r macOSRoute) same(other macOSRoute) bool {
 	return r.prefix == other.prefix && r.gateway == other.gateway && r.index == other.index && r.flags&macOSIdentityFlags == other.flags&macOSIdentityFlags
 }
 
+// sameScope reports whether both routes live in the same lookup namespace.
+// Darwin keeps one namespace per interface scope alongside the unscoped table,
+// so the same destination may hold an unscoped route and a scoped route per
+// interface at once. Only routes sharing a namespace can conflict.
+func (r macOSRoute) sameScope(other macOSRoute) bool {
+	if r.flags&unix.RTF_IFSCOPE != other.flags&unix.RTF_IFSCOPE {
+		return false
+	}
+	return r.flags&unix.RTF_IFSCOPE == 0 || r.index == other.index
+}
+
 func (r macOSRoute) message(operation int) *route.RouteMessage {
 	addresses := make([]route.Addr, unix.RTAX_MAX)
 	addresses[unix.RTAX_DST] = routeAddress(r.prefix.Addr())
