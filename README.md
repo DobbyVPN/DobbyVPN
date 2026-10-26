@@ -50,7 +50,7 @@ after a transport failure.
 VPN DNS uses `9.9.9.9`, `1.1.1.1`, `2620:fe::fe` and
 `2606:4700:4700::1111`. Gateway hostnames use the underlying network's DNS.
 IPv4 and IPv6 application traffic are supported independently of the gateway's
-address family. Xray configurations retain their protocol and transport settings,
+address family. IPv6 destinations require IPv6 connectivity at the VPN exit. Xray configurations retain their protocol and transport settings,
 including Trojan and Hysteria2.
 
 Android supports the system's **Always-on VPN** and **Block connections without

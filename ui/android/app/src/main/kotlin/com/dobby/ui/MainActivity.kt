@@ -706,7 +706,7 @@ internal class SessionController(
             session.state == "CONNECTED" -> "Connected"
             session.state == "PROBING" || session.state == "PREPARING" -> "Connecting"
             session.state == "STOPPING" -> "Stopping"
-            session.failure.isNotEmpty() -> "Failed"
+            session.state == "FAILED" -> "Failed"
             else -> "Disconnected"
         }
     }
