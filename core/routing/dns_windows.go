@@ -28,5 +28,19 @@ func SetWindowsDNS(luid winipcfg.LUID, static bool, servers []netip.Addr) error 
 			log.Debugf(Category, "set tunnel DNS luid=%d family=%d static=%t servers=%v", luid, family, static, servers)
 		}
 	}
-	return errors.Join(errs...)
+	applyErr := errors.Join(errs...)
+	if static {
+		fields := map[string]any{"tunnel_luid": uint64(luid), "requested_servers": servers}
+		actual, inspectErr := luid.DNS()
+		if inspectErr != nil {
+			fields["inspection_error"] = inspectErr.Error()
+		} else {
+			fields["effective_servers"] = actual
+		}
+		if applyErr != nil {
+			fields["apply_error"] = applyErr.Error()
+		}
+		log.Info(Category, "Windows tunnel DNS state", fields)
+	}
+	return applyErr
 }
