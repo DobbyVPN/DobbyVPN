@@ -17,8 +17,8 @@ import (
 const Category = "DNSCache"
 const ServerResolveTimeout = 5 * time.Second
 
-// Resolver is scoped to the physical network. Native resolvers own caching and
-// DNS64 synthesis; Dobby must not pin a CDN address beyond the native cache.
+// Resolver is scoped to the physical network. Its native resolver or captured
+// DNS servers own caching and DNS64 answers; Dobby must not pin another CDN TTL.
 type Resolver func(context.Context, string) ([]net.IPAddr, error)
 
 // ResolverSource captures a current physical network before each lookup. The

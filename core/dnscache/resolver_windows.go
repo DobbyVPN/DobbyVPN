@@ -7,14 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"net"
 	"net/netip"
 	"runtime"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"core/log"
@@ -22,53 +20,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// These are the documented 64-bit DNS_QUERY_REQUEST, DNS_QUERY_RESULT and
-// DNS_RECORD layouts. Both supported Windows architectures use this ABI.
-type dnsQueryRequest struct {
-	version    uint32
-	name       *uint16
-	recordType uint16
-	options    uint64
-	servers    *byte
-	index      uint32
-	callback   uintptr
-	owner      uintptr
-}
-type dnsQueryResult struct {
-	version  uint32
-	status   uint32
-	options  uint64
-	records  *dnsRecord
-	reserved uintptr
-}
-type dnsRecord struct {
-	next       *dnsRecord
-	name       *uint16
-	recordType uint16
-	length     uint16
-	flags      uint32
-	ttl        uint32
-	reserved   uint32
-	data       [32]byte
-}
 type windowsResolver struct {
-	index    uint32
-	identity string
-	servers  []net.IPAddr
+	index     uint32
+	ipv4Index uint32
+	ipv6Index uint32
+	identity  string
+	servers   []net.IPAddr
 }
-
-var dnsAPI = windows.NewLazySystemDLL("dnsapi.dll")
-var dnsQueryEx = dnsAPI.NewProc("DnsQueryEx")
-var dnsCancelQuery = dnsAPI.NewProc("DnsCancelQuery")
-var dnsRecordFree = dnsAPI.NewProc("DnsRecordListFree")
-var dnsRequests sync.Map
-var dnsRequestID atomic.Uint64
-var dnsQueryCallback = windows.NewCallback(func(owner uintptr, _ uintptr) uintptr {
-	if value, ok := dnsRequests.Load(owner); ok {
-		close(value.(chan struct{}))
-	}
-	return 0
-})
 
 func (c *Cache) UseInterface(index int) error {
 	if _, _, _, err := CaptureWindowsInterface(context.Background(), index); err != nil {
@@ -139,7 +97,7 @@ func captureWindowsResolver(index uint32) (*windowsResolver, error) {
 			if adapter.IfIndex != index && adapter.Ipv6IfIndex != index {
 				continue
 			}
-			resolver := &windowsResolver{index: index}
+			resolver := &windowsResolver{index: index, ipv4Index: adapter.IfIndex, ipv6Index: adapter.Ipv6IfIndex}
 			var local []string
 			for address := adapter.FirstUnicastAddress; address != nil; address = address.Next {
 				local = append(local, address.Address.IP().String())
@@ -161,7 +119,7 @@ func captureWindowsResolver(index uint32) (*windowsResolver, error) {
 			if len(resolver.servers) == 0 {
 				return nil, errors.New("physical interface has no non-loopback DNS servers")
 			}
-			resolver.identity = fmt.Sprintf("windows:%d:%d:%v:%v", index, adapter.Luid, local, resolver.servers)
+			resolver.identity = fmt.Sprintf("windows:%d:%d:%d:%d:%v:%v", index, adapter.Luid, adapter.IfIndex, adapter.Ipv6IfIndex, local, resolver.servers)
 			runtime.KeepAlive(buffer)
 			return resolver, nil
 		}
@@ -169,110 +127,46 @@ func captureWindowsResolver(index uint32) (*windowsResolver, error) {
 	}
 }
 
+// The shared DNS Client service sends DnsQueryEx traffic under its own identity.
+// Query from backend-owned sockets so the retained guard can authorize only this
+// resolver's captured servers, without permitting other applications' DNS.
 func (r *windowsResolver) lookup(ctx context.Context, host string) ([]net.IPAddr, error) {
-	type response struct {
-		addresses []net.IPAddr
-		err       error
+	servers := make([]string, 0, len(r.servers))
+	for _, server := range r.servers {
+		servers = append(servers, net.JoinHostPort(server.String(), "53"))
 	}
-	results := make(chan response, 2)
-	for _, recordType := range []uint16{28, 1} {
-		go func(kind uint16) {
-			started := time.Now()
-			addresses, err := r.query(ctx, host, kind)
-			log.Debugf(Category, "native Windows lookup interface=%d host=%s type=%d servers=%v addresses=%v elapsed=%s err=%v", r.index, host, kind, r.servers, addresses, time.Since(started), err)
-			if err != nil {
-				err = fmt.Errorf("native Windows DNS interface=%d type=%d host=%s: %w", r.index, kind, host, err)
-			}
-			results <- response{addresses, err}
-		}(recordType)
-	}
-	var addresses []net.IPAddr
-	var failures []error
-	for range 2 {
-		result := <-results
-		addresses = append(addresses, result.addresses...)
-		failures = append(failures, result.err)
-	}
-	if ctx.Err() != nil {
-		return nil, errors.Join(ctx.Err(), errors.Join(failures...))
-	}
-	if len(addresses) == 0 {
-		return nil, errors.Join(failures...)
-	}
-	return addresses, nil
-}
-
-func (r *windowsResolver) query(ctx context.Context, host string, kind uint16) ([]net.IPAddr, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	name, err := windows.UTF16PtrFromString(host)
-	if err != nil {
-		return nil, err
-	}
-	owner := uintptr(dnsRequestID.Add(1))
-	completed := make(chan struct{})
-	dnsRequests.Store(owner, completed)
-	defer dnsRequests.Delete(owner)
-	// InterfaceIndex selects the physical adapter's native DNS configuration.
-	// Passing an explicit server list as well is rejected by DnsQueryEx. The
-	// before/after capture fence ensures this configuration still matches the
-	// retained resolver and its authorized bootstrap server addresses.
-	request := dnsQueryRequest{version: 1, name: name, recordType: kind, index: r.index, callback: dnsQueryCallback, owner: owner}
-	result := dnsQueryResult{version: 1}
-	var cancellation [4]uint64 // DNS_QUERY_CANCEL is 32 bytes, aligned to 8.
-	status, _, _ := dnsQueryEx.Call(uintptr(unsafe.Pointer(&request)), uintptr(unsafe.Pointer(&result)), uintptr(unsafe.Pointer(&cancellation)))
-	if status == 9506 { // DNS_REQUEST_PENDING
-		select {
-		case <-completed:
-		case <-ctx.Done():
-			cancelled, _, _ := dnsCancelQuery.Call(uintptr(unsafe.Pointer(&cancellation)))
-			// DnsCancelQuery requests cancellation; the completion callback owns the
-			// final native pointers. Never free or reuse them before it arrives.
-			<-completed
-			if cancelled != 0 {
-				err = fmt.Errorf("DnsCancelQuery: %w", syscall.Errno(cancelled))
-			}
-		}
-	} else if status != 0 {
-		err = fmt.Errorf("DnsQueryEx: %w", syscall.Errno(status))
-	}
-	runtime.KeepAlive(&request)
-	runtime.KeepAlive(&cancellation)
-	runtime.KeepAlive(r)
-	defer func() {
-		if result.records != nil {
-			dnsRecordFree.Call(uintptr(unsafe.Pointer(result.records)), 1)
-		}
-	}()
-	if ctx.Err() != nil {
-		return nil, errors.Join(ctx.Err(), err)
-	}
-	if result.status == 9501 || result.status == 9003 {
-		return nil, nil
-	}
-	if result.status != 0 {
-		return nil, errors.Join(err, fmt.Errorf("DNS type %d on interface %d: %w", kind, r.index, syscall.Errno(result.status)))
-	}
-	if err != nil {
-		return nil, err
-	}
-	var addresses []net.IPAddr
-	for record := result.records; record != nil; record = record.next {
-		var ip net.IP
-		switch record.recordType {
-		case 1:
-			ip = append(net.IP(nil), record.data[:4]...)
-		case 28:
-			ip = append(net.IP(nil), record.data[:16]...)
+	dialer := &net.Dialer{Control: func(network, address string, raw syscall.RawConn) error {
+		level := syscall.IPPROTO_IPV6
+		index := r.ipv6Index
+		switch network {
+		case "udp4", "tcp4":
+			level = syscall.IPPROTO_IP
+			index = r.ipv4Index
+		case "udp6", "tcp6":
 		default:
-			continue
+			return fmt.Errorf("unsupported physical DNS socket network %q", network)
 		}
-		address := net.IPAddr{IP: ip}
-		if ip.To4() == nil && ip.IsLinkLocalUnicast() {
-			address.Zone = strconv.FormatUint(uint64(r.index), 10)
+		if index == 0 {
+			return fmt.Errorf("physical DNS interface %d has no %s index", r.index, network)
 		}
-		addresses = append(addresses, address)
+		selectedIndex := index
+		if level == syscall.IPPROTO_IP {
+			index = bits.ReverseBytes32(index)
+		}
+		var bindErr error
+		if err := raw.Control(func(fd uintptr) {
+			bindErr = syscall.SetsockoptInt(syscall.Handle(fd), level, 31, int(index))
+			log.Debugf(Category, "Windows endpoint DNS socket interface=%d network=%s server=%s fd=%d err=%v", selectedIndex, network, address, fd, bindErr)
+		}); err != nil {
+			return err
+		}
+		return bindErr
+	}}
+	addresses, err := resolveCapturedDNSServers(ctx, host, servers, dialer, fmt.Sprintf("windows:%d", r.index))
+	for i := range addresses {
+		if addresses[i].IP.To4() == nil && addresses[i].IP.IsLinkLocalUnicast() {
+			addresses[i].Zone = strconv.FormatUint(uint64(r.ipv6Index), 10)
+		}
 	}
-	return addresses, nil
+	return addresses, err
 }
