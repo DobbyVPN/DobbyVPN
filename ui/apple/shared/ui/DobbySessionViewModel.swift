@@ -425,12 +425,6 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
-    private func markSourceAccepted(_ source: String) {
-        acceptedSource = source
-        sourceIsDirty = false
-        sourceText = source
-    }
-
     private func setError(
         _ message: String,
         origin: DobbySessionErrorOrigin,
@@ -647,6 +641,12 @@ extension DobbySessionViewModel {
 }
 
 extension DobbySessionViewModel {
+    private func markSourceAccepted(_ source: String) {
+        acceptedSource = source
+        sourceIsDirty = false
+        sourceText = source
+    }
+
     private var connected: Bool { snapshot.primaryAction == "STOP" }
 
     public var mainActionTitle: String {
