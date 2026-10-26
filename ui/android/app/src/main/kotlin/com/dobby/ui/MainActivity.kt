@@ -822,10 +822,9 @@ internal class SessionController(
         permissionTarget = null
         val current = latest
         if (state.busy || (current.primaryAction != "STOP" && !current.vpnActive)) return
-        dismissedErrors = emptySet()
-        // Stop acknowledges the displayed transport failure. Backend history
-        // must not reopen its dialog after the network has been released.
-        if (state.session.failure.isNotEmpty()) dismissError(state.session.failure)
+        // Preserve closed errors and acknowledge only the displayed transport failure.
+        val displayed = errors.firstOrNull { it !in dismissedErrors }
+        if (!displayed.isNullOrEmpty() && displayed == state.session.failure) dismissError(displayed)
         state = state.copy(busy = true, error = "")
         worker.execute {
             runCatching { NativeGoSession.stop(current.sessionId, current.generation) }

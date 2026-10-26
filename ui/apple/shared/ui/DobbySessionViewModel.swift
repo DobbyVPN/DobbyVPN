@@ -379,10 +379,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func performCommand(index: Int?, stopping: Bool, retrying: Bool = false) {
-        resetClosedFailures()
-        if stopping, let failure = snapshot.lastFailure {
-            dismissedFailures.insert("\(failure.message) (\(failure.code))")
-        }
+        if stopping { acknowledgeDisplayedTransportFailure() } else { resetClosedFailures() }
         busy = true
         setError("", origin: .other)
         let current = snapshot
@@ -713,6 +710,12 @@ extension DobbySessionViewModel {
         } else {
             dismissedFailures.insert(shown)
         }
+    }
+
+    private func acknowledgeDisplayedTransportFailure() {
+        guard let failure = snapshot.lastFailure else { return }
+        let message = "\(failure.message) (\(failure.code))"
+        if visibleFailure == message { dismissedFailures.insert(message) }
     }
 
     /// A new attempt shows its failure again, even when it repeats one the user closed.

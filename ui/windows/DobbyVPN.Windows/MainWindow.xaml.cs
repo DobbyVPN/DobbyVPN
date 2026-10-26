@@ -800,7 +800,8 @@ public sealed partial class MainWindow : Window
             _stopInFlight = true;
             var acknowledgedFailure = current.LastFailure is { } failure
                 ? $"{failure.Message} ({failure.Code})" : "";
-            if (acknowledgedFailure.Length > 0) _dismissedErrors.Add(acknowledgedFailure);
+            if (acknowledgedFailure.Length > 0 && (ShowActiveFailure || ShownError == acknowledgedFailure))
+                _dismissedErrors.Add(acknowledgedFailure);
             _errors.Operation = "";
             Render();
             try
@@ -819,7 +820,6 @@ public sealed partial class MainWindow : Window
             finally
             {
                 _stopInFlight = false;
-                _dismissedErrors.RemoveWhere(detail => detail != acknowledgedFailure);
                 if (!_lifetime.IsClosing)
                 {
                     await RefreshSnapshotAsync(cancellationToken);
