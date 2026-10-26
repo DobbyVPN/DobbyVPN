@@ -1054,7 +1054,7 @@ internal class SessionController(
             if (retained != null && retainedLogViewState === retained) {
                 retainedLogViewValid = result.retainedEntriesVisible == true
             }
-            state = state.copy(logs = result.entries, logsError = result.error)
+            state = state.copy(logs = result.entries.filter { StructuredLogs.isShownOnScreen(it) }, logsError = result.error)
         }
     }
 

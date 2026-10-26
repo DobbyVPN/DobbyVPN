@@ -1546,8 +1546,10 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _logsError = error.Message; RenderError(); }
     }
 
+    // DEBUG and TRACE stay in the files and the export; the screen shows what a person reads.
     private static List<NativeDiagnostics.Entry> Shown(IEnumerable<NativeDiagnostics.Entry> entries) =>
-        entries.Where(entry => !entry.Raw.Contains("\"event\":\"logs.backend-ingested\"", StringComparison.Ordinal)).ToList();
+        entries.Where(entry => entry.Level is not ("DEBUG" or "TRACE")
+            && !entry.Raw.Contains("\"event\":\"logs.backend-ingested\"", StringComparison.Ordinal)).ToList();
 
     private void RenderLogs()
     {

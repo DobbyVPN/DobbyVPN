@@ -99,6 +99,9 @@ internal class StructuredLogs(private val paths: List<String>, private val bound
     }
 
     companion object {
+        /** DEBUG and TRACE stay in the files and the export; the screen shows what a person reads. */
+        fun isShownOnScreen(entry: LogEntry): Boolean = entry.level != "DEBUG" && entry.level != "TRACE"
+
         fun friendlyStream(name: String): String = when {
             name.contains("stderr") -> if (name.contains("tunnel")) "Tunnel stderr" else "Backend stderr"
             name.contains("ui") || name.contains("app") -> "App"

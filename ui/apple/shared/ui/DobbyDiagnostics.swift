@@ -20,6 +20,9 @@ func exportDiagnostics(paths: [URL], to url: URL, header: String) throws -> Stri
 
 typealias DobbyLogEntry = DiagnosticFiles.Entry
 
+/// DEBUG and TRACE stay in the files and the export; the screen shows what a person reads.
+func isShownOnScreen(_ entry: DobbyLogEntry) -> Bool { entry.level != "DEBUG" && entry.level != "TRACE" }
+
 func structuredPreview(paths: [URL], boundary: URL) -> (entries: [DobbyLogEntry], error: String) {
     DiagnosticFiles.entries(paths: paths, boundary: boundary)
 }
