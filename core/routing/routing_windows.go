@@ -190,76 +190,63 @@ func CleanupStaleWindowsIPv6FirewallRules() error {
 	return windowsFirewallRemove(IsOwnedWindowsIPv6RuleName)
 }
 
-func acquireIPv6Block(plan *Plan) error {
-	ruleName := "DobbyVPN Block IPv6 " + plan.SessionID()
-	_, err := plan.Acquire("IPv6 firewall rule "+ruleName,
-		func() error { return windowsFirewallAdd(ruleName) },
-		func(_ context.Context) error {
-			return windowsFirewallRemove(func(name string) bool { return name == ruleName })
-		})
-	return err
-}
-
-// ConfigureWindowsRouting acquires all Windows routing resources into plan.
-// Any failure closes the plan, rolling back in LIFO order and leaving routes
-// that existed before this session untouched.
-func ConfigureWindowsRouting(plan *Plan, proxyIP, gatewayIP, tunDeviceName, interfaceName string) error {
-	if _, err := AcquireProxyRoute(plan, proxyIP, gatewayIP, interfaceName); err != nil {
-		return err
-	}
-	for _, subnet := range ipv4ReservedSubnets {
-		if _, err := acquireWindowsRoute(plan, "reserved bypass "+subnet, windowsRoute{prefix: subnet, nextHop: gatewayIP, interfaceName: interfaceName}); err != nil {
+// ConfigureWindowsRouting captures both families on the retained adapter.
+// Physical routes and resolvers remain owned by Windows; protected sockets bind
+// their selected physical interface. No endpoint-specific host route is needed.
+func ConfigureWindowsRouting(plan *Plan, tunDeviceName string) error {
+	for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1"} {
+		nextHop := "0.0.0.0"
+		if strings.Contains(prefix, ":") {
+			nextHop = "::"
+		}
+		if _, err := acquireWindowsRoute(plan, "TUN redirect "+prefix, windowsRoute{prefix: prefix, nextHop: nextHop, interfaceName: tunDeviceName}); err != nil {
 			return err
 		}
-	}
-	for _, subnet := range ipv4Subnets {
-		// Wintun is a layer-3 adapter without a peer responding to ARP. Use an
-		// explicit on-link route instead of inventing a gateway which Windows
-		// can mark unreachable even though the route remains in ActiveStore.
-		if _, err := acquireWindowsRoute(plan, "TUN redirect "+subnet, windowsRoute{prefix: subnet, nextHop: windowsOnLinkNextHop, interfaceName: tunDeviceName}); err != nil {
-			return err
-		}
-	}
-	if err := acquireIPv6Block(plan); err != nil {
-		return err
 	}
 	return nil
 }
 
-// DiscoverWindowsDefaultRoute selects the live IPv4 default route by the
-// combined route/interface metric. No command output or gateway dependency is used.
-func DiscoverWindowsDefaultRoute() (net.IP, *net.Interface, error) {
-	rows, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
-	if err != nil {
-		return nil, nil, err
+// WindowsPhysicalInterfaces selects the live default of each family using the
+// route plus interface metric. Gateway-less defaults are valid on a physical
+// point-to-point link. No VPN-owned route participates in selection.
+func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
+	for _, family := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
+		rows, readErr := winipcfg.GetIPForwardTable2(family)
+		if readErr != nil {
+			return 0, 0, readErr
+		}
+		best := ^uint64(0)
+		selected := 0
+		for _, row := range rows {
+			if row.DestinationPrefix.Prefix().Bits() != 0 {
+				continue
+			}
+			iface, readErr := net.InterfaceByIndex(int(row.InterfaceIndex))
+			if readErr != nil {
+				return 0, 0, readErr
+			}
+			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || IsTunnelInterfaceName(iface.Name) {
+				continue
+			}
+			settings, readErr := row.InterfaceLUID.IPInterface(family)
+			if readErr != nil {
+				return 0, 0, readErr
+			}
+			metric := uint64(row.Metric) + uint64(settings.Metric)
+			if metric < best {
+				best, selected = metric, iface.Index
+			}
+		}
+		if family == windows.AF_INET {
+			ipv4 = selected
+		} else {
+			ipv6 = selected
+		}
 	}
-	var selected *net.Interface
-	var gateway net.IP
-	best := uint64(^uint32(0)) * 2
-	for _, row := range rows {
-		if row.DestinationPrefix.Prefix() != netip.MustParsePrefix("0.0.0.0/0") || row.NextHop.Addr().IsUnspecified() {
-			continue
-		}
-		iface, err := net.InterfaceByIndex(int(row.InterfaceIndex))
-		if err != nil {
-			return nil, nil, err
-		}
-		if iface.Flags&net.FlagUp == 0 || IsTunnelInterfaceName(iface.Name) {
-			continue
-		}
-		settings, err := row.InterfaceLUID.IPInterface(windows.AF_INET)
-		if err != nil {
-			return nil, nil, err
-		}
-		metric := uint64(row.Metric) + uint64(settings.Metric)
-		if metric < best {
-			best, selected, gateway = metric, iface, net.IP(row.NextHop.Addr().AsSlice())
-		}
+	if ipv4 == 0 && ipv6 == 0 {
+		return 0, 0, errors.New("no active physical IPv4 or IPv6 default route")
 	}
-	if selected == nil {
-		return nil, nil, errors.New("no active IPv4 uplink default route")
-	}
-	return gateway, selected, nil
+	return ipv4, ipv6, nil
 }
 
 func IsTunnelInterfaceName(name string) bool {

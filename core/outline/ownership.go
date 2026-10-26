@@ -207,26 +207,15 @@ func (d *OutlineDevice) dialContext(parent context.Context) (operation context.C
 	return ctx, func() { stop(); cancel() }
 }
 
-// Resolve keeps SOCKS hostname lookups under the same owner as dialing. The
-// upstream default uses net.ResolveIPAddr with a background context, which can
-// leave Close waiting for DNS workers after the tunnel has already stopped.
-func (d *OutlineDevice) Resolve(parent context.Context, name string) (context.Context, net.IP, error) {
-	ctx, cancel := d.dialContext(parent)
-	defer cancel()
-	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, name)
-	if err != nil {
+// Resolve leaves the application destination hostname in the SOCKS request.
+// Shadowsocks carries it inside the encrypted connection for remote resolution.
+// A local lookup would depend on VPN DNS before readiness admits application
+// packets. Only the transport gateway uses the underlying-network resolver.
+func (d *OutlineDevice) Resolve(parent context.Context, _ string) (context.Context, net.IP, error) {
+	if err := parent.Err(); err != nil {
 		return parent, nil, err
 	}
-	// Preserve ResolveIPAddr's preference for IPv4 when resolving a hostname.
-	for _, address := range addresses {
-		if address.IP.To4() != nil {
-			return parent, address.IP, nil
-		}
-	}
-	if len(addresses) == 0 {
-		return parent, nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
-	}
-	return parent, addresses[0].IP, nil
+	return parent, nil, d.ctx.Err()
 }
 
 func (d *OutlineDevice) Close() error {

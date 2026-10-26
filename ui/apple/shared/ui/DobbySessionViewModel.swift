@@ -49,6 +49,9 @@ public enum DobbyProfileStatus: String {
 public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
     @Published public private(set) var busy = false
+    @Published public private(set) var onDemandEnabled = false
+    @Published public private(set) var onDemandBusy = false
+    private var onDemandRefreshPending = false
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
@@ -108,6 +111,7 @@ public final class DobbySessionViewModel: ObservableObject {
         self.debounceScheduler = debounceScheduler
         recordAppStarted()
         refreshSnapshot()
+        refreshOnDemandPreference()
         if automaticallyPoll {
             timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.refreshForTimerTick() }
@@ -127,18 +131,34 @@ public final class DobbySessionViewModel: ObservableObject {
 
     public var status: String {
         if !error.isEmpty { return "Error" }
+        if snapshot.state == "FAILED" { return "Failed" }
         if snapshot.recovering { return "Reconnecting" }
         switch snapshot.state {
         case "CONNECTED": return "Connected"
         case "PROBING", "PREPARING": return "Connecting"
         case "STOPPING": return "Stopping"
-        case "FAILED": return "Failed"
         default: return "Disconnected"
         }
     }
 
     public var inventoryReady: Bool {
         snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && loadError.isEmpty
+    }
+
+    private var protectedRetryState: Bool {
+        snapshot.state == "FAILED" && snapshot.vpnActive && snapshot.canRetry && snapshot.primaryAction == "RETRY"
+    }
+
+    public var canRetryActiveSelection: Bool {
+        !busy && !snapshot.sessionID.isEmpty && protectedRetryState
+    }
+
+    private var networkCanBeStopped: Bool {
+        snapshot.vpnActive || snapshot.primaryAction == "STOP"
+    }
+
+    public var canStop: Bool {
+        !busy && !snapshot.sessionID.isEmpty && networkCanBeStopped
     }
 
     public func isStopTarget(_ index: Int?) -> Bool {
@@ -157,7 +177,10 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func canAct(_ index: Int? = nil) -> Bool {
-        !busy && !snapshot.sessionID.isEmpty && (isStopTarget(index) || inventoryReady && (snapshot.primaryAction == "START" || snapshot.canSwitch))
+        guard !busy, !snapshot.sessionID.isEmpty else { return false }
+        if isStopTarget(index) { return true }
+        if protectedRetryState { return index == nil && canRetryActiveSelection }
+        return inventoryReady && (snapshot.primaryAction == "START" || snapshot.canSwitch)
     }
 
     public func dismissError() {
@@ -340,16 +363,22 @@ public final class DobbySessionViewModel: ObservableObject {
 
     public func performPrimaryAction(_ index: Int? = nil) {
         guard canAct(index) else { return }
+        if protectedRetryState, index == nil { retryActiveSelection(); return }
         if isStopTarget(index) { stop(); return }
         performCommand(index: index, stopping: false)
     }
 
+    public func retryActiveSelection() {
+        guard canRetryActiveSelection else { return }
+        performCommand(index: nil, stopping: false, retrying: true)
+    }
+
     public func stop() {
-        guard !busy, snapshot.primaryAction == "STOP" else { return }
+        guard canStop else { return }
         performCommand(index: nil, stopping: true)
     }
 
-    private func performCommand(index: Int?, stopping: Bool) {
+    private func performCommand(index: Int?, stopping: Bool, retrying: Bool = false) {
         resetClosedFailures()
         busy = true
         setError("", origin: .other)
@@ -359,6 +388,18 @@ public final class DobbySessionViewModel: ObservableObject {
             let outcome = Result {
                 if stopping {
                     try DobbyResponse.check(client.call("Stop", parameters: ["session_id": current.sessionID, "generation": current.generation]))
+                } else if retrying {
+                    let latest = try DobbyResponse.result(from: client.call("Snapshot", parameters: ["session_id": current.sessionID]), as: DobbySessionSnapshot.self)
+                    guard latest.canRetry, latest.vpnActive, latest.state == "FAILED",
+                          latest.generation == current.generation, latest.activeDigest == current.activeDigest,
+                          latest.activeMode == current.activeMode, latest.activeIndex == current.activeIndex else {
+                        throw NSError(domain: "DobbyVPN.Session", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connection changed before Retry. Refresh and try again."])
+                    }
+                    try DobbyResponse.check(client.call("Start", parameters: [
+                        "session_id": current.sessionID, "expected_sequence": latest.sequence,
+                        "mode": current.activeMode, "index": current.activeIndex,
+                        "digest": current.activeDigest,
+                    ]))
                 } else {
                     try DobbyResponse.check(client.call("Start", parameters: [
                         "session_id": current.sessionID, "expected_sequence": current.sequence,
@@ -373,6 +414,7 @@ public final class DobbySessionViewModel: ObservableObject {
                 if case let .failure(failure) = outcome {
                     self.setError(failure.localizedDescription, origin: .other)
                 }
+                if stopping { self.refreshOnDemandPreference() }
                 self.refreshSnapshot()
             }
         }
@@ -553,16 +595,70 @@ public final class DobbySessionViewModel: ObservableObject {
 }
 
 extension DobbySessionViewModel {
+    public var supportsOnDemand: Bool {
+        client is any DobbyOnDemandClient
+    }
+
+    public func refreshOnDemandPreference() {
+        guard let onDemandClient = client as? any DobbyOnDemandClient else { return }
+        guard !onDemandBusy else {
+            onDemandRefreshPending = true
+            return
+        }
+        onDemandBusy = true
+        Task { @MainActor [weak self, onDemandClient] in
+            guard let self else { return }
+            defer { self.finishOnDemandOperation() }
+            do {
+                self.onDemandEnabled = try await onDemandClient.onDemandEnabled()
+            } catch {
+                self.setError("Could not read Connect on demand preference: \(error.localizedDescription)", origin: .other)
+            }
+        }
+    }
+
+    public func setOnDemandEnabled(_ enabled: Bool) {
+        guard !onDemandBusy, let onDemandClient = client as? any DobbyOnDemandClient else { return }
+        onDemandBusy = true
+        Task { @MainActor [weak self, onDemandClient] in
+            guard let self else { return }
+            defer { self.finishOnDemandOperation() }
+            do {
+                try await onDemandClient.setOnDemandEnabled(enabled)
+                self.onDemandEnabled = try await onDemandClient.onDemandEnabled()
+            } catch {
+                self.setError("Could not update Connect on demand preference: \(error.localizedDescription)", origin: .other)
+            }
+        }
+    }
+
+    private func finishOnDemandOperation() {
+        onDemandBusy = false
+        if onDemandRefreshPending {
+            onDemandRefreshPending = false
+            refreshOnDemandPreference()
+        }
+    }
+}
+
+extension DobbySessionViewModel {
     private var connected: Bool { snapshot.primaryAction == "STOP" }
 
     public var mainActionTitle: String {
-        if !connected { return busy ? "Connecting…" : "Auto connect" }
-        return ["CONNECTED", "STOPPING"].contains(snapshot.state) && snapshot.pendingTarget == nil ? "Disconnect" : "Connecting…"
+        if protectedRetryState { return busy ? "Retrying…" : "Retry" }
+        if !networkCanBeStopped { return busy ? "Connecting…" : "Auto connect" }
+        if snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil { return "Disconnect" }
+        if snapshot.state == "STOPPING" { return "Stopping…" }
+        return busy ? "Stopping…" : "Stop"
     }
 
-    public var mainActionEnabled: Bool { connected ? !busy : canAct() }
+    public var mainActionEnabled: Bool { canRetryActiveSelection || canStop || canAct() }
 
-    public func mainAction() { connected ? stop() : performPrimaryAction() }
+    public func mainAction() {
+        if protectedRetryState { retryActiveSelection() }
+        else if networkCanBeStopped { stop() }
+        else { performPrimaryAction() }
+    }
 
     public func profileStatus(_ index: Int) -> DobbyProfileStatus? {
         guard snapshot.activeDigest == snapshot.digest else { return nil }

@@ -58,17 +58,20 @@ func (m *Manager) cleanupContext(s *session) context.Context {
 func (m *Manager) StopAndWait(ctx context.Context) error {
 	s := m.session
 	s.mu.Lock()
-	s.closing = true
+	s.closing, s.stopRequested = true, true
 	s.pending = nil
 	s.recovering, s.restartAfterCleanup, s.recoveryOriginGeneration = false, false, 0
-	if !s.cleanupDone && s.state != StateFailed {
+	if !s.cleanupDone && !s.cleanupFailed {
+		wasDormant := s.state == StateFailed
 		s.state = StateStopping
-		if s.cleanupBudget == nil {
+		if s.cleanupBudget == nil || wasDormant {
 			s.cleanupBudget = &cleanupBudget{}
 		}
 		s.cleanupBudget.begin()
 		if s.cancel != nil {
 			s.cancel()
+		} else if wasDormant {
+			go m.finish(s, s.generation, nil)
 		}
 	}
 	m.appendLocked(s)

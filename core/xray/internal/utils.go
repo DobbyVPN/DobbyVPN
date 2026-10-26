@@ -1,15 +1,11 @@
 package internal
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 
 	xrayLog "github.com/xtls/xray-core/common/log"
-
-	"core/dnscache"
 )
 
 const (
@@ -45,47 +41,6 @@ func XrayLogLevelName(level xrayLog.Severity) string {
 	}
 }
 
-// ExtractServerIP resolves the accepted configuration for this attempt.
-func ExtractServerIP(config map[string]any, dnsCache *dnscache.Cache) (string, error) {
-	if dnsCache == nil {
-		return "", errors.New("DNS cache is required")
-	}
-
-	// Assuming standard Xray config structure where outbound[0] is the proxy
-	address, ok := firstXrayServerAddress(config)
-	if ok {
-		return resolveIP(address, dnsCache)
-	}
-	return "", errors.New("could not find server address in config")
-}
-
-func firstXrayServerAddress(config map[string]interface{}) (string, bool) {
-	outbounds, ok := config["outbounds"].([]interface{})
-	if !ok || len(outbounds) == 0 {
-		return "", false
-	}
-	firstOut, ok := outbounds[0].(map[string]interface{})
-	if !ok {
-		return "", false
-	}
-	settings, ok := firstOut["settings"].(map[string]interface{})
-	if !ok {
-		return "", false
-	}
-	vnext, ok := settings["vnext"].([]interface{})
-	if !ok || len(vnext) == 0 {
-		return "", false
-	}
-	server, ok := vnext[0].(map[string]interface{})
-	if !ok {
-		return "", false
-	}
-	address, ok := server["address"].(string)
-	return address, ok
-}
-
-// ExtractLogLevel reads the optional setting from the accepted configuration.
-// An omitted setting uses the app default without reporting a parse failure.
 func ExtractLogLevel(config map[string]any) (xrayLog.Severity, error) {
 	if config["log"] == nil {
 		return DefaultXrayLogLevel(), nil
@@ -112,21 +67,4 @@ func ExtractLogLevel(config map[string]any) (xrayLog.Severity, error) {
 		}
 	}
 	return xrayLog.Severity_Unknown, errors.New("could not find log level in config")
-}
-
-// resolveIP resolves a domain to an IP, or returns the IP if it's already one.
-func resolveIP(addr string, dnsCache *dnscache.Cache) (string, error) {
-	ip := net.ParseIP(addr)
-	if ip != nil {
-		if ip4 := ip.To4(); ip4 != nil {
-			return ip4.String(), nil
-		}
-		return "", errors.New("IPv6 address not supported; routing requires IPv4")
-	}
-
-	ip4, err := dnsCache.ResolvePreflightIPv4(context.Background(), addr, dnscache.ServerResolveTimeout, "xray")
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve xray address %q: %w", addr, err)
-	}
-	return ip4.String(), nil
 }

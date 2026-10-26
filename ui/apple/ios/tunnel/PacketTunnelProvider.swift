@@ -25,8 +25,10 @@ private enum GomobileProviderSessionClient {
 // be interpreted as illegal multiple class inheritance on Simulator builds.
 /// Go snapshots are authoritative; callbacks synchronize native tunnel state.
 private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksProtocol {
-    private let acquireHandler: (_ sessionID: String?, _ generation: Int64) -> String
+    private let acquireHandler: (_ sessionID: String?, _ generation: Int64, _ dnsServersJSON: String?) -> String
     private let releaseHandler: (_ sessionID: String?, _ generation: Int64, _ timeoutMillis: Int64) -> String
+    private let networkHandler: (_ sessionID: String?, _ generation: Int64) -> String
+    private let protectHandler: (_ sessionID: String?, _ generation: Int64, _ fd: Int32) -> Bool
     private let stateHandler: (
         _ sessionID: String?,
         _ generation: Int64,
@@ -35,8 +37,10 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
     ) -> Void
 
     init(
-        acquireHandler: @escaping (_ sessionID: String?, _ generation: Int64) -> String,
+        acquireHandler: @escaping (_ sessionID: String?, _ generation: Int64, _ dnsServersJSON: String?) -> String,
         releaseHandler: @escaping (_ sessionID: String?, _ generation: Int64, _ timeoutMillis: Int64) -> String,
+        networkHandler: @escaping (_ sessionID: String?, _ generation: Int64) -> String,
+        protectHandler: @escaping (_ sessionID: String?, _ generation: Int64, _ fd: Int32) -> Bool,
         stateHandler: @escaping (
             _ sessionID: String?,
             _ generation: Int64,
@@ -46,12 +50,14 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
     ) {
         self.acquireHandler = acquireHandler
         self.releaseHandler = releaseHandler
+        self.networkHandler = networkHandler
+        self.protectHandler = protectHandler
         self.stateHandler = stateHandler
         super.init()
     }
 
-    func acquireTunnel(_ sessionID: String?, generation: Int64) -> String {
-        acquireHandler(sessionID, generation)
+    func acquireTunnel(_ sessionID: String?, generation: Int64, dnsServersJSON: String?) -> String {
+        acquireHandler(sessionID, generation, dnsServersJSON)
     }
 
     func releaseTunnel(_ sessionID: String?, generation: Int64, fd: Int32, timeoutMillis: Int64) -> String {
@@ -65,7 +71,11 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
         // BSD sockets opened by the packet tunnel provider are excluded from
         // its own tunnel by NetworkExtension. This callback remains in the
         // shared platform contract; iOS has no additional socket option.
-        return true
+        return protectHandler(sessionID, generation, fd)
+    }
+
+    func underlyingNetwork(_ sessionID: String?, generation: Int64) -> String {
+        networkHandler(sessionID, generation)
     }
 
     func publishState(
@@ -75,6 +85,15 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
         failureCode: String?
     ) {
         stateHandler(sessionID, generation, state, failureCode)
+    }
+
+    func loadActivation() -> String {
+        SharedKeychainSecretStore.shared.string(for: SharedKeychainSecretStore.activationKey) ?? ""
+    }
+
+    func saveActivation(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return SharedKeychainSecretStore.shared.set(value, for: SharedKeychainSecretStore.activationKey)
     }
 
     func loadSourceURL() -> String {
@@ -106,11 +125,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     var callbackBridge: AnyObject?
     private func registerPlatform() throws {
         let bridge = IOSPlatformCallbacks(
-            acquireHandler: { sessionID, generation in
-                self.acquireTunnel(sessionID: sessionID, generation: generation)
+            acquireHandler: { sessionID, generation, dnsServersJSON in
+                self.acquireTunnel(sessionID: sessionID, generation: generation, dnsServersJSON: dnsServersJSON)
             },
             releaseHandler: { sessionID, generation, timeoutMillis in
                 self.releaseTunnel(sessionID: sessionID, generation: generation, timeoutMillis: timeoutMillis)
+            },
+            networkHandler: { sessionID, generation in
+                self.underlyingNetwork(sessionID: sessionID, generation: generation)
+            },
+            protectHandler: { sessionID, generation, fd in
+                self.settingsQueue.sync {
+                    fd >= 0 && self.networkSession == sessionID && self.networkGeneration == generation
+                }
             },
             stateHandler: { sessionID, generation, state, failureCode in
                 self.handleGoPublishedState(sessionID: sessionID, generation: generation, state: state, failureCode: failureCode)
@@ -126,6 +153,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     var pathMonitor: Network.NWPathMonitor?
     var lastPathSignature: String?
+    let physicalPathLock = NSLock()
+    var physicalPath: Network.NWPath?
+    var physicalRevision: UInt64 = 0
+    var networkSession: String?
+    var networkGeneration: Int64 = -1
 
     private func fixedCString<T>(_ value: inout T) -> String {
         withUnsafePointer(to: &value) { pointer in
@@ -268,6 +300,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logInitialNetworkPath(timeout: 1.0)
         logs.writeLog(log: "service_logger_init result=success state=ready")
         logs.writeLog(log: "[tunnel:\(tunnelId)] control-mode logger ready")
+        if (options?["dobby_control_only"] as? NSNumber)?.boolValue != true {
+            // System Settings and On Demand supply no app-only control flag.
+            // Go owns loading, selection, retries and the protected failure state.
+            let reply = DobbyvpnRestoreSession()
+            guard let data = reply.data(using: .utf8),
+                  let result = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  result["ok"] as? Bool == true else {
+                logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] automatic startup failed: \(reply)")
+                await teardownForStop(reason: "automatic startup failed", completionHandler: {})
+                throw sessionError(reply)
+            }
+            logs.writeLog(log: "[tunnel:\(tunnelId)] automatic startup acquired protection: \(reply)")
+        }
     }
 
     private func sessionError(_ code: String) -> NSError {

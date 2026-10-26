@@ -1,157 +1,121 @@
 //go:build darwin && !(android || ios)
-// +build darwin,!android,!ios
 
 package internal
 
 import (
 	"context"
-	"core/log"
-	"core/tunnel/platform_engine"
-	"core/tunnel/protected_dialer"
+	"errors"
 	"fmt"
+	"net"
 	"time"
 
+	"core/dnscache"
+	"core/log"
 	"core/routing"
 	"core/tunnel"
-
-	"github.com/jackpal/gateway"
+	"core/tunnel/platform_engine"
+	"core/tunnel/protected_dialer"
 )
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
-	log.Debugf(Category, "[Darwin][Init] VPN initialization started")
-	if app.ProtocolDevice == nil {
-		err := fmt.Errorf("protocol device is not initialized")
-		signalInit(initResult, err)
-		return err
-	}
 	if app.RoutingConfig == nil {
-		err := fmt.Errorf("routing config is not initialized")
+		err := errors.New("routing config is not initialized")
 		signalInit(initResult, err)
 		return err
 	}
-
-	gatewayIP, err := gateway.DiscoverGateway()
-	if err != nil {
-		err = fmt.Errorf("failed to discover gateway: %w", err)
-		signalInit(initResult, err)
-		return err
-	}
-
-	log.Debugf(Category, "[Network] Default gateway detected")
-
-	serverIP := app.ProtocolDevice.GetServerIP()
-	if serverIP == nil {
-		err = fmt.Errorf("server IP is nil")
-		signalInit(initResult, err)
-		return err
-	}
-	log.Debugf(Category, "[Routing] VPN server address resolved")
-
-	ifaceName, idx, err := protected_dialer.GetDefaultInterfaceNameDarwin(gatewayIP)
-	if err != nil {
-		log.Errorf(Category, "[Darwin-Protect] failed to detect default interface for protected sockets: %v", err)
-	} else {
-		log.Debugf(Category, "[Darwin-Protect] Selected interface for direct traffic: %s (index=%d)", ifaceName, idx)
-	}
-
-	routePlan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
+	plan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
 	var ownedEngine *tunnel.Engine
-	tunName := ""
-	protocolOpened := false
-	app.setCleanup(routePlan.Close,
-		func(ctx context.Context) error {
-			if ownedEngine != nil {
-				return ownedEngine.Stop(ctx)
-			}
-			return nil
-		},
-		func(context.Context) error {
-			if protocolOpened {
-				return app.ProtocolDevice.Close()
-			}
-			return nil
-		},
-		func(context.Context) error {
-			protected_dialer.ResetDefaultRoute()
-			return nil
-		})
-	if err == nil {
-		protected_dialer.SetDefaultRoute(gatewayIP.String(), ifaceName, idx)
-	}
-
-	if serverIP.String() != "127.0.0.1" {
-		log.Debugf(Category, "[Darwin][Routing] acquiring direct VPN bypass route")
-		_, err = routePlan.AcquireMacOSProxyRoute(ctx, serverIP.String(), gatewayIP.String(), ifaceName)
-		if err != nil {
-			err = fmt.Errorf("failed to acquire server bypass route: %w", err)
-			signalInit(initResult, err)
-			return err
+	app.setCleanup(plan.Close, func(ctx context.Context) error {
+		if ownedEngine != nil {
+			return ownedEngine.Stop(ctx)
 		}
-	} else {
-		log.Debugf(Category, "[Darwin][Routing] loopback server bypass not required")
-	}
+		return nil
+	}, func(context.Context) error { protected_dialer.ResetDefaultRoute(); return nil })
 
-	log.Debugf(Category, "[Darwin][Protocol] opening protocol SOCKS bridge")
-	// Open may partially allocate protocol resources before returning an error.
-	protocolOpened = true
-	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, ifaceName)
+	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
+		physical, err := routing.CaptureMacOSPhysicalNetwork(queryCtx)
+		if err != nil {
+			protected_dialer.ResetDefaultRoute()
+			return "", nil, err
+		}
+		protected_dialer.SetPhysicalInterfaces(physical.IPv4, physical.IPv6)
+		index := physical.IPv4
+		if index == 0 {
+			index = physical.IPv6
+		}
+		resolve := dnscache.AppleLinkResolver(index)
+		fenced := func(lookupCtx context.Context, host string) ([]net.IPAddr, error) {
+			addresses, err := resolve(lookupCtx, host)
+			after, inspectErr := routing.CaptureMacOSPhysicalNetwork(lookupCtx)
+			if inspectErr != nil {
+				return nil, errors.Join(err, inspectErr)
+			}
+			if after.Identity != physical.Identity {
+				return nil, errors.Join(err, errors.New("physical macOS network changed during DNS lookup"))
+			}
+			return addresses, err
+		}
+		return physical.Identity, fenced, nil
+	}
+	// Capture the physical service before publishing the owned supplemental DNS.
+	// The same source is refreshed for every endpoint lookup and link observation.
+	identity, _, err := capture(ctx)
 	if err != nil {
-		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(Category, "[Darwin][Protocol] protocol SOCKS bridge ready")
-
-	log.Debugf(Category, "[Darwin][Tunnel] starting tun2socks engine")
-
-	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{
-		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
-		FD:          -1,
-		UplinkIface: "",
-	}, app.DNSCache, app.BypassPolicy)
+	app.DNSCache.SetResolverSource(capture)
+	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{FD: -1}, app.DNSCache, app.BypassPolicy)
+	app.Engine = ownedEngine
 	if err != nil {
 		signalInit(initResult, err)
 		return err
 	}
-	tunName = ownedEngine.InterfaceName()
-
-	if tunName == "" {
-		err = fmt.Errorf("tun2socks did not report a TUN interface")
+	name := ownedEngine.InterfaceName()
+	if name == "" {
+		err = errors.New("new macOS packet stack has no interface")
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(Category, "[Darwin][Tunnel] tun2socks engine ready interface=%s", tunName)
-
-	err = routePlan.AcquireMacOSIPv4Default(ctx, tunName)
+	if err = plan.AcquireMacOSIPv4Default(ctx, name); err == nil {
+		err = plan.AcquireMacOSIPv6Default(ctx, name)
+	}
 	if err == nil {
-		err = routePlan.AcquireMacOSIPv6Block(ctx, tunName)
+		_, err = plan.AcquireMacOSDNS(ctx, name, app.RoutingConfig.DNSServers)
 	}
 	if err != nil {
-		err = fmt.Errorf("failed to acquire generation-owned routing: %w", err)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Debugf(Category, "[Darwin][Routing] generation-owned IPv4, IPv6, and protected routes ready")
-
-	log.Debugf(Category, "[Darwin][Lifecycle] VPN initialization completed successfully")
-
+	log.Info(Category, "macOS retained network ready", map[string]any{"interface": name, "network_identity": identity})
 	signalInit(initResult, nil)
 
-	routeRepair := time.NewTicker(time.Second)
-	defer routeRepair.Stop()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	previousError := ""
 	for {
 		select {
 		case <-ctx.Done():
-			log.Debugf(Category, "[Darwin][Lifecycle] context cancelled — stopping generation")
 			return nil
-		case <-routeRepair.C:
-			repaired, repairErr := routePlan.Repair()
-			if repairErr != nil {
-				return fmt.Errorf("repair macOS session routing: %w", repairErr)
-			}
-			if repaired {
-				log.Debugf(Category, "[Darwin][Routing] restored routes removed during physical-uplink transition")
+		case <-ticker.C:
+			// Physical service transitions may remove interface routes. Repair only
+			// the exact routes owned by this network; never replace foreign state.
+			repaired, repairErr := plan.Repair()
+			refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			currentIdentity, _, refreshErr := capture(refreshCtx)
+			cancel()
+			if err := errors.Join(repairErr, refreshErr); err != nil {
+				if err.Error() != previousError {
+					log.Error(Category, "macOS network maintenance failed; interface retained", map[string]any{"interface": name, "cause": err.Error()})
+					previousError = err.Error()
+				}
+			} else {
+				if currentIdentity != identity || repaired || previousError != "" {
+					log.Info(Category, "macOS physical network refreshed", map[string]any{"network_identity": currentIdentity, "routes_repaired": repaired})
+					identity = currentIdentity
+				}
+				previousError = ""
 			}
 		}
 	}

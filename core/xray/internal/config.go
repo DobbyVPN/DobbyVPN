@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 
 	"core/dnscache"
 	"core/log"
 	"core/protocol"
-	"core/tunnel/protected_dialer"
 	xrayCommon "core/xray/common"
 
 	"github.com/xtls/xray-core/core"
@@ -67,10 +65,6 @@ func GenerateXrayConfig(
 	userConfig["inbounds"] = []interface{}{socksInbound}
 
 	ensureXrayLogConfig(userConfig)
-	if err := applyResolvedOutboundAddresses(userConfig, dnsCache); err != nil {
-		return nil, err
-	}
-	applyProtectedSockopt(userConfig, routingTableID, uplinkIface)
 
 	finalJSON, err := json.Marshal(userConfig)
 	if err != nil {
@@ -107,203 +101,6 @@ func ensureXrayLogConfig(userConfig map[string]interface{}) {
 			log.Debugf(xrayCommon.Category, "xray log config applied: level=%s reason=missing", defaultXrayLogLevelName)
 		} else {
 			log.Debugf(xrayCommon.Category, "xray log config applied: level=%s reason=unsupported previous=%q", defaultXrayLogLevelName, level)
-		}
-	}
-}
-
-func applyResolvedOutboundAddresses(userConfig map[string]interface{}, dnsCache *dnscache.Cache) error {
-	outbounds, ok := userConfig["outbounds"].([]interface{})
-	if !ok {
-		return nil
-	}
-
-	updated := 0
-	skipped := 0
-	for _, outbound := range outbounds {
-		outboundMap, ok := outbound.(map[string]interface{})
-		if !ok {
-			skipped++
-			continue
-		}
-		settings, ok := outboundMap["settings"].(map[string]interface{})
-		if !ok {
-			skipped++
-			continue
-		}
-		vnext, ok := settings["vnext"].([]interface{})
-		if !ok {
-			skipped++
-			continue
-		}
-
-		for _, server := range vnext {
-			serverMap, ok := server.(map[string]interface{})
-			if !ok {
-				skipped++
-				continue
-			}
-			address, ok := serverMap["address"].(string)
-			if !ok || address == "" {
-				skipped++
-				continue
-			}
-			if ip := net.ParseIP(address); ip != nil {
-				if ip.To4() != nil {
-					skipped++
-					continue
-				}
-				log.Debugf(xrayCommon.Category, "protected DNS rewrite skipped: IPv6 address=%q", address)
-				skipped++
-				continue
-			}
-
-			ip4, ok := dnsCache.LookupIPv4(address, "xray-config")
-			if !ok {
-				return fmt.Errorf("resolved Xray endpoint %q is absent from the session DNS cache", address)
-			}
-			appliedNames := applyOriginalServerName(outboundMap, address)
-			serverMap["address"] = ip4.String()
-			updated++
-			log.Debugf(xrayCommon.Category, "protected DNS rewrite applied: address=%s resolved=%s preservedNames=%v", address, ip4.String(), appliedNames)
-		}
-	}
-
-	log.Debugf(xrayCommon.Category, "protected DNS rewrite complete: outbounds=%d updated=%d skipped=%d", len(outbounds), updated, skipped)
-	return nil
-}
-
-func applyOriginalServerName(outboundMap map[string]interface{}, originalAddress string) []string {
-	streamSettings, ok := outboundMap["streamSettings"].(map[string]interface{})
-	if !ok || originalAddress == "" {
-		return nil
-	}
-
-	applied := make([]string, 0, 4)
-	if streamSecurity(streamSettings) == xrayStreamSecurityTLS {
-		tlsSettings := ensureMap(streamSettings, "tlsSettings")
-		if setStringIfMissing(tlsSettings, "serverName", originalAddress) {
-			applied = append(applied, "tlsSettings.serverName")
-		}
-	}
-	if streamSecurity(streamSettings) == "reality" {
-		realitySettings := ensureMap(streamSettings, "realitySettings")
-		if setStringIfMissing(realitySettings, "serverName", originalAddress) {
-			applied = append(applied, "realitySettings.serverName")
-		}
-	}
-	for _, key := range []string{"xhttpSettings", "splithttpSettings"} {
-		xhttpSettings, ok := streamSettings[key].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if setStringIfMissing(xhttpSettings, "host", originalAddress) {
-			applied = append(applied, key+".host")
-		}
-		if downloadSettings, ok := xhttpSettings["downloadSettings"].(map[string]interface{}); ok {
-			applied = append(applied, applyOriginalServerNameToStream(downloadSettings, originalAddress, key+".downloadSettings")...)
-		}
-	}
-	if grpcSettings, ok := streamSettings["grpcSettings"].(map[string]interface{}); ok {
-		if setStringIfMissing(grpcSettings, "authority", originalAddress) {
-			applied = append(applied, "grpcSettings.authority")
-		}
-	}
-	return applied
-}
-
-func applyOriginalServerNameToStream(streamSettings map[string]interface{}, originalAddress, prefix string) []string {
-	applied := make([]string, 0, 2)
-	switch streamSecurity(streamSettings) {
-	case xrayStreamSecurityTLS:
-		tlsSettings := ensureMap(streamSettings, "tlsSettings")
-		if setStringIfMissing(tlsSettings, "serverName", originalAddress) {
-			applied = append(applied, prefix+".tlsSettings.serverName")
-		}
-	case "reality":
-		realitySettings := ensureMap(streamSettings, "realitySettings")
-		if setStringIfMissing(realitySettings, "serverName", originalAddress) {
-			applied = append(applied, prefix+".realitySettings.serverName")
-		}
-	}
-	return applied
-}
-
-func streamSecurity(streamSettings map[string]interface{}) string {
-	security, _ := streamSettings["security"].(string)
-	return strings.ToLower(security)
-}
-
-func ensureMap(parent map[string]interface{}, key string) map[string]interface{} {
-	value, ok := parent[key].(map[string]interface{})
-	if ok {
-		return value
-	}
-	value = map[string]interface{}{}
-	parent[key] = value
-	return value
-}
-
-func setStringIfMissing(settings map[string]interface{}, key, value string) bool {
-	existing, _ := settings[key].(string)
-	if existing != "" {
-		return false
-	}
-	settings[key] = value
-	return true
-}
-
-func applyProtectedSockopt(userConfig map[string]interface{}, routingTableID int, uplinkIface string) {
-	protectedSockopt := protected_dialer.XraySockopt(routingTableID, uplinkIface)
-	if len(protectedSockopt) == 0 {
-		log.Debugf(xrayCommon.Category, "protected sockopt skipped: routingTableID=%d uplinkIface=%q", routingTableID, uplinkIface)
-		return
-	}
-
-	outbounds, ok := userConfig["outbounds"].([]interface{})
-	if !ok {
-		log.Debugf(xrayCommon.Category, "protected sockopt skipped: outbounds missing or invalid type")
-		return
-	}
-
-	updated := 0
-	skipped := 0
-	for _, outbound := range outbounds {
-		outboundMap, ok := outbound.(map[string]interface{})
-		if !ok {
-			skipped++
-			continue
-		}
-
-		streamSettings := ensureMap(outboundMap, "streamSettings")
-		applySockoptToStreamSettings(streamSettings, protectedSockopt)
-		updated++
-	}
-
-	log.Debugf(
-		xrayCommon.Category,
-		"protected sockopt applied: policy=%v outbounds=%d updated=%d skipped=%d routingTableID=%d uplinkIface=%q",
-		protectedSockopt,
-		len(outbounds),
-		updated,
-		skipped,
-		routingTableID,
-		uplinkIface,
-	)
-}
-
-func applySockoptToStreamSettings(streamSettings, protectedSockopt map[string]interface{}) {
-	sockopt := ensureMap(streamSettings, "sockopt")
-	for key, value := range protectedSockopt {
-		sockopt[key] = value
-	}
-
-	for _, key := range []string{"xhttpSettings", "splithttpSettings"} {
-		xhttpSettings, ok := streamSettings[key].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if downloadSettings, ok := xhttpSettings["downloadSettings"].(map[string]interface{}); ok {
-			applySockoptToStreamSettings(downloadSettings, protectedSockopt)
 		}
 	}
 }

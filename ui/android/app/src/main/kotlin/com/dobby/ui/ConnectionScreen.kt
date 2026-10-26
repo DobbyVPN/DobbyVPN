@@ -122,7 +122,7 @@ internal fun DobbyApp(controller: SessionController) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SubscriptionField(controller)
-                    MainButton(controller)
+                    MainActions(controller)
                     Connections(controller, Modifier.padding(top = 8.dp).height(trayHeight))
                 }
                 Logs(controller, Modifier.weight(1f))
@@ -180,7 +180,19 @@ private fun SubscriptionField(controller: SessionController) {
 }
 
 @Composable
-private fun MainButton(controller: SessionController) {
+private fun MainActions(controller: SessionController) {
+    if (controller.isProtectedFailure) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MainButton(controller, Modifier.weight(1f))
+            StopButton(controller, Modifier.weight(0.5f))
+        }
+    } else {
+        MainButton(controller)
+    }
+}
+
+@Composable
+private fun MainButton(controller: SessionController, modifier: Modifier = Modifier) {
     val title = controller.mainActionTitle
     val enabled = controller.mainActionEnabled
     val status = controller.status
@@ -193,14 +205,14 @@ private fun MainButton(controller: SessionController) {
         else -> Modifier.border(1.5.dp, Rule, ButtonShape)
     }
     Box(
-        Modifier.fillMaxWidth()
+        modifier.fillMaxWidth()
             .height(60.dp)
             .clip(ButtonShape)
             .then(style)
             .clickable(enabled = enabled, role = Role.Button, onClick = controller::mainAction)
-            .testTag("connection.action")
+            .testTag(if (controller.isProtectedFailure) "connection.retry" else "connection.action")
             .semantics {
-                contentDescription = "VPN connection action"
+                contentDescription = if (controller.isProtectedFailure) "Retry VPN connection" else "VPN connection action"
                 stateDescription = status
                 liveRegion = LiveRegionMode.Polite
             },
@@ -212,6 +224,25 @@ private fun MainButton(controller: SessionController) {
             fontSize = 20.sp,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+@Composable
+private fun StopButton(controller: SessionController, modifier: Modifier = Modifier) {
+    Box(
+        modifier.fillMaxWidth()
+            .height(60.dp)
+            .clip(ButtonShape)
+            .border(2.dp, Ink, ButtonShape)
+            .clickable(enabled = controller.stopActionEnabled, role = Role.Button, onClick = controller::stop)
+            .testTag("connection.stop")
+            .semantics {
+                contentDescription = "Stop VPN connection"
+                stateDescription = controller.status
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("Stop", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -390,6 +421,8 @@ private fun ErrorDialog(controller: SessionController) {
     LaunchedEffect(errors) { controller.forgetClearedErrors() }
     val detail = errors.firstOrNull { it !in controller.dismissedErrors } ?: return
     val loadFailed = detail == controller.state.loadError
+    val protectedFailure = controller.isProtectedFailure
+    val showStop = controller.state.session.primaryAction == "STOP" && controller.state.session.vpnActive
     val close = { controller.dismissError(detail) }
     val status = controller.status
     Dialog(onDismissRequest = close) {
@@ -457,6 +490,26 @@ private fun ErrorDialog(controller: SessionController) {
                         filled = true,
                         modifier = Modifier.weight(1f).testTag("subscription.retry"),
                     ) { controller.retryLoad() }
+                } else if (protectedFailure) {
+                    DialogButton(
+                        "Retry",
+                        filled = true,
+                        enabled = controller.retryActionEnabled,
+                        modifier = Modifier.weight(1f).testTag("failure.retry"),
+                    ) { controller.retry() }
+                    DialogButton(
+                        "Stop",
+                        filled = false,
+                        enabled = controller.stopActionEnabled,
+                        modifier = Modifier.weight(1f).testTag("failure.stop"),
+                    ) { controller.stop() }
+                } else if (showStop) {
+                    DialogButton(
+                        "Stop",
+                        filled = true,
+                        enabled = controller.stopActionEnabled,
+                        modifier = Modifier.weight(1f).testTag("failure.stop"),
+                    ) { controller.stop() }
                 }
             }
         }
@@ -464,16 +517,22 @@ private fun ErrorDialog(controller: SessionController) {
 }
 
 @Composable
-private fun DialogButton(title: String, filled: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun DialogButton(
+    title: String,
+    filled: Boolean,
+    modifier: Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(8.dp)
     Box(
         modifier.height(44.dp)
             .clip(shape)
             .then(if (filled) Modifier.background(Ink) else Modifier.border(1.5.dp, Ink, shape))
-            .clickable(role = Role.Button, onClick = onClick),
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(title, color = if (filled) Surface else Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(title, color = if (!enabled) Muted else if (filled) Surface else Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

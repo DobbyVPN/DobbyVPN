@@ -154,16 +154,20 @@ type StopResult struct {
 // StateChange is a content-free native wake hint. Clients read Snapshot for
 // the authoritative current state and revision.
 type StateChange struct {
-	SessionID  string
-	Generation uint64
-	State      State
-	Failure    FailureCode
+	SessionID         string
+	Generation        uint64
+	NetworkGeneration uint64
+	State             State
+	Failure           FailureCode
 }
 
 type SnapshotResult struct {
 	SessionID          string
 	Sequence           uint64
 	Generation         uint64
+	NetworkGeneration  uint64
+	VPNActive          bool
+	CanRetry           bool
 	State              State
 	Configured         bool
 	Digest             string
@@ -210,6 +214,13 @@ type Runtime interface {
 
 type RuntimeLease interface{ Stop(context.Context) error }
 
+// NetworkRuntime acquires resources whose lifetime spans protocol attempts.
+// The reference uses the network generation; Start uses the attempt generation.
+// A partial acquisition must return its lease so rollback remains owned.
+type NetworkRuntime interface {
+	PrepareNetwork(context.Context, SessionRef, RuntimeProfile) (RuntimeLease, error)
+}
+
 // HealthMonitoringLease is implemented by runtimes which own connected-health
 // checks. The runtime applies its own failure threshold and sends at most one
 // notification for a lease. Closing the channel means monitoring stopped.
@@ -220,8 +231,8 @@ type HealthMonitoringLease interface {
 	HealthFailures() <-chan error
 }
 
-// PlatformAdapter owns only platform concerns.  PrepareTunnel must allocate a
-// fresh TUN policy for every generation; it must not reuse a prior lease.
+// PlatformAdapter owns platform permission and callback registration for one
+// network generation. PrepareTunnel is called once per VPN activation.
 // ProtectSocket is exposed here so implementations can make failure fatal for
 // non-loopback protocol dials.  All callbacks include SessionRef.
 type PlatformAdapter interface {
@@ -261,6 +272,12 @@ type session struct {
 	closing       bool
 	changed       chan struct{}
 	cleanupBudget *cleanupBudget
+
+	networkGeneration     uint64
+	networkLedger         *ledger
+	vpnActive             bool
+	stopRequested         bool
+	startOriginGeneration uint64
 
 	id          string
 	state       State
@@ -491,8 +508,8 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	if err != nil {
 		return StartResult{}, err
 	}
-	if err := requestCtx.Err(); err != nil {
-		return StartResult{}, failureWithCause(FailureCanceled, "start was canceled before it was accepted", err)
+	if contextErr := requestCtx.Err(); contextErr != nil {
+		return StartResult{}, failureWithCause(FailureCanceled, "start was canceled before it was accepted", contextErr)
 	}
 	// A GUI submits its changed source with Start. Configuration is accepted
 	// before tunnel startup, so it remains available if this attempt fails.
@@ -503,9 +520,9 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 		if target.Mode != AutoSelect {
 			return StartResult{}, failure(FailureInvalidArgument, "a source can only be started with AUTO_SELECT")
 		}
-		configured, err := m.Configure(requestCtx, sessionID, expectedSequence, source)
-		if err != nil {
-			return StartResult{}, err
+		configured, configureErr := m.Configure(requestCtx, sessionID, expectedSequence, source)
+		if configureErr != nil {
+			return StartResult{}, configureErr
 		}
 		expectedSequence = configured.Sequence
 	}
@@ -518,32 +535,23 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureNotConfigured, "configure a session before starting it")
 	}
-	if target.Mode != AutoSelect && target.Mode != ProfileIndex {
+	if canRetry(s) {
+		result, err = m.retryLocked(s, target, source != nil)
 		s.mu.Unlock()
-		return StartResult{}, failure(FailureInvalidArgument, "start mode must be AUTO_SELECT or PROFILE_INDEX")
+		return result, err
 	}
-	if target.Mode == ProfileIndex && (target.Index < 0 || target.Index >= len(s.profiles)) {
+	if targetErr := validateStartTarget(s, target); targetErr != nil {
 		s.mu.Unlock()
-		return StartResult{}, failure(FailureInvalidArgument, "profile index is out of range")
-	}
-	if target.Digest != "" && target.Digest != s.digest {
-		s.mu.Unlock()
-		return StartResult{}, failure(FailureConflict, "profile inventory changed; refresh its snapshot")
+		return StartResult{}, targetErr
 	}
 	if configurationBlocked(s) {
-		if !target.ReplaceCurrent || !canSwitch(s) {
-			s.mu.Unlock()
-			return StartResult{}, failure(FailureConflict, "previous generation has not completed cleanup")
-		}
-		s.pending = &pendingStart{target: target, profiles: s.profiles, digest: s.digest}
-		s.switchOriginGeneration = s.generation
-		s.state = StateStopping
-		s.cleanupBudget.begin()
-		s.cancel()
-		m.appendLocked(s)
-		result = StartResult{Generation: s.generation, Sequence: s.sequence}
+		result, err = m.replaceLocked(requestCtx, s, target)
 		s.mu.Unlock()
-		return result, nil
+		return result, err
+	}
+	if err := m.saveActivationLocked(requestCtx, s, target); err != nil {
+		s.mu.Unlock()
+		return StartResult{}, err
 	}
 	s.activeProfiles, s.activeDigest = s.profiles, s.digest
 	// A new direct Start supersedes any stop intent from an earlier completed
@@ -551,8 +559,12 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	// so a UI action racing connection completion still stops the current target.
 	s.switchOriginGeneration = 0
 	retainPolicy(s.activeDigest, s.activeProfiles)
+	s.networkGeneration++
+	s.networkLedger = &ledger{}
+	s.vpnActive, s.stopRequested = false, false
 	s.generation++
 	generation := s.generation
+	s.startOriginGeneration = generation
 	// Accepted work outlives the request and is canceled by Stop or recovery.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cleanupBudget = &cleanupBudget{}
@@ -570,16 +582,75 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	return result, nil
 }
 
+func validateStartTarget(s *session, target StartTarget) error {
+	if target.Mode != AutoSelect && target.Mode != ProfileIndex {
+		return failure(FailureInvalidArgument, "start mode must be AUTO_SELECT or PROFILE_INDEX")
+	}
+	if target.Mode == ProfileIndex && (target.Index < 0 || target.Index >= len(s.profiles)) {
+		return failure(FailureInvalidArgument, "profile index is out of range")
+	}
+	if target.Digest != "" && target.Digest != s.digest {
+		return failure(FailureConflict, "profile inventory changed; refresh its snapshot")
+	}
+	return nil
+}
+
+func (m *Manager) retryLocked(s *session, target StartTarget, suppliedSource bool) (StartResult, error) {
+	if suppliedSource || target.ReplaceCurrent || target.Mode != s.activeTarget.Mode ||
+		(target.Mode == ProfileIndex && target.Index != s.activeTarget.Index) ||
+		(target.Digest != "" && target.Digest != s.activeDigest) {
+		return StartResult{}, failure(FailureConflict, "retry requires the saved active selection")
+	}
+	s.recoveryCount, s.recoveryOriginGeneration = 0, 0
+	ctx, generation := m.beginAttemptLocked(s, s.activeTarget)
+	s.startOriginGeneration = generation
+	go m.runStart(ctx, s, generation, target)
+	return StartResult{Generation: generation, Sequence: s.sequence}, nil
+}
+
+func (m *Manager) replaceLocked(ctx context.Context, s *session, target StartTarget) (StartResult, error) {
+	if !target.ReplaceCurrent || !canSwitch(s) {
+		return StartResult{}, failure(FailureConflict, "previous generation has not completed cleanup")
+	}
+	if err := m.saveActivationLocked(ctx, s, target); err != nil {
+		return StartResult{}, err
+	}
+	s.pending = &pendingStart{target: target, profiles: s.profiles, digest: s.digest}
+	s.switchOriginGeneration = s.generation
+	s.state = StateStopping
+	s.cleanupBudget.begin()
+	s.cancel()
+	m.appendLocked(s)
+	return StartResult{Generation: s.generation, Sequence: s.sequence}, nil
+}
+
 func retryableCleanup(s *session) bool {
-	return s.state == StateFailed && s.cleanupFailed && s.ledger != nil && len(s.ledger.closers) > 0
+	return s.state == StateFailed && s.cleanupFailed && (s.ledger != nil || s.networkLedger != nil)
 }
 
 func acceptsStop(s *session, generation uint64) bool {
 	return generation != 0 && (generation == s.generation ||
-		s.recovering && generation == s.recoveryOriginGeneration || generation == s.switchOriginGeneration)
+		s.recovering && generation == s.recoveryOriginGeneration || generation == s.switchOriginGeneration || generation == s.startOriginGeneration)
 }
 
-func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (result StopResult, err error) {
+func (m *Manager) acknowledgeStoppedLocked(s *session, generation uint64) (StopResult, error) {
+	// A runtime-owned health failure can finish cleanup before the mobile
+	// caller gets to issue its ordinary stop request. Once this exact
+	// generation is fully cleaned, stop is an idempotent acknowledgement;
+	// it must not turn a clean terminal state into a misleading stale-stop
+	// failure. Cleanup failures remain errors and still block restart.
+	if s.generation == generation && s.cleanupDone && !s.cleanupFailed && s.state != StateConfigured {
+		if s.recovering || s.recoveryOriginGeneration != 0 {
+			s.recovering, s.restartAfterCleanup, s.recoveryOriginGeneration = false, false, 0
+			m.appendLocked(s)
+		}
+		return StopResult{Generation: generation, Sequence: s.sequence}, nil
+	}
+	err := failure(FailureStaleGeneration, "generation is no longer active")
+	return StopResult{}, err
+}
+
+func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64) (result StopResult, err error) {
 	s, err := m.get(sessionID)
 	if err != nil {
 		return StopResult{}, err
@@ -589,8 +660,13 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 	if !acceptsStop(s, generation) {
 		return StopResult{}, failure(FailureStaleGeneration, "generation is not active for this session")
 	}
+	// A persistence failure is reported, but cannot prevent the requested
+	// release of app-owned protection. OS teardown does not call this path.
+	persistErr := m.stopActivationLocked(ctx)
+	defer func() { err = errors.Join(err, persistErr) }()
 	// A stop from cleanup may arrive just after its replacement is reserved.
 	generation = s.generation
+	s.stopRequested = true
 	s.switchOriginGeneration = 0
 	if s.pending != nil {
 		s.pending = nil
@@ -606,22 +682,16 @@ func (m *Manager) Stop(_ context.Context, sessionID string, generation uint64) (
 		go m.finish(s, generation, nil)
 		return StopResult{Generation: generation, Sequence: s.sequence}, nil
 	}
+	if s.state == StateFailed && s.vpnActive && !s.cleanupFailed {
+		s.cleanupBudget = &cleanupBudget{}
+		s.cleanupBudget.begin()
+		s.state = StateStopping
+		m.appendLocked(s)
+		go m.finish(s, generation, nil)
+		return StopResult{Generation: generation, Sequence: s.sequence}, nil
+	}
 	if s.state == StateIdle || s.state == StateConfigured || s.state == StateFailed {
-		// A runtime-owned health failure can finish cleanup before the mobile
-		// caller gets to issue its ordinary stop request. Once this exact
-		// generation is fully cleaned, stop is an idempotent acknowledgement;
-		// it must not turn a clean terminal state into a misleading stale-stop
-		// failure. Cleanup failures remain errors and still block restart.
-		if s.generation == generation && s.cleanupDone && !s.cleanupFailed && s.state != StateConfigured {
-			if s.recovering || s.recoveryOriginGeneration != 0 {
-				s.recovering, s.restartAfterCleanup, s.recoveryOriginGeneration = false, false, 0
-				m.appendLocked(s)
-			}
-			result = StopResult{Generation: generation, Sequence: s.sequence}
-			return result, nil
-		}
-		err := failure(FailureStaleGeneration, "generation is no longer active")
-		return StopResult{}, err
+		return m.acknowledgeStoppedLocked(s, generation)
 	}
 	result = StopResult{Generation: generation, Sequence: s.sequence}
 	if s.recovering || s.recoveryOriginGeneration != 0 {
@@ -656,7 +726,8 @@ func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loo
 		return err
 	}
 	s.mu.Lock()
-	valid := s.generation == ref.Generation && (s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected)
+	valid := s.generation == ref.Generation && !s.stopRequested && (s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected)
+	networkRef := SessionRef{SessionID: s.id, Generation: s.networkGeneration}
 	s.mu.Unlock()
 	if !valid {
 		return failure(FailureStaleGeneration, "socket protection belongs to a stale generation")
@@ -664,7 +735,7 @@ func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loo
 	if loopback {
 		return nil
 	}
-	if err := m.platform.ProtectSocket(ctx, ref, fd); err != nil {
+	if err := m.platform.ProtectSocket(ctx, networkRef, fd); err != nil {
 		return wrapFailure(FailurePlatform, err)
 	}
 	return nil
@@ -733,65 +804,130 @@ func (m *Manager) Snapshot(_ context.Context, sessionID string) (result Snapshot
 	return result, nil
 }
 
-type profileSelection struct {
-	profile       RuntimeProfile
-	platformLease PlatformLease
-	runtimeLease  RuntimeLease
-}
-
-// runStart is one lifecycle transaction whose branches all preserve generation
-// fencing and late-lease cleanup; keeping those checks together is deliberate.
-//
-//nolint:gocyclo,nestif // Refactoring the transaction would risk cleanup races.
-func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
-	defer func() {
-		s.mu.Lock()
-		stopping := s.generation == generation && s.state == StateStopping
+func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
+	s.mu.Lock()
+	if s.vpnActive {
 		s.mu.Unlock()
-		if stopping {
-			m.finish(s, generation, failure(FailureCanceled, "attempt stopped"))
+		return nil
+	}
+	ref := SessionRef{SessionID: s.id, Generation: s.networkGeneration}
+	profile := s.activeProfiles[0]
+	if s.activeTarget.Mode == ProfileIndex {
+		profile = s.activeProfiles[s.activeTarget.Index]
+	}
+	work := s.networkLedger
+	s.mu.Unlock()
+	platform, err := m.platform.PrepareTunnel(ctx, ref)
+	if platform != nil {
+		work.push(platform.Release)
+	}
+	if err != nil {
+		return wrapFailure(FailurePlatform, err)
+	}
+	if platform == nil {
+		return failure(FailurePlatform, "platform returned an empty network lease")
+	}
+	if runtime, ok := m.runtime.(NetworkRuntime); ok {
+		network, err := runtime.PrepareNetwork(ctx, ref, profile)
+		if network != nil {
+			work.push(network.Stop)
 		}
-	}()
-	if target.Mode == ProfileIndex {
-		s.mu.Lock()
-		profile := s.activeProfiles[target.Index]
-		s.mu.Unlock()
-		if !m.advance(s, generation, StatePreparing, &profile.Summary) {
-			return
+		if err != nil {
+			return wrapFailure(FailurePlatform, err)
+		}
+		if network == nil {
+			return failure(FailurePlatform, "runtime returned an empty network lease")
 		}
 	}
-	selection, err := m.selectProfile(ctx, s, generation, target)
-	if err != nil {
+	s.mu.Lock()
+	s.vpnActive = true
+	m.appendLocked(s)
+	s.mu.Unlock()
+	return ctx.Err()
+}
+
+// runStart owns acquisition and cleanup, including canceled late callbacks.
+func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
+	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
+	if err := m.prepareNetwork(ctx, s); err != nil {
 		m.finish(s, generation, err)
 		return
 	}
-	profile := selection.profile
-	if selection.platformLease == nil || selection.runtimeLease == nil {
-		if cleanupErr := m.releaseSelection(s, selection); cleanupErr != nil {
-			m.finish(s, generation, wrapFailure(FailureCleanup, cleanupErr))
-		} else {
-			m.finish(s, generation, failure(FailureRuntime, "profile selection returned incomplete leases"))
+	s.mu.Lock()
+	profiles := append([]RuntimeProfile(nil), s.activeProfiles...)
+	s.mu.Unlock()
+	if target.Mode == ProfileIndex {
+		profiles = profiles[target.Index : target.Index+1]
+	}
+	var candidateErrors []error
+	for index, profile := range profiles {
+		var prepareErr error
+		ctx, generation, prepareErr = prepareCandidate(ctx, s, index, generation)
+		if prepareErr != nil {
+			m.finish(s, generation, prepareErr)
+			return
 		}
-		return
+		state := StateProbing
+		if target.Mode == ProfileIndex {
+			state = StatePreparing
+		}
+		if !m.advance(s, generation, state, &profile.Summary) {
+			m.finish(s, generation, failure(FailureCanceled, "attempt stopped"))
+			return
+		}
+		ref := SessionRef{SessionID: s.id, Generation: generation}
+		lease, err := m.runtime.Start(ctx, ref, profile)
+		if lease != nil {
+			s.ledger.push(lease.Stop)
+		}
+		invalidLease := err == nil && lease == nil
+		if invalidLease {
+			err = failure(FailureRuntime, "runtime returned an empty lease")
+		}
+		if err == nil && ctx.Err() == nil {
+			if m.advance(s, generation, StateConnected, &profile.Summary) {
+				m.waitForAttemptEnd(ctx, s, generation, lease)
+			}
+			m.finish(s, generation, nil)
+			return
+		}
+		candidateError := errors.Join(err, ctx.Err())
+		if target.Mode == AutoSelect && !invalidLease {
+			candidateError = fmt.Errorf("profile %d (%s): %w", profile.Summary.Index, profile.Summary.Protocol, candidateError)
+		}
+		candidateErrors = append(candidateErrors, candidateError)
+		if CodeOf(err) == FailureCleanup {
+			m.finish(s, generation, wrapFailure(FailureCleanup, errors.Join(candidateErrors...)))
+			return
+		}
+		if cleanupErr := s.ledger.release(m.cleanupContext(s)); cleanupErr != nil {
+			m.finish(s, generation, wrapFailure(FailureCleanup, errors.Join(errors.Join(candidateErrors...), cleanupErr)))
+			return
+		}
+		if ctx.Err() != nil {
+			m.finish(s, generation, failureWithCause(FailureCanceled, "start was canceled", errors.Join(candidateErrors...)))
+			return
+		}
+		if invalidLease || target.Mode == ProfileIndex {
+			m.finish(s, generation, wrapFailure(FailureRuntime, errors.Join(candidateErrors...)))
+			return
+		}
+	}
+	m.finish(s, generation, failureWithCause(FailureProbe, "no configured profile became ready", errors.Join(candidateErrors...)))
+}
+
+func prepareCandidate(ctx context.Context, s *session, index int, generation uint64) (attemptContext context.Context, attemptGeneration uint64, err error) {
+	if index == 0 {
+		return ctx, generation, nil
 	}
 	s.mu.Lock()
-	if s.generation != generation || s.ledger == nil {
-		s.mu.Unlock()
-		if cleanupErr := m.releaseSelection(s, selection); cleanupErr != nil {
-			m.finish(s, generation, wrapFailure(FailureCleanup, cleanupErr))
-		}
-		return
+	defer s.mu.Unlock()
+	if s.stopRequested || ctx.Err() != nil {
+		return ctx, generation, failure(FailureCanceled, "attempt stopped")
 	}
-	s.ledger.push(func(c context.Context) error { return selection.platformLease.Release(c) })
-	s.ledger.push(func(c context.Context) error { return selection.runtimeLease.Stop(c) })
-	s.mu.Unlock()
-	if target.Mode == AutoSelect && !m.advance(s, generation, StatePreparing, &profile.Summary) {
-		return
-	}
-	if !m.advance(s, generation, StateConnected, &profile.Summary) {
-		return
-	}
-	m.waitForAttemptEnd(ctx, s, generation, selection.runtimeLease)
+	s.generation++
+	s.cleanupBudget = &cleanupBudget{}
+	return context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget), s.generation, nil
 }
 
 // waitForAttemptEnd keeps cleanup with the worker that acquired the lease.
@@ -817,109 +953,6 @@ func (m *Manager) waitForAttemptEnd(ctx context.Context, s *session, generation 
 	}
 }
 
-func (m *Manager) selectProfile(ctx context.Context, s *session, generation uint64, target StartTarget) (profileSelection, error) {
-	s.mu.Lock()
-	profiles := append([]RuntimeProfile(nil), s.activeProfiles...)
-	s.mu.Unlock()
-	candidates := profiles
-	if target.Mode == ProfileIndex {
-		if target.Index < 0 || target.Index >= len(profiles) {
-			return profileSelection{}, failure(FailureInvalidArgument, "profile index is out of range")
-		}
-		candidates = profiles[target.Index : target.Index+1]
-	}
-	var candidateErrors []error
-	for _, profile := range candidates {
-		selection, retry, candidateErr := m.selectProfileCandidate(ctx, s, generation, target, profile, candidateErrors)
-		if retry {
-			candidateErrors = append(candidateErrors, candidateErr)
-			continue
-		}
-		return selection, candidateErr
-	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return profileSelection{}, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(candidateErrors...)))
-	}
-	return profileSelection{}, failureWithCause(FailureProbe, "no configured profile became ready", errors.Join(candidateErrors...))
-}
-
-// selectProfileCandidate owns setup and rollback for one candidate. A retry is
-// returned only for an auto-selection runtime failure after full cleanup.
-func (m *Manager) selectProfileCandidate(ctx context.Context, s *session, generation uint64, target StartTarget, profile RuntimeProfile, previousErrors []error) (profileSelection, bool, error) {
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return profileSelection{}, false, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, errors.Join(previousErrors...)))
-	}
-	s.mu.Lock()
-	if s.state == StateStopping || s.closing {
-		s.mu.Unlock()
-		return profileSelection{}, false, failure(FailureCanceled, "attempt stopped before acquisition")
-	}
-	s.cleanupBudget = &cleanupBudget{}
-	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
-	s.mu.Unlock()
-	ref := SessionRef{s.id, generation}
-	platformLease, prepareErr := m.platform.PrepareTunnel(ctx, ref)
-	if prepareErr == nil && platformLease == nil {
-		prepareErr = failure(FailurePlatform, "platform returned an empty tunnel lease")
-	}
-	if prepareErr != nil {
-		prepareErr = errors.Join(errors.Join(previousErrors...), prepareErr)
-		if platformLease != nil {
-			if releaseErr := m.releaseSelection(s, profileSelection{platformLease: platformLease}); releaseErr != nil {
-				return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(prepareErr, releaseErr))
-			}
-		}
-		return profileSelection{}, false, wrapFailure(FailurePlatform, prepareErr)
-	}
-	runtimeLease, startErr := m.runtime.Start(ctx, ref, profile)
-	invalidRuntimeLease := startErr == nil && runtimeLease == nil
-	if invalidRuntimeLease {
-		startErr = failure(FailureRuntime, "runtime returned an empty lease")
-	}
-	if runtimeLease != nil && CodeOf(startErr) == FailureCleanup {
-		s.mu.Lock()
-		s.ledger.push(platformLease.Release)
-		s.ledger.push(runtimeLease.Stop)
-		s.mu.Unlock()
-		return profileSelection{}, false, wrapFailure(FailureCleanup, startErr)
-	}
-	if startErr != nil {
-		cleanupErr := m.releaseSelection(s, profileSelection{platformLease: platformLease, runtimeLease: runtimeLease})
-		if cleanupErr != nil {
-			return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(errors.Join(previousErrors...), startErr, cleanupErr))
-		}
-		var cleanupFailure *CleanupFailure
-		if errors.As(startErr, &cleanupFailure) || CodeOf(startErr) == FailureCleanup {
-			return profileSelection{}, false, wrapFailure(FailureCleanup, errors.Join(errors.Join(previousErrors...), startErr))
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return profileSelection{}, false, failureWithCause(FailureCanceled, "start was canceled", errors.Join(ctxErr, startErr, errors.Join(previousErrors...)))
-		}
-		if invalidRuntimeLease || target.Mode == ProfileIndex {
-			return profileSelection{}, false, wrapFailure(FailureRuntime, errors.Join(errors.Join(previousErrors...), startErr))
-		}
-		return profileSelection{}, true, fmt.Errorf("profile %d (%s): %w", profile.Summary.Index, profile.Summary.Protocol, startErr)
-	}
-	return profileSelection{profile: profile, platformLease: platformLease, runtimeLease: runtimeLease}, false, nil
-}
-
-func (m *Manager) releaseSelection(s *session, selection profileSelection) error {
-	work := &ledger{}
-	if selection.platformLease != nil {
-		work.push(selection.platformLease.Release)
-	}
-	if selection.runtimeLease != nil {
-		work.push(selection.runtimeLease.Stop)
-	}
-	err := work.release(m.cleanupContext(s))
-	if err != nil {
-		s.mu.Lock()
-		s.ledger.closers = append(s.ledger.closers, work.closers...)
-		s.mu.Unlock()
-	}
-	return err
-}
-
 func (m *Manager) advance(s *session, generation uint64, state State, profile *ProfileSummary) bool {
 	s.mu.Lock()
 	if s.generation != generation || s.state == StateStopping {
@@ -928,6 +961,7 @@ func (m *Manager) advance(s *session, generation uint64, state State, profile *P
 	}
 	s.state, s.active = state, cloneSummaryPtr(profile)
 	if state == StateConnected {
+		s.startOriginGeneration = 0
 		s.lastConnectedAt = m.now()
 		s.hasConnectedAt = true
 		s.lastFailure, s.lastFailureMessage = "", ""
@@ -949,102 +983,110 @@ func attemptActive(state State) bool {
 	return false
 }
 
-// finish runs only in the attempt worker, after its current native
-// operation returns. It drains the generation ledger before another attempt.
+// finish retires only the attempt unless Stop or incomplete activation requires
+// network release. A failed cleanup retains both ledgers and blocks replacement.
 func (m *Manager) finish(s *session, generation uint64, cause error) {
 	s.mu.Lock()
 	if s.generation != generation || !attemptActive(s.state) {
 		s.mu.Unlock()
 		return
 	}
-	wasStopping := s.state == StateStopping
 	work := s.ledger
 	s.mu.Unlock()
-	var cleanupErr error
-	if work != nil && CodeOf(cause) != FailureCleanup {
-		cleanupErr = work.release(m.cleanupContext(s))
-	}
+	releaseNetwork, cleanupErr := m.retireFinishedResources(s, work, cause)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != generation {
 		return
 	}
-	// Stop may arrive while the ledger is releasing outside the lock.
-	wasStopping = wasStopping || s.state == StateStopping
+	s.cancel = nil
 	s.cleanupFailed = cleanupErr != nil || CodeOf(cause) == FailureCleanup
-	s.cleanupDone, s.cancel = !s.cleanupFailed, nil
-	if s.cleanupDone {
-		s.ledger = nil
-		s.cleanupBudget.finish()
-	}
 	if s.cleanupFailed {
-		s.switchOriginGeneration = 0
 		s.pending = nil
-		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
-		s.failureMessageAfterCleanup = ""
-		s.recovering, s.recoveryOriginGeneration = false, 0
+		s.restartAfterCleanup, s.recovering = false, false
+		s.failureAfterCleanup, s.failureMessageAfterCleanup = "", ""
 		s.state, s.active, s.lastFailure = StateFailed, nil, FailureCleanup
-		diagnostic := errors.Join(cause, cleanupErr)
-		message := errorMessage(diagnostic)
-		s.lastFailureMessage = message
+		s.lastFailureMessage = errorMessage(errors.Join(cause, cleanupErr))
+		s.cleanupDone = false
 		m.appendLocked(s)
 		return
 	}
-	if wasStopping || cause != nil && CodeOf(cause) == FailureCanceled {
-		restart := s.restartAfterCleanup
-		terminalFailure := s.failureAfterCleanup
-		s.restartAfterCleanup, s.failureAfterCleanup = false, ""
-		if terminalFailure != "" {
-			s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, terminalFailure, s.failureMessageAfterCleanup
-			s.failureMessageAfterCleanup = ""
-			s.recovering, s.recoveryOriginGeneration = false, 0
-			m.appendLocked(s)
-			return
-		}
+	s.ledger = nil
+	if releaseNetwork {
+		s.networkLedger, s.vpnActive = nil, false
+	}
+	// A Stop that arrived during attempt cleanup still owns network release.
+	if !releaseNetwork && (s.stopRequested || s.closing) {
+		s.state = StateStopping
+		go m.finish(s, generation, nil)
+		return
+	}
+	s.cleanupBudget.finish()
+	s.cleanupDone = !s.vpnActive
+	if s.stopRequested || s.closing {
 		s.state, s.active = StateIdle, nil
+		s.pending = nil
+		s.recovering, s.restartAfterCleanup = false, false
+		s.recoveryOriginGeneration, s.startOriginGeneration = 0, 0
 		m.appendLocked(s)
-		if restart || s.pending != nil {
-			go m.startFailover(s, generation)
-		} else {
-			s.recovering, s.recoveryOriginGeneration = false, 0
-		}
 		return
 	}
+	if s.vpnActive && (s.restartAfterCleanup || s.pending != nil) {
+		target := s.activeTarget
+		if s.pending != nil {
+			target = s.pending.target
+			s.activeProfiles, s.activeDigest = s.pending.profiles, s.pending.digest
+			s.pending = nil
+			s.recoveryCount = 0
+			retainPolicy(s.activeDigest, s.activeProfiles)
+		}
+		ctx, next := m.beginAttemptLocked(s, target)
+		go m.runStart(ctx, s, next, target)
+		return
+	}
+	m.finishProtectedFailureLocked(s, cause)
+}
+
+func (m *Manager) finishProtectedFailureLocked(s *session, cause error) {
 	message := errorMessage(cause)
-	if s.recovering && s.lastFailureMessage != "" {
+	code := CodeOf(cause)
+	if s.failureAfterCleanup != "" {
+		code, message = s.failureAfterCleanup, s.failureMessageAfterCleanup
+	} else if s.recovering && s.lastFailureMessage != "" {
 		message = s.lastFailureMessage + "; automatic recovery failed: " + message
 	}
-	s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, CodeOf(cause), message
+	s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, code, message
 	s.recovering, s.recoveryOriginGeneration = false, 0
+	s.failureAfterCleanup, s.failureMessageAfterCleanup = "", ""
 	m.appendLocked(s)
 }
 
-func (m *Manager) startFailover(s *session, expectedGeneration uint64) {
+func (m *Manager) retireFinishedResources(s *session, work *ledger, cause error) (releaseNetwork bool, cleanupErr error) {
+	if work != nil && CodeOf(cause) != FailureCleanup {
+		cleanupErr = work.release(m.cleanupContext(s))
+	}
 	s.mu.Lock()
-	if s.closing || !s.configured || !s.cleanupDone || s.state != StateIdle || (!s.recovering && s.pending == nil) || s.generation != expectedGeneration {
-		s.mu.Unlock()
-		return
+	releaseNetwork = s.stopRequested || s.closing || !s.vpnActive
+	network := s.networkLedger
+	s.mu.Unlock()
+	if cleanupErr == nil && CodeOf(cause) != FailureCleanup && releaseNetwork && network != nil {
+		cleanupErr = network.release(m.cleanupContext(s))
 	}
-	target := s.activeTarget
-	if s.pending != nil {
-		target = s.pending.target
-		s.activeProfiles, s.activeDigest = s.pending.profiles, s.pending.digest
-		retainPolicy(s.activeDigest, s.activeProfiles)
-		s.pending = nil
-		s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
-		s.lastFailure, s.lastFailureMessage = "", ""
-	}
+	return releaseNetwork, cleanupErr
+}
+
+func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptContext context.Context, generation uint64) {
 	s.generation++
-	generation := s.generation
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cleanupBudget = &cleanupBudget{}
-	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active = cancel, &ledger{}, false, false, nil
-	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
+	s.cancel, s.ledger = cancel, &ledger{}
+	s.cleanupDone, s.cleanupFailed, s.stopRequested = false, false, false
+	s.active, s.activeTarget = nil, target
+	s.restartAfterCleanup, s.failureAfterCleanup = false, ""
 	s.failureMessageAfterCleanup = ""
 	s.state = StateProbing
 	m.appendLocked(s)
-	s.mu.Unlock()
-	go m.runStart(ctx, s, generation, target)
+	return ctx, s.generation
 }
 
 func retainPolicy(digest string, profiles []RuntimeProfile) {
@@ -1062,7 +1104,7 @@ func (m *Manager) appendLocked(s *session) {
 	if digest == "" {
 		digest = s.digest
 	}
-	details := map[string]any{"session_id": s.id, "generation": s.generation, "configuration_digest": digest, "loaded_configuration_digest": s.digest, "sequence": s.sequence, "state": s.state, "cleanup_complete": s.cleanupDone, "recovering": s.recovering, "active_profile": s.active}
+	details := map[string]any{"session_id": s.id, "generation": s.generation, "configuration_digest": digest, "loaded_configuration_digest": s.digest, "sequence": s.sequence, "state": s.state, "cleanup_complete": s.cleanupDone, "vpn_active": s.vpnActive, "network_generation": s.networkGeneration, "recovering": s.recovering, "active_profile": s.active}
 	if !s.lastTransitionAt.IsZero() {
 		details["previous_state_duration_ms"] = now.Sub(s.lastTransitionAt).Milliseconds()
 	}
@@ -1075,7 +1117,7 @@ func (m *Manager) appendLocked(s *session) {
 		log.Info("SESSION", "session state changed", details)
 	}
 	m.platform.PublishState(context.Background(), StateChange{
-		SessionID: s.id, Generation: s.generation, State: s.state, Failure: s.lastFailure,
+		SessionID: s.id, Generation: s.generation, NetworkGeneration: s.networkGeneration, State: s.state, Failure: s.lastFailure,
 	})
 }
 
@@ -1096,6 +1138,7 @@ func snapshotLocked(s *session) SnapshotResult {
 	}
 	return SnapshotResult{
 		SessionID: s.id, Sequence: s.sequence, Generation: s.generation, State: s.state,
+		VPNActive: s.vpnActive, NetworkGeneration: s.networkGeneration, CanRetry: canRetry(s),
 		Configured: s.configured, Digest: s.digest, SourceKind: s.sourceKind, SourceURL: s.sourceURL, SourceError: s.sourceError,
 		ActiveDigest: s.activeDigest, ActiveMode: s.activeTarget.Mode, ActiveIndex: s.activeTarget.Index, PendingTarget: pending, CanSwitch: canSwitch(s),
 		Profiles:      summaries(s.profiles),
@@ -1109,12 +1152,24 @@ func canSwitch(s *session) bool {
 	return !s.closing && s.state == StateConnected && !s.recovering && s.pending == nil && !s.cleanupFailed
 }
 
+func canRetry(s *session) bool {
+	return !s.closing && s.state == StateFailed && s.vpnActive && !s.cleanupFailed && s.ledger == nil
+}
+
+const primaryActionStop = "STOP"
+
 func primaryActionLocked(s *session) string {
+	if canRetry(s) {
+		return "RETRY"
+	}
+	if s.state == StateFailed && s.cleanupFailed {
+		return primaryActionStop
+	}
 	if s.pending != nil {
-		return "STOP"
+		return primaryActionStop
 	}
 	if s.state == StateProbing || s.state == StatePreparing || s.state == StateConnected || s.recovering {
-		return "STOP"
+		return primaryActionStop
 	}
 	if s.state != StateStopping && s.cleanupDone && !s.cleanupFailed {
 		return "START"

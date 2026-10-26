@@ -5,22 +5,24 @@ package protected_dialer
 import (
 	"fmt"
 	"math"
+	"sync/atomic"
 	"syscall"
 
 	"core/log"
 )
 
-var linuxSocketMark int
+var linuxSocketMark atomic.Int64
 
 func SetLinuxSocketMark(mark int) {
-	linuxSocketMark = mark
+	linuxSocketMark.Store(int64(mark))
 	log.Debugf(Category, "[Linux-Protect] SO_MARK=%d", mark)
 }
 
 type linuxProtector struct{}
 
 func (l *linuxProtector) Protect(fdU uintptr, network string) error {
-	if linuxSocketMark == 0 {
+	mark := int(linuxSocketMark.Load())
+	if mark == 0 {
 		return ErrSocketProtectionUnavailable
 	}
 
@@ -34,9 +36,9 @@ func (l *linuxProtector) Protect(fdU uintptr, network string) error {
 		fd,
 		syscall.SOL_SOCKET,
 		syscall.SO_MARK,
-		linuxSocketMark,
+		mark,
 	); err != nil {
-		log.Errorf(Category, "[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, linuxSocketMark, err)
+		log.Errorf(Category, "[Linux-Protect] SO_MARK failed fd=%d mark=%d err=%v", fd, mark, err)
 		return err
 	}
 	return nil

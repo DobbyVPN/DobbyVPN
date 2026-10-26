@@ -71,6 +71,12 @@ public struct DobbyRootView: View {
                 VStack(spacing: pt(8)) {
                     subscriptionField
                     mainButton
+                    if model.supportsOnDemand {
+                        Toggle("Connect on demand", isOn: onDemandBinding)
+                            .dobbyFont(14, .medium)
+                            .accessibilityIdentifier("connection.on-demand")
+                            .disabled(model.onDemandBusy || model.busy)
+                    }
                     connections
                         .frame(height: trayHeight(geometry.size.height))
                         .padding(.top, pt(8))
@@ -94,11 +100,15 @@ public struct DobbyRootView: View {
         .frame(minWidth: 320, minHeight: 460)
         .navigationTitle("doBBYVPN")
 #endif
-        .onAppear { model.setLogsVisible(true); refreshClipboard() }
+        .onAppear { model.setLogsVisible(true); model.refreshOnDemandPreference(); refreshClipboard() }
         .onDisappear { model.setLogsVisible(false) }
         .onChange(of: model.status) { announceStatus($0) }
         .onChange(of: showingError) { if $0 { sourceFocused = false } }
-        .onChange(of: scenePhase) { phase in model.setLogsVisible(phase == .active); refreshClipboard() }
+        .onChange(of: scenePhase) { phase in
+            model.setLogsVisible(phase == .active)
+            if phase == .active { model.refreshOnDemandPreference() }
+            refreshClipboard()
+        }
 #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshClipboard()
@@ -193,13 +203,18 @@ public struct DobbyRootView: View {
         Binding(get: { model.sourceText }, set: { model.sourceChanged($0) })
     }
 
+    private var onDemandBinding: Binding<Bool> {
+        Binding(get: { model.onDemandEnabled }, set: { model.setOnDemandEnabled($0) })
+    }
+
     private var mainButton: some View {
         let title = model.mainActionTitle
         let enabled = model.mainActionEnabled
         let idle = title == "Auto connect"
         let filled = enabled && idle
         let outlined = enabled || !idle
-        return Button {
+        return VStack(spacing: pt(8)) {
+        Button {
             sourceFocused = false
             model.mainAction()
         } label: {
@@ -216,6 +231,12 @@ public struct DobbyRootView: View {
         .accessibilityIdentifier("VPN connection action")
         .accessibilityValue(model.status)
         .keyboardShortcut(.return, modifiers: .command)
+        if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
+            Button("Stop", action: model.stop)
+                .disabled(!model.canStop)
+                .accessibilityIdentifier("connection.stop")
+        }
+        }
     }
 
     private var connections: some View {
@@ -363,6 +384,14 @@ public struct DobbyRootView: View {
                     .padding(.top, pt(10))
                     HStack(spacing: pt(8)) {
                         DialogButton(title: "Close", filled: false, action: model.closeFailure)
+                        if model.canRetryActiveSelection {
+                            DialogButton(title: "Retry", filled: true, action: model.retryActiveSelection)
+                                .accessibilityIdentifier("connection.retry")
+                        }
+                        if model.canStop {
+                            DialogButton(title: "Stop", filled: false, action: model.stop)
+                                .accessibilityIdentifier("failure.stop")
+                        }
                         if loadFailed {
                             DialogButton(title: "Retry", filled: true) { model.retryLoad() }
                                 .accessibilityIdentifier("subscription.retry")

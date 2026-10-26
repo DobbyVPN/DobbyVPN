@@ -36,7 +36,6 @@ type OutlineDevice struct {
 	closing      bool
 	listener     net.Listener
 	proxyAddr    string
-	svrIP        net.IP
 	streamDialer transport.StreamDialer
 	packetDialer transport.PacketDialer
 	websocket    bool
@@ -44,17 +43,11 @@ type OutlineDevice struct {
 	hasUDPPath   bool
 }
 
-func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {
+func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {
 	if dnsCache == nil {
 		return nil, errors.New("DNS cache is required")
 	}
-	ip, err := ResolveServerIPFromConfig(transportConfig, dnsCache)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx := context.Background()
-	providers := protected_dialer.NewOutlineProviders(dnsCache, registerPendingStreamConn)
+	providers := protected_dialer.NewOutlineProviders(ctx, dnsCache, registerPendingStreamConn)
 
 	sd, err := providers.NewStreamDialer(ctx, transportConfig)
 	if err != nil {
@@ -73,19 +66,17 @@ func NewOutlineDevice(transportConfig string, dnsCache *dnscache.Cache) (*Outlin
 	hasUDPPath := strings.Contains(transportConfig, "udp_path=")
 
 	log.Debugf(Category,
-		"outline client: transport summary len=%d serverIP=%s websocket=%v tcpPath=%v udpPath=%v streamDialer=%T packetDialer=%T",
+		"outline client: transport summary len=%d websocket=%v tcpPath=%v udpPath=%v streamDialer=%T packetDialer=%T",
 		len(transportConfig),
-		ip.String(),
 		isWebSocket,
 		hasTCPPath,
 		hasUDPPath,
 		sd,
 		pd,
 	)
-	ownerContext, cancel := context.WithCancel(context.Background())
+	ownerContext, cancel := context.WithCancel(ctx)
 	od := &OutlineDevice{
 		ctx: ownerContext, cancel: cancel, connections: make(map[*ownedConn]struct{}),
-		svrIP:        ip,
 		streamDialer: sd,
 		packetDialer: pd,
 		websocket:    isWebSocket,
@@ -166,7 +157,6 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	defer cancel()
 
 	start := time.Now()
-	serverIP := d.serverIPString()
 
 	host, portStr, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portStr)
@@ -195,7 +185,9 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			if errors.Is(ctx.Err(), context.Canceled) {
 				writeLog = log.Debugf
 			}
-			writeLog(Category, "[SOCKS5 TCP] dial ended dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
+			// The protected dialer logs each actual transport endpoint. A
+			// composable transport does not have one immutable server address.
+			writeLog(Category, "[SOCKS5 TCP] dial ended dst=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, time.Since(start), ctx.Err(), contextCause(ctx), err)
 			return nil, fmt.Errorf("StreamDialer failed for %s: %w", addr, err)
 		}
 
@@ -217,7 +209,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			if errors.Is(ctx.Err(), context.Canceled) {
 				writeLog = log.Debugf
 			}
-			writeLog(Category, "[SOCKS5 UDP] dial ended dst=%s server=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, serverIP, time.Since(start), ctx.Err(), contextCause(ctx), err)
+			writeLog(Category, "[SOCKS5 UDP] dial ended dst=%s elapsed=%s ctxErr=%v cause=%s err=%v", addr, time.Since(start), ctx.Err(), contextCause(ctx), err)
 			return nil, fmt.Errorf("PacketDialer failed for %s: %w", addr, err)
 		}
 
@@ -225,15 +217,8 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	}
 
 	err := fmt.Errorf("unsupported network %s", network)
-	log.Errorf(Category, "[SOCKS5 ERROR] dst=%s server=%s elapsed=%s err=%v", addr, serverIP, time.Since(start), err)
+	log.Errorf(Category, "[SOCKS5 ERROR] dst=%s elapsed=%s err=%v", addr, time.Since(start), err)
 	return nil, err
-}
-
-func (d *OutlineDevice) serverIPString() string {
-	if d.svrIP == nil {
-		return nilString
-	}
-	return d.svrIP.String()
 }
 
 func contextCause(ctx context.Context) string {
@@ -322,86 +307,6 @@ func (c *truncatedDNSConn) SetDeadline(t time.Time) error      { return nil }
 func (c *truncatedDNSConn) SetReadDeadline(t time.Time) error  { return nil }
 func (c *truncatedDNSConn) SetWriteDeadline(t time.Time) error { return nil }
 
-func ResolveServerIPFromConfig(transportConfig string, dnsCache *dnscache.Cache) (net.IP, error) {
-	if dnsCache == nil {
-		return nil, errors.New("DNS cache is required")
-	}
-
-	if transportConfig = strings.TrimSpace(transportConfig); transportConfig == "" {
-		return nil, errors.New("config is required")
-	}
-
-	host := extractTLSSNIHost(transportConfig)
-	if host != "" {
-		log.Debugf(Category, "outline client: detected WSS config, using TLS SNI host: %s", host)
-	} else {
-		var err error
-		host, err = extractSSHost(transportConfig)
-		if err != nil {
-			return nil, err
-		}
-		log.Debugf(Category, "outline client: using ss:// host: %s", host)
-	}
-
-	if host == "127.0.0.1" || host == "localhost" {
-		log.Debugf(Category, "outline client: localhost detected, skipping IP resolution")
-		return net.ParseIP("127.0.0.1").To4(), nil
-	}
-
-	ip, err := dnsCache.ResolvePreflightIPv4(context.Background(), host, dnscache.ServerResolveTimeout, "outline")
-	if err != nil {
-		return nil, err
-	}
-	log.Debugf(Category, "outline client: resolved %s -> %s", host, ip.String())
-	return ip, nil
-}
-
-func extractTLSSNIHost(transportConfig string) string {
-
-	parts := strings.Split(transportConfig, "|")
-
-	for _, part := range parts {
-
-		part = strings.TrimSpace(part)
-
-		if strings.HasPrefix(part, "tls:") {
-
-			params := strings.TrimPrefix(part, "tls:")
-
-			for _, param := range strings.Split(params, "&") {
-
-				if strings.HasPrefix(param, "sni=") {
-					return strings.TrimPrefix(param, "sni=")
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
-func extractSSHost(transportConfig string) (string, error) {
-
-	parts := strings.Split(transportConfig, "|")
-
-	for _, part := range parts {
-
-		part = strings.TrimSpace(part)
-
-		if strings.HasPrefix(part, "ss://") {
-
-			u, err := url.Parse(part)
-			if err != nil {
-				return "", err
-			}
-
-			return u.Hostname(), nil
-		}
-	}
-
-	return "", errors.New("ss:// not found")
-}
-
 // Open implements protocol.ProtocolDevice. The SOCKS5 server is already started
 // by NewOutlineDevice, so this is a no-op.
 func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
@@ -409,13 +314,6 @@ func (d *OutlineDevice) Open(routingTableID int, uplinkIface string) error {
 		return errors.New("outline device is not initialized")
 	}
 	return nil
-}
-
-func (d *OutlineDevice) GetServerIP() net.IP {
-	if d == nil {
-		return nil
-	}
-	return d.svrIP
 }
 
 func (d *OutlineDevice) GetProxyAddr() string {

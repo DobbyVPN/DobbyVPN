@@ -20,7 +20,6 @@ import (
 	"context"
 	"core/dnscache"
 	"core/log"
-	"core/protocol"
 	"core/sessionapi"
 	"core/tunnel"
 	"errors"
@@ -30,14 +29,16 @@ import (
 )
 
 type App struct {
-	cleanupMu  sync.Mutex
-	cleanup    []func(context.Context) error
-	cleanupErr error
+	cleanupMu      sync.Mutex
+	cleanup        []func(context.Context) error
+	cleanupErr     error
+	cleanupContext context.Context
 
-	ProtocolDevice protocol.ProtocolDevice
-	DNSCache       *dnscache.Cache
-	BypassPolicy   *tunnel.BypassPolicy
-	RoutingConfig  *RoutingConfig
+	Engine          *tunnel.Engine
+	UplinkInterface string
+	DNSCache        *dnscache.Cache
+	BypassPolicy    *tunnel.BypassPolicy
+	RoutingConfig   *RoutingConfig
 }
 
 type RoutingConfig struct {
@@ -47,7 +48,7 @@ type RoutingConfig struct {
 	TunGatewayCIDR       string
 	RoutingTableID       int
 	RoutingTablePriority int
-	DNSServerIP          string
+	DNSServers           []string
 }
 
 // The run goroutine registers one ordered cleanup transaction before acquiring
@@ -84,8 +85,22 @@ func (app *App) CleanupError() error {
 	return app.cleanupErr
 }
 
+// SetCleanupContext supplies the current network owner's deadline before the
+// run goroutine is canceled. Attempt contexts have a shorter, independent life.
+func (app *App) SetCleanupContext(ctx context.Context) {
+	app.cleanupMu.Lock()
+	defer app.cleanupMu.Unlock()
+	app.cleanupContext = ctx
+}
+
 func (app *App) finishCleanup(ctx context.Context, runErr error) error {
-	if err := app.Close(sessionapi.CleanupContext(ctx)); err != nil {
+	app.cleanupMu.Lock()
+	cleanupCtx := app.cleanupContext
+	app.cleanupMu.Unlock()
+	if cleanupCtx == nil {
+		cleanupCtx = sessionapi.CleanupContext(ctx)
+	}
+	if err := app.Close(cleanupCtx); err != nil {
 		runErr = errors.Join(runErr, err)
 		log.Errorf(Category, "native cleanup pending: %v", err)
 	} else {

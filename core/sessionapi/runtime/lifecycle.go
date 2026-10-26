@@ -1,4 +1,4 @@
-// Package runtime owns one transactional protocol/runtime lease for the session manager.
+// Package runtime owns a VPN network and its independently retired protocol attempts.
 // It is deliberately owned by Go: callers never interpret profile TOML or
 // normalized protocol payloads.
 package runtime
@@ -18,18 +18,22 @@ import (
 	"core/protocol"
 	"core/sessionapi"
 	"core/tunnel"
+	"core/tunnel/protected_dialer"
 )
 
 const category = "sessionapi/runtime"
 
-// TunnelProvider is the deliberately narrow mobile boundary. Acquire must
-// return a newly allocated TUN for this exact SessionRef; a provider must not
-// retain or reuse a TUN from an earlier generation. ProtectSocket is passed to
+// TunnelProvider acquires one interface for a network generation. The returned
+// lease survives all protocol attempts until the network owner is stopped. ProtectSocket is passed to
 // custom device factories so platform dial hooks can correlate protection with
 // the session which owns the socket.
 type TunnelProvider interface {
 	Acquire(context.Context, sessionapi.SessionRef) (TunnelLease, error)
 	ProtectSocket(context.Context, sessionapi.SessionRef, int) error
+}
+
+type NetworkResolverProvider interface {
+	ConfigureResolver(context.Context, sessionapi.SessionRef, *dnscache.Cache) error
 }
 
 type TunnelLease interface {
@@ -45,22 +49,19 @@ type InputProvider interface {
 }
 
 // DeviceFactory receives only the normalized config for every protocol and
-// the DNS cache owned by this start attempt.
+// the resolver context owned by the retained VPN network.
 type DeviceFactory func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector, *dnscache.Cache) (protocol.ProtocolDevice, error)
-
-// numericUpstreamIPProvider is an optional capability for protocol devices
-// whose native bootstrap connection uses exact numeric endpoint addresses.
-type numericUpstreamIPProvider interface {
-	UpstreamIPs() []net.IP
-}
 
 type SocketProtector func(context.Context, int) error
 
-type CoreFactory func(protocol.ProtocolDevice, io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore
+type CoreFactory func(io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore
 
 type sessionCore interface {
 	Connect(context.Context) error
 	Disconnect(context.Context) error
+	Attach(context.Context, uint64, string, *dnscache.Cache, *tunnel.BypassPolicy) error
+	Detach(context.Context, uint64) error
+	ProtocolParameters() (int, string)
 }
 
 // connectCanceler is implemented by native runtimes whose Connect operation
@@ -147,6 +148,7 @@ type runtime struct {
 	mu      sync.Mutex
 	active  bool
 	options Options
+	network *networkOwner
 }
 
 func markCleanupFailure(err error) error {
@@ -156,17 +158,99 @@ func markCleanupFailure(err error) error {
 	return &sessionapi.CleanupFailure{Err: err}
 }
 
-// The native core also closes its device. A single wrapper lets the attempt
-// register ownership immediately without asking each core to coordinate it.
-type ownedDevice struct {
-	protocol.ProtocolDevice
-	closeOnce sync.Once
-	closeErr  error
+// networkOwner is acquired before any protocol. Failed partial acquisition is
+// returned to the manager, which releases it after attempt cleanup.
+type networkOwner struct {
+	ref   sessionapi.SessionRef
+	cache *dnscache.Cache
+	core  sessionCore
+	lease lease
 }
 
-func (d *ownedDevice) Close() error {
-	d.closeOnce.Do(func() { d.closeErr = d.ProtocolDevice.Close() })
-	return d.closeErr
+func (n *networkOwner) Stop(ctx context.Context) error { return n.lease.Stop(ctx) }
+
+func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.network != nil || r.active {
+		return nil, errors.New("previous network is still owned")
+	}
+	n := &networkOwner{ref: ref, cache: dnscache.New()}
+	r.network = n
+	n.lease.setOnDone(func(error) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.network == n {
+			r.network = nil
+		}
+	})
+	// The stack starts without a transport or bypass target. Resolve the actual
+	// attempt policy only after native setup has captured the physical resolver.
+	entries := profile.ExcludeCIDRs
+	if _, native := r.options.Inputs.(defaultInputProvider); native {
+		entries = nil
+	}
+	bypass, err := r.options.Inputs.Resolve(ctx, entries)
+	if err != nil {
+		return n, fmt.Errorf("resolve network bypass: %w", err)
+	}
+	if bypass == nil {
+		return n, errors.New("network bypass is unavailable")
+	}
+	var tun TunnelLease
+	if mobileRuntime {
+		tun, err = r.acquireNetworkTunnel(ctx, ref, n)
+		if err != nil {
+			return n, err
+		}
+	}
+	n.core = r.options.NewCore(tun, n.cache, bypass)
+	if n.core == nil {
+		return n, errors.New("network core is unavailable")
+	}
+	// The native network worker must not inherit a protocol cancellation. Link
+	// acquisition cancellation only until Connect has settled; Stop owns it after.
+	networkCtx, cancel := context.WithCancel(context.Background())
+	n.lease.push(func(cleanupCtx context.Context) error {
+		disconnectErr := n.core.Disconnect(cleanupCtx)
+		cancel()
+		return disconnectErr
+	})
+	acquisitionDone := context.AfterFunc(ctx, cancel)
+	err = connectContext(networkCtx, n.core)
+	acquisitionDone()
+	if err != nil {
+		return n, err
+	}
+	if err := ctx.Err(); err != nil {
+		return n, err
+	}
+	log.Infof(category, "network acquired session=%s network_generation=%d", ref.SessionID, ref.Generation)
+	return n, nil
+}
+
+func (r *runtime) acquireNetworkTunnel(ctx context.Context, ref sessionapi.SessionRef, n *networkOwner) (TunnelLease, error) {
+	if r.options.Tunnel == nil {
+		return nil, errors.New("mobile network requires a TunnelProvider")
+	}
+	tun, err := r.options.Tunnel.Acquire(ctx, ref)
+	if tun != nil {
+		n.lease.push(tun.Release)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if tun == nil {
+		return nil, errors.New("platform returned no network interface")
+	}
+	resolver, ok := r.options.Tunnel.(NetworkResolverProvider)
+	if !ok {
+		return nil, errors.New("platform underlying resolver is unavailable")
+	}
+	if err := resolver.ConfigureResolver(ctx, ref, n.cache); err != nil {
+		return nil, err
+	}
+	return tun, nil
 }
 
 func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
@@ -177,6 +261,9 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	defer r.mu.Unlock()
 	if r.active {
 		return nil, errors.New("another runtime lease is active")
+	}
+	if r.network == nil || r.network.ref.SessionID != ref.SessionID {
+		return nil, errors.New("VPN network must be acquired before a protocol attempt")
 	}
 	r.active = true
 	lease, err := r.startLocked(ctx, ref, profile)
@@ -221,6 +308,17 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		}
 		return nil, cause
 	}
+	if err := r.network.core.Attach(lease.socketContext, ref.Generation, lease.proxyAddr, r.network.cache, lease.bypass); err != nil {
+		cleanupErr := lease.Stop(sessionapi.CleanupContext(ctx))
+		if cleanupErr == nil {
+			r.active = false
+			return nil, err
+		}
+		lease.setOnDone(r.releaseActive)
+		return lease, errors.Join(err, markCleanupFailure(cleanupErr))
+	}
+	core := r.network.core
+	lease.push(func(ctx context.Context) error { return core.Detach(ctx, ref.Generation) })
 	lease.setOnDone(r.releaseActive)
 	healthInterval, healthFailureThreshold := testHealthMonitorTiming(r.options.HealthInterval, r.options.HealthFailureThreshold)
 	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, healthInterval, healthFailureThreshold)
@@ -242,112 +340,76 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Every start attempt owns an isolated DNS cache. Retiring the lease drops
-	// its cache along with the protocol device and native runtime.
-	dnsCache := dnscache.New()
-
 	owned := &lease{}
 	fail := func(cause error) (*lease, error) {
-		if errors.Is(cause, errConnectCancellationPending) {
-			// Connect was asked to stop but has not returned yet.  Returning the
-			// still-owned lease lets the manager retain this generation and run
-			// Stop after the native operation is quiescent; releasing the TUN
-			// here would race a blocked platform call.
-			return owned, cause
-		}
 		cleanupErr := owned.Stop(sessionapi.CleanupContext(ctx))
 		if cleanupErr != nil {
 			return owned, errors.Join(cause, markCleanupFailure(cleanupErr))
 		}
 		return nil, cause
 	}
-
-	bypassPolicy, err := r.options.Inputs.Resolve(ctx, profile.ExcludeCIDRs)
+	var bypass *tunnel.BypassPolicy
+	var err error
+	if _, native := r.options.Inputs.(defaultInputProvider); native {
+		bypass, err = tunnel.ResolveBypassPolicyWithResolver(ctx, profile.ExcludeCIDRs, r.network.cache.ResolveAddresses)
+	} else {
+		bypass, err = r.options.Inputs.Resolve(ctx, profile.ExcludeCIDRs)
+	}
 	if err != nil {
 		return fail(fmt.Errorf("resolve bypass policy: %w", err))
 	}
-	if bypassPolicy == nil {
-		return fail(errors.New("resolve bypass policy returned nil"))
+	if bypass == nil {
+		return fail(errors.New("bypass policy unavailable"))
 	}
-	protect := func(protectCtx context.Context, fd int) error {
-		if r.options.Tunnel == nil {
-			return nil // desktop protocol devices use their existing routing path.
+	n := r.network
+	var protect SocketProtector
+	if r.options.Tunnel != nil {
+		protect = func(ctx context.Context, fd int) error {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return contextErr
+			}
+			return r.options.Tunnel.ProtectSocket(ctx, n.ref, fd)
 		}
-		if protectErr := r.options.Tunnel.ProtectSocket(protectCtx, ref, fd); protectErr != nil {
-			return fmt.Errorf("protect socket for session generation %d: %w", ref.Generation, protectErr)
-		}
-		return nil
 	}
-	device, err := r.options.NewDevice(ctx, ref, profile, protect, dnsCache)
+	ctx, scope := protected_dialer.NewSocketScope(ctx, ref.Generation, protect)
+	owned.socketContext = ctx
+	owned.push(scope.Close)
+	device, err := r.options.NewDevice(ctx, ref, profile, protect, n.cache)
+	if device != nil {
+		owned.push(func(ctx context.Context) error {
+			if closer, ok := device.(interface{ CloseContext(context.Context) error }); ok {
+				return closer.CloseContext(ctx)
+			}
+			return device.Close()
+		})
+	}
 	if err != nil {
-		_, _, err = ownProtocolDevice(device, err, owned, bypassPolicy)
 		return fail(fmt.Errorf("create protocol device: %w", err))
 	}
-	device, bypassPolicy, err = ownProtocolDevice(device, nil, owned, bypassPolicy)
-	if err != nil {
+	if device == nil {
+		return fail(errors.New("protocol device unavailable"))
+	}
+	// The native TrustTunnel pinger uses numeric upstreams directly. Preserve
+	// those addresses in this attempt's direct policy, including IPv6 answers.
+	if upstreams, ok := device.(interface{ UpstreamIPs() []net.IP }); ok {
+		bypass, err = bypass.WithNumericIPs(upstreams.UpstreamIPs())
+		if err != nil {
+			return fail(fmt.Errorf("extend bypass policy with numeric protocol upstreams: %w", err))
+		}
+	}
+	owned.proxyAddr, owned.bypass = device.GetProxyAddr(), bypass
+	if owned.proxyAddr == "" {
+		return fail(errors.New("protocol device returned an empty SOCKS endpoint"))
+	}
+	mark, iface := n.core.ProtocolParameters()
+	if err := device.Open(mark, iface); err != nil {
+		return fail(fmt.Errorf("open protocol: %w", err))
+	}
+	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
-	if device == nil {
-		return fail(errors.New("create protocol device returned nil"))
-	}
-	owned.proxyAddr = device.GetProxyAddr()
-	if owned.proxyAddr == "" {
-		return fail(errors.New("protocol device returned an empty local SOCKS address"))
-	}
-
-	var tun TunnelLease
-	if mobileRuntime {
-		if r.options.Tunnel == nil {
-			return fail(errors.New("mobile runtime requires a TunnelProvider"))
-		}
-		tun, err = r.options.Tunnel.Acquire(ctx, ref)
-		if tun != nil {
-			owned.push(tun.Release)
-		}
-		if err != nil {
-			return fail(fmt.Errorf("acquire fresh TUN: %w", err))
-		}
-		// Acquisition is recorded immediately, before any later construction.
-		if tun == nil {
-			return fail(errors.New("acquire fresh TUN returned nil lease"))
-		}
-	}
-
-	client := r.options.NewCore(device, tun, dnsCache, bypassPolicy)
-	if client == nil {
-		return fail(errors.New("create native session runtime returned nil"))
-	}
-	// A partially connected native runtime can own a device/engine, so register its
-	// rollback before Connect rather than only after Connect reports success.
-	owned.push(func(cleanupCtx context.Context) error { return client.Disconnect(cleanupCtx) })
-	if err := connectContext(ctx, client); err != nil {
-		return fail(fmt.Errorf("connect transactional native session runtime: %w", err))
-	}
-	// The native runtime is stopped before the mobile TUN in strict LIFO order.
-	// This preserves the tun2socks/device dependency chain.
-	log.Debugf(category, "runtime connected protocol=%s generation=%d", profile.Summary.Protocol, ref.Generation)
+	log.Infof(category, "protocol opened generation=%d network_generation=%d protocol=%s", ref.Generation, n.ref.Generation, profile.Summary.Protocol)
 	return owned, nil
-}
-
-func ownProtocolDevice(device protocol.ProtocolDevice, creationErr error, owned *lease, bypassPolicy *tunnel.BypassPolicy) (protocol.ProtocolDevice, *tunnel.BypassPolicy, error) {
-	if device == nil {
-		return nil, bypassPolicy, creationErr
-	}
-	deviceWithCapabilities := device
-	ownedProtocolDevice := &ownedDevice{ProtocolDevice: deviceWithCapabilities}
-	owned.push(func(context.Context) error { return ownedProtocolDevice.Close() })
-	if creationErr != nil {
-		return ownedProtocolDevice, bypassPolicy, creationErr
-	}
-	upstreams, ok := deviceWithCapabilities.(numericUpstreamIPProvider)
-	if !ok {
-		return ownedProtocolDevice, bypassPolicy, nil
-	}
-	updatedPolicy, err := bypassPolicy.WithNumericIPs(upstreams.UpstreamIPs())
-	if err != nil {
-		return ownedProtocolDevice, bypassPolicy, fmt.Errorf("extend bypass policy with numeric protocol upstreams: %w", err)
-	}
-	return ownedProtocolDevice, updatedPolicy, nil
 }
 
 func waitForInitialReadiness(
@@ -435,14 +497,16 @@ func connectContext(ctx context.Context, client sessionCore) error {
 }
 
 type lease struct {
-	proxyAddr    string
-	stopMu       sync.Mutex
-	stopped      bool
-	undo         []func(context.Context) error
-	onDone       func(error)
-	healthCancel context.CancelFunc
-	healthDone   chan struct{}
-	healthFailed chan error
+	socketContext context.Context
+	bypass        *tunnel.BypassPolicy
+	proxyAddr     string
+	stopMu        sync.Mutex
+	stopped       bool
+	undo          []func(context.Context) error
+	onDone        func(error)
+	healthCancel  context.CancelFunc
+	healthDone    chan struct{}
+	healthFailed  chan error
 }
 
 func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }

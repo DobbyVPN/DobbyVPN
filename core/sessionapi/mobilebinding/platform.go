@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"core/common"
 	"core/sessionapi"
 	"core/sessionapi/runtime"
 )
@@ -102,7 +103,11 @@ func (p *platformAdapter) acquire(ref sessionapi.SessionRef) (int32, PlatformCal
 	if err != nil {
 		return -1, nil, err
 	}
-	raw := callbacks.AcquireTunnel(ref.SessionID, generation)
+	dnsServers, err := json.Marshal(common.VPNDNSServers())
+	if err != nil {
+		return -1, nil, fmt.Errorf("marshal VPN DNS servers: %w", err)
+	}
+	raw := callbacks.AcquireTunnel(ref.SessionID, generation, string(dnsServers))
 	result, err := decodeTunnelResult(raw)
 	if err != nil || result.FD == nil || *result.FD < 0 {
 		if err == nil {

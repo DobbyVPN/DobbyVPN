@@ -1,7 +1,5 @@
 package protocol
 
-import "net"
-
 // ProtocolDevice represents any VPN protocol implementation (Xray, Outline, etc.)
 // that provides a local SOCKS5 bridge for tun2socks.
 type ProtocolDevice interface {
@@ -11,8 +9,6 @@ type ProtocolDevice interface {
 	// GetProxyAddr returns the authenticated local endpoint ("user:password@127.0.0.1:port")
 	// where tun2socks should forward device traffic.
 	GetProxyAddr() string
-
-	GetServerIP() net.IP
 
 	// Close shuts down the engine and releases bound ports.
 	Close() error

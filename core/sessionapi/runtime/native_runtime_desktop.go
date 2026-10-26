@@ -13,10 +13,10 @@ import (
 	"core/common"
 	"core/dnscache"
 	"core/log"
-	"core/protocol"
 	"core/sessionapi"
 	"core/sessionapi/runtime/internal"
 	"core/tunnel"
+	"core/tunnel/platform_engine"
 )
 
 // nativeRuntime is the platform-native resource adapter used by
@@ -34,22 +34,21 @@ type nativeRuntime struct {
 	mu sync.Mutex
 }
 
-func newNativeRuntime(device protocol.ProtocolDevice, dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
+func newNativeRuntime(dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
 	cfg := common.GetNetworkConfig()
 
 	c := &nativeRuntime{
 		app: &internal.App{
-			ProtocolDevice: device,
-			DNSCache:       dnsCache,
-			BypassPolicy:   bypass,
+			DNSCache:     dnsCache,
+			BypassPolicy: bypass,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        ownedTunName,
 				TunDeviceIP:          cfg.TunDevice,
-				TunDeviceMTU:         1500,
+				TunDeviceMTU:         platform_engine.TunnelMTU,
 				TunGatewayCIDR:       cfg.TunGateway + "/32",
 				RoutingTableID:       ownedRoutingTableID,
 				RoutingTablePriority: ownedRoutingPriority,
-				DNSServerIP:          "9.9.9.9",
+				DNSServers:           common.VPNDNSServers(),
 			},
 		},
 		state: stateIdle,
@@ -174,6 +173,9 @@ func (c *nativeRuntime) Disconnect(ctx context.Context) error {
 	}
 
 	c.state = stateStopping
+	if c.app != nil {
+		c.app.SetCleanupContext(ctx)
+	}
 	cancel := c.cancel
 	done := c.done
 	c.mu.Unlock()
@@ -199,6 +201,9 @@ func (c *nativeRuntime) Disconnect(ctx context.Context) error {
 
 func (c *nativeRuntime) stopAndWait(ctx context.Context, reason string) error {
 	c.mu.Lock()
+	if c.app != nil {
+		c.app.SetCleanupContext(ctx)
+	}
 	if c.state != stateStopping {
 		c.state = stateStopping
 	}
@@ -266,4 +271,14 @@ func (c *nativeRuntime) generationValue() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.generation
+}
+
+func (c *nativeRuntime) Attach(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *tunnel.BypassPolicy) error {
+	return c.app.Engine.Attach(ctx, generation, address, cache, bypass)
+}
+func (c *nativeRuntime) Detach(ctx context.Context, generation uint64) error {
+	return c.app.Engine.Detach(ctx, generation)
+}
+func (c *nativeRuntime) ProtocolParameters() (int, string) {
+	return c.app.RoutingConfig.RoutingTableID, c.app.UplinkInterface
 }

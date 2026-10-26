@@ -56,13 +56,15 @@ public final class NativeGoSession {
         byte[] rawConfig
     );
 
-    public static native String startSelection(String sessionId, long expectedSequence, String mode, int index, String digest);
+    public static native String startSelection(String sessionId, long expectedSequence, String mode, int index, String digest, boolean replaceCurrent);
 
     public static native String stop(String sessionId, long generation);
 
     static native String stopAndWait();
 
     static native String resume();
+
+    static native String restore(boolean onlyPreviouslyEnabled);
 
     public static native String snapshot(String sessionId);
 }

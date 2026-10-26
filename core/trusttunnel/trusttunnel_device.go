@@ -13,6 +13,8 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"core/auth"
+	"core/common"
+	"core/dnscache"
 	log "core/log"
 	"core/protocol"
 	"core/trusttunnel/internal"
@@ -30,24 +32,24 @@ type TrustTunnelDevice struct {
 	upstreamIPs         []net.IP
 }
 
-var protectSocket = protected_dialer.ProtectSocketIntErr
+var protectSocket = protected_dialer.ProtectSocketDestinations
 
-func protectTrustTunnelSocket(fd int) int {
-	if err := protectSocket(fd); err != nil {
+func protectTrustTunnelSocket(ctx context.Context, addresses []string, fd int) int {
+	if err := protectSocket(ctx, fd, addresses); err != nil {
 		log.Errorf("trusttunnel", "[TrustTunnel] socket protection failed: %v", err)
 		return 1
 	}
 	return 0
 }
 
-func NewTrustTunnelDevice(accepted map[string]any) (*TrustTunnelDevice, error) {
+func NewTrustTunnelDevice(ctx context.Context, accepted map[string]any, cache *dnscache.Cache) (*TrustTunnelDevice, error) {
 	startedAt := time.Now()
 	parsedConfig := protocol.CloneFields(accepted)
 	endpoint, ok := parsedConfig["endpoint"].(map[string]any)
 	if !ok {
 		return nil, errors.New("invalid endpoint configuration")
 	}
-	addresses, ip, err := internal.PrepareEndpointAddresses(endpoint, nil)
+	addresses, ip, err := internal.PrepareEndpointAddresses(ctx, endpoint, cache.ResolveAddresses)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare TrustTunnel endpoint addresses: %w", err)
 	}
@@ -56,10 +58,22 @@ func NewTrustTunnelDevice(accepted map[string]any) (*TrustTunnelDevice, error) {
 		return nil, fmt.Errorf("failed to retain numeric TrustTunnel endpoint addresses: %w", err)
 	}
 	endpoint["addresses"] = addresses
+	// Native reconnect must not fall back to direct application/DNS traffic
+	// before the shared health monitor retires this attempt. Network lifetime
+	// and configured bypass remain owned by the shared packet router.
+	parsedConfig["killswitch_enabled"] = true
+	parsedConfig["killswitch_allow_ports"] = []any{}
+	dns := common.VPNDNSServers()
+	dnsUpstreams := make([]any, len(dns))
+	for i, server := range dns {
+		dnsUpstreams[i] = net.JoinHostPort(server, "53")
+	}
+	endpoint["dns_upstreams"] = dnsUpstreams
+	delete(parsedConfig, "dns_upstreams") // Superseded legacy native DNS field.
 
 	// Pick a free local port for the SOCKS inbound.
 	listenConfig := net.ListenConfig{}
-	l, err := listenConfig.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	l, err := listenConfig.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate local port: %w", err)
 	}
@@ -106,18 +120,26 @@ func NewTrustTunnelDevice(accepted map[string]any) (*TrustTunnelDevice, error) {
 
 	d.trusttunnelInstance.SetLogCallback(internal.LogFunc)
 
-	// Register the global socket protection callback
-	// This delegates TrustTunnel's OS-level socket protection back to DobbyVPN's `protected_dialer`
-	d.trusttunnelInstance.SetProtectSocketCallback(protectTrustTunnelSocket)
+	numericAddresses := make([]string, len(addresses))
+	for i, address := range addresses {
+		numericAddresses[i] = address.(string)
+	}
+	// The callback captures this attempt, rather than consulting a mutable
+	// "current generation" when native code eventually creates a socket.
+	d.trusttunnelInstance.SetProtectSocketCallback(func(fd int) int {
+		return protectTrustTunnelSocket(ctx, numericAddresses, fd)
+	})
 
 	endpointHostname, _ := endpoint["hostname"].(string)
 	log.Info("trusttunnel", "TrustTunnel endpoint prepared for native start", map[string]any{
 		"endpoint_hostname":    endpointHostname,
 		"endpoint_addresses":   addresses,
-		"selected_ipv4":        ip.String(),
+		"selected_address":     ip.String(),
 		"socks_address":        socksAddress,
 		"socks_listener_state": "not_started",
 		"preparation_elapsed":  time.Since(startedAt).Truncate(time.Millisecond).String(),
+		"vpn_dns_servers":      dns,
+		"direct_fallback":      false,
 	})
 	return d, nil
 }
@@ -187,7 +209,7 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	endpointHostname, _ := endpoint["hostname"].(string)
 	log.Info("trusttunnel", "TrustTunnel native start accepted; local SOCKS listener readiness is not observed here", map[string]any{
 		"endpoint_hostname":        endpointHostname,
-		"selected_ipv4":            d.svrIP.String(),
+		"selected_address":         d.svrIP.String(),
 		"socks_address":            d.socksAddress,
 		"native_start_result":      "accepted",
 		"socks_listener_readiness": "unobserved",
@@ -195,13 +217,6 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	})
 
 	return nil
-}
-
-func (d *TrustTunnelDevice) GetServerIP() net.IP {
-	if d == nil {
-		return nil
-	}
-	return d.svrIP
 }
 
 // UpstreamIPs returns the numeric addresses TrustTunnel can use for its native

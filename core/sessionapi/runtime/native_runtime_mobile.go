@@ -11,7 +11,6 @@ import (
 
 	"core/dnscache"
 	"core/log"
-	"core/protocol"
 	"core/sessionapi"
 	"core/tunnel"
 	"core/tunnel/platform_engine"
@@ -23,7 +22,6 @@ import (
 // sessionapi/runtime. The session manager owns the externally meaningful
 // state and generation; this type only tracks local resource cleanup.
 type nativeRuntime struct {
-	device       protocol.ProtocolDevice
 	tun          io.ReadWriteCloser
 	dnsCache     *dnscache.Cache
 	bypassPolicy *tunnel.BypassPolicy
@@ -31,7 +29,6 @@ type nativeRuntime struct {
 	// cleanupErr retains the failed rollback for a repeated Disconnect call.
 	cleanupErr        error
 	state             lifecycleState
-	deviceOpened      bool
 	tunOwned          bool
 	tunCloseAttempted bool
 	tunCloseErr       error
@@ -45,9 +42,8 @@ type nativeRuntime struct {
 	connectCancel chan struct{}
 }
 
-func newNativeRuntime(device protocol.ProtocolDevice, tun io.ReadWriteCloser, dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
+func newNativeRuntime(tun io.ReadWriteCloser, dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
 	c := &nativeRuntime{
-		device:        device,
 		tun:           tun,
 		dnsCache:      dnsCache,
 		bypassPolicy:  bypass,
@@ -106,7 +102,6 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 	}
 	c.state = statePreparing
 	c.cleanupErr = nil
-	c.deviceOpened = false
 	c.tunOwned = false
 	c.tunCloseAttempted = false
 	c.tunCloseErr = nil
@@ -120,9 +115,6 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 		return fail(errors.New("mobile session connect canceled before native startup"))
 	}
 
-	if c.device == nil {
-		return fail(errors.New("mobile protocol device is not initialized"))
-	}
 	if c.tun == nil {
 		return fail(errors.New("mobile TUN device is not initialized"))
 	}
@@ -140,20 +132,8 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 		return fail(fmt.Errorf("TUN device does not expose a descriptor"))
 	}
 
-	c.deviceOpened = true
-	err = c.device.Open(0, "")
-	if err != nil {
-		log.Errorf(nativeLogCategory, "failed to create protocol device: %v", err)
-		return fail(fmt.Errorf("failed to open protocol device: %w", err))
-	}
-	c.deviceOpened = true
-	if c.connectWasCanceled() {
-		return fail(errors.New("mobile session connect canceled after protocol startup"))
-	}
-
 	log.Debugf(nativeLogCategory, "starting tun2socks engine proxy_endpoint_configured=true local_socks_listener_readiness=unobserved")
 	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
-		ProxyAddr:   c.device.GetProxyAddr(),
 		FD:          fd,
 		UplinkIface: "",
 	}, c.dnsCache, c.bypassPolicy)
@@ -198,12 +178,6 @@ func (c *nativeRuntime) cleanupResourcesLocked(ctx context.Context) error {
 		}
 		c.engine = nil
 	}
-	if c.deviceOpened && c.device != nil {
-		if err := c.device.Close(); err != nil {
-			return err
-		}
-		c.deviceOpened = false
-	}
 	if c.tunOwned && c.tun != nil {
 		if err := c.closeTunLocked(); err != nil {
 			return err
@@ -238,7 +212,7 @@ func (c *nativeRuntime) disconnectLocked(ctx context.Context) error {
 		c.state = stateFailed
 	} else {
 		c.state = stateIdle
-		c.engine, c.tun, c.device = nil, nil, nil
+		c.engine, c.tun = nil, nil
 	}
 
 	log.Debugf(nativeLogCategory, "native session runtime disconnected")
@@ -253,3 +227,11 @@ func (c *nativeRuntime) stateValue() lifecycleState {
 	defer c.mu.Unlock()
 	return c.state
 }
+
+func (c *nativeRuntime) Attach(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *tunnel.BypassPolicy) error {
+	return c.engine.Attach(ctx, generation, address, cache, bypass)
+}
+func (c *nativeRuntime) Detach(ctx context.Context, generation uint64) error {
+	return c.engine.Detach(ctx, generation)
+}
+func (c *nativeRuntime) ProtocolParameters() (int, string) { return 0, "" }

@@ -9,20 +9,6 @@ import (
 	"core/log"
 )
 
-var defaultInterfaceIndex int
-
-func SetDefaultRoute(gatewayIP, interfaceName string, idx int) {
-	defaultInterfaceIndex = idx
-	log.Debugf(Category, "[Windows-Protect] default route gateway=%s iface=%s ifindex=%d", gatewayIP, interfaceName, idx)
-}
-
-// ResetDefaultRoute clears the generation-owned interface binding. It must be
-// called when a session exits, including failed starts, so later protected
-// sockets cannot inherit a stale physical interface.
-func ResetDefaultRoute() {
-	defaultInterfaceIndex = 0
-}
-
 type windowsProtector struct{}
 
 func windowsInterfaceOption(network string) (level, option int, ipv4 bool, err error) {
@@ -37,25 +23,26 @@ func windowsInterfaceOption(network string) (level, option int, ipv4 bool, err e
 }
 
 func (w *windowsProtector) Protect(fd uintptr, network string) error {
-	if defaultInterfaceIndex == 0 {
-		return ErrSocketProtectionUnavailable
+	selectedIndex, err := physicalInterfaceIndex(network)
+	if err != nil {
+		return err
 	}
 
 	level, option, ipv4, err := windowsInterfaceOption(network)
 	if err != nil {
 		return err
 	}
-	interfaceIndex := defaultInterfaceIndex
+	optionIndex := selectedIndex
 	if ipv4 {
-		idx := htonl(uint32(defaultInterfaceIndex))
-		interfaceIndex = int(idx)
+		idx := htonl(uint32(selectedIndex))
+		optionIndex = int(idx)
 	}
-	if err := syscall.SetsockoptInt(syscall.Handle(fd), level, option, interfaceIndex); err != nil {
+	if err := syscall.SetsockoptInt(syscall.Handle(fd), level, option, optionIndex); err != nil {
 		optionName := "IPV6_UNICAST_IF"
 		if ipv4 {
 			optionName = "IP_UNICAST_IF"
 		}
-		log.Errorf(Category, "[Windows-Protect] %s failed fd=%d iface=%d network=%s err=%v", optionName, fd, defaultInterfaceIndex, network, err)
+		log.Errorf(Category, "[Windows-Protect] %s failed fd=%d iface=%d network=%s err=%v", optionName, fd, selectedIndex, network, err)
 		return err
 	}
 	return nil

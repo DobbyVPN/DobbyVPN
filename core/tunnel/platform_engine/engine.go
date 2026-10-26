@@ -2,6 +2,7 @@ package platform_engine
 
 import (
 	"context"
+	"core/log"
 	"fmt"
 	"net/url"
 
@@ -12,7 +13,11 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
+// TunnelMTU meets IPv6's minimum while leaving protocol overhead to the transport.
+const TunnelMTU = 1280
+
 type EngineConfig struct {
+	Dialer      proxy.Proxy
 	ProxyAddr   string
 	FD          int    // Linux / Mobile
 	UplinkIface string // Windows
@@ -36,26 +41,35 @@ func InterfaceName() string { return platformInterfaceName() }
 var ownedDevice device.Device
 var ownedStack *stack.Stack
 
-func startStack(address string, open func() (device.Device, error)) (bool, error) {
+func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, error) {
 	if ownedDevice != nil || ownedStack != nil {
 		return false, fmt.Errorf("network stack is still owned")
 	}
-	endpoint, err := url.Parse("socks5://" + address)
-	if err != nil {
-		return false, fmt.Errorf("parse local SOCKS endpoint: %w", err)
-	}
-	password, _ := endpoint.User.Password()
-	outbound, err := proxy.NewSocks5(endpoint.Host, endpoint.User.Username(), password)
-	if err != nil {
-		return false, fmt.Errorf("open local SOCKS proxy: %w", err)
+	outbound := cfg.Dialer
+	if outbound == nil {
+		endpoint, err := url.Parse("socks5://" + cfg.ProxyAddr)
+		if err != nil {
+			return false, fmt.Errorf("parse local SOCKS endpoint: %w", err)
+		}
+		password, _ := endpoint.User.Password()
+		outbound, err = proxy.NewSocks5(endpoint.Host, endpoint.User.Username(), password)
+		if err != nil {
+			return false, fmt.Errorf("open local SOCKS proxy: %w", err)
+		}
 	}
 	dev, err := open()
 	if err != nil {
 		return false, err
 	}
 	ownedDevice = dev
+	if dev.MTU() < TunnelMTU {
+		return true, fmt.Errorf("tunnel MTU %d is below IPv6 minimum %d", dev.MTU(), TunnelMTU)
+	}
 	tunnel.T().SetDialer(outbound)
 	ownedStack, err = core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: tunnel.T()})
+	if err == nil {
+		log.Infof(Category, "packet stack ready interface=%s mtu=%d ipv4=true ipv6=true", dev.Name(), dev.MTU())
+	}
 	// From open onward the owner must call stop, including on a stack failure.
 	return true, err
 }

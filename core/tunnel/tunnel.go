@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,7 +13,6 @@ import (
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
-	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 
 	"core/dnscache"
 	"core/log"
@@ -42,6 +42,8 @@ type Engine struct {
 	stopErr   error
 	ifaceName string
 	proxy     *DobbyProxy
+	router    *switchingProxy
+	attempt   uint64
 
 	// stopPlatform exists so ownership bookkeeping can be tested without a
 	// real TUN device. Production handles use platform_engine.EngineStop.
@@ -234,11 +236,7 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	start := time.Now()
 	dest := metadata.DestinationAddress()
 	attempt := p.tcpDialAttempt.Add(1)
-	if isBlockedIPv6Destination(metadata) {
-		err := fmt.Errorf("IPv6 destination blocked: %s", dest)
-		log.Debugf(Category, "[Router] TCP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
-		return nil, err
-	}
+
 	route, px := "VPN", p.vpn
 	if p.bypass.IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
@@ -277,11 +275,7 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	start := time.Now()
 	dest := metadata.DestinationAddress()
 	attempt := p.udpDialAttempt.Add(1)
-	if isBlockedIPv6Destination(metadata) {
-		err := fmt.Errorf("IPv6 destination blocked: %s", dest)
-		log.Debugf(Category, "[Router] UDP IPv6 blocked attempt=%d dstIP=%s dest=%s proto=%s stats={%s}", attempt, metadata.DstIP, dest, metadata.Network, p.flowStats())
-		return nil, err
-	}
+
 	route, px := "VPN", p.vpn
 	if p.bypass.IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
@@ -324,10 +318,6 @@ func (p *DobbyProxy) Addr() string {
 	return p.vpn.Addr()
 }
 
-func isBlockedIPv6Destination(metadata *M.Metadata) bool {
-	return metadata != nil && metadata.DstIP.Is6() && !metadata.DstIP.Is4In6()
-}
-
 func (p *DobbyProxy) Proto() proto.Proto {
 	return p.vpn.Proto()
 }
@@ -359,46 +349,95 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 		return nil, false, errors.New("bypass policy is required for tunnel start")
 	}
 
-	handle := &Engine{stopPlatform: platform_engine.EngineStop}
-	// Reserve ownership before touching the platform engine. This closes the
-	// race where two starts both observe an idle global engine.
+	handle := &Engine{stopPlatform: platform_engine.EngineStop, router: newSwitchingProxy()}
 	activeEngine = handle
-
-	log.Debugf(Category, "[Engine] StartOwnedEngine config proxy=%s fd=%d uplinkIface=%s", cfg.ProxyAddr, cfg.FD, cfg.UplinkIface)
+	// Install the stable router before the descriptor can receive packets.
+	// No transport exists until an attempt has passed its readiness check.
+	cfg.Dialer = handle.router
+	if cfg.ProxyAddr != "" {
+		if err := handle.attachLocked(context.Background(), 0, cfg.ProxyAddr, dnsCache, bypass); err != nil {
+			activeEngine = nil
+			return nil, false, err
+		}
+	}
 	if accepted, err := platform_engine.StartPlatformEngine(cfg); err != nil {
 		if accepted {
 			return handle, true, err
 		}
 		activeEngine = nil
-		log.Errorf(Category, "[Engine] StartPlatformEngine failed: %v", err)
 		return nil, false, err
 	}
 	handle.ifaceName = platform_engine.InterfaceName()
-
-	t := tunnel.T()
-	if t == nil {
-		return handle, true, fmt.Errorf("tunnel not initialized after engine start")
-	}
-
-	vpnOutbound, ok := t.Dialer().(proxy.Proxy)
-	if !ok {
-		return handle, true, fmt.Errorf("current dialer is not a proxy (type=%T)", t.Dialer())
-	}
-	wrapper := &DobbyProxy{
-		vpn:    vpnOutbound,
-		direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: dnsCache},
-		bypass: bypass,
-	}
-	cancellableVPN, err := newSocksTCPProxy(vpnOutbound, cfg.ProxyAddr, &wrapper.flows)
-	if err != nil {
-		return handle, true, err
-	}
-	wrapper.vpn = cancellableVPN
-	handle.proxy = wrapper
-	t.SetDialer(wrapper)
-
-	log.Debugf(Category, "[Engine] DobbyProxy installed; owner is active")
+	log.Infof(Category, "[Engine] network owner active interface=%s", handle.ifaceName)
 	return handle, true, nil
+}
+
+// Attach admits packets only to a verified protocol attempt. A prior failed
+// detach retains its flows and prevents another target from being installed.
+func (e *Engine) Attach(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *BypassPolicy) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopped || e.router == nil {
+		return net.ErrClosed
+	}
+	if e.proxy != nil {
+		return errors.New("previous attempt still owns flows")
+	}
+	return e.attachLocked(ctx, generation, address, cache, bypass)
+}
+
+func (e *Engine) attachLocked(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *BypassPolicy) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cache == nil || bypass == nil {
+		return errors.New("attempt resolver and bypass policy are required")
+	}
+	endpoint, err := url.Parse("socks5://" + address)
+	if err != nil {
+		return err
+	}
+	password, _ := endpoint.User.Password()
+	outbound, err := proxy.NewSocks5(endpoint.Host, endpoint.User.Username(), password)
+	if err != nil {
+		return err
+	}
+	wrapper := &DobbyProxy{vpn: outbound, direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: cache, OwnerContext: ctx}, bypass: bypass}
+	wrapper.vpn, err = newSocksTCPProxy(outbound, address, &wrapper.flows)
+	if err != nil {
+		return err
+	}
+	e.proxy, e.attempt = wrapper, generation
+	e.router.set(wrapper)
+	log.Infof(Category, "[Engine] transport attached generation=%d interface=%s", generation, e.ifaceName)
+	return nil
+}
+
+// Detach fences admission before canceling pending work and closing flows. It
+// never stops the packet stack or releases the network interface.
+func (e *Engine) Detach(ctx context.Context, generation uint64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.attempt != generation || e.proxy == nil {
+		return nil
+	}
+	return e.detachLocked(ctx)
+}
+
+func (e *Engine) detachLocked(ctx context.Context) error {
+	if e.router != nil {
+		e.router.set(nil)
+	}
+	if e.proxy == nil {
+		return nil
+	}
+	e.proxy.flows.sealAndClose()
+	if err := e.proxy.flows.wait(ctx); err != nil {
+		return err
+	}
+	log.Infof(Category, "[Engine] transport detached generation=%d interface=%s", e.attempt, e.ifaceName)
+	e.proxy = nil
+	return nil
 }
 
 // Stop releases this handle's resources in reverse start order. A stale handle
@@ -424,6 +463,9 @@ func (e *Engine) Stop(ctx context.Context) error {
 	// wait on a proxy handshake merely to discover that this owner is busy.
 	engineMu.Unlock()
 	log.Debugf(Category, "[Engine] stopping owned tun2socks engine")
+	if e.router != nil {
+		e.router.close()
+	}
 	if e.proxy != nil {
 		e.proxy.flows.sealAndClose()
 	}

@@ -17,6 +17,7 @@ import (
 
 	"core/log"
 	"core/routing"
+	"core/tunnel/protected_dialer"
 
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/tun"
@@ -31,7 +32,7 @@ type windowsAdapterState struct {
 	lastIface        string
 	lastLUID         winipcfg.LUID
 	luidKnown        bool
-	dnsGuard         windowsDNSGuard
+	networkGuard     WindowsProtection
 	prevDNS          []netip.Addr
 	prevDNSStatic    bool
 	dnsKnown         bool
@@ -39,13 +40,15 @@ type windowsAdapterState struct {
 	prevDAD          uint32
 	dadMutated       bool
 	tunnelIPv4       netip.Prefix
+	tunnelIPv6       netip.Prefix
+	ipv6Mutated      bool
 	ipv4Mutated      bool
 }
 
 var adapter windowsAdapterState
 
 const (
-	windowsTunMTU             = 1200
+	windowsTunMTU             = TunnelMTU
 	windowsAdapterPrefix      = "DobbyVPN-"
 	windowsAdapterRandomBytes = 16
 )
@@ -65,7 +68,7 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 		return false, fmt.Errorf("create owned Wintun identity: %w", err)
 	}
 	resetTun2SocksInterfaceBinding()
-	accepted, err := startStack(c.ProxyAddr, func() (device.Device, error) { return tun.Open(adapterName, windowsTunMTU) })
+	accepted, err := startStack(c, func() (device.Device, error) { return tun.Open(adapterName, windowsTunMTU) })
 	if accepted {
 		adapter.ownedAdapterName = adapterName
 	}
@@ -90,7 +93,7 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 		return true, (fmt.Errorf("resolve interface %q LUID: %w", ifName, err))
 	}
 	adapter.luidKnown = true
-	if err := acquireWindowsDNSGuard(uint64(adapter.lastLUID)); err != nil {
+	if err := acquireWindowsNetworkGuard(uint64(adapter.lastLUID)); err != nil {
 		return true, err
 	}
 
@@ -135,11 +138,20 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 		return true, (fmt.Errorf("add owned Wintun IPv4 address: %w", err))
 	}
 	adapter.ipv4Mutated = true
+	adapter.tunnelIPv6 = netip.MustParsePrefix("fd00:dbb::2/128")
+	if err := adapter.lastLUID.AddIPAddress(adapter.tunnelIPv6); err != nil {
+		return true, fmt.Errorf("add owned Wintun IPv6 address: %w", err)
+	}
+	adapter.ipv6Mutated = true
 	if err := waitForPreferredIPv4(ifName, tunCfg.TunDevice, 5*time.Second); err != nil {
 		return true, err
 	}
 	adapter.dnsMutated = true // SetDNS may have changed state before returning an error.
-	if err := routing.SetWindowsDNS(adapter.lastLUID, true, []netip.Addr{netip.MustParseAddr("1.1.1.1")}); err != nil {
+	servers := make([]netip.Addr, 0, len(common.VPNDNSServers()))
+	for _, address := range common.VPNDNSServers() {
+		servers = append(servers, netip.MustParseAddr(address))
+	}
+	if err := routing.SetWindowsDNS(adapter.lastLUID, true, servers); err != nil {
 		return true, err
 	}
 
@@ -160,16 +172,17 @@ func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
 	stopDevice()
 	removalErr := waitForWindowsAdapterRemoval(ctx, adapterName)
 	var guardCloseErr error
-	if removalErr == nil && adapter.dnsGuard != nil {
-		if err := adapter.dnsGuard.Close(); err != nil {
-			guardCloseErr = fmt.Errorf("close Windows DNS leak guard: %w", err)
-			log.Errorf(Category, "[Engine][Windows] DNS leak guard close failed; owner retained for retry iface=%s err=%v", adapter.lastIface, err)
+	if removalErr == nil && adapter.networkGuard != nil {
+		if err := adapter.networkGuard.Close(); err != nil {
+			guardCloseErr = fmt.Errorf("close Windows network guard: %w", err)
+			log.Errorf(Category, "[Engine][Windows] network guard close failed; owner retained for retry iface=%s err=%v", adapter.lastIface, err)
 		} else {
-			adapter.dnsGuard = nil
-			log.Infof(Category, "[Engine][Windows] DNS leak guard closed after owned adapter removal iface=%s", adapter.lastIface)
+			adapter.networkGuard = nil
+			protected_dialer.SetDestinationPermissions(nil)
+			log.Infof(Category, "[Engine][Windows] network guard closed after owned adapter removal iface=%s", adapter.lastIface)
 		}
-	} else if removalErr != nil && adapter.dnsGuard != nil {
-		log.Errorf(Category, "[Engine][Windows] retaining DNS leak guard until owned adapter removal is confirmed iface=%s err=%v", adapter.lastIface, removalErr)
+	} else if removalErr != nil && adapter.networkGuard != nil {
+		log.Errorf(Category, "[Engine][Windows] retaining network guard until owned adapter removal is confirmed iface=%s err=%v", adapter.lastIface, removalErr)
 	}
 	err := errors.Join(configurationErr, removalErr, guardCloseErr)
 	if err != nil {
@@ -179,44 +192,51 @@ func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
 	// Once Windows removes it and the leak guard closes, failed per-adapter
 	// restoration no longer needs a retry. Keep ownership state if closing the
 	// guard fails so the next Stop can retry that cleanup.
-	if removalErr == nil && adapter.dnsGuard == nil {
+	if removalErr == nil && adapter.networkGuard == nil {
 		resetWindowsState()
 	}
 	return err
 }
 
-type windowsDNSGuard interface {
+type WindowsProtection interface {
+	protected_dialer.DestinationPermissions
+	UpdateBootstrap(context.Context, string, []netip.Addr) error
 	Close() error
 }
 
-var openWindowsDNSGuard = func(tunnelLUID uint64) (windowsDNSGuard, error) {
-	guard, err := routing.OpenWindowsDNSGuard(tunnelLUID)
+// Read once after StartOwnedEngine succeeds. The network owner retains this
+// reference; the guard serializes updates and rejects operations after Close.
+func WindowsNetworkProtection() WindowsProtection { return adapter.networkGuard }
+
+var openWindowsNetworkGuard = func(tunnelLUID uint64) (WindowsProtection, error) {
+	guard, err := routing.OpenWindowsNetworkGuard(tunnelLUID)
 	if guard == nil {
 		return nil, err
 	}
 	return guard, err
 }
 
-func acquireWindowsDNSGuard(tunnelLUID uint64) error {
-	guard, err := openWindowsDNSGuard(tunnelLUID)
+func acquireWindowsNetworkGuard(tunnelLUID uint64) error {
+	guard, err := openWindowsNetworkGuard(tunnelLUID)
 	// Open may return a partial owner alongside an installation error. Retain it
 	// before propagating that error so Stop can remove partial WFP state.
-	adapter.dnsGuard = guard
+	adapter.networkGuard = guard
 	if err != nil {
-		log.Errorf(Category, "[Engine][Windows] DNS leak guard acquisition failed tunnel_luid=%d partial_owner_retained=%t err=%v", tunnelLUID, guard != nil, err)
-		return fmt.Errorf("install Windows DNS leak guard: %w", err)
+		log.Errorf(Category, "[Engine][Windows] network guard acquisition failed tunnel_luid=%d partial_owner_retained=%t err=%v", tunnelLUID, guard != nil, err)
+		return fmt.Errorf("install Windows network guard: %w", err)
 	}
 	if guard == nil {
-		err := errors.New("Windows DNS leak guard returned no owner")
-		log.Errorf(Category, "[Engine][Windows] DNS leak guard acquisition failed tunnel_luid=%d err=%v", tunnelLUID, err)
+		err := errors.New("Windows network guard returned no owner")
+		log.Errorf(Category, "[Engine][Windows] network guard acquisition failed tunnel_luid=%d err=%v", tunnelLUID, err)
 		return err
 	}
-	log.Infof(Category, "[Engine][Windows] DNS leak guard acquired tunnel_luid=%d", tunnelLUID)
+	protected_dialer.SetDestinationPermissions(guard)
+	log.Infof(Category, "[Engine][Windows] network guard acquired tunnel_luid=%d", tunnelLUID)
 	return nil
 }
 
 func prepareWindowsStateForStart() error {
-	if adapter.ownedAdapterName != "" || adapter.dnsGuard != nil {
+	if adapter.ownedAdapterName != "" || adapter.networkGuard != nil {
 		return errors.New("previous Windows adapter cleanup is pending")
 	}
 	return nil
@@ -225,7 +245,7 @@ func prepareWindowsStateForStart() error {
 // RecoverStaleWindowsIPv6FirewallRules runs at backend startup, before it
 // accepts desktop control requests.
 func RecoverStaleWindowsIPv6FirewallRules() error {
-	if adapter.ownedAdapterName != "" || adapter.lastIface != "" || adapter.dnsGuard != nil {
+	if adapter.ownedAdapterName != "" || adapter.lastIface != "" || adapter.networkGuard != nil {
 		return fmt.Errorf("cannot run Windows startup recovery while adapter %q is active", adapter.ownedAdapterName)
 	}
 	return routing.CleanupStaleWindowsIPv6FirewallRules()
@@ -253,6 +273,13 @@ func cleanupWindowsState() error {
 				adapter.prevDNS = nil
 				adapter.prevDNSStatic = false
 			}
+		}
+	}
+	if adapter.ipv6Mutated && adapter.luidKnown {
+		if err := adapter.lastLUID.DeleteIPAddress(adapter.tunnelIPv6); err != nil {
+			errs = append(errs, fmt.Errorf("remove owned Wintun IPv6 address: %w", err))
+		} else {
+			adapter.ipv6Mutated = false
 		}
 	}
 	if adapter.ipv4Mutated && adapter.luidKnown {

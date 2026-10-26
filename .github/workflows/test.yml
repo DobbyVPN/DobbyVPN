@@ -294,7 +294,7 @@ jobs:
     secrets: inherit
     with:
       runner: ubuntu-24.04
-      checks: android-unit android-mutations
+      checks: android-unit android-mutations android-security
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
       torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
@@ -547,14 +547,13 @@ jobs:
       fixture_host_name: fixture_host_macos / Serve fixtures / macos
 
   android_test_inputs:
-    needs: [resolve_build, ready_android]
+    needs: resolve_build
     uses: ./.github/workflows/android_test_inputs.yml
     permissions:
       contents: read
       actions: read
     secrets: inherit
     with:
-      build_packages: ${{ needs.ready_android.outputs.packages }}
       torturer_sha: ${{ needs.resolve_build.outputs.torturer_sha }}
       torturer_tree_sha256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
       build_run_id: ${{ inputs.build_run_id }}

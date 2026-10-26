@@ -33,14 +33,32 @@ choice. Removing or purging the package preserves subscription data.
 Enter or paste an HTTPS subscription URL to load its profiles automatically.
 Choose **Auto connect** to try profiles in subscription order, or **Connect**
 beside a profile to select it. Choosing another profile while connected stops
-the old tunnel before starting the new one. If the new connection fails, DobbyVPN
+the old protocol connection before starting the new one, retaining the VPN
+interface. If the new connection fails, DobbyVPN
 does not reconnect the old profile automatically. Loading a subscription keeps
 the current connection running. Failed loads offer **Retry**; **Stop** or
 **Disconnect** remains available for the active connection. The backend saves
-the accepted URL and restores it when the app reopens. About shows the version,
-commit and source link. File and inline configuration remain available in the CLI.
+the accepted URL and restores it when the app reopens. The startup log shows the
+version and commit. File and inline configuration remain available in the CLI.
 
-Logs show timestamps, severity labels and colors, source, and readable messages.
+The VPN interface, routes and DNS stay active while DobbyVPN switches protocols.
+If no protocol works, the app shows the failure with **Retry** and **Stop**.
+Retry uses the saved selection without removing the interface; Stop releases
+the app's VPN protection. Existing application connections may need to reconnect
+after a transport failure.
+
+VPN DNS uses `9.9.9.9`, `1.1.1.1`, `2620:fe::fe` and
+`2606:4700:4700::1111`. Gateway hostnames use the underlying network's DNS.
+IPv4 and IPv6 application traffic are supported independently of the gateway's
+address family. Xray configurations retain their protocol and transport settings,
+including Trojan and Hysteria2.
+
+Android supports the system's **Always-on VPN** and **Block connections without
+VPN** settings. On iOS, connect once to save a selection, then enable **Connect on
+demand** to let the system start it automatically. Stop disables On Demand.
+
+Logs show timestamps and messages, with emphasis for warnings and errors.
+Complete exports retain severity and source fields.
 Scroll up to hold your reading position; return to the bottom to follow updates.
 **Clear** hides earlier entries
 across app restarts without deleting diagnostics. Share logs (Save logs on
@@ -147,15 +165,19 @@ ends that generation. Session commands always emit JSON.
 
 After an automatically selected connection becomes unhealthy, DobbyVPN allows
 up to three automatic recovery attempts. If another health failure occurs
-before five uninterrupted connected minutes, the session fails and the user
-must connect again manually. Five uninterrupted connected minutes reset the
+before five uninterrupted connected minutes, the connection fails while VPN
+protection remains active. Choose Retry to start another selection attempt or
+Stop to release it. Five uninterrupted connected minutes reset the
 recovery allowance. The same ordered `[[Outline]]`, `[[Xray]]`, and
 `[[TrustTunnel]]` section format works for one profile or several.
 
 `[ExcludeIPs]` intentionally bypasses the VPN for the destinations in `IPs`. The
 traffic still enters the tunnel on some platforms before the runtime routes it
-outside the proxy; platform routing details differ. DobbyVPN does not claim a
-system-wide kill switch or leak-free recovery during tunnel teardown.
+outside the proxy; platform routing details differ. Protection is tied to the
+running VPN service or provider. Process termination, OS shutdown and reboot
+have platform-specific behavior; DobbyVPN does not promise persistent lockdown
+on every platform. Android's optional system lockdown is controlled in Android
+settings.
 
 **Clean ShadowSocks** (best performance)
 ```toml

@@ -26,7 +26,7 @@ func New(tunnel runtime.TunnelProvider) sessionapi.Runtime {
 }
 
 func newDevice(
-	_ context.Context,
+	ctx context.Context,
 	_ sessionapi.SessionRef,
 	profile sessionapi.RuntimeProfile,
 	_ runtime.SocketProtector,
@@ -34,11 +34,11 @@ func newDevice(
 ) (vpnprotocol.ProtocolDevice, error) {
 	switch profile.Summary.Protocol {
 	case sessionapi.ProtocolOutline:
-		return outline.NewOutlineDevice(profile.Config.OutlineURL, dnsCache)
+		return outline.NewOutlineDevice(ctx, profile.Config.OutlineURL, dnsCache)
 	case sessionapi.ProtocolXray:
-		return xray.NewXrayDevice(profile.Config.Xray, dnsCache)
+		return xray.NewXrayDevice(ctx, profile.Config.Xray, dnsCache)
 	case sessionapi.ProtocolTrustTunnel:
-		return trusttunnel.NewTrustTunnelDevice(profile.Config.TrustTunnel)
+		return trusttunnel.NewTrustTunnelDevice(ctx, profile.Config.TrustTunnel, dnsCache)
 	default:
 		return nil, fmt.Errorf("unsupported protocol")
 	}

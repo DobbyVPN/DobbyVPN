@@ -23,7 +23,7 @@ import (
 // closes that descriptor before ReleaseTunnel; a failed release prevents Go
 // from reporting cleanup as complete.
 type PlatformCallbacks interface {
-	AcquireTunnel(sessionID string, generation int64) string
+	AcquireTunnel(sessionID string, generation int64, dnsServersJSON string) string
 	ReleaseTunnel(sessionID string, generation int64, fd int32, timeoutMillis int64) string
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
 	PublishState(sessionID string, generation int64, state string, failureCode string)
@@ -80,6 +80,21 @@ func (b *Binding) Resume() error {
 		return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "session owner is unavailable"}
 	}
 	return owner.Resume()
+}
+
+// Restore is used only by the OS service/provider lifecycle.
+func (b *Binding) Restore(onlyPreviouslyEnabled bool) string {
+	owner, ok := b.manager.(interface {
+		Restore(context.Context, bool) (sessionapi.StartResult, error)
+	})
+	if !ok {
+		return failed(&sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "automatic startup owner is unavailable"})
+	}
+	result, err := owner.Restore(context.Background(), onlyPreviouslyEnabled)
+	if err != nil {
+		return failed(err)
+	}
+	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
 }
 
 func (b *Binding) AttachSourceStore() {

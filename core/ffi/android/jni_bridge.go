@@ -169,7 +169,7 @@ static jclass dobby_load_bridge(JNIEnv *env, jobject context) {
 	return global;
 }
 
-static char *dobby_call_tunnel(const char *session, int64_t generation, int32_t fd, int64_t timeout, bool acquire) {
+static char *dobby_call_tunnel(const char *session, int64_t generation, const char *dns_servers_json, int32_t fd, int64_t timeout, bool acquire) {
 	bool attached = false; JNIEnv *env = dobby_env(&attached);
 	if (env == NULL) { dobby_detach(attached); return NULL; }
 	pthread_mutex_lock(&dobby_bridge_lock);
@@ -177,19 +177,62 @@ static char *dobby_call_tunnel(const char *session, int64_t generation, int32_t 
 	if (dobby_bridge != NULL) {
 		jmethodID method = (*env)->GetStaticMethodID(env, dobby_bridge,
 			acquire ? "acquireTunnel" : "releaseTunnel",
-			acquire ? "(Ljava/lang/String;J)Ljava/lang/String;" : "(Ljava/lang/String;JIJ)Ljava/lang/String;");
+			acquire ? "(Ljava/lang/String;JLjava/lang/String;)Ljava/lang/String;" : "(Ljava/lang/String;JIJ)Ljava/lang/String;");
 		jstring id = method == NULL ? NULL : (*env)->NewStringUTF(env, session == NULL ? "" : session);
-		if (method != NULL && id != NULL && !(*env)->ExceptionCheck(env)) {
+		jstring dns_servers = method != NULL && acquire ? (*env)->NewStringUTF(env, dns_servers_json == NULL ? "" : dns_servers_json) : NULL;
+		if (method != NULL && id != NULL && (!acquire || dns_servers != NULL) && !(*env)->ExceptionCheck(env)) {
 			jstring response = acquire
-				? (jstring)(*env)->CallStaticObjectMethod(env, dobby_bridge, method, id, (jlong)generation)
+				? (jstring)(*env)->CallStaticObjectMethod(env, dobby_bridge, method, id, (jlong)generation, dns_servers)
 				: (jstring)(*env)->CallStaticObjectMethod(env, dobby_bridge, method, id, (jlong)generation, (jint)fd, (jlong)timeout);
 			if (response != NULL && !(*env)->ExceptionCheck(env)) result = dobby_jstring_utf8(env, response);
 			if (response != NULL) (*env)->DeleteLocalRef(env, response);
 		}
+		if (dns_servers != NULL) (*env)->DeleteLocalRef(env, dns_servers);
 		if (id != NULL) (*env)->DeleteLocalRef(env, id);
 		if (result == NULL || (*env)->ExceptionCheck(env)) dobby_record_jni_failure(env, "jni.tunnel_callback_failed");
 	}
 	pthread_mutex_unlock(&dobby_bridge_lock);
+	dobby_detach(attached);
+	return result;
+}
+
+// DNS calls may block until their deadline. A local reference pins the bridge
+// while the global lock is released, allowing cancellation and socket hooks to
+// run concurrently and preventing a context replacement from invalidating it.
+static char *dobby_call_resolver(int operation, const char *session, int64_t generation,
+ const char *revision, int64_t query, const char *host, int64_t timeout) {
+	bool attached = false; JNIEnv *env = dobby_env(&attached);
+	if (env == NULL) { dobby_detach(attached); return NULL; }
+	pthread_mutex_lock(&dobby_bridge_lock);
+	jclass bridge = dobby_bridge == NULL ? NULL : (jclass)(*env)->NewLocalRef(env, dobby_bridge);
+	pthread_mutex_unlock(&dobby_bridge_lock);
+	char *result = NULL;
+	if (bridge != NULL) {
+		const char *name = operation == 0 ? "underlyingNetwork" : operation == 1 ? "resolveUnderlying" : operation == 2 ? "cancelUnderlying" : "finishUnderlying";
+		const char *signature = operation == 0 ? "(Ljava/lang/String;J)Ljava/lang/String;" :
+			operation == 1 ? "(Ljava/lang/String;JLjava/lang/String;JLjava/lang/String;J)Ljava/lang/String;" : "(J)V";
+		jmethodID method = (*env)->GetStaticMethodID(env, bridge, name, signature);
+		jstring id = operation < 2 ? (*env)->NewStringUTF(env, session == NULL ? "" : session) : NULL;
+		jstring version = operation == 1 ? (*env)->NewStringUTF(env, revision == NULL ? "" : revision) : NULL;
+		jstring domain = operation == 1 ? (*env)->NewStringUTF(env, host == NULL ? "" : host) : NULL;
+		if (method != NULL && !(*env)->ExceptionCheck(env)) {
+			jstring response = NULL;
+			if (operation == 0 && id != NULL) response = (jstring)(*env)->CallStaticObjectMethod(env, bridge, method, id, (jlong)generation);
+			if (operation == 1 && id != NULL && version != NULL && domain != NULL) response = (jstring)(*env)->CallStaticObjectMethod(env, bridge, method, id, (jlong)generation, version, (jlong)query, domain, (jlong)timeout);
+			if (operation >= 2) (*env)->CallStaticVoidMethod(env, bridge, method, (jlong)query);
+			if (response != NULL && !(*env)->ExceptionCheck(env)) result = dobby_jstring_utf8(env, response);
+			if (response != NULL) (*env)->DeleteLocalRef(env, response);
+		}
+		if (id != NULL) (*env)->DeleteLocalRef(env, id);
+		if (version != NULL) (*env)->DeleteLocalRef(env, version);
+		if (domain != NULL) (*env)->DeleteLocalRef(env, domain);
+		(*env)->DeleteLocalRef(env, bridge);
+	}
+	if ((*env)->ExceptionCheck(env) || (operation < 2 && result == NULL)) {
+		pthread_mutex_lock(&dobby_bridge_lock);
+		dobby_record_jni_failure(env, "jni.underlying_resolver_failed");
+		pthread_mutex_unlock(&dobby_bridge_lock);
+	}
 	dobby_detach(attached);
 	return result;
 }
@@ -333,18 +376,49 @@ import (
 
 type jniPlatformCallbacks struct{}
 
-func (jniPlatformCallbacks) AcquireTunnel(sessionID string, generation int64) string {
-	return nativeTunnelCall(sessionID, generation, -1, 0, true)
+func (jniPlatformCallbacks) UnderlyingNetwork(sessionID string, generation int64) string {
+	return nativeResolverCall(0, sessionID, generation, "", 0, "", 0)
+}
+
+func (jniPlatformCallbacks) ResolveUnderlying(sessionID string, generation int64, revision string, queryID int64, host string, timeoutMillis int64) string {
+	return nativeResolverCall(1, sessionID, generation, revision, queryID, host, timeoutMillis)
+}
+
+func (jniPlatformCallbacks) CancelUnderlying(queryID int64) {
+	C.dobby_call_resolver(2, nil, 0, nil, C.int64_t(queryID), nil, 0)
+}
+
+func (jniPlatformCallbacks) FinishUnderlying(queryID int64) {
+	C.dobby_call_resolver(3, nil, 0, nil, C.int64_t(queryID), nil, 0)
+}
+
+func nativeResolverCall(operation int, session string, generation int64, revision string, query int64, host string, timeout int64) string {
+	id, version, domain := C.CString(session), C.CString(revision), C.CString(host)
+	defer C.free(unsafe.Pointer(id))
+	defer C.free(unsafe.Pointer(version))
+	defer C.free(unsafe.Pointer(domain))
+	result := C.dobby_call_resolver(C.int(operation), id, C.int64_t(generation), version, C.int64_t(query), domain, C.int64_t(timeout))
+	if result == nil {
+		return `{"error":"JNI underlying resolver unavailable; see native diagnostics"}`
+	}
+	defer C.free(unsafe.Pointer(result))
+	return C.GoString(result)
+}
+
+func (jniPlatformCallbacks) AcquireTunnel(sessionID string, generation int64, dnsServersJSON string) string {
+	return nativeTunnelCall(sessionID, generation, dnsServersJSON, -1, 0, true)
 }
 
 func (jniPlatformCallbacks) ReleaseTunnel(sessionID string, generation int64, fd int32, timeoutMillis int64) string {
-	return nativeTunnelCall(sessionID, generation, fd, timeoutMillis, false)
+	return nativeTunnelCall(sessionID, generation, "", fd, timeoutMillis, false)
 }
 
-func nativeTunnelCall(sessionID string, generation int64, fd int32, timeoutMillis int64, acquire bool) string {
+func nativeTunnelCall(sessionID string, generation int64, dnsServersJSON string, fd int32, timeoutMillis int64, acquire bool) string {
 	value := C.CString(sessionID)
 	defer C.free(unsafe.Pointer(value))
-	result := C.dobby_call_tunnel(value, C.int64_t(generation), C.int32_t(fd), C.int64_t(timeoutMillis), C.bool(acquire))
+	dnsServers := C.CString(dnsServersJSON)
+	defer C.free(unsafe.Pointer(dnsServers))
+	result := C.dobby_call_tunnel(value, C.int64_t(generation), dnsServers, C.int32_t(fd), C.int64_t(timeoutMillis), C.bool(acquire))
 	if result == nil {
 		return `{"error":"JNI tunnel callback unavailable; see native diagnostics","cleanup_pending":true}`
 	}
@@ -451,9 +525,9 @@ func Java_com_dobby_nativebridge_NativeGoSession_start(
 
 //export Java_com_dobby_nativebridge_NativeGoSession_startSelection
 func Java_com_dobby_nativebridge_NativeGoSession_startSelection(
-	env *C.JNIEnv, _ C.jclass, session C.jstring, sequence C.jlong, mode C.jstring, index C.jint, digest C.jstring,
+	env *C.JNIEnv, _ C.jclass, session C.jstring, sequence C.jlong, mode C.jstring, index C.jint, digest C.jstring, replace C.jboolean,
 ) C.jstring {
-	return jniResult(env, mobileSessions.StartSelection(jniString(env, session), int64(sequence), jniString(env, mode), int32(index), jniString(env, digest), true))
+	return jniResult(env, mobileSessions.StartSelection(jniString(env, session), int64(sequence), jniString(env, mode), int32(index), jniString(env, digest), replace != 0))
 }
 
 //export Java_com_dobby_nativebridge_NativeGoSession_stop
@@ -484,4 +558,9 @@ func Java_com_dobby_nativebridge_NativeGoSession_resume(env *C.JNIEnv, _ C.jclas
 		return jniResult(env, err.Error())
 	}
 	return jniResult(env, "")
+}
+
+//export Java_com_dobby_nativebridge_NativeGoSession_restore
+func Java_com_dobby_nativebridge_NativeGoSession_restore(env *C.JNIEnv, _ C.jclass, onlyPreviouslyEnabled C.jboolean) C.jstring {
+	return jniResult(env, mobileSessions.Restore(onlyPreviouslyEnabled != 0))
 }

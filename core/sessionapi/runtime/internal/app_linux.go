@@ -1,290 +1,143 @@
-//go:build linux && !(android || ios)
-// +build linux,!android,!ios
+//go:build linux && !android
 
 package internal
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net"
+	"time"
+
+	"core/dnscache"
 	"core/log"
 	"core/routing"
 	"core/tunnel"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
-	"errors"
-	"fmt"
-	"time"
 
-	"github.com/jackpal/gateway"
 	"golang.getoutline.org/sdk/network"
 )
 
-var discoverLinuxUplink = routing.DiscoverLinuxDefaultRoute
-var reconcileLinuxRoutes = routing.ReconcileLinuxSessionRoutesWithRule
-var recoverLinuxOwnedRoutes = routing.RecoverLinuxOwnedRoutes
-
-func reconcileLinuxUplink(serverIP string, tableID, priority int) error {
-	gatewayIP, uplinkIface, err := discoverLinuxUplink()
-	if errors.Is(err, routing.ErrNoLinuxPhysicalDefault) {
-		// The main table normally contains only our gateway-less TUN default.
-		// Reconciliation starts when the physical uplink publishes a new route.
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("discover restored uplink: %w", err)
-	}
-	if err := reconcileLinuxRoutes(serverIP, gatewayIP, uplinkIface, tableID, priority); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (app *App) validateRunInputs() error {
-	if app.ProtocolDevice == nil {
-		return fmt.Errorf("protocol device is not initialized")
-	}
-	if app.RoutingConfig == nil {
-		return fmt.Errorf("routing config is not initialized")
+	if app.RoutingConfig == nil || app.DNSCache == nil || app.BypassPolicy == nil {
+		return errors.New("network routing, resolver and bypass inputs are required")
 	}
 	return nil
 }
 
-// Run intentionally keeps the ordered Linux routing and lifecycle transaction
-// together so each acquired resource has one visible, reverse-order teardown.
-//
-//nolint:gocyclo // Splitting this transaction would obscure its cleanup ownership.
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
-	log.Debugf(Category, "[Linux][Init] ===== VPN initialization started =====")
+	fail := func(err error) error { signalInit(initResult, err); return err }
 	if err := app.validateRunInputs(); err != nil {
-		signalInit(initResult, err)
-		return err
+		return fail(err)
 	}
-
-	// 1. discover gateway
-	log.Debugf(Category, "[Linux][Step 1] Discovering default gateway...")
-	gatewayIP, err := gateway.DiscoverGateway()
+	config := app.RoutingConfig
+	// Retire precisely tagged state from an interrupted older process. The new
+	// policy leaves physical routes untouched, so it needs no route restoration.
+	if err := routing.RecoverLinuxNetworkRules(config.RoutingTableID, config.RoutingTablePriority, config.TunDeviceName); err != nil {
+		return fail(err)
+	}
+	if err := routing.RecoverLinuxOwnedRoutes(config.RoutingTableID, config.RoutingTablePriority, config.TunDeviceName); err != nil {
+		return fail(err)
+	}
+	index, err := routing.LinuxPhysicalInterface(config.TunDeviceName)
 	if err != nil {
-		err = fmt.Errorf("failed to discover gateway: %w", err)
-		log.Errorf(Category, "[Linux][Step 1] %v", err)
-		signalInit(initResult, err)
-		return err
+		return fail(err)
 	}
-	log.Debugf(Category, "[Linux][Step 1][OK] Default gateway discovered")
-
-	// 2. resolve VPN server IP
-	serverIP := app.ProtocolDevice.GetServerIP()
-	if serverIP == nil {
-		err = fmt.Errorf("server IP is nil")
-		signalInit(initResult, err)
-		return err
-	}
-	log.Debugf(Category, "[Routing] VPN server address resolved")
-
-	// 3. detect physical default interface
-	log.Debugf(Category, "[Linux][Step 3] Detecting uplink interface...")
-	uplinkIface, err := routing.GetDefaultInterfaceNameLinux(gatewayIP.String())
+	iface, err := net.InterfaceByIndex(index)
 	if err != nil {
-		err = fmt.Errorf("failed to detect uplink interface: %w", err)
-		log.Errorf(Category, "[Linux][Step 3] %v", err)
-		signalInit(initResult, err)
-		return err
+		return fail(err)
 	}
-	log.Debugf(Category, "[Linux][Step 3][OK] Uplink interface=%s", uplinkIface)
+	app.UplinkInterface = iface.Name
+	if _, _, captureErr := dnscache.CaptureLinuxLink(ctx, index); captureErr != nil {
+		return fail(captureErr)
+	}
 
-	log.Debugf(Category, "[Linux][Recovery] Checking for routes tagged by an interrupted DobbyVPN process")
-	if err = recoverLinuxOwnedRoutes(
-		app.RoutingConfig.RoutingTableID,
-		app.RoutingConfig.RoutingTablePriority,
-		app.RoutingConfig.TunDeviceName,
-	); err != nil {
-		err = fmt.Errorf("failed to recover interrupted Linux routing state: %w", err)
-		log.Errorf(Category, "[Linux][Recovery] %v", err)
-		signalInit(initResult, err)
-		return err
-	}
-	log.Debugf(Category, "[Linux][Recovery][OK] Tagged routing state is clean")
-	routePlan := routing.NewPlan(fmt.Sprintf("%s:%s", app.RoutingConfig.TunDeviceName, serverIP.String()))
-	var ownedEngine *tunnel.Engine
+	plan := routing.NewPlan(config.TunDeviceName)
+	var engine *tunnel.Engine
 	var tun network.IPDevice
-	protocolOpened := false
-	app.setCleanup(routePlan.Close,
-		func(ctx context.Context) error {
-			if ownedEngine != nil {
-				return ownedEngine.Stop(ctx)
-			}
-			return nil
-		},
-		func(context.Context) error {
-			if protocolOpened {
-				return app.ProtocolDevice.Close()
-			}
-			return nil
-		},
-		func(context.Context) error {
-			if tun != nil {
-				return tun.Close()
-			}
-			return nil
-		})
-
-	// 4. early route
-	if serverIP.String() != "127.0.0.1" {
-		log.Debugf(Category, "[Linux][Step 4] Installing early VPN bypass route uplink=%s", uplinkIface)
-
-		_, err = routePlan.AcquireLinuxProxyRoute(serverIP.String(), gatewayIP.String(), uplinkIface)
-		if err != nil {
-			err = fmt.Errorf("failed to add early route: %w", err)
-			log.Errorf(Category, "[Linux][Step 4] %v", err)
-			signalInit(initResult, err)
-			return err
+	app.setCleanup(func(cleanup context.Context) error {
+		if engine != nil {
+			return engine.Stop(cleanup)
 		}
-
-		log.Debugf(Category, "[Linux][Step 4][OK] Early route installed")
-	} else {
-		log.Debugf(Category, "[Linux][Step 4] Skipped (localhost endpoint)")
-	}
-
-	// 5. marked routing
-	log.Debugf(Category, "[Linux][Step 5] Setting up policy routing (fwmark=%d table=%d priority=%d)",
-		app.RoutingConfig.RoutingTableID,
-		app.RoutingConfig.RoutingTableID,
-		app.RoutingConfig.RoutingTablePriority,
-	)
-
-	if err = routePlan.AcquireLinuxMarkedRouting(
-		app.RoutingConfig.RoutingTableID,
-		app.RoutingConfig.RoutingTablePriority,
-		uplinkIface,
-		gatewayIP.String(),
-	); err != nil {
-		err = fmt.Errorf("failed to setup marked routing: %w", err)
-		log.Errorf(Category, "[Linux][Step 5] %v", err)
-		signalInit(initResult, err)
-		return err
-	}
-
-	log.Debugf(Category, "[Linux][Step 5][OK] Policy routing configured")
-
-	// protected sockets
-	protected_dialer.SetLinuxSocketMark(app.RoutingConfig.RoutingTableID)
-	defer protected_dialer.SetLinuxSocketMark(0)
-
-	log.Debugf(Category, "[Linux][Step 5] Protected dialers installed (SO_MARK=%d)", app.RoutingConfig.RoutingTableID)
-
-	// 6. create TUN
-	log.Debugf(Category, "[Linux][Step 6] Creating TUN: name=%s ip=%s",
-		app.RoutingConfig.TunDeviceName,
-		app.RoutingConfig.TunDeviceIP,
-	)
-
-	tun, err = newTunDevice(app.RoutingConfig.TunDeviceName, app.RoutingConfig.TunDeviceIP)
+		return nil
+	}, plan.Close, func(context.Context) error {
+		if tun != nil {
+			if closeErr := tun.Close(); closeErr != nil {
+				return closeErr
+			}
+		}
+		protected_dialer.SetLinuxSocketMark(0)
+		return nil
+	})
+	guard, err := plan.AcquireLinuxOutputGuard(ctx, config.TunDeviceName, config.RoutingTableID)
 	if err != nil {
-		err = fmt.Errorf("failed to create TUN device: %w", err)
-		log.Errorf(Category, "[Linux][Step 6] %v", err)
-		signalInit(initResult, err)
-		return err
+		return fail(err)
 	}
-
-	log.Debugf(Category, "[Linux][Step 6][OK] TUN created: %s", app.RoutingConfig.TunDeviceName)
-
-	// 7. Protocol
-	log.Debugf(Category, "[Linux][Step 7] Creating Protocol SOCKS bridge...")
-	// Open may partially allocate protocol resources before returning an error.
-	protocolOpened = true
-	err = app.ProtocolDevice.Open(app.RoutingConfig.RoutingTableID, uplinkIface)
+	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
+		return captureLinuxResolver(queryCtx, config.TunDeviceName, guard)
+	}
+	if _, _, captureErr := capture(ctx); captureErr != nil {
+		return fail(captureErr)
+	}
+	app.DNSCache.SetResolverSource(capture)
+	tun, err = newTunDevice(config.TunDeviceName, config.TunDeviceIP)
 	if err != nil {
-		err = fmt.Errorf("failed to create ProtocolDevice: %w", err)
-		log.Errorf(Category, "[Linux][Step 7] %v", err)
-		signalInit(initResult, err)
-		return err
+		return fail(err)
 	}
-	log.Debugf(Category, "[Linux][Step 7][OK] Protocol SOCKS bridge ready")
-
-	// 8. fd
-	t, ok := tun.(interface{ GetFd() int })
-	if !ok {
-		err = fmt.Errorf("TUN has no fd")
-		log.Errorf(Category, "[Linux][Step 8] %v", err)
-		signalInit(initResult, err)
-		return err
+	descriptor, ok := tun.(interface{ GetFd() int })
+	if !ok || descriptor.GetFd() < 0 {
+		return fail(errors.New("owned TUN descriptor is unavailable"))
 	}
-	fd := t.GetFd()
-	if fd < 0 {
-		err = fmt.Errorf("invalid fd=%d", fd)
-		log.Errorf(Category, "[Linux][Step 8] %v", err)
-		signalInit(initResult, err)
-		return err
-	}
-	log.Debugf(Category, "[Linux][Step 8][OK] fd=%d", fd)
-
-	// 9. tun2socks
-	log.Debugf(Category, "[Linux][Step 9] Starting tun2socks with independently owned TUN descriptor proxy_ready=true")
-	ownedEngine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
-		ProxyAddr:   app.ProtocolDevice.GetProxyAddr(),
-		FD:          fd,
-		UplinkIface: "",
-	}, app.DNSCache, app.BypassPolicy)
+	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: descriptor.GetFd()}, app.DNSCache, app.BypassPolicy)
+	app.Engine = engine
 	if err != nil {
-		log.Errorf(Category, "Can't start tun2socks: %v", err)
-		signalInit(initResult, err)
-		return err
+		return fail(err)
 	}
-	log.Debugf(Category, "[Linux][Step 9][OK] tun2socks started — waiting for readiness...")
-
-	time.Sleep(300 * time.Millisecond)
-
-	// 10. routing switch
-	log.Debugf(Category, "[Linux][Step 10] Switching default route → TUN (%s)", app.RoutingConfig.TunDeviceName)
-
-	if _, err = routePlan.AcquireLinuxTunnelDefault(app.RoutingConfig.TunDeviceName); err == nil {
-		_, err = routePlan.AcquireLinuxResolvedDNS(
-			ctx,
-			app.RoutingConfig.TunDeviceName,
-			app.RoutingConfig.DNSServerIP,
-		)
+	if err := plan.AcquireLinuxNetwork(config.TunDeviceName, config.RoutingTableID, config.RoutingTablePriority); err != nil {
+		return fail(err)
 	}
-	if err == nil {
-		err = routePlan.AcquireLinuxIPv6Block()
+	protected_dialer.SetLinuxSocketMark(config.RoutingTableID)
+	if _, err := plan.AcquireLinuxResolvedDNS(ctx, config.TunDeviceName, config.DNSServers); err != nil {
+		return fail(err)
 	}
-	if err != nil {
-		err = fmt.Errorf("failed to configure routing: %w", err)
-		log.Errorf(Category, "[Linux][Step 10] %v", err)
-		signalInit(initResult, err)
-		return err
-	}
-
-	log.Debugf(Category, "[Linux][Step 10][OK] Default route switched to VPN")
-
-	log.Debugf(Category, "[Linux][Init] ===== VPN started successfully =====")
-
+	log.Infof(Category, "Linux network acquired interface=%s physical=%s mark=%d IPv4=true IPv6=true protection=owned-output-filter", config.TunDeviceName, iface.Name, config.RoutingTableID)
 	signalInit(initResult, nil)
+	return maintainLinuxResolver(ctx, capture)
+}
 
-	// A physical uplink flap removes link-bound routes from the kernel while
-	// the TUN session and policy rule remain alive. Reconcile only this
-	// session's endpoint and marked-table routes until shutdown; do not alter
-	// the shared UI/runtime contract or guess at another actor's routes.
-	reconcileDone := make(chan struct{})
-	go func() {
-		defer close(reconcileDone)
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if reconcileErr := reconcileLinuxUplink(
-					serverIP.String(), app.RoutingConfig.RoutingTableID, app.RoutingConfig.RoutingTablePriority,
-				); reconcileErr != nil {
-					log.Warnf(Category, "[Linux][Routing] route reconciliation pending: %v", reconcileErr)
-				}
+func captureLinuxResolver(ctx context.Context, tunName string, guard *routing.LinuxOutputGuard) (string, dnscache.Resolver, error) {
+	index, err := routing.LinuxPhysicalInterface(tunName)
+	if err != nil {
+		return "", nil, errors.Join(err, guard.UpdateBootstrap(ctx, "unavailable", nil))
+	}
+	identity, servers, err := dnscache.CaptureLinuxLink(ctx, index)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := guard.UpdateBootstrap(ctx, identity, servers); err != nil {
+		return "", nil, err
+	}
+	return identity, dnscache.LinuxLinkResolver(index), nil
+}
+
+func maintainLinuxResolver(ctx context.Context, capture func(context.Context) (string, dnscache.Resolver, error)) error {
+	// Physical routes need no repair. Refresh service-owned bootstrap exceptions
+	// even when no protocol is running; each endpoint lookup also refreshes them.
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			refresh, cancel := context.WithTimeout(ctx, dnscache.ServerResolveTimeout)
+			_, _, err := capture(refresh)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				log.Warnf(Category, "Linux underlying network refresh: %v", fmt.Errorf("capture physical resolver: %w", err))
 			}
 		}
-	}()
-
-	<-ctx.Done()
-	<-reconcileDone
-
-	log.Debugf(Category, "[Linux][Lifecycle] Context cancelled — stopping engine")
-	return nil
+	}
 }

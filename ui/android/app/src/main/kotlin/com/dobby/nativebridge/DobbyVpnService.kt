@@ -8,6 +8,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Android-only VPN boundary for the Go-owned session manager. */
@@ -20,6 +21,7 @@ class DobbyVpnService : VpnService() {
     }
 
     private var shuttingDown = false
+    @Volatile private var restorationRunning = false
     private var operationFailure: Throwable? = null
 
     private fun recordFailure(event: String, failure: Throwable) {
@@ -30,6 +32,7 @@ class DobbyVpnService : VpnService() {
     private var activeSession: String? = null
     private var activeGeneration: Long = -1
     private var vpnInterface: ParcelFileDescriptor? = null
+    private var underlyingNetwork: UnderlyingNetworkOwner? = null
     private var goTunFd: Int = -1
     private var lastClosedSession: String? = null
     private var lastClosedGeneration: Long = -1
@@ -39,6 +42,7 @@ class DobbyVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         try {
+            NativeGoSession.attach(this)
             val failure = NativeGoSession.resume()
             check(failure.isEmpty()) { failure }
             NativeVpnBridge.attach(this)
@@ -50,27 +54,53 @@ class DobbyVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_PREPARE || intent?.action == null) {
-            try {
-                ensureForeground()
-            } catch (failure: Throwable) {
-                recordFailure("vpn.service.foreground_failed", failure)
-                throw failure
-            }
+        try {
+            ensureForeground()
+        } catch (failure: Throwable) {
+            recordFailure("vpn.service.foreground_failed", failure)
+            throw failure
         }
-        return START_NOT_STICKY
+        // PREPARE belongs to an app command; Go already has that selection.
+        // Android's always-on start has the VpnService action. A null intent
+        // restores a killed sticky service only if the user had left it on.
+        if ((intent == null || intent.action == VpnService.SERVICE_INTERFACE) && !restorationRunning) {
+            restorationRunning = true
+            val onlyPreviouslyEnabled = intent == null
+            Thread({
+                try {
+                    val reply = JSONObject(NativeGoSession.restore(onlyPreviouslyEnabled))
+                    check(reply.optBoolean("ok")) { reply.toString() }
+                    NativeVpnBridge.recordDiagnostic(this, "vpn.service.restored", reply.toString())
+                    if (reply.getJSONObject("result").optLong("generation") == 0L) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf(startId)
+                    }
+                } catch (failure: Throwable) {
+                    recordFailure("vpn.service.restore_failed", failure)
+                    synchronized(this) {
+                        if (vpnInterface == null && underlyingNetwork == null) {
+                            stopForeground(STOP_FOREGROUND_REMOVE)
+                            stopSelf(startId)
+                        }
+                    }
+                } finally {
+                    synchronized(this) { restorationRunning = false }
+                }
+            }, "dobby-vpn-restore").start()
+        }
+        return START_STICKY
     }
 
     @Synchronized
-    fun acquireTunnel(sessionID: String, generation: Long): String {
+    fun acquireTunnel(sessionID: String, generation: Long, dnsServersJSON: String): String {
         operationFailure = null
-        val fd = if (shuttingDown) -1 else acquireDescriptor(sessionID, generation)
-        return JSONObject().put("fd", fd).put("cleanup_pending", vpnInterface != null)
+        val fd = if (shuttingDown) -1 else acquireDescriptor(sessionID, generation, dnsServersJSON)
+        return JSONObject().put("fd", fd).put("cleanup_pending", vpnInterface != null || underlyingNetwork != null)
             .apply { if (fd < 0) put("error", operationFailure?.stackTraceToString() ?: "VPN service is stopping") }
             .toString()
     }
 
-    private fun acquireDescriptor(sessionID: String, generation: Long): Int {
+    private fun acquireDescriptor(sessionID: String, generation: Long, dnsServersJSON: String): Int {
         if (activeSession != null && activeSession != sessionID) {
             recordFailure(
                 "vpn.service.acquire_rejected",
@@ -78,7 +108,7 @@ class DobbyVpnService : VpnService() {
             )
             return -1
         }
-        if (activeGeneration > generation || vpnInterface != null) {
+        if (activeGeneration > generation || vpnInterface != null || underlyingNetwork != null) {
             recordFailure(
                 "vpn.service.acquire_rejected",
                 IllegalStateException("VPN tunnel is already active or generation is stale"),
@@ -92,18 +122,24 @@ class DobbyVpnService : VpnService() {
             return -1
         }
         val established = try {
-            Builder()
+            val dnsServers = parseDnsServers(dnsServersJSON)
+            activeSession = sessionID
+            activeGeneration = generation
+            val owner = UnderlyingNetworkOwner(this) {
+                NativeVpnBridge.recordDiagnostic(this, "vpn.underlying_network", it)
+            }
+            underlyingNetwork = owner
+            val physical = owner.start()
+            val builder = Builder()
                 .setSession("Dobby VPN")
-                .setMtu(1500)
+                .setMtu(1280) // IPv6 minimum; matches the shared packet stack.
                 .addAddress("10.7.0.2", 32)
+                .addAddress("fd00:dbb::2", 128)
+                .setUnderlyingNetworks(arrayOf(physical))
                 .addRoute("0.0.0.0", 0)
-                // Keep IPv6 fail-closed: the shared tunnel router blocks IPv6
-                // destinations until the protocol engines can carry them.
                 .addRoute("::", 0)
-                // The tunnel router currently blocks IPv6 destinations, so
-                // advertise only a resolver it can reach through the tunnel.
-                .addDnsServer("1.1.1.1")
-                .establish()
+            dnsServers.forEach { builder.addDnsServer(it) }
+            builder.establish()
         } catch (failure: Throwable) {
             Log.e(TAG, "VPN interface establish failed", failure)
             recordFailure("vpn.service.establish_failed", failure)
@@ -148,6 +184,17 @@ class DobbyVpnService : VpnService() {
         return detached
     }
 
+    private fun parseDnsServers(dnsServersJSON: String): List<String> {
+        val servers = JSONArray(dnsServersJSON)
+        if (servers.length() == 0) throw IllegalArgumentException("VPN DNS server list is empty")
+        return (0 until servers.length()).map { index ->
+            val server = servers.get(index) as? String
+                ?: throw IllegalArgumentException("VPN DNS server at index $index is not a string")
+            if (server.isBlank()) throw IllegalArgumentException("VPN DNS server at index $index is empty")
+            server
+        }
+    }
+
     @Synchronized
     fun releaseTunnel(sessionID: String, generation: Long, fd: Int, timeoutMillis: Long): String {
         operationFailure = null
@@ -173,7 +220,7 @@ class DobbyVpnService : VpnService() {
 
     @Synchronized
     fun protectProtocolSocket(sessionID: String, generation: Long, fd: Int): Boolean {
-        if (sessionID != activeSession || generation != activeGeneration || fd < 0) {
+        if (sessionID != activeSession || generation != activeGeneration || fd < 0 || vpnInterface == null) {
             recordFailure(
                 "vpn.service.protect_rejected",
                 IllegalStateException("VPN socket protect request did not match the active session, generation, and descriptor"),
@@ -181,17 +228,35 @@ class DobbyVpnService : VpnService() {
             return false
         }
         return try {
-            protect(fd).also { protected ->
-                if (!protected) NativeVpnBridge.recordNativeFailure(
-                    this, "vpn.service.protect_failed",
-                    IllegalStateException("VpnService.protect returned false"),
-                )
-            }
+            checkNotNull(underlyingNetwork) { "Underlying network owner is unavailable" }.protect(fd)
         } catch (failure: Throwable) {
             recordFailure("vpn.service.protect_failed", failure)
             throw failure
         }
     }
+
+    private fun networkOwner(sessionID: String, generation: Long): UnderlyingNetworkOwner = synchronized(this) {
+        check(sessionID == activeSession && generation == activeGeneration && !shuttingDown) {
+            "Underlying network request does not match the active owner"
+        }
+        checkNotNull(underlyingNetwork) { "Underlying network owner is unavailable" }
+    }
+
+    private fun dnsReply(operation: () -> String): String = try { operation() } catch (failure: Throwable) {
+        NativeVpnBridge.recordNativeFailure(this, "vpn.underlying_dns_failed", failure)
+        JSONObject().put("error", failure.stackTraceToString()).toString()
+    }
+
+    fun underlyingNetwork(sessionID: String, generation: Long): String = dnsReply {
+        networkOwner(sessionID, generation).snapshot()
+    }
+
+    fun resolveUnderlying(sessionID: String, generation: Long, revision: String, queryID: Long, host: String, timeoutMillis: Long): String = dnsReply {
+        networkOwner(sessionID, generation).resolve(revision, queryID, host, timeoutMillis)
+    }
+
+    fun cancelUnderlying(queryID: Long) { synchronized(this) { underlyingNetwork }?.cancel(queryID) }
+    fun finishUnderlying(queryID: Long) { synchronized(this) { underlyingNetwork }?.finish(queryID) }
 
     @Synchronized
     fun publishState(sessionID: String, generation: Long, state: String, failureCode: String) {
@@ -199,8 +264,15 @@ class DobbyVpnService : VpnService() {
         val released = sessionID == lastClosedSession && generation == lastClosedGeneration && lastCloseSucceeded == true
         if ((!active && !released) || (vpnInterface != null && !active)) return
         Log.i(TAG, "Go state=$state generation=$generation failure=$failureCode")
-        if (state == "IDLE" || (state == "FAILED" && failureCode != "CLEANUP_FAILED")) {
+        if (vpnInterface != null) {
+            try {
+                ensureForeground()
+            } catch (failure: Throwable) {
+                recordFailure("vpn.service.foreground_failed", failure)
+            }
+        } else if (state == "IDLE" || state == "FAILED") {
             stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
     }
 
@@ -233,12 +305,13 @@ class DobbyVpnService : VpnService() {
     }
 
     private fun closeTunnel(): Boolean {
-        if (vpnInterface == null) return lastCloseSucceeded ?: true
+        if (vpnInterface == null && underlyingNetwork == null) return lastCloseSucceeded ?: true
         val closingSession = activeSession
         val closingGeneration = activeGeneration
         val closingFd = goTunFd
         val closed = try {
             vpnInterface?.close()
+            underlyingNetwork?.stop()
             true
         } catch (failure: Throwable) {
             Log.e(TAG, "VPN close failed", failure)
@@ -247,6 +320,7 @@ class DobbyVpnService : VpnService() {
         }
         if (!closed) return false
         vpnInterface = null
+        underlyingNetwork = null
         goTunFd = -1
         activeGeneration = -1
         activeSession = null
@@ -265,7 +339,7 @@ class DobbyVpnService : VpnService() {
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("Dobby VPN")
-            .setContentText("VPN connection is active")
+            .setContentText(if (vpnInterface != null) "VPN protection is active" else "Starting VPN")
             .setOngoing(true)
             .build()
         startForeground(NOTIFICATION_ID, notification)

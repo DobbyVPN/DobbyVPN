@@ -10,12 +10,20 @@ public protocol DobbySessionClient: AnyObject, Sendable {
     var sourceCommit: String { get }
 }
 
+public protocol DobbyOnDemandClient: DobbySessionClient {
+    func onDemandEnabled() async throws -> Bool
+    func setOnDemandEnabled(_ enabled: Bool) async throws
+}
+
 public struct DobbySessionSnapshot: Decodable, Sendable {
     public let sessionID: String
     public let sequence: Int64
     public let generation: Int64
+    public let networkGeneration: UInt64
     public let state: String
     public let primaryAction: String
+    public let vpnActive: Bool
+    public let canRetry: Bool
     public internal(set) var configured: Bool
     public internal(set) var sourceURL: String
     public let sourceError: String
@@ -39,6 +47,9 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
         case sequence, generation, state, configured
+        case networkGeneration = "network_generation"
+        case vpnActive = "vpn_active"
+        case canRetry = "can_retry"
         case primaryAction = "primary_action"
         case sourceURL = "source_url"
         case sourceError = "source_error"
@@ -57,8 +68,11 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID) ?? ""
         sequence = try values.decodeIfPresent(Int64.self, forKey: .sequence) ?? 0
         generation = try values.decodeIfPresent(Int64.self, forKey: .generation) ?? 0
+        networkGeneration = try values.decodeIfPresent(UInt64.self, forKey: .networkGeneration) ?? 0
         state = try values.decodeIfPresent(String.self, forKey: .state) ?? "IDLE"
         primaryAction = try values.decodeIfPresent(String.self, forKey: .primaryAction) ?? "NONE"
+        vpnActive = try values.decodeIfPresent(Bool.self, forKey: .vpnActive) ?? false
+        canRetry = try values.decodeIfPresent(Bool.self, forKey: .canRetry) ?? false
         configured = try values.decodeIfPresent(Bool.self, forKey: .configured) ?? false
         sourceURL = try values.decodeIfPresent(String.self, forKey: .sourceURL) ?? ""
         sourceError = try values.decodeIfPresent(String.self, forKey: .sourceError) ?? ""
@@ -77,13 +91,17 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public init(
         sessionID: String, sequence: Int64, generation: Int64, state: String, primaryAction: String,
         configured: Bool, sourceURL: String, sourceError: String,
-        activeProfile: DobbyProfile?, lastFailure: DobbyFailure?, recovering: Bool
+        activeProfile: DobbyProfile?, lastFailure: DobbyFailure?, recovering: Bool,
+        networkGeneration: UInt64 = 0, vpnActive: Bool = false, canRetry: Bool = false
     ) {
         self.sessionID = sessionID
         self.sequence = sequence
         self.generation = generation
+        self.networkGeneration = networkGeneration
         self.state = state
         self.primaryAction = primaryAction
+        self.vpnActive = vpnActive
+        self.canRetry = canRetry
         self.configured = configured
         self.sourceURL = sourceURL
         self.sourceError = sourceError

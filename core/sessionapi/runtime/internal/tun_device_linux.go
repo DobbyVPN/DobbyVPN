@@ -12,6 +12,7 @@ import (
 	"github.com/songgao/water"
 	"github.com/vishvananda/netlink"
 	"golang.getoutline.org/sdk/network"
+	"golang.org/x/sys/unix"
 
 	"core/log"
 )
@@ -74,6 +75,14 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 		err = fmt.Errorf("failed to configure TUN/TAP device subnet: %w", err)
 		log.Errorf(Category, "[TUN][Config] %v", err)
 		return d, err
+	}
+	address, err := netlink.ParseAddr("fd00:dbb::1/128")
+	if err != nil {
+		return d, err
+	}
+	address.Flags = unix.IFA_F_NODAD
+	if err = netlink.AddrAdd(tunLink, address); err != nil {
+		return d, fmt.Errorf("configure TUN IPv6: %w", err)
 	}
 	log.Debugf(Category, "[TUN][Config][OK] IP configured")
 

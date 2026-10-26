@@ -35,7 +35,7 @@ func (p *platformAdapter) publishStateChanges() {
 		if callbacks == nil {
 			continue
 		}
-		generation, err := generationAsInt64(event.Generation)
+		generation, err := generationAsInt64(event.NetworkGeneration)
 		if err != nil {
 			continue
 		}
@@ -82,6 +82,38 @@ func (p *platformAdapter) Clear(ctx context.Context) error {
 	source, ok := callbacks.(SourceCallbacks)
 	if !ok || !source.ClearSourceURL() {
 		return errors.New("native source storage clear failed")
+	}
+	return nil
+}
+
+// iOS uses the same protected native storage as its accepted source URL.
+// Android attaches FileSourceStore and therefore uses Go's private file writer.
+type activationCallbacks interface {
+	LoadActivation() string
+	SaveActivation(string) bool
+}
+
+func (p *platformAdapter) LoadActivation(ctx context.Context) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	callbacks, ok := p.callbacks.(activationCallbacks)
+	p.mu.Unlock()
+	if !ok {
+		return nil, errors.New("native activation storage is unavailable")
+	}
+	return []byte(callbacks.LoadActivation()), nil
+}
+func (p *platformAdapter) SaveActivation(ctx context.Context, raw []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	callbacks, ok := p.callbacks.(activationCallbacks)
+	p.mu.Unlock()
+	if !ok || !callbacks.SaveActivation(string(raw)) {
+		return errors.New("native activation storage write failed")
 	}
 	return nil
 }

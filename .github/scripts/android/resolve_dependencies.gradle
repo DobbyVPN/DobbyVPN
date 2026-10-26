@@ -1,35 +1,91 @@
-def resolveProjectConfigurations = { project ->
-    project.configurations
-        .findAll { configuration -> configuration.canBeResolved }
-        .sort { left, right -> left.name <=> right.name }
-        .each { configuration ->
-            project.logger.lifecycle("Resolving external artifacts for ${project.path}:${configuration.name}")
-            def files = configuration.incoming.artifactView {
-                componentFilter { componentId ->
-                    !(componentId instanceof org.gradle.api.artifacts.component.ProjectComponentIdentifier)
-                }
-            }.files.files
-            project.logger.lifecycle("Resolved ${files.size()} external artifact(s) for ${project.path}:${configuration.name}")
-        }
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+
+// The same resolved graphs feed dependency preparation and security scanning.
+// Buildscript classpaths include plugins DSL and legacy classpath declarations.
+def dependencyGroup = { project, kind, configuration ->
+    def name = configuration.name.toLowerCase(Locale.ROOT)
+    if (kind == "buildscript") return "buildscript"
+    if (name.contains("androidtest")) return "instrumentation-test"
+    if (name.contains("unittest") || name.startsWith("test")) return "unit-test"
+    if (project.path == ":app" && configuration.name == "releaseRuntimeClasspath") return "release-runtime"
+    return "project"
+}
+
+def writeInventory = { file, inventory ->
+    file.parentFile.mkdirs()
+    def pending = new File(file.parentFile, file.name + ".tmp")
+    pending.setText(JsonOutput.prettyPrint(JsonOutput.toJson(inventory)) + "\n", "UTF-8")
+    java.nio.file.Files.move(pending.toPath(), file.toPath(),
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
 }
 
 gradle.projectsEvaluated {
-    def projectTasks = rootProject.subprojects.collect { project ->
-        project.tasks.register("resolveDobbyProjectDependencies") {
+    def projects = rootProject.allprojects.sort { left, right -> left.path <=> right.path }
+    // Gradle owns each project's configuration lock while its task executes.
+    // Resolving subproject configurations from a root task violates that owner.
+    def reports = projects.collect { project ->
+        def report = project.layout.buildDirectory.file("reports/dobby-resolved-dependencies.json")
+        def producer = project.tasks.register("resolveDobbyProjectDependencies") {
             group = "verification"
-            description = "Download all resolvable dependencies for this project without running build tasks."
+            description = "Resolve this project's build/plugin and application/test dependencies."
+            outputs.file(report)
+            outputs.upToDateWhen { false }
             doLast {
-                resolveProjectConfigurations(project)
+                def inventories = []
+                [buildscript: project.buildscript.configurations, project: project.configurations].each { kind, configurations ->
+                    configurations.findAll { it.canBeResolved }.sort { it.name }.each { configuration ->
+                        def group = dependencyGroup(project, kind, configuration)
+                        project.logger.lifecycle("Resolving ${group} dependencies for ${project.path} ${kind}:${configuration.name}")
+                        def graph = configuration.incoming.resolutionResult
+                        def rootComponent = graph.rootComponent.get().id
+                        graph.allDependencies.each { dependency ->
+                            if (dependency instanceof UnresolvedDependencyResult) throw dependency.failure
+                        }
+                        def modules = graph.allComponents.collect { component ->
+                            if (component.id == rootComponent || component.id instanceof ProjectComponentIdentifier) return null
+                            if (!(component.id instanceof ModuleComponentIdentifier)) {
+                                throw new GradleException("Unsupported dependency identity in ${project.path}:${configuration.name}: ${component.id}")
+                            }
+                            return "${component.id.group}:${component.id.module}:${component.id.version}".toString()
+                        }.findAll { it != null }.unique().sort()
+                        // Force artifact resolution too; a partially resolved
+                        // graph or failed download cannot yield a clean scan.
+                        def files = configuration.incoming.artifactView {
+                            componentFilter { it != rootComponent && !(it instanceof ProjectComponentIdentifier) }
+                        }.files.files
+                        inventories.add([project: project.path, kind: kind, configuration: configuration.name,
+                                         group: group, modules: modules])
+                        project.logger.lifecycle("Resolved ${modules.size()} modules and ${files.size()} artifacts for ${project.path} ${kind}:${configuration.name}")
+                    }
+                }
+                writeInventory(report.get().asFile, [project: project.path, configurations: inventories])
             }
         }
+        return [project: project.path, file: report, producer: producer]
     }
-
     rootProject.tasks.register("resolveDobbyDependencies") {
         group = "verification"
-        description = "Download all resolvable project dependencies without running build tasks."
-        dependsOn projectTasks
+        description = "Resolve all Android dependencies and optionally export their security inventories."
+        dependsOn(reports.collect { it.producer })
         doLast {
-            resolveProjectConfigurations(rootProject)
+            def inventories = reports.collectMany { report ->
+                def content = new JsonSlurper().parse(report.file.get().asFile)
+                if (content.project != report.project || !(content.configurations instanceof List)) {
+                    throw new GradleException("Invalid dependency inventory for ${report.project}")
+                }
+                return content.configurations
+            }
+            def output = rootProject.findProperty("dobbySecurityInventory")
+            if (output != null) {
+                def file = rootProject.file(output)
+                writeInventory(file, [schema_version: 1, projects: reports.collect { it.project },
+                                      configurations: inventories])
+                rootProject.logger.lifecycle("Wrote resolved Android dependency inventory: ${file}")
+            }
         }
     }
 }

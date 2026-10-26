@@ -21,7 +21,7 @@ const (
 )
 
 func startPlatformEngine(c EngineConfig) (bool, error) {
-	accepted, err := startStack(c.ProxyAddr, func() (device.Device, error) { return tun.Open("utun", 1200) })
+	accepted, err := startStack(c, func() (device.Device, error) { return tun.Open("utun", TunnelMTU) })
 	if !accepted {
 		return false, err
 	}

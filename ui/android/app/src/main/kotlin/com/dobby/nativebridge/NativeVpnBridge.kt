@@ -201,8 +201,8 @@ object NativeVpnBridge {
     }
 
     @JvmStatic
-    fun acquireTunnel(sessionID: String, generation: Long): String =
-        service?.acquireTunnel(sessionID, generation) ?: """{"error":"VPN service unavailable","cleanup_pending":false}"""
+    fun acquireTunnel(sessionID: String, generation: Long, dnsServersJSON: String): String =
+        service?.acquireTunnel(sessionID, generation, dnsServersJSON) ?: """{"error":"VPN service unavailable","cleanup_pending":false}"""
 
     @JvmStatic
     fun releaseTunnel(sessionID: String, generation: Long, fd: Int, timeoutMillis: Long): String =
@@ -211,6 +211,21 @@ object NativeVpnBridge {
     @JvmStatic
     fun protectSocket(sessionID: String, generation: Long, fd: Int): Boolean =
         service?.protectProtocolSocket(sessionID, generation, fd) ?: false
+
+    @JvmStatic
+    fun underlyingNetwork(sessionID: String, generation: Long): String =
+        service?.underlyingNetwork(sessionID, generation) ?: """{"error":"VPN service unavailable"}"""
+
+    @JvmStatic
+    fun resolveUnderlying(sessionID: String, generation: Long, revision: String, queryID: Long, host: String, timeoutMillis: Long): String =
+        service?.resolveUnderlying(sessionID, generation, revision, queryID, host, timeoutMillis)
+            ?: """{"error":"VPN service unavailable during DNS query"}"""
+
+    @JvmStatic
+    fun cancelUnderlying(queryID: Long) { service?.cancelUnderlying(queryID) }
+
+    @JvmStatic
+    fun finishUnderlying(queryID: Long) { service?.finishUnderlying(queryID) }
 
     @JvmStatic
     fun publishState(sessionID: String, generation: Long, state: String, failureCode: String) {

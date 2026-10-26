@@ -11,9 +11,6 @@ on:
       retention_days:
         type: number
         default: 7
-      build_packages:
-        type: string
-        default: ''
       torturer_sha:
         type: string
         required: true
@@ -26,9 +23,6 @@ on:
       source_sha:
         type: string
         required: true
-
-env:
-  DOBBY_BUILD_PACKAGES: ${{ inputs.build_packages }}
 
 jobs:
   android_companion:
@@ -86,12 +80,6 @@ jobs:
           go-modules: 'false'
           gradle: 'true'
           gradle-extra-dependency-files: torturer/source_tests/product/ui/android/app/android-test-wiring.gradle.kts
-      - name: Download selected unsigned Android package
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 .github/scripts/release/download_artifact.py \
-            "$SELECTED_BUILD_RUN_ID" dobbyvpn-android-unsign.apk release-packages
       - name: Read Android SDK pins
         id: android_java
         run: |
@@ -117,7 +105,7 @@ jobs:
             "platforms;${{ steps.android_java.outputs.android_sdk_platform }}" \
             "build-tools;${{ steps.android_java.outputs.android_build_tools }}" \
             "ndk;${{ steps.android_java.outputs.android_ndk }}"
-      - name: Compile and attest reusable companion APK
+      - name: Compile and attest unbound companion APK
         id: compile
         shell: bash
         run: |
@@ -125,16 +113,14 @@ jobs:
           python3 - <<'PY'
           import hashlib, json, os, subprocess
           from pathlib import Path
-          from source_tests.android import build_test_companion
+          from source_tests.android import compile_test_companion
           from torturer_runner.compiled_test_inputs import command_tool_identity, file_sha256, write_manifest
 
           product = Path(os.environ["DOBBY_PRODUCT_ROOT"])
           tests = Path(os.environ["DOBBY_TESTS_ROOT"])
-          version = (product / "VERSION").read_text().strip()
-          apk = product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk"
           output = Path(os.environ["RUNNER_TEMP"]) / "private-android-companion"
-          result = build_test_companion(
-              product, tests / "source_tests/product", apk, output,
+          compile_test_companion(
+              product, tests / "source_tests/product", output,
               product_sha=os.environ["DOBBYVPN_COMMIT_SHA"],
               torturer_sha=os.environ["DOBBY_TEST_SHA"],
               torturer_tree_sha256=os.environ["DOBBY_TEST_TREE_SHA256"],
@@ -156,7 +142,6 @@ jobs:
           }
           properties = lambda path: file_sha256(path / "source.properties")
           compatibility = {
-              "product_apk_sha256": result["pairing"]["unsigned_product_apk_sha256"],
               "sdk_platform": sdk_platform,
               "sdk_platform_sha256": properties(sdk / "platforms" / sdk_platform),
               "build_tools": build_tools,
@@ -165,7 +150,7 @@ jobs:
               "ndk_sha256": properties(sdk / "ndk" / ndk),
           }
           digest = write_manifest(
-              output, kind="android-test-companion",
+              output, kind="android-test-companion-unbound",
               source_sha=os.environ["DOBBYVPN_COMMIT_SHA"],
               tests_sha=os.environ["DOBBY_TEST_SHA"],
               tests_tree_sha256=os.environ["DOBBY_TEST_TREE_SHA256"],

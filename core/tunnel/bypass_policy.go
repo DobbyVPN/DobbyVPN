@@ -47,7 +47,11 @@ func (p *BypassPolicy) IsBypass(metadata *M.Metadata) bool {
 // ResolveBypassPolicy validates and resolves every entry before returning a
 // value for this runtime attempt.
 func ResolveBypassPolicy(ctx context.Context, entries []string) (*BypassPolicy, error) {
-	cidrs, err := resolveRoutingEntries(ctx, entries)
+	return ResolveBypassPolicyWithResolver(ctx, entries, net.DefaultResolver.LookupIPAddr)
+}
+
+func ResolveBypassPolicyWithResolver(ctx context.Context, entries []string, resolve func(context.Context, string) ([]net.IPAddr, error)) (*BypassPolicy, error) {
+	cidrs, err := resolveRoutingEntriesWithResolver(ctx, entries, resolve)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +99,7 @@ func (p *BypassPolicy) recordResolved() {
 	})
 }
 
-func resolveRoutingEntries(ctx context.Context, entries []string) ([]*net.IPNet, error) {
+func resolveRoutingEntriesWithResolver(ctx context.Context, entries []string, resolve func(context.Context, string) ([]net.IPAddr, error)) ([]*net.IPNet, error) {
 	var result []*net.IPNet
 	var errs []error
 	for _, entry := range entries {
@@ -107,7 +111,7 @@ func resolveRoutingEntries(ctx context.Context, entries []string) ([]*net.IPNet,
 			result = append(result, network)
 			continue
 		}
-		resolved, err := resolveHostToCIDRs(ctx, entry)
+		resolved, err := resolveHostToCIDRsWithResolver(ctx, entry, resolve)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("resolve bypass host %q: %w", entry, err))
 			continue
@@ -128,9 +132,11 @@ func summarizeCIDRs(cidrs []*net.IPNet) []string {
 	return result
 }
 
-func resolveHostToCIDRs(ctx context.Context, host string) ([]*net.IPNet, error) {
-	resolver := net.Resolver{}
-	ips, err := resolver.LookupIPAddr(ctx, host)
+func resolveHostToCIDRsWithResolver(ctx context.Context, host string, resolve func(context.Context, string) ([]net.IPAddr, error)) ([]*net.IPNet, error) {
+	if resolve == nil {
+		return nil, errors.New("underlying bypass resolver is required")
+	}
+	ips, err := resolve(ctx, host)
 	if err != nil {
 		log.Debugf(Category, "[Bypass] resolve failed for %s: %v", host, err)
 		return nil, err
@@ -143,8 +149,11 @@ func resolveHostToCIDRs(ctx context.Context, host string) ([]*net.IPNet, error) 
 			result = append(result, n)
 			continue
 		}
-		_, n, _ := net.ParseCIDR(ip.String() + "/128")
-		result = append(result, n)
+		if v6 := ip.IP.To16(); v6 != nil {
+			result = append(result, &net.IPNet{IP: v6, Mask: net.CIDRMask(128, 128)})
+		} else {
+			return nil, fmt.Errorf("resolver returned invalid address %v", ip)
+		}
 	}
 	if len(result) == 0 {
 		return nil, errors.New("resolver returned no IP addresses")

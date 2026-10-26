@@ -18,8 +18,8 @@ func startPlatformEngine(cfg EngineConfig) (bool, error) {
 	if runtime.GOOS == "ios" {
 		offset = 4
 	}
-	return startStack(cfg.ProxyAddr, func() (device.Device, error) {
-		return fdbased.Open(strconv.Itoa(cfg.FD), 1200, offset)
+	return startStack(cfg, func() (device.Device, error) {
+		return fdbased.Open(strconv.Itoa(cfg.FD), TunnelMTU, offset)
 	})
 }
 

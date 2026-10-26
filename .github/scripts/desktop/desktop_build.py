@@ -939,6 +939,15 @@ def build_cli(
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
     configure_macos_deployment_target(target_platform, env)
     ldflags = go_build_identity(debug)
+    if target_platform == "macos":
+        # The CLI shares the runtime's native physical-network resolver and DNS
+        # ownership code, so it needs the same cgo framework closure as the service.
+        env["CGO_ENABLED"] = "1"
+        configure_macos_bridge_link(env)
+        ldflags += (
+            f" -linkmode=external -extldflags "
+            f"'-mmacosx-version-min={MACOS_MINIMUM_SYSTEM_VERSION} -lc++'"
+        )
     run(
         [str(go_executable), "build", "-trimpath", *(["-gcflags=all=-N -l"] if debug else []), f"-ldflags={ldflags}", "-o", output.name, "./cmd/dobbyvpn/"],
         cwd=GO_MODULE_DIR,

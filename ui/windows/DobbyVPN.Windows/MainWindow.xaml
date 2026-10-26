@@ -118,6 +118,15 @@
           <Button.KeyboardAccelerators><KeyboardAccelerator Key="Enter" Modifiers="Control" /></Button.KeyboardAccelerators>
         </Button>
 
+        <StackPanel x:Name="ActiveFailurePanel" Spacing="6" Visibility="Collapsed"
+                    AutomationProperties.AutomationId="connection.active-failure">
+          <TextBlock x:Name="ActiveFailureText" FontSize="11.9" TextWrapping="Wrap"
+                     Foreground="{StaticResource Ink}" AutomationProperties.AutomationId="connection.failure" />
+          <Button x:Name="StopActiveButton" Content="Stop" Style="{StaticResource OutlinedButton}" MinHeight="33"
+                  Click="StopActive_Click" Visibility="Collapsed"
+                  AutomationProperties.AutomationId="connection.stop" />
+        </StackPanel>
+
         <Border x:Name="ConnectionsTray" Margin="0,6,0,0" CornerRadius="10.5" Background="{StaticResource Tray}">
           <Grid>
             <local:SockIcon x:Name="EmptySock" Width="30" Height="37.5"

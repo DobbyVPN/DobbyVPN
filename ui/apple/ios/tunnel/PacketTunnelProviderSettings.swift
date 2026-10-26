@@ -23,10 +23,24 @@ extension PacketTunnelProvider {
         }
     }
 
-    func acquireTunnel(sessionID: String?, generation: Int64) -> String {
+    func acquireTunnel(sessionID: String?, generation: Int64, dnsServersJSON: String?) -> String {
         settingsQueue.sync {
+            guard networkSession == nil else {
+                let error = NSError(domain: "DobbyVPN.TUN", code: 2, userInfo: [NSLocalizedDescriptionKey: "Tunnel network is already owned"])
+                return tunnelResult(error: error, pending: true)
+            }
+            let dnsServers: [String]
+            do {
+                dnsServers = try parseDnsServers(dnsServersJSON)
+                _ = try physicalNetworkContext()
+            } catch {
+                logs.writeLog(level: "ERROR", log: "prepare tunnel network context: \(diagnosticErrorDescription(error))")
+                return tunnelResult(error: error, pending: false)
+            }
+            networkSession = sessionID
+            networkGeneration = generation
             let error = settingsOwner.apply(session: sessionID ?? "", generation: generation) { completed in
-                self.setTunnelNetworkSettings(self.fixedTunnelSettings(), completionHandler: completed)
+                self.setTunnelNetworkSettings(self.fixedTunnelSettings(dnsServers: dnsServers), completionHandler: completed)
             }
             if let error { return tunnelResult(error: error, pending: true) }
             let rawDescriptor = DobbyvpnGetTunnelFileDescriptor()
@@ -47,13 +61,53 @@ extension PacketTunnelProvider {
             let error = settingsOwner.release(session: sessionID ?? "", generation: generation, timeout: Double(timeoutMillis) / 1000) { completed in
                 self.setTunnelNetworkSettings(nil, completionHandler: completed)
             }
+            if error == nil && networkSession == sessionID && networkGeneration == generation {
+                networkSession = nil
+                networkGeneration = -1
+            }
             return tunnelResult(error: error, pending: error != nil)
         }
     }
 
-    private func fixedTunnelSettings() -> NEPacketTunnelNetworkSettings {
+    func underlyingNetwork(sessionID: String?, generation: Int64) -> String {
+        settingsQueue.sync {
+            do {
+                guard networkSession == sessionID && networkGeneration == generation else {
+                    throw NSError(domain: "DobbyVPN.DNS", code: 3, userInfo: [NSLocalizedDescriptionKey: "Underlying network owner is obsolete"])
+                }
+                return String(decoding: try JSONSerialization.data(withJSONObject: physicalNetworkContext()), as: UTF8.self)
+            } catch {
+                logs.writeLog(level: "ERROR", log: "underlying resolver context: \(diagnosticErrorDescription(error))")
+                return tunnelResult(error: error, pending: networkSession != nil)
+            }
+        }
+    }
+
+    private func physicalNetworkContext() throws -> [String: Any] {
+        if let path = pathMonitor?.currentPath { updatePhysicalPath(path) }
+        physicalPathLock.lock()
+        defer { physicalPathLock.unlock() }
+        guard let path = physicalPath, path.status == .satisfied,
+              let interface = path.availableInterfaces.first(where: {
+                  $0.type != .loopback && !$0.name.hasPrefix("utun") && path.usesInterfaceType($0.type)
+              }) else {
+            throw NSError(domain: "DobbyVPN.DNS", code: 4, userInfo: [NSLocalizedDescriptionKey: "Physical network is unavailable"])
+        }
+        return ["revision": "\(physicalRevision):\(interface.index)", "interface_index": interface.index]
+    }
+
+    private func updatePhysicalPath(_ path: Network.NWPath) {
+        physicalPathLock.lock()
+        if physicalPath != path {
+            physicalPath = path
+            physicalRevision += 1
+        }
+        physicalPathLock.unlock()
+    }
+
+    private func fixedTunnelSettings(dnsServers: [String]) -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
-        settings.mtu = 1200
+        settings.mtu = 1280 // IPv6 minimum; matches the shared packet stack.
         settings.ipv4Settings = NEIPv4Settings(
             addresses: ["198.18.0.1"],
             subnetMasks: ["255.255.0.0"]
@@ -64,19 +118,41 @@ extension PacketTunnelProvider {
             networkPrefixLengths: [NSNumber(value: 128)]
         )
         settings.ipv6Settings?.includedRoutes = [NEIPv6Route.default()]
-        settings.dnsSettings = NEDNSSettings(servers: ["1.1.1.1", "8.8.8.8"])
+        settings.dnsSettings = NEDNSSettings(servers: dnsServers)
         settings.dnsSettings?.matchDomains = [""]
         return settings
     }
 
+    private func parseDnsServers(_ dnsServersJSON: String?) throws -> [String] {
+        guard let raw = dnsServersJSON, let data = raw.data(using: .utf8) else {
+            throw NSError(
+                domain: "DobbyVPN.DNS",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "VPN DNS server list is missing"]
+            )
+        }
+        let value = try JSONSerialization.jsonObject(with: data)
+        guard let servers = value as? [String], !servers.isEmpty,
+              servers.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw NSError(
+                domain: "DobbyVPN.DNS",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "VPN DNS server list is invalid or empty"]
+            )
+        }
+        return servers
+    }
+
     func startPathLogging() {
-        // Logs-only: helps correlate "Wi‑Fi off/on" with tunnel lifecycle and health-check decisions.
+        // Resolver ownership follows the provider's physical path, independently
+        // of the retained packet-tunnel settings and the active protocol.
         let monitor = Network.NWPathMonitor()
         let pathQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.path.\(tunnelId)")
         pathMonitor = monitor
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
+            self.updatePhysicalPath(path)
             let status = path.status
             let ifaces = path.availableInterfaces.map { "\($0.name)[\(self.interfaceTypeKey($0.type))]" }.joined(separator: ",")
             let expensive = path.isExpensive
@@ -119,6 +195,7 @@ extension PacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
+            self.updatePhysicalPath(path)
             lock.lock()
             if captured {
                 lock.unlock()

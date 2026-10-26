@@ -348,19 +348,81 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 
+  # Package readiness watches android_build above. Debug remains an independent
+  # required Build job, so its compilation cannot hold back Android consumers.
+  android_debug:
+    if: ${{ inputs.reference_build_run_id == '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      APP_SOURCE_SHA: ${{ inputs.source_sha }}
+      VERSION_NAME: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
+      GOTOOLCHAIN: local
+      GOFLAGS: -trimpath -buildvcs=false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Verify exact Debug source and pins
+        id: pins
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$APP_SOURCE_SHA"
+          for pin in java_major android_sdk_platform android_build_tools android_ndk android_cmdline_tools android_cmdline_tools_archive; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
+      - name: Restore Debug dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          gradle: 'true'
+          pinned-tools: 'true'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: false
+      - name: Verify pinned Debug Go compiler
+        run: |
+          set -euo pipefail
+          test "$(go env GOVERSION)" = "go$(tr -d '[:space:]' < .go-version)"
+          echo "GOROOT=$(go env GOROOT)" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: ${{ steps.pins.outputs.java_major }}
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          cmdline-tools-version: ${{ steps.pins.outputs.android_cmdline_tools_archive }}
+          packages: >
+            platforms;${{ steps.pins.outputs.android_sdk_platform }}
+            build-tools;${{ steps.pins.outputs.android_build_tools }}
+            ndk;${{ steps.pins.outputs.android_ndk }}
+      - name: Prepare pinned Debug dependencies
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          ndk_home="$sdk_root/ndk/${{ steps.pins.outputs.android_ndk }}"
+          grep -Fqx 'Pkg.Revision = ${{ steps.pins.outputs.android_ndk }}' "$ndk_home/source.properties"
+          analyzer="$sdk_root/cmdline-tools/${{ steps.pins.outputs.android_cmdline_tools }}/bin/apkanalyzer"
+          test -x "$analyzer"
+          printf 'ANDROID_NDK_HOME=%s\nAPKANALYZER=%s\n' "$ndk_home" "$analyzer" >> "$GITHUB_ENV"
+          python3 .github/scripts/dependency_fetch.py retry --cwd "$GITHUB_WORKSPACE" -- \
+            ui/android/gradlew -p ui/android "-PdobbyGoBinary=$GOROOT/bin/go" \
+            --init-script "$GITHUB_WORKSPACE/.github/scripts/android/resolve_dependencies.gradle" \
+            resolveDobbyDependencies --no-daemon --stacktrace
       - name: Build and inspect native Debug APK
-        if: ${{ inputs.reference_build_run_id == '' }}
-        working-directory: /home/vagrant/build/com.dobby.vpn
         run: |
           python3 .github/scripts/android/android_debug_build.py \
             --source-sha "$APP_SOURCE_SHA" --go-binary "$GOROOT/bin/go" \
-            --output "runtime/android-release/DobbyVPN-v${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}-debug.apk"
-
+            --output "runtime/android-release/DobbyVPN-v${VERSION_NAME}-debug.apk"
+          git diff --exit-code HEAD --
       - name: Upload Debug APK
-        if: ${{ inputs.reference_build_run_id == '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dobbyvpn-android-debug.apk${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
-          path: ${{ env.ANDROID_REPRO_SOURCE_ROOT }}/runtime/android-release/DobbyVPN-v${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}-debug.apk
+          path: runtime/android-release/DobbyVPN-v${{ env.VERSION_NAME }}-debug.apk
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}

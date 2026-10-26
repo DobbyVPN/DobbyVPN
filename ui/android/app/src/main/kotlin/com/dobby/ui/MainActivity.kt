@@ -440,13 +440,17 @@ internal enum class ProfileStatus(val label: String) {
 
 private data class PendingPermissionAction(
     val session: SessionData,
-    val index: Int?,
+    val selection: SelectionData,
     val fence: PermissionTarget,
+    val retry: Boolean = false,
 )
 internal data class SessionData(
     val sessionId: String = "",
     val sequence: Long = 0,
     val generation: Long = 0,
+    val networkGeneration: ULong = 0uL,
+    val vpnActive: Boolean = false,
+    val canRetry: Boolean = false,
     val state: String = "IDLE",
     val primaryAction: String = "NONE",
     val configured: Boolean = false,
@@ -461,9 +465,13 @@ internal data class SessionData(
     val canSwitch: Boolean = false,
     val activeProfile: ProfileData? = null,
     val recovering: Boolean = false,
+    val cleanupComplete: Boolean = true,
     val failure: String = "",
     val sourceError: String = "",
-)
+) {
+    val protectedFailure: Boolean
+        get() = state == "FAILED" && vpnActive && canRetry && primaryAction == "RETRY" && !cleanupComplete
+}
 
 private fun SessionData.permissionSnapshot(
     sourceRevision: Long,
@@ -681,6 +689,11 @@ internal class SessionController(
         (isStopTarget(index) || (!state.sourceDirty && !state.loading && state.loadError.isEmpty() && state.session.sequence >= acceptedSequence && state.session.configured &&
             (state.session.primaryAction == "START" || state.session.canSwitch)))
 
+    val isProtectedFailure: Boolean get() = state.session.protectedFailure
+    val retryActionEnabled: Boolean get() = isProtectedFailure && !state.busy && permissionTarget == null
+    val stopActionEnabled: Boolean get() = !state.busy &&
+        (state.session.primaryAction == "STOP" || state.session.vpnActive && state.session.primaryAction == "RETRY")
+
     fun actionTitle(index: Int? = null): String = if (isStopTarget(index)) {
         if (state.session.state == "CONNECTED" && state.session.pendingTarget == null) "Disconnect" else "Stop"
     } else if (index == null) "Auto connect" else "Connect"
@@ -701,14 +714,24 @@ internal class SessionController(
     private val connected get() = state.session.primaryAction == "STOP"
 
     val mainActionTitle: String get() = when {
+        isProtectedFailure -> if (state.busy) "Retrying…" else "Retry"
         !connected -> if (state.busy) "Connecting…" else "Auto connect"
-        state.session.state in setOf("CONNECTED", "STOPPING") && state.session.pendingTarget == null -> "Disconnect"
-        else -> "Connecting…"
+        state.session.state == "CONNECTED" && state.session.pendingTarget == null -> "Disconnect"
+        state.busy && state.session.state == "STOPPING" -> "Stopping…"
+        else -> "Stop"
     }
 
-    val mainActionEnabled: Boolean get() = if (connected) !state.busy else canAct()
+    val mainActionEnabled: Boolean get() = when {
+        isProtectedFailure -> retryActionEnabled
+        connected -> !state.busy
+        else -> canAct()
+    }
 
-    fun mainAction() = if (connected) stop() else connectOrDisconnect()
+    fun mainAction() = when {
+        isProtectedFailure -> retry()
+        connected -> stop()
+        else -> connectOrDisconnect()
+    }
 
     fun profileStatus(index: Int): ProfileStatus? {
         val session = state.session
@@ -755,8 +778,36 @@ internal class SessionController(
         state = state.copy(busy = true, error = "")
         permissionTarget = PendingPermissionAction(
             current,
-            index,
+            SelectionData(
+                digest = current.digest,
+                mode = if (index == null) "AUTO_SELECT" else "PROFILE_INDEX",
+                index = index ?: 0,
+            ),
             PermissionTarget(current.sessionId, current.digest, current.generation, sourceLoads.revision),
+        )
+        worker.execute {
+            when (NativeVpnBridge.prepare(activity)) {
+                1 -> main.post { continuePermission(true) }
+                0 -> main.post { state = state.copy(busy = false, error = "Approve the Android VPN permission to connect") }
+                else -> main.post { permissionTarget = null; report("Android VPN service could not be prepared") }
+            }
+        }
+    }
+
+    fun retry() {
+        if (!retryActionEnabled) return
+        val current = latest
+        if (!current.protectedFailure || current.sessionId != state.session.sessionId) {
+            worker.execute { refreshSnapshot(clearBusy = true) }
+            return
+        }
+        dismissedErrors = emptySet()
+        state = state.copy(busy = true, error = "")
+        permissionTarget = PendingPermissionAction(
+            session = current,
+            selection = SelectionData(current.activeDigest, current.activeMode, current.activeIndex),
+            fence = PermissionTarget(current.sessionId, current.digest, current.generation, sourceLoads.revision),
+            retry = true,
         )
         worker.execute {
             when (NativeVpnBridge.prepare(activity)) {
@@ -770,7 +821,7 @@ internal class SessionController(
     fun stop() {
         permissionTarget = null
         val current = latest
-        if (state.busy || current.primaryAction != "STOP") return
+        if (state.busy || (current.primaryAction != "STOP" && !current.vpnActive)) return
         dismissedErrors = emptySet()
         state = state.copy(busy = true, error = "")
         worker.execute {
@@ -804,9 +855,8 @@ internal class SessionController(
         permissionTarget = null
         if (!granted) { report("VPN permission was not granted"); return }
         val selected = target.session
-        val index = target.index
         val current = latest
-        if (!PermissionTargetFence.stillCurrent(
+        if (!target.retry && !PermissionTargetFence.stillCurrent(
                 target.fence,
                 current.permissionSnapshot(sourceLoads.revision, state.sourceDirty),
             )) {
@@ -815,8 +865,6 @@ internal class SessionController(
         }
         state = state.copy(busy = true, error = "")
         worker.execute {
-            val mode = if (index == null) "AUTO_SELECT" else "PROFILE_INDEX"
-            val selectedIndex = index ?: 0
             val command = runCatching {
                 val response = JSONObject(NativeGoSession.snapshot(selected.sessionId))
                 requireOK(response)
@@ -828,6 +876,17 @@ internal class SessionController(
                 val primaryAction = snapshot.optString("primary_action", "NONE")
                 val canSwitch = snapshot.optBoolean("can_switch")
                 val hasPendingTarget = snapshot.optJSONObject("pending_target") != null
+                val retryStillCurrent = target.retry &&
+                    sessionId == selected.sessionId &&
+                    generation == selected.generation &&
+                    snapshot.optString("state", "IDLE") == "FAILED" &&
+                    snapshot.optBoolean("vpn_active") &&
+                    snapshot.optBoolean("can_retry") &&
+                    primaryAction == "RETRY" &&
+                    !snapshot.optBoolean("cleanup_complete", true) &&
+                    snapshot.optString("active_digest") == target.selection.digest &&
+                    snapshot.optString("active_mode") == target.selection.mode &&
+                    snapshot.optInt("active_index") == target.selection.index
                 val freshRevision = sourceLoads.revision
                 val freshSnapshot = PermissionSnapshot(
                     sessionId = sessionId,
@@ -839,10 +898,28 @@ internal class SessionController(
                     primaryAction = primaryAction,
                     canSwitch = canSwitch,
                 )
-                if (!PermissionTargetFence.mayStartAfterConsent(target.fence, freshSnapshot)) {
+                if (target.retry && !retryStillCurrent) {
                     null
+                } else if (!target.retry && !PermissionTargetFence.mayStartAfterConsent(target.fence, freshSnapshot)) {
+                    null
+                } else if (target.retry) {
+                    NativeGoSession.startSelection(
+                        sessionId,
+                        sequence,
+                        target.selection.mode,
+                        target.selection.index,
+                        target.selection.digest,
+                        false,
+                    )
                 } else {
-                    NativeGoSession.startSelection(sessionId, sequence, mode, selectedIndex, selected.digest)
+                    NativeGoSession.startSelection(
+                        sessionId,
+                        sequence,
+                        target.selection.mode,
+                        target.selection.index,
+                        target.selection.digest,
+                        true,
+                    )
                 }
             }
             command.onSuccess { encoded ->
@@ -989,6 +1066,9 @@ internal class SessionController(
                 sessionId = snapshot.optString("session_id"),
                 sequence = snapshot.optLong("sequence"),
                 generation = snapshot.optLong("generation"),
+                networkGeneration = snapshot.opt("network_generation")?.toString()?.toULongOrNull() ?: 0uL,
+                vpnActive = snapshot.optBoolean("vpn_active"),
+                canRetry = snapshot.optBoolean("can_retry"),
                 state = snapshot.optString("state", "IDLE"),
                 primaryAction = snapshot.optString("primary_action", "NONE"),
                 configured = snapshot.optBoolean("configured"),
@@ -1009,6 +1089,7 @@ internal class SessionController(
                     ProfileData(it.optInt("index"), it.optString("description"), it.optString("protocol"))
                 },
                 recovering = snapshot.optBoolean("recovering"),
+                cleanupComplete = snapshot.optBoolean("cleanup_complete", true),
                 failure = failure?.let {
                     val message = it.optString("message")
                     val code = it.optString("code")

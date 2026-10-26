@@ -300,7 +300,7 @@ jobs:
           python3 - <<'PYTHON'
           import json, os
           from pathlib import Path
-          from torturer_runner.android_instrumentation import validate_reusable_test_companion
+          from torturer_runner.android_instrumentation import bind_reusable_test_companion, validate_reusable_test_companion
           from torturer_runner.compiled_test_inputs import command_tool_identity, file_sha256
           product = Path(os.environ["DOBBY_PRODUCT_ROOT"])
           version = (product / "VERSION").read_text().strip()
@@ -321,9 +321,6 @@ jobs:
           }
           properties = lambda path: file_sha256(path / "source.properties")
           compatibility = {
-              "product_apk_sha256": file_sha256(
-                  product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk"
-              ),
               "sdk_platform": sdk_platform,
               "sdk_platform_sha256": properties(sdk / "platforms" / sdk_platform),
               "build_tools": build_tools,
@@ -338,6 +335,26 @@ jobs:
           tests_sha = os.environ["DOBBY_TEST_SHA"]
           tests_tree = os.environ["DOBBY_TEST_TREE_SHA256"]
           companion_name = "dobbyvpn-test-companion-unsigned.apk"
+          # Verify the selected APK, then bind the already compiled companion
+          # to this exact producer selection before accepting it for execution.
+          import subprocess, sys
+          apk = product / "release-packages" / f"DobbyVPN-v{version}-unsign.apk"
+          apk_sha_before = file_sha256(apk)
+          version_code = subprocess.check_output([sys.executable,
+              str(product / ".github/scripts/release/version_metadata.py"),
+              "--version-file", str(product / "VERSION"), "--field", "android_version_code"], text=True).strip()
+          analyzer = subprocess.check_output([sys.executable,
+              str(product / ".github/scripts/android/android_tool_selection.py"), "--tool", "apkanalyzer"], text=True).strip()
+          subprocess.run([sys.executable, str(product / ".github/scripts/android/verify_android_apk_source.py"),
+              "--apk", str(apk), "--source-sha", source_sha, "--repository", os.environ["GITHUB_REPOSITORY"],
+              "--version-name", version, "--version-code", version_code, "--apkanalyzer", analyzer], check=True)
+          manifest_sha, compatibility = bind_reusable_test_companion(
+              root, expected_manifest_sha256=manifest_sha, source_sha=source_sha,
+              tests_sha=tests_sha, tests_tree_sha256=tests_tree, producer_attempt=producer_attempt,
+              tools=tools, compatibility=compatibility, verified_product_apk=apk,
+              verified_product_apk_sha256=apk_sha_before,
+              build_packages=json.loads(os.environ["DOBBY_BUILD_PACKAGES"]))
+          print("Bound Android companion manifest SHA256=" + manifest_sha, flush=True)
           companion = validate_reusable_test_companion(
               root, companion_relative_path=companion_name,
               expected_manifest_sha256=manifest_sha, source_sha=source_sha,

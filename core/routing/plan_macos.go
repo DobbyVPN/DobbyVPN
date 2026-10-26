@@ -13,30 +13,11 @@ import (
 
 var ipv4DefaultSubnets = []string{"0.0.0.0/1", "128.0.0.0/1"}
 
-func (p *Plan) AcquireMacOSProxyRoute(ctx context.Context, proxyIP, gatewayIP, interfaceName string) (*Lease, error) {
-	if isLoopbackIP(proxyIP) {
-		return nil, nil
-	}
-	prefix, err := netip.ParsePrefix(proxyIP + "/32")
-	if err != nil {
-		return nil, err
-	}
-	gateway, err := netip.ParseAddr(gatewayIP)
-	if err != nil {
-		return nil, err
-	}
-	iface, err := macOSInterface(interfaceName)
-	if err != nil {
-		return nil, err
-	}
-	return p.acquireMacOSRoute(ctx, macOSRoute{prefix, gateway, iface.Index, unix.RTF_UP | unix.RTF_STATIC | unix.RTF_GATEWAY | unix.RTF_HOST})
-}
-
 func (p *Plan) AcquireMacOSIPv4Default(ctx context.Context, tunName string) error {
 	return p.acquireMacOSInterfaceRoutes(ctx, ipv4DefaultSubnets, tunName)
 }
 
-func (p *Plan) AcquireMacOSIPv6Block(ctx context.Context, tunName string) error {
+func (p *Plan) AcquireMacOSIPv6Default(ctx context.Context, tunName string) error {
 	return p.acquireMacOSInterfaceRoutes(ctx, ipv6DefaultSubnets, tunName)
 }
 

@@ -1,3 +1,4 @@
+// Package dnscache keeps endpoint resolution separate from VPN application DNS.
 package dnscache
 
 import (
@@ -5,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -12,188 +14,106 @@ import (
 	"core/log"
 )
 
-const (
-	Category            = "DNSCache"
-	PreflightCacheTTL   = 12 * time.Hour
-	preflightAttempts   = 2
-	preflightRetryDelay = 250 * time.Millisecond
-	// ServerResolveTimeout bounds each mandatory bootstrap lookup attempt used
-	// to establish the VPN server route. A fresh macOS daemon can need longer
-	// than two seconds for its first resolver request after launchd restarts it.
-	ServerResolveTimeout = 5 * time.Second
-)
+const Category = "DNSCache"
+const ServerResolveTimeout = 5 * time.Second
 
-type entry struct {
-	ip        net.IP
-	expiresAt time.Time
-}
+// Resolver is scoped to the physical network. Native resolvers own caching and
+// DNS64 synthesis; Dobby must not pin a CDN address beyond the native cache.
+type Resolver func(context.Context, string) ([]net.IPAddr, error)
 
-// Cache belongs to one runtime start attempt. Its lifetime is the attempt's
-// lifetime, so retrying or replacing a session cannot reuse an earlier
-// bootstrap address.
+// ResolverSource captures a current physical network before each lookup. The
+// returned resolver must reject a result if that native network changes.
+type ResolverSource func(context.Context) (string, Resolver, error)
+
+// Cache retains resolver ownership, not a second DNS TTL policy. A revision
+// prevents a late lookup on a replaced physical network from being used.
 type Cache struct {
-	mu      sync.RWMutex
-	entries map[string]entry
+	mu       sync.RWMutex
+	resolver Resolver
+	identity string
+	revision uint64
+	source   ResolverSource
 }
 
-func New() *Cache {
-	return &Cache{entries: make(map[string]entry)}
+func New() *Cache { return &Cache{revision: 1} }
+
+func (c *Cache) SetResolverSource(source ResolverSource) {
+	c.mu.Lock()
+	c.source = source
+	c.resolver = nil
+	c.revision++
+	c.mu.Unlock()
 }
 
-func (c *Cache) SetIPv4(host, ipString, source string, ttl time.Duration) bool {
-	host = NormalizeHost(host)
-	ip := net.ParseIP(strings.TrimSpace(ipString))
-	if c == nil || host == "" || ip == nil || ip.To4() == nil || ttl <= 0 {
-		return false
-	}
-
+func (c *Cache) SetResolver(identity string, resolver Resolver) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.entries == nil {
-		c.entries = make(map[string]entry)
+	if c.identity == identity && c.resolver != nil {
+		return
 	}
-	c.entries[host] = entry{
-		ip:        append(net.IP(nil), ip.To4()...),
-		expiresAt: time.Now().Add(ttl),
-	}
-	log.Debugf(Category, "stored source=%s ttl=%s", source, ttl)
-	return true
+	c.identity, c.resolver = identity, resolver
+	c.revision++
+	log.Infof(Category, "underlying resolver changed network=%s revision=%d", identity, c.revision)
 }
 
-func (c *Cache) ResolveIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
+func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr, error) {
 	if c == nil {
-		return nil, errors.New("DNS cache is required")
+		return nil, errors.New("underlying resolver is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	host = NormalizeHost(host)
 	if host == "" {
 		return nil, errors.New("empty host")
 	}
-
-	if ip := net.ParseIP(host); ip != nil {
-		if ip4 := ip.To4(); ip4 != nil {
-			return ip4, nil
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return []net.IPAddr{{IP: net.IP(ip.AsSlice()), Zone: ip.Zone()}}, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, ServerResolveTimeout)
+	defer cancel()
+	c.mu.RLock()
+	source := c.source
+	c.mu.RUnlock()
+	if source != nil {
+		identity, resolver, err := source(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("capture underlying resolver: %w", err)
 		}
-		return nil, errors.New("IPv6 address not supported; routing requires IPv4")
+		c.SetResolver(identity, resolver)
 	}
-
-	if ip, ok := c.LookupIPv4(host, source); ok {
-		return ip, nil
+	c.mu.RLock()
+	resolve, revision, identity := c.resolver, c.revision, c.identity
+	c.mu.RUnlock()
+	if resolve == nil {
+		return nil, errors.New("underlying network resolver is unavailable")
 	}
-
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+	started := time.Now()
+	addresses, err := resolve(ctx, host)
+	c.mu.RLock()
+	current := c.revision
+	c.mu.RUnlock()
+	if current != revision {
+		err = errors.Join(err, errors.New("underlying network changed during resolution"))
 	}
-
-	startedAt := time.Now()
-	resolver := net.Resolver{}
-	addrs, err := resolver.LookupIPAddr(ctx, host)
-	elapsed := time.Since(startedAt).Truncate(time.Millisecond)
+	if ctx.Err() != nil {
+		err = errors.Join(err, ctx.Err())
+	}
+	if err == nil && len(addresses) == 0 {
+		err = errors.New("underlying resolver returned no addresses")
+	}
+	log.Debugf(Category, "underlying lookup network=%s revision=%d host=%s addresses=%v elapsed=%s err=%v", identity, revision, host, addresses, time.Since(started), err)
 	if err != nil {
-		log.Debugf(Category, "lookup failed source=%s elapsed=%s errorType=%T error=%v", source, elapsed, err, err)
-		return nil, fmt.Errorf("DNS resolve failed: %w", err)
+		return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
 	}
-
-	for _, addr := range addrs {
-		if ip4 := addr.IP.To4(); ip4 != nil {
-			log.Debugf(Category, "lookup resolved source=%s elapsed=%s", source, elapsed)
-			c.SetIPv4(host, ip4.String(), source, time.Minute)
-			return ip4, nil
-		}
-	}
-	log.Debugf(Category, "lookup returned no IPv4 source=%s elapsed=%s addresses=%d", source, elapsed, len(addrs))
-	return nil, errors.New("DNS resolved only IPv6, IPv4 required")
-}
-
-// ResolvePreflightIPv4 pins a successful bootstrap lookup for this attempt.
-func (c *Cache) ResolvePreflightIPv4(ctx context.Context, host string, timeout time.Duration, source string) (net.IP, error) {
-	if c == nil {
-		return nil, errors.New("DNS cache is required")
-	}
-	return resolvePreflightIPv4(ctx, host, timeout, source, c.ResolveIPv4, c.SetIPv4)
-}
-
-func resolvePreflightIPv4(
-	ctx context.Context,
-	host string,
-	timeout time.Duration,
-	source string,
-	resolve func(context.Context, string, time.Duration, string) (net.IP, error),
-	set func(string, string, string, time.Duration) bool,
-) (net.IP, error) {
-	var lastErr error
-	for attempt := 1; attempt <= preflightAttempts; attempt++ {
-		ip, err := resolve(ctx, host, timeout, source)
-		if err == nil {
-			if !set(host, ip.String(), source, PreflightCacheTTL) {
-				return nil, errors.New("failed to cache preflight IPv4")
-			}
-			return ip, nil
-		}
-		lastErr = err
-		var networkError net.Error
-		if attempt == preflightAttempts || !errors.As(err, &networkError) || !networkError.Timeout() {
-			return nil, err
-		}
-		log.Debugf(Category, "preflight lookup retry source=%s attempt=%d", source, attempt+1)
-		timer := time.NewTimer(preflightRetryDelay)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return nil, ctx.Err()
-		case <-timer.C:
-		}
-	}
-	return nil, lastErr
-}
-
-func (c *Cache) LookupIPv4(host, source string) (net.IP, bool) {
-	if c == nil {
-		return nil, false
-	}
-	host = NormalizeHost(host)
-	if host == "" {
-		return nil, false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip4 := ip.To4(); ip4 != nil {
-			return ip4, true
-		}
-		return nil, false
-	}
-
-	if ip, ok := c.lookup(host); ok {
-		log.Debugf(Category, "cache hit source=%s", source)
-		return ip, true
-	}
-	return nil, false
+	return addresses, nil
 }
 
 func NormalizeHost(host string) string {
-	host = strings.TrimSpace(strings.ToLower(host))
-	host = strings.TrimPrefix(strings.TrimSuffix(host, "."), "[")
-	host = strings.TrimSuffix(host, "]")
-	return host
-}
-
-func (c *Cache) lookup(host string) (net.IP, bool) {
-	now := time.Now()
-	c.mu.RLock()
-	cached, ok := c.entries[host]
-	c.mu.RUnlock()
-	if !ok {
-		return nil, false
+	host = strings.TrimSpace(host)
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if _, err := netip.ParseAddr(host); err == nil {
+		return host
 	}
-	if now.After(cached.expiresAt) {
-		c.mu.Lock()
-		if current, exists := c.entries[host]; exists && now.After(current.expiresAt) {
-			delete(c.entries, host)
-		}
-		c.mu.Unlock()
-		return nil, false
-	}
-	return append(net.IP(nil), cached.ip...), true
+	return strings.TrimSuffix(strings.ToLower(host), ".")
 }

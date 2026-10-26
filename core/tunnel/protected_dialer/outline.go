@@ -13,12 +13,13 @@ import (
 )
 
 type outlineStreamDialer struct {
+	owner    context.Context
 	dnsCache *dnscache.Cache
 	register func(context.Context, net.Conn) error
 }
 
 func (d outlineStreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
-	conn, err := DialContextWithProtect(ctx, d.dnsCache, "tcp", addr)
+	conn, err := DialContextWithProtect(withSocketScope(ctx, d.owner), d.dnsCache, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -36,19 +37,23 @@ func (d outlineStreamDialer) DialStream(ctx context.Context, addr string) (trans
 	return tcpConn, nil
 }
 
-type outlinePacketDialer struct{ dnsCache *dnscache.Cache }
-
-func (d outlinePacketDialer) DialPacket(ctx context.Context, addr string) (net.Conn, error) {
-	return DialUDPConnWithProtect(ctx, d.dnsCache, "udp", addr)
+type outlinePacketDialer struct {
+	dnsCache *dnscache.Cache
+	owner    context.Context
 }
 
-func NewOutlineProviders(dnsCache *dnscache.Cache, register func(context.Context, net.Conn) error) *configurl.ProviderContainer {
+func (d outlinePacketDialer) DialPacket(ctx context.Context, addr string) (net.Conn, error) {
+	return DialUDPConnWithProtect(withSocketScope(ctx, d.owner), d.dnsCache, "udp", addr)
+}
+
+func NewOutlineProviders(owner context.Context, dnsCache *dnscache.Cache, register func(context.Context, net.Conn) error) *configurl.ProviderContainer {
 	providers := &configurl.ProviderContainer{
 		StreamDialers: configurl.NewExtensibleProvider[transport.StreamDialer](outlineStreamDialer{
+			owner:    owner,
 			dnsCache: dnsCache,
 			register: register,
 		}),
-		PacketDialers:   configurl.NewExtensibleProvider[transport.PacketDialer](outlinePacketDialer{dnsCache}),
+		PacketDialers:   configurl.NewExtensibleProvider[transport.PacketDialer](outlinePacketDialer{dnsCache, owner}),
 		PacketListeners: configurl.NewExtensibleProvider[transport.PacketListener](&transport.UDPListener{}),
 	}
 	log.Debugf(Category, "[Protect][Outline] SDK providers use attempt-scoped protected stream/packet dialers")

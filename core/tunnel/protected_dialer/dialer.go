@@ -2,8 +2,10 @@ package protected_dialer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"syscall"
 	"time"
 
@@ -23,7 +25,8 @@ const (
 
 type ProtectedDirectProxy struct {
 	proxy.Proxy
-	DNSCache *dnscache.Cache
+	DNSCache     *dnscache.Cache
+	OwnerContext context.Context
 }
 
 func isLoopback(address string) bool {
@@ -37,8 +40,8 @@ func isLoopback(address string) bool {
 
 func normalizeTCP(address string) string {
 	host, _, _ := net.SplitHostPort(address)
-	ip := net.ParseIP(host)
-	if ip != nil && ip.To4() == nil {
+	ip, err := netip.ParseAddr(host)
+	if err == nil && ip.Is6() && !ip.Is4In6() {
 		return networkTCP6
 	}
 	return networkTCP4
@@ -46,8 +49,8 @@ func normalizeTCP(address string) string {
 
 func normalizeUDP(address string) string {
 	host, _, _ := net.SplitHostPort(address)
-	ip := net.ParseIP(host)
-	if ip != nil && ip.To4() == nil {
+	ip, err := netip.ParseAddr(host)
+	if err == nil && ip.Is6() && !ip.Is4In6() {
 		return networkUDP6
 	}
 	return networkUDP4
@@ -63,7 +66,7 @@ func listenAddr(network string) string {
 // protectFD applies the platform's route-exclusion policy. It is deliberately
 // strict: a non-loopback connection without successful protection is unsafe,
 // because it can be sent back through the VPN tunnel it is trying to create.
-func protectFD(fd uintptr, network, address string) error {
+func protectPlatformFD(fd uintptr, network, address string) error {
 	if isLoopback(address) {
 		return nil
 	}
@@ -82,7 +85,7 @@ func protectFD(fd uintptr, network, address string) error {
 func protectRawConn(network, address string, c syscall.RawConn) error {
 	var protectErr error
 	err := c.Control(func(fd uintptr) {
-		protectErr = protectFD(fd, network, address)
+		protectErr = protectPlatformFD(fd, network, address)
 	})
 	if err != nil {
 		return err
@@ -116,27 +119,49 @@ func socketNetwork(family, socketType int) (string, error) {
 	return network, nil
 }
 
-// Use the server address resolved before tunnel routing changes. Resolving it
-// again through the tunnel would make connecting depend on an already working VPN.
-func cachedDialAddress(cache *dnscache.Cache, address string) (string, error) {
+// Resolve before the socket hook using the retained physical-network context.
+// The original hostname remains with TLS/protocol configuration.
+func resolvedDialAddresses(ctx context.Context, cache *dnscache.Cache, address string) ([]string, error) {
 	if cache == nil {
-		return "", fmt.Errorf("DNS cache is required for protected dialing")
+		return nil, fmt.Errorf("DNS resolver is required for protected dialing")
 	}
-	host, port, splitErr := net.SplitHostPort(address)
-	if splitErr == nil {
-		if ip, ok := cache.LookupIPv4(host, "protected-dialer"); ok {
-			return net.JoinHostPort(ip.String(), port), nil
-		}
-	}
-	return address, nil
-}
-
-func DialContextWithProtect(ctx context.Context, cache *dnscache.Cache, network, address string) (net.Conn, error) {
-	start := time.Now()
-	dialAddress, err := cachedDialAddress(cache, address)
+	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
+	addresses, err := cache.ResolveAddresses(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(addresses))
+	for _, ip := range addresses {
+		result = append(result, net.JoinHostPort(ip.String(), port))
+	}
+	return result, nil
+}
+
+func DialContextWithProtect(ctx context.Context, cache *dnscache.Cache, network, address string) (net.Conn, error) {
+	addresses, err := resolvedDialAddresses(ctx, cache, address)
+	if err != nil {
+		return nil, err
+	}
+	var failures []error
+	for _, address := range addresses {
+		conn, err := dialResolvedTCP(ctx, network, address)
+		if err == nil {
+			return conn, nil
+		}
+		failures = append(failures, err)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, errors.Join(failures...)
+}
+
+func dialResolvedTCP(ctx context.Context, network, address string) (net.Conn, error) {
+	start := time.Now()
+	dialAddress := address
 	realNet := normalizeTCP(dialAddress)
 	if deadline, ok := ctx.Deadline(); ok {
 		log.Debugf(Category, "[Protect] TCP dial begin requestedNetwork=%s realNetwork=%s destination=%s deadline=%s protector=%T", network, realNet, address, deadline.Format(time.RFC3339Nano), protector)
@@ -158,7 +183,7 @@ func DialContextWithProtect(ctx context.Context, cache *dnscache.Cache, network,
 
 	d := &net.Dialer{
 		Control: func(network, address string, c syscall.RawConn) error {
-			protectErr := protectRawConn(realNet, address, c)
+			protectErr := ProtectRawConnContext(ctx, realNet, address, c)
 			if protectErr != nil {
 				log.Errorf(Category, "[Protect] TCP protection failed network=%s dest=%s err=%v", realNet, address, protectErr)
 			}
@@ -178,10 +203,25 @@ func DialContextWithProtect(ctx context.Context, cache *dnscache.Cache, network,
 
 func DialUDPConnWithProtect(ctx context.Context, cache *dnscache.Cache, network, address string) (net.Conn, error) {
 	start := time.Now()
-	dialAddress, err := cachedDialAddress(cache, address)
+	addresses, err := resolvedDialAddresses(ctx, cache, address)
 	if err != nil {
 		return nil, err
 	}
+	var failures []error
+	for _, dialAddress := range addresses {
+		conn, err := dialResolvedUDPConn(ctx, network, address, dialAddress, start)
+		if err == nil {
+			return conn, nil
+		}
+		failures = append(failures, err)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, errors.Join(failures...)
+}
+
+func dialResolvedUDPConn(ctx context.Context, network, address, dialAddress string, start time.Time) (net.Conn, error) {
 	realNet := normalizeUDP(dialAddress)
 	if deadline, ok := ctx.Deadline(); ok {
 		log.Debugf(Category, "[Protect] UDP conn dial begin requestedNetwork=%s realNetwork=%s dest=%s dialDest=%s deadline=%s protector=%T", network, realNet, address, dialAddress, deadline.Format(time.RFC3339Nano), protector)
@@ -190,7 +230,9 @@ func DialUDPConnWithProtect(ctx context.Context, cache *dnscache.Cache, network,
 	}
 
 	d := net.Dialer{
-		Control: ProtectRawConn,
+		Control: func(network, address string, c syscall.RawConn) error {
+			return ProtectRawConnContext(ctx, network, address, c)
+		},
 	}
 	conn, err := d.DialContext(ctx, realNet, dialAddress)
 	if err != nil {
@@ -212,10 +254,25 @@ func ProtectRawConn(network, address string, c syscall.RawConn) error {
 
 func DialUDPWithProtect(ctx context.Context, cache *dnscache.Cache, network, address string) (net.PacketConn, error) {
 	start := time.Now()
-	dialAddress, err := cachedDialAddress(cache, address)
+	addresses, err := resolvedDialAddresses(ctx, cache, address)
 	if err != nil {
 		return nil, err
 	}
+	var failures []error
+	for _, dialAddress := range addresses {
+		packet, err := dialResolvedUDPPacket(ctx, network, address, dialAddress, start)
+		if err == nil {
+			return packet, nil
+		}
+		failures = append(failures, err)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, errors.Join(failures...)
+}
+
+func dialResolvedUDPPacket(ctx context.Context, network, address, dialAddress string, start time.Time) (net.PacketConn, error) {
 	realNet := normalizeUDP(dialAddress)
 	if deadline, ok := ctx.Deadline(); ok {
 		log.Debugf(Category, "[Protect] UDP dial begin requestedNetwork=%s realNetwork=%s dest=%s dialDest=%s deadline=%s protector=%T", network, realNet, address, dialAddress, deadline.Format(time.RFC3339Nano), protector)
@@ -251,8 +308,8 @@ func DialUDPWithProtect(ctx context.Context, cache *dnscache.Cache, network, add
 	}
 
 	lc := net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			protectErr := protectRawConn(realNet, address, c)
+		Control: func(network, _ string, c syscall.RawConn) error {
+			protectErr := ProtectRawConnContext(ctx, realNet, dialAddress, c)
 			if protectErr != nil {
 				log.Errorf(Category, "[Protect] UDP protection failed network=%s dest=%s err=%v", realNet, address, protectErr)
 			}
@@ -299,14 +356,18 @@ func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Meta
 	if p == nil {
 		return nil, fmt.Errorf("protected direct proxy is required")
 	}
-	return DialContextWithProtect(ctx, p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
+	return DialContextWithProtect(withSocketScope(ctx, p.OwnerContext), p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
 }
 
 func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if p == nil {
 		return nil, fmt.Errorf("protected direct proxy is required")
 	}
-	return DialUDPWithProtect(context.Background(), p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
+	ctx := p.OwnerContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return DialUDPWithProtect(ctx, p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
 }
 
 // ProtectSocketIntErr is for integrations whose callback can signal an error
@@ -325,7 +386,7 @@ func ProtectSocketIntErr(fd int) error {
 		return fmt.Errorf("%w: inspect external socket fd=%d: %w", ErrSocketProtectionUnavailable, fd, err)
 	}
 	log.Debugf(Category, "[Protect] external socket identified fd=%d network=%s", fd, network)
-	if err := protectFD(uintptr(fd), network, "external-socket"); err != nil {
+	if err := protectPlatformFD(uintptr(fd), network, "external-socket"); err != nil {
 		log.Errorf(Category, "[Protect] external socket protection failed fd=%d network=%s err=%v", fd, network, err)
 		return err
 	}

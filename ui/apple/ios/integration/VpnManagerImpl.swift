@@ -16,6 +16,8 @@ public final class VpnManagerImpl: NSObject {
     let condition = NSCondition()
     var vpnManager: NETunnelProviderManager?
     var providerStatus: NEVPNStatus = .invalid
+    let preferenceQueue = DispatchQueue(label: "vpn.dobby.preferences")
+    var preferenceOperations: [(@escaping () -> Void) -> Void] = []
     private var snapshotReadinessFailureCooldown = IOSReadinessFailureCooldown()
     private var observer: NSObjectProtocol?
 
@@ -66,6 +68,7 @@ public final class VpnManagerImpl: NSObject {
             )
         }
         let deadline = monotonicNow() + IOSProviderTiming.appMessageTimeout
+        let onDemandCompletion: (() -> String?)? = commandMethod == "Stop" ? beginDisableOnDemandForStop(until: deadline) : nil
         if let readinessFailure = ensureProviderReady(until: deadline) {
             if commandMethod != nil && !Thread.isMainThread {
                 condition.lock()
@@ -86,7 +89,14 @@ public final class VpnManagerImpl: NSObject {
             )
         }
         do {
-            return try sendOnce(messageData, timeout: timeout)
+            let response = try sendOnce(messageData, timeout: timeout)
+            if let onDemandFailure = onDemandCompletion?() {
+                // Preserve the actual Go stop result even when the OS restart
+                // preference failed. The app must expose that failure.
+                logs.writeLog(level: "ERROR", log: "[provider] Go Stop response after On Demand failure: \(String(decoding: response, as: UTF8.self))")
+                return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED", message: onDemandFailure)
+            }
+            return response
         } catch {
             logs.writeLog(level: "ERROR", log: "[provider] sendProviderMessage failed:\n\(diagnosticErrorDescription(error))")
             return transportFailureResponse(
@@ -263,7 +273,7 @@ public final class VpnManagerImpl: NSObject {
                 continue
             }
             do {
-                try current.connection.startVPNTunnel(options: nil)
+                try current.connection.startVPNTunnel(options: ["dobby_control_only": NSNumber(value: true)])
             } catch {
                 logs.writeLog(level: "ERROR", log: "[provider] control-mode start failed:\n\(diagnosticErrorDescription(error))")
                 return String(reflecting: error)

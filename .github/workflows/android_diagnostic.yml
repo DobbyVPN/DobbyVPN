@@ -91,7 +91,6 @@ jobs:
     secrets: inherit
     with:
       retention_days: 1
-      build_packages: ${{ needs.identity.outputs.packages }}
       source_sha: ${{ needs.identity.outputs.source_sha }}
       build_run_id: ${{ inputs.build_run_id }}
       torturer_sha: ${{ inputs.torturer_sha }}

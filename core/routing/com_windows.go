@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
-	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
 func withCOM(progID string, operation func(*ole.IDispatch) error) error {
@@ -65,59 +64,6 @@ func comEach(collection *ole.IDispatch, visit func(*ole.IDispatch) error) error 
 			return errors.Join(err, clearErr)
 		}
 	}
-}
-
-// SetWindowsDNS uses WMI's per-adapter API, available at the existing Windows
-// minimum. No-argument SetDNSServerSearchOrder restores DHCP DNS assignment.
-func SetWindowsDNS(luid winipcfg.LUID, static bool, servers []netip.Addr) error {
-	guid, err := luid.GUID()
-	if err != nil {
-		return fmt.Errorf("resolve DNS adapter GUID: %w", err)
-	}
-	return withCOM("WbemScripting.SWbemLocator", func(locator *ole.IDispatch) error {
-		services, err := oleutil.CallMethod(locator, "ConnectServer", ".", `ROOT\CIMV2`)
-		if err != nil {
-			return err
-		}
-		defer services.Clear()
-		query := fmt.Sprintf("SELECT * FROM Win32_NetworkAdapterConfiguration WHERE SettingID = '%s'", guid.String())
-		rows, err := oleutil.CallMethod(services.ToIDispatch(), "ExecQuery", query)
-		if err != nil {
-			return err
-		}
-		defer rows.Clear()
-		matched := 0
-		err = comEach(rows.ToIDispatch(), func(adapter *ole.IDispatch) error {
-			matched++
-			if matched > 1 {
-				return fmt.Errorf("multiple DNS adapters match GUID %s", guid)
-			}
-			var args []any
-			if static {
-				addresses := make([]string, len(servers))
-				for index, server := range servers {
-					addresses[index] = server.String()
-				}
-				args = []any{addresses}
-			}
-			result, err := oleutil.CallMethod(adapter, "SetDNSServerSearchOrder", args...)
-			if err != nil {
-				return fmt.Errorf("WMI SetDNSServerSearchOrder: %w", err)
-			}
-			defer result.Clear()
-			if result.Val != 0 {
-				return fmt.Errorf("WMI SetDNSServerSearchOrder returned %d (1 requires reboot)", result.Val)
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		if matched != 1 {
-			return fmt.Errorf("DNS adapter GUID %s not found in WMI", guid)
-		}
-		return nil
-	})
 }
 
 const windowsIPv6Range = "0000:0000:0000:0000:0000:0000:0000:0000-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"

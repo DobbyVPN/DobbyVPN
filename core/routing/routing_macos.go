@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 
 	"golang.org/x/net/route"
 	"golang.org/x/sys/unix"
@@ -36,7 +37,11 @@ func routeIP(address route.Addr) netip.Addr {
 	case *route.Inet4Addr:
 		return netip.AddrFrom4(a.IP)
 	case *route.Inet6Addr:
-		return netip.AddrFrom16(a.IP)
+		ip := netip.AddrFrom16(a.IP)
+		if a.ZoneID != 0 {
+			ip = ip.WithZone(strconv.Itoa(a.ZoneID))
+		}
+		return ip
 	default:
 		return netip.Addr{}
 	}
@@ -46,7 +51,8 @@ func routeAddress(ip netip.Addr) route.Addr {
 	if ip.Is4() {
 		return &route.Inet4Addr{IP: ip.As4()}
 	}
-	return &route.Inet6Addr{IP: ip.As16()}
+	zone, _ := strconv.Atoi(ip.Zone())
+	return &route.Inet6Addr{IP: ip.As16(), ZoneID: zone}
 }
 
 func readMacOSRoutes() ([]macOSRoute, error) {

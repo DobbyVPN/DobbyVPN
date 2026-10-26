@@ -40,6 +40,7 @@ from android_dependency_provenance import (
     ANDROID_SDK_PLATFORM,
     JAVA_MAJOR,
 )
+from android_security_inventory import GROUPS, scanner_inputs, verify_scanner_report
 
 # Release asset digests pin the downloaded executable archives. These versions
 # intentionally match the existing CI tool versions, except Trivy and SwiftLint
@@ -381,7 +382,7 @@ def require_android_sdk() -> Path:
     return sdk
 
 
-def lint_android(tools: Tools) -> None:
+def android_check_tools() -> tuple[Path, Path]:
     require_platform("linux")
     go = ensure_go()
     java = require_command("java", "Android Lint")
@@ -399,28 +400,142 @@ def lint_android(tools: Tools) -> None:
     gradle = ROOT / "ui" / "android" / "gradlew"
     if not gradle.is_file():
         raise CheckError(f"Android Gradle wrapper is missing: {gradle}")
+    return gradle, go
+
+
+def android_security(tools: Tools, *, output_dir: Path | None = None, require_tests: bool = False) -> None:
+    gradle, go = android_check_tools()
+    directory = (output_dir or tools.root / "android-security").resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    inventory = directory / "resolved-gradle.json"
+    report = directory / "trivy.json"
+    # Only this check's known outputs are replaced. A previous successful scan
+    # cannot satisfy a failed resolution or missing scanner result.
+    for path in (inventory, report, *(directory / f"{group}.gradle.lockfile" for group in GROUPS)):
+        path.unlink(missing_ok=True)
     resolver = SCRIPT_DIR / "android" / "resolve_dependencies.gradle"
     run_dependency_fetch(
         [
             str(gradle), f"-PdobbyGoBinary={go}", "--init-script", str(resolver),
-            "resolveDobbyDependencies", "--no-daemon", "--stacktrace",
+            f"-PdobbySecurityInventory={inventory}", "resolveDobbyDependencies", "--no-daemon", "--stacktrace",
         ],
         cwd=ROOT / "ui" / "android",
     )
-    run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "ui" / "android")
+    try:
+        expected = scanner_inputs(inventory, directory, require_tests=require_tests)
+    except (OSError, ValueError) as error:
+        raise CheckError(f"invalid resolved Android dependency inventory: {error}") from error
+    _forward(sys.stdout, inventory.read_bytes())
+    trivy = tools.get("trivy")
+    try:
+        run([
+            str(trivy), "fs", "--cache-dir", str(tools.root / "trivy-cache"),
+            "--severity", "HIGH,CRITICAL", "--ignore-unfixed", "--exit-code", "1",
+            "--include-dev-deps", "--list-all-pkgs", "--format", "json", "--output", str(report),
+            str(directory),
+        ])
+    finally:
+        if report.is_file():
+            _forward(sys.stdout, report.read_bytes())
+    try:
+        verify_scanner_report(report, expected)
+    except (OSError, ValueError) as error:
+        raise CheckError(f"incomplete Android dependency scan: {error}") from error
+    log(f"Android dependency scan verified all resolved packages in {len(expected)} groups")
 
-    lock_file = tools.root / "gradle.lockfile"
-    run(
-        [
-            str(gradle), f"-PdobbyGradleLockFile={lock_file}",
-            ":app:resolveAndroidSecurityDependencies",
-            "--write-locks", "--no-daemon", "--stacktrace",
-        ],
-        cwd=ROOT / "ui" / "android",
+
+ANDROID_LINT_REPORT_NAMES = ("lint-results-release.txt", "lint-results-release.sarif")
+
+
+def _android_lint_report_paths(android_root: Path) -> tuple[Path, Path]:
+    return (
+        android_root / "app" / "build" / "intermediates" / "lint_intermediate_text_report"
+        / "release" / "lintReportRelease" / ANDROID_LINT_REPORT_NAMES[0],
+        android_root / "app" / "build" / "reports" / ANDROID_LINT_REPORT_NAMES[1],
     )
-    if not lock_file.is_file() or lock_file.stat().st_size == 0:
-        raise CheckError("Gradle did not produce the Android release dependency lockfile")
-    trivy_scan(tools, (lock_file,))
+
+
+def _clear_android_lint_reports(report_paths: tuple[Path, ...]) -> None:
+    for path in dict.fromkeys(path.resolve() for path in report_paths):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            raise CheckError(f"could not remove stale Android lint report {path}: {error}") from error
+
+
+def _collect_android_lint_reports(
+    report_paths: tuple[Path, ...],
+    output_directory: Path,
+    primary_error: BaseException | None,
+) -> None:
+    text_report = report_paths[0]
+    collection_errors: list[Exception] = []
+
+    try:
+        has_text_report = text_report.is_file()
+    except OSError as error:
+        has_text_report = False
+        collection_errors.append(error)
+    if has_text_report:
+        try:
+            _forward(sys.stdout, text_report.read_bytes())
+        except Exception as error:
+            collection_errors.append(error)
+    elif not collection_errors:
+        log("Android lint text report unavailable: Gradle did not generate lint-results-release.txt")
+
+    for report in report_paths:
+        try:
+            if not report.is_file():
+                continue
+            destination = output_directory / report.name
+            if report.resolve() == destination.resolve():
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(report, destination)
+        except Exception as error:
+            collection_errors.append(error)
+
+    if not collection_errors:
+        return
+
+    messages = [
+        f"Android lint report collection failed: {type(error).__name__}: {error}"
+        for error in collection_errors
+    ]
+    for message in messages:
+        try:
+            print(f"[source-checks] ERROR: {message}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
+        if primary_error is not None:
+            try:
+                primary_error.add_note(message)
+            except Exception:
+                pass
+    if primary_error is None:
+        raise CheckError("; ".join(messages)) from collection_errors[0]
+
+
+def lint_android(tools: Tools, *, output_dir: Path | None = None, require_tests: bool = False) -> None:
+    output_directory = (output_dir or tools.root / "android-security").resolve()
+    android_root = ROOT / "ui" / "android"
+    report_paths = _android_lint_report_paths(android_root)
+    try:
+        output_directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise CheckError(f"could not create Android check output directory {output_directory}: {error}") from error
+    _clear_android_lint_reports((*report_paths, *(output_directory / path.name for path in report_paths)))
+    android_security(tools, output_dir=output_dir, require_tests=require_tests)
+    gradle, go = android_check_tools()
+    primary_error: BaseException | None = None
+    try:
+        run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "ui" / "android")
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        _collect_android_lint_reports(report_paths, output_directory, primary_error)
 
 
 def lint_swift(tools: Tools) -> None:
@@ -518,17 +633,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "check",
         choices=(
-            "go-build", "lint-go", "lint-android", "lint-swift", "security",
+            "go-build", "lint-go", "lint-android", "android-security", "lint-swift", "security",
             "actionlint", "cache-clean",
         ),
     )
     parser.add_argument("--git-repository", type=Path, help="Checkout whose full history TruffleHog scans")
-    return parser.parse_args()
+    parser.add_argument("--output-dir", type=Path, help="Retain Android dependency inventories and scanner reports")
+    parser.add_argument("--require-test-dependencies", action="store_true", help="Require resolved unit/instrumentation test inventories")
+    args = parser.parse_args()
+    if args.require_test_dependencies and args.check not in {"android-security", "lint-android"}:
+        parser.error("--require-test-dependencies requires an Android source check")
+    if args.output_dir is not None and args.check not in {"android-security", "lint-android"}:
+        parser.error("--output-dir requires an Android source check")
+    return args
 
 
 def main() -> int:
     args = parse_args()
-    needs_tools = args.check in {"lint-go", "lint-android", "lint-swift", "security", "actionlint"}
+    needs_tools = args.check in {"lint-go", "lint-android", "android-security", "lint-swift", "security", "actionlint"}
     temporary_tools: tempfile.TemporaryDirectory[str] | None = None
     try:
         tools: Tools | None = None
@@ -542,7 +664,10 @@ def main() -> int:
             lint_go(tools)
         elif args.check == "lint-android":
             assert tools is not None
-            lint_android(tools)
+            lint_android(tools, output_dir=args.output_dir, require_tests=args.require_test_dependencies)
+        elif args.check == "android-security":
+            assert tools is not None
+            android_security(tools, output_dir=args.output_dir, require_tests=args.require_test_dependencies)
         elif args.check == "lint-swift":
             assert tools is not None
             lint_swift(tools)

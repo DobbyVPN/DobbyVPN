@@ -11,6 +11,8 @@ public final class SharedKeychainSecretStore {
     /// put into an app-message payload.
     public static let sessionConfigurationMailboxKey = "sessionapi.v2.configuration.mailbox"
 
+    public static let activationKey = "sessionapi.activation.v1"
+
     private let service = "vpn.dobby.app.config.v1"
     private let accessGroup: String?
 

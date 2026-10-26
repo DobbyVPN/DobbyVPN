@@ -20,9 +20,10 @@ var mobileSessions = mobilebinding.New(nil)
 // Objective-C protocol instead of skipping an interface imported from another
 // Go package.
 type PlatformCallbacks interface {
-	AcquireTunnel(sessionID string, generation int64) string
+	AcquireTunnel(sessionID string, generation int64, dnsServersJSON string) string
 	ReleaseTunnel(sessionID string, generation int64, fd int32, timeoutMillis int64) string
 	ProtectSocket(sessionID string, generation int64, fd int32) bool
+	UnderlyingNetwork(sessionID string, generation int64) string
 	PublishState(
 		sessionID string,
 		generation int64,
@@ -32,6 +33,8 @@ type PlatformCallbacks interface {
 	LoadSourceURL() string
 	SaveSourceURL(value string) bool
 	ClearSourceURL() bool
+	LoadActivation() string
+	SaveActivation(string) bool
 }
 
 // RegisterSessionPlatform installs the NetworkExtension boundary used by the
@@ -85,3 +88,7 @@ func StopSessionAndWait() string {
 	mobileSessions.SetPlatformCallbacks(nil)
 	return ""
 }
+
+// RestoreSession starts the saved Go selection for an OS/On Demand launch and
+// returns after its network owner has acquired protection (or startup fails).
+func RestoreSession() string { return mobileSessions.Restore(false) }

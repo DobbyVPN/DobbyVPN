@@ -336,6 +336,8 @@ public sealed partial class MainWindow : Window
             if (result.SessionId != previous?.SessionId) _acceptedSequence = 0;
             else if (_subscriptionLoad.SourceDirty && previous is not null)
             {
+                // Preserve the accepted inventory while the URL editor is dirty, but keep
+                // active-selection and recovery fields from this fresh backend snapshot.
                 result.Configured = previous.Configured;
                 result.SourceUrl = previous.SourceUrl;
                 result.Digest = previous.Digest;
@@ -432,12 +434,26 @@ public sealed partial class MainWindow : Window
             canStartOrSwitch: s.PrimaryAction == "START" || s.CanSwitch);
     }
 
+    private static bool CanRetryActive(Snapshot? snapshot) => snapshot is
+        { State: "FAILED", VpnActive: true, CanRetry: true, PrimaryAction: "RETRY", CleanupComplete: false };
+
+    private static bool HasUnfinishedActiveVpn(Snapshot? snapshot) =>
+        snapshot is { VpnActive: true, CleanupComplete: false };
+
+    private static bool CanStopActive(Snapshot? snapshot) =>
+        snapshot?.PrimaryAction == "STOP" || HasUnfinishedActiveVpn(snapshot);
+
+    private bool ShowActiveFailure => _snapshot is
+        { State: "FAILED", VpnActive: true, CleanupComplete: false };
+
+    private bool ShowSeparateStop => HasUnfinishedActiveVpn(_snapshot) && _snapshot?.PrimaryAction != "STOP";
+
     private string ActionTitle(int? index) => IsStopTarget(index)
         ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Disconnect" : "Stop")
         : (index is null ? "Auto connect" : "Connect");
 
     private bool Busy => _busy || _stopInFlight;
-    private bool Connected => _snapshot?.PrimaryAction == "STOP";
+    private bool Connected => _snapshot is { PrimaryAction: "STOP" } active && active.State != "FAILED";
 
     private string Status
     {
@@ -476,15 +492,25 @@ public sealed partial class MainWindow : Window
     {
         get
         {
+            if (CanRetryActive(_snapshot)) return "Retry";
+            if (_snapshot is { PrimaryAction: "STOP" } stop)
+                return (stop.State is "CONNECTED" or "STOPPING") && stop.PendingTarget is null ? "Disconnect" : "Stop";
             if (!Connected) return Busy ? "Connecting…" : "Auto connect";
-            return _snapshot!.State is "CONNECTED" or "STOPPING" && _snapshot.PendingTarget is null ? "Disconnect" : "Connecting…";
+            return _snapshot!.PendingTarget is null ? "Disconnect" : "Connecting…";
         }
     }
 
-    private bool MainEnabled => Connected ? !Busy : CanAct(null);
+    private bool MainEnabled => _snapshot?.PrimaryAction == "STOP" || CanRetryActive(_snapshot)
+        ? !Busy
+        : CanAct(null);
 
-    private Task MainActionAsync(CancellationToken cancellationToken) =>
-        Connected ? PerformActionAsync(null, true, cancellationToken) : PerformActionAsync(null, false, cancellationToken);
+    private Task MainActionAsync(CancellationToken cancellationToken)
+    {
+        if (CanRetryActive(_snapshot)) return RetryActiveAsync(cancellationToken);
+        return _snapshot?.PrimaryAction == "STOP"
+            ? PerformActionAsync(null, true, cancellationToken)
+            : PerformActionAsync(null, false, cancellationToken);
+    }
 
     private string ProfileTitle(int index)
     {
@@ -543,6 +569,13 @@ public sealed partial class MainWindow : Window
         ConnectionButton.BorderBrush = Palette(outlined ? "Ink" : "Rule");
         ConnectionButton.BorderThickness = new Thickness(filled ? 0 : outlined ? 2 : 1.5);
 
+        ActiveFailurePanel.Visibility = ShowActiveFailure ? Visibility.Visible : Visibility.Collapsed;
+        ActiveFailureText.Text = _snapshot?.LastFailure is { } failure
+            ? $"{failure.Message} ({failure.Code})"
+            : "Connection failed.";
+        StopActiveButton.Visibility = ShowSeparateStop ? Visibility.Visible : Visibility.Collapsed;
+        StopActiveButton.IsEnabled = !Busy;
+
         var status = Status;
         AutomationProperties.SetItemStatus(ConnectionButton, status);
         AutomationProperties.SetItemStatus(ErrorCard, status);
@@ -572,6 +605,10 @@ public sealed partial class MainWindow : Window
             current.State,
             current.PrimaryAction,
             current.Recovering,
+            current.VpnActive,
+            current.NetworkGeneration,
+            current.CanRetry,
+            current.CleanupComplete,
             current.ActiveDigest,
             current.ActiveMode,
             current.ActiveIndex,
@@ -670,7 +707,7 @@ public sealed partial class MainWindow : Window
     {
         get
         {
-            var failure = _snapshot?.LastFailure is { } value ? $"{value.Message} ({value.Code})" : "";
+            var failure = !ShowActiveFailure && _snapshot?.LastFailure is { } value ? $"{value.Message} ({value.Code})" : "";
             return new[] { _importError, _loadError, _errors.Operation, _errors.Snapshot, failure, _logsError, _clearLogsError, _exportError }
                 .Where(text => text.Length > 0).Distinct().ToList();
         }
@@ -745,19 +782,28 @@ public sealed partial class MainWindow : Window
         if (!ErrorShown) StartWindowWork(MainActionAsync);
     }
 
+    private void StopActive_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ErrorShown) StartWindowWork(token => PerformActionAsync(null, true, token));
+    }
+
     private async Task PerformActionAsync(int? index, bool forceStop, CancellationToken cancellationToken)
     {
         if (_lifetime.IsClosing) return;
         if (_snapshot is not { } current) return;
         if (forceStop || IsStopTarget(index))
         {
-            if (_stopInFlight || current.PrimaryAction != "STOP") return;
+            if (_stopInFlight || !CanStopActive(current)) return;
             _stopInFlight = true;
             _errors.Operation = "";
             Render();
             try
             {
-                await CallAsync<JsonElement>("Stop", new { session_id = current.SessionId, generation = current.Generation }, cancellationToken);
+                var stopTarget = current;
+                if (current.PrimaryAction != "STOP" || current.Sequence < _acceptedSequence)
+                    stopTarget = await ReadSnapshotAsync(cancellationToken);
+                if (_lifetime.IsClosing || !CanStopActive(stopTarget)) return;
+                await CallAsync<JsonElement>("Stop", new { session_id = stopTarget.SessionId, generation = stopTarget.Generation }, cancellationToken);
             }
             catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); }
             finally
@@ -782,6 +828,40 @@ public sealed partial class MainWindow : Window
                 session_id = current.SessionId, expected_sequence = current.Sequence,
                 mode = index is null ? "AUTO_SELECT" : "PROFILE_INDEX", index = index ?? 0,
                 digest = current.Digest, replace_current = true
+            }, cancellationToken);
+        }
+        catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); }
+        finally
+        {
+            _busy = false;
+            _dismissedErrors.Clear();
+            if (!_lifetime.IsClosing)
+            {
+                await RefreshSnapshotAsync(cancellationToken);
+                Render();
+            }
+        }
+    }
+
+    private async Task RetryActiveAsync(CancellationToken cancellationToken)
+    {
+        if (_lifetime.IsClosing || _busy || !CanRetryActive(_snapshot)) return;
+        _busy = true;
+        _errors.Operation = "";
+        Render();
+        try
+        {
+            // Read a current sequence without changing the URL inventory. A dirty editor or a
+            // locally fenced older snapshot must not turn Retry into Configure or a replacement.
+            var current = await ReadSnapshotAsync(cancellationToken);
+            if (_lifetime.IsClosing || !CanRetryActive(current)) return;
+            await CallAsync<JsonElement>("Start", new
+            {
+                session_id = current.SessionId,
+                expected_sequence = current.Sequence,
+                mode = current.ActiveMode,
+                index = current.ActiveIndex,
+                digest = current.ActiveDigest,
             }, cancellationToken);
         }
         catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); }
@@ -1596,6 +1676,9 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("session_id")] public string SessionId { get; init; } = "";
         [JsonPropertyName("sequence")] public long Sequence { get; init; }
         [JsonPropertyName("generation")] public long Generation { get; init; }
+        [JsonPropertyName("network_generation")] public ulong NetworkGeneration { get; init; }
+        [JsonPropertyName("vpn_active")] public bool VpnActive { get; init; }
+        [JsonPropertyName("can_retry")] public bool CanRetry { get; init; }
         [JsonPropertyName("state")] public string State { get; init; } = "IDLE";
         [JsonPropertyName("primary_action")] public string PrimaryAction { get; init; } = "NONE";
         [JsonPropertyName("configured")] public bool Configured { get; set; }
@@ -1603,6 +1686,7 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("source_error")] public string SourceError { get; init; } = "";
         [JsonPropertyName("active_profile")] public Profile? ActiveProfile { get; init; }
         [JsonPropertyName("last_failure")] public Failure? LastFailure { get; init; }
+        [JsonPropertyName("cleanup_complete")] public bool CleanupComplete { get; init; }
         [JsonPropertyName("recovering")] public bool Recovering { get; init; }
         [JsonPropertyName("digest")] public string Digest { get; set; } = "";
         [JsonPropertyName("profiles")] public Profile[] Profiles { get; set; } = [];
