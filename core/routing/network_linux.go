@@ -10,6 +10,8 @@ import (
 	"net"
 	"sort"
 
+	"core/log"
+
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
@@ -76,6 +78,9 @@ func (p *Plan) acquireLinuxNetworkFamily(tableID, priority, index int, mark uint
 	}
 	for _, rule := range rules {
 		if rule.Priority >= priority && rule.Priority <= priority+2 {
+			log.Error(Category, "retained VPN routing priority is occupied", map[string]any{
+				"family": family, "table": tableID, "priority": priority, "rule": rule,
+			})
 			return fmt.Errorf("routing priority %d is already in use", rule.Priority)
 		}
 	}
@@ -134,12 +139,18 @@ func recoverLinuxNetworkFamily(family, tableID, priority int, mark uint32, tunNa
 }
 
 func recoverLinuxNetworkFamilyRules(family, priority, tableID int, mark uint32) error {
-	rules, err := linuxRuleList(family)
+	rules, err := linuxNetworkRules(family, priority)
 	if err != nil {
 		return err
 	}
 	for _, rule := range rules {
-		if !linuxOwnsNetworkRule(rule, priority, tableID, mark) {
+		owned := linuxOwnsNetworkRule(rule, priority, tableID, mark)
+		if rule.Priority >= priority && rule.Priority <= priority+2 {
+			log.Info(Category, "retained VPN routing rule inspected during recovery", map[string]any{
+				"family": family, "table": tableID, "priority": priority, "owned": owned, "rule": rule,
+			})
+		}
+		if !owned {
 			continue
 		}
 		if deleteErr := linuxRuleOperation("delete", &rule, linuxRuleDel); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
@@ -155,7 +166,8 @@ func linuxOwnsNetworkRule(rule netlink.Rule, priority, tableID int, mark uint32)
 	}
 	selectorRule := rule
 	selectorRule.Protocol = 0
-	if !linuxSessionRuleHasNoAddressSelectors(selectorRule) || !linuxSessionRuleHasNoFlowSelectors(selectorRule) || !linuxSessionRuleHasFullMarkMask(selectorRule) {
+	selectorRule.Type = 0
+	if !linuxSessionRuleHasNoAddressSelectors(selectorRule) || !linuxSessionRuleHasNoFlowSelectors(selectorRule) || !linuxSessionRuleHasNoTransportSelectors(selectorRule) || !linuxSessionRuleHasFullMarkMask(selectorRule) {
 		return false
 	}
 	switch rule.Priority {
