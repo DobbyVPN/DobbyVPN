@@ -28,6 +28,14 @@ internal func reversibleDiagnosticText(_ data: Data) -> String {
     return "[invalid-utf8-hex:\(hex)]"
 }
 
+/// Name one error on a single line for a failure message that reaches the
+/// screen, keeping the domain and code that identify it. The complete cause
+/// chain belongs in the log, through `diagnosticErrorDescription`.
+public func compactErrorDescription(_ error: Error) -> String {
+    let nsError = error as NSError
+    return "\(nsError.domain) \(nsError.code): \(nsError.localizedDescription)"
+}
+
 /// Render the complete NSError details and its underlying cause chain for the
 /// exported native diagnostic log. `localizedDescription` alone often drops
 /// the domain, code, and NetworkExtension's underlying failure information.

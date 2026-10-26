@@ -89,10 +89,11 @@ public final class VpnManagerImpl: NSObject {
             return try sendOnce(messageData, timeout: timeout)
         } catch {
             logs.writeLog(level: "ERROR", log: "[provider] sendProviderMessage failed:\n\(diagnosticErrorDescription(error))")
+            // The whole cause chain is in the log above; the message gets one line.
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
-                message: "provider request failed"
+                message: "provider request failed: \(compactErrorDescription(error))"
             )
         }
     }
