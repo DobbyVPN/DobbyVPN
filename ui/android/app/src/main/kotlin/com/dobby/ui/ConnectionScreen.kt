@@ -75,7 +75,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -422,33 +421,19 @@ private fun ErrorDialog(controller: SessionController) {
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
-            Row(
-                Modifier.padding(top = 10.dp)
+            Text(
+                detail,
+                color = Ink,
+                fontSize = 11.5.sp,
+                lineHeight = 16.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 10.dp)
                     .fillMaxWidth()
                     .border(1.dp, Rule, RoundedCornerShape(6.dp))
                     .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    detail,
-                    color = Ink,
-                    fontSize = 11.5.sp,
-                    lineHeight = 16.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    "Copy",
-                    color = Ink,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    textDecoration = TextDecoration.Underline,
-                    modifier = Modifier.clickable(role = Role.Button) { controller.copyToClipboard(detail) },
-                )
-            }
+            )
             Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DialogButton("Close", filled = false, modifier = Modifier.weight(1f), onClick = close)
                 if (loadFailed) {

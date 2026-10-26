@@ -345,22 +345,19 @@ public struct DobbyRootView: View {
                             .foregroundColor(.muted)
                             .padding(.top, pt(8))
                     }
-                    HStack(spacing: pt(8)) {
-                        Text(detail)
-                            .dobbyFont(11.5, design: .monospaced)
-                            .foregroundColor(.ink)
-                            .lineLimit(4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityIdentifier("error.detail")
-                        Button { copy(detail) } label: {
-                            Text("Copy").underline().dobbyFont(12, .semibold).foregroundColor(.ink)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, pt(10))
-                    .padding(.vertical, pt(8))
-                    .overlay(RoundedRectangle(cornerRadius: pt(6)).stroke(Color.rule, lineWidth: 1))
-                    .padding(.top, pt(10))
+                    // Keep the detail alone on its row: beside another view it is
+                    // proposed a single line's width and truncates at the line
+                    // limit instead of wrapping.
+                    Text(detail)
+                        .dobbyFont(11.5, design: .monospaced)
+                        .foregroundColor(.ink)
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("error.detail")
+                        .padding(.horizontal, pt(10))
+                        .padding(.vertical, pt(8))
+                        .overlay(RoundedRectangle(cornerRadius: pt(6)).stroke(Color.rule, lineWidth: 1))
+                        .padding(.top, pt(10))
                     HStack(spacing: pt(8)) {
                         DialogButton(title: "Close", filled: false, action: model.closeFailure)
                         if loadFailed {
@@ -381,15 +378,6 @@ public struct DobbyRootView: View {
                 .accessibilityAddTraits(.isModal)
             }
         }
-    }
-
-    private func copy(_ text: String) {
-#if os(iOS)
-        UIPasteboard.general.string = text
-#elseif os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-#endif
     }
 
     private func announceStatus(_ status: String) {

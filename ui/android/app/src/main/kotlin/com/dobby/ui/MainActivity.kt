@@ -743,10 +743,6 @@ internal class SessionController(
         if (latest.sessionId.isNotEmpty()) dismissedErrors = dismissedErrors.intersect(errors.toSet())
     }
 
-    fun copyToClipboard(text: String) {
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DobbyVPN error", text))
-    }
-
     fun connectOrDisconnect(index: Int? = null) {
         if (!canAct(index)) return
         if (isStopTarget(index)) { stop(); return }
