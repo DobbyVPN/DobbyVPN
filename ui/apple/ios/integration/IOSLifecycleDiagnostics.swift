@@ -33,7 +33,13 @@ internal func reversibleDiagnosticText(_ data: Data) -> String {
 /// chain belongs in the log, through `diagnosticErrorDescription`.
 public func compactErrorDescription(_ error: Error) -> String {
     let nsError = error as NSError
-    return "\(nsError.domain) \(nsError.code): \(nsError.localizedDescription)"
+    // NetworkExtension descriptions carry their own line breaks, which would
+    // spend the dialog's lines and split one log entry in two.
+    let description = nsError.localizedDescription
+        .replacingOccurrences(of: "\r\n", with: " ")
+        .replacingOccurrences(of: "\n", with: " ")
+        .replacingOccurrences(of: "\r", with: " ")
+    return "\(nsError.domain) \(nsError.code): \(description)"
 }
 
 /// Render the complete NSError details and its underlying cause chain for the
