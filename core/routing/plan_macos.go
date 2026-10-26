@@ -43,7 +43,8 @@ func findMacOSRoute(want macOSRoute) (*macOSRoute, error) {
 	}
 	var exact *macOSRoute
 	for _, row := range rows {
-		if row.prefix != want.prefix {
+		if row.prefix != want.prefix || row.flags&unix.RTF_IFSCOPE != want.flags&unix.RTF_IFSCOPE ||
+			want.flags&unix.RTF_IFSCOPE != 0 && row.index != want.index {
 			continue
 		}
 		// Ignore OS-generated neighbour clones; they do not own static policy.

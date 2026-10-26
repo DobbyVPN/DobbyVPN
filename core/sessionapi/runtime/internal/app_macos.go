@@ -33,9 +33,19 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return nil
 	}, func(context.Context) error { protected_dialer.ResetDefaultRoute(); return nil })
 
+	physicalRoutes, err := plan.AcquireMacOSPhysicalRoutes()
+	if err != nil {
+		signalInit(initResult, err)
+		return err
+	}
+
 	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
 		physical, err := routing.CaptureMacOSPhysicalNetwork(queryCtx)
 		if err != nil {
+			protected_dialer.ResetDefaultRoute()
+			return "", nil, err
+		}
+		if err := physicalRoutes.Update(queryCtx, physical); err != nil {
 			protected_dialer.ResetDefaultRoute()
 			return "", nil, err
 		}
