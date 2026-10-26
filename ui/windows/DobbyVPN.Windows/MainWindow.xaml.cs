@@ -719,7 +719,10 @@ public sealed partial class MainWindow : Window
 
     private void RenderError()
     {
-        _dismissedErrors.IntersectWith(Errors);
+        var currentErrors = Errors;
+        if (_snapshot?.LastFailure is { } retainedFailure)
+            currentErrors.Add($"{retainedFailure.Message} ({retainedFailure.Code})");
+        _dismissedErrors.IntersectWith(currentErrors);
         var detail = ShownError;
         var visible = detail.Length > 0;
         var loadFailure = visible && detail == _loadError;
@@ -795,6 +798,9 @@ public sealed partial class MainWindow : Window
         {
             if (_stopInFlight || !CanStopActive(current)) return;
             _stopInFlight = true;
+            var acknowledgedFailure = current.LastFailure is { } failure
+                ? $"{failure.Message} ({failure.Code})" : "";
+            if (acknowledgedFailure.Length > 0) _dismissedErrors.Add(acknowledgedFailure);
             _errors.Operation = "";
             Render();
             try
@@ -805,11 +811,15 @@ public sealed partial class MainWindow : Window
                 if (_lifetime.IsClosing || !CanStopActive(stopTarget)) return;
                 await CallAsync<JsonElement>("Stop", new { session_id = stopTarget.SessionId, generation = stopTarget.Generation }, cancellationToken);
             }
-            catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); }
+            catch (Exception error) when (!_lifetime.IsClosing)
+            {
+                _dismissedErrors.Remove(error.Message);
+                SetError(error.ToString(), error.Message);
+            }
             finally
             {
                 _stopInFlight = false;
-                _dismissedErrors.Clear();
+                _dismissedErrors.RemoveWhere(detail => detail != acknowledgedFailure);
                 if (!_lifetime.IsClosing)
                 {
                     await RefreshSnapshotAsync(cancellationToken);

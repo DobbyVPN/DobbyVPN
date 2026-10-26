@@ -380,6 +380,9 @@ public final class DobbySessionViewModel: ObservableObject {
 
     private func performCommand(index: Int?, stopping: Bool, retrying: Bool = false) {
         resetClosedFailures()
+        if stopping, let failure = snapshot.lastFailure {
+            dismissedFailures.insert("\(failure.message) (\(failure.code))")
+        }
         busy = true
         setError("", origin: .other)
         let current = snapshot
@@ -412,7 +415,9 @@ public final class DobbySessionViewModel: ObservableObject {
                 guard let self else { return }
                 self.busy = false
                 if case let .failure(failure) = outcome {
-                    self.setError(failure.localizedDescription, origin: .other)
+                    let message = failure.localizedDescription
+                    self.dismissedFailures.remove(message)
+                    self.setError(message, origin: .other)
                 }
                 if stopping { self.refreshOnDemandPreference() }
                 self.refreshSnapshot()
