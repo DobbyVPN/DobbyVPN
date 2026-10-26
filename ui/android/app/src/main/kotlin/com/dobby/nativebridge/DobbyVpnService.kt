@@ -156,6 +156,12 @@ class DobbyVpnService : VpnService() {
         activeGeneration = generation
         vpnInterface = established
         goTunFd = -1
+        try {
+            checkNotNull(underlyingNetwork) { "Underlying network owner is unavailable" }.established()
+        } catch (failure: Throwable) {
+            recordFailure("vpn.service.underlying_bind_failed", failure)
+            return -1
+        }
         val duplicate = try {
             ParcelFileDescriptor.dup(established.fileDescriptor)
         } catch (failure: Throwable) {

@@ -30,6 +30,7 @@ internal class UnderlyingNetworkOwner(
     private var signature = ""
     private var revision = 0L
     private var registered = false
+    private var vpnEstablished = false
     private val queries = mutableMapOf<Long, Query>()
     // Cancellation may cross JNI before its query is registered.
     private val canceled = mutableSetOf<Long>()
@@ -68,6 +69,18 @@ internal class UnderlyingNetworkOwner(
         context().network
     }
 
+    fun established() = synchronized(lock) {
+        check(registered) { "Underlying network owner is stopped" }
+        // Builder owns the initial binding. The service setter succeeds only
+        // after establish(); recapture here in case callbacks changed the link
+        // between the initial capture and interface creation.
+        vpnEstablished = true
+        signature = ""
+        refresh(selectPhysicalNetwork())
+        context()
+        Unit
+    }
+
     private fun eligible(candidate: Network): Boolean = manager.getNetworkCapabilities(candidate)?.let {
         it.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) &&
             it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -97,12 +110,14 @@ internal class UnderlyingNetworkOwner(
             revision++
             queries.values.forEach { it.signal.cancel(); it.done.countDown() }
             val replacement = selected.takeIf { properties != null }
-            check(service.setUnderlyingNetworks(replacement?.let { arrayOf(it) } ?: emptyArray())) {
-                "VpnService.setUnderlyingNetworks rejected the physical network"
+            if (vpnEstablished) {
+                check(service.setUnderlyingNetworks(replacement?.let { arrayOf(it) } ?: emptyArray())) {
+                    "VpnService.setUnderlyingNetworks rejected the physical network"
+                }
             }
             signature = next
             network = replacement
-            diagnostic("underlying network revision=$revision context=$signature")
+            diagnostic("underlying network revision=$revision vpn_established=$vpnEstablished context=$signature")
         }
     }
 
@@ -200,6 +215,7 @@ internal class UnderlyingNetworkOwner(
         queries.values.forEach { it.signal.cancel(); it.done.countDown() }
         if (registered) manager.unregisterNetworkCallback(callback)
         registered = false
+        vpnEstablished = false
         network = null
         signature = ""
         canceled.clear()
