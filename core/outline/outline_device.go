@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	socks5 "github.com/things-go/go-socks5"
@@ -27,20 +28,21 @@ const (
 )
 
 type OutlineDevice struct {
-	mu           sync.Mutex
-	closeMu      sync.Mutex
-	connections  map[*ownedConn]struct{}
-	workers      sync.WaitGroup
-	ctx          context.Context
-	cancel       context.CancelFunc
-	closing      bool
-	listener     net.Listener
-	proxyAddr    string
-	streamDialer transport.StreamDialer
-	packetDialer transport.PacketDialer
-	websocket    bool
-	hasTCPPath   bool
-	hasUDPPath   bool
+	mu            sync.Mutex
+	closeMu       sync.Mutex
+	connections   map[*ownedConn]struct{}
+	workers       sync.WaitGroup
+	activeWorkers atomic.Int64
+	ctx           context.Context
+	cancel        context.CancelFunc
+	closing       bool
+	listener      net.Listener
+	proxyAddr     string
+	streamDialer  transport.StreamDialer
+	packetDialer  transport.PacketDialer
+	websocket     bool
+	hasTCPPath    bool
+	hasUDPPath    bool
 }
 
 func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {

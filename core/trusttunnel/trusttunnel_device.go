@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -30,6 +31,12 @@ type TrustTunnelDevice struct {
 	socksAddress        string
 	svrIP               net.IP
 	upstreamIPs         []net.IP
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	readiness           *nativeReadiness
+	lifecycleMu         sync.Mutex
+	nativeOwned         bool
+	closed              bool
 }
 
 var protectSocket = protected_dialer.ProtectSocketDestinations
@@ -109,6 +116,7 @@ func NewTrustTunnelDevice(ctx context.Context, accepted map[string]any, cache *d
 	socks["username"] = socksUser
 	socks["password"] = socksPass
 
+	deviceContext, cancelDevice := context.WithCancel(ctx)
 	d := &TrustTunnelDevice{
 		trusttunnelInstance: tt.NewTrustTunnelManager(),
 		config:              parsedConfig,
@@ -116,9 +124,21 @@ func NewTrustTunnelDevice(ctx context.Context, accepted map[string]any, cache *d
 		socksAddress:        socksAddress,
 		svrIP:               ip,
 		upstreamIPs:         upstreamIPs,
+		ctx:                 deviceContext,
+		cancel:              cancelDevice,
+		readiness:           newNativeReadiness(),
 	}
 
 	d.trusttunnelInstance.SetLogCallback(internal.LogFunc)
+	d.trusttunnelInstance.SetStateChangedCallback(func(state tt.VpnState) {
+		if d.readiness.update(state) {
+			log.Info("trusttunnel", "TrustTunnel native transport state changed", map[string]any{
+				"socks_address":      socksAddress,
+				"native_state":       nativeStateName(state),
+				"native_state_value": int(state),
+			})
+		}
+	})
 
 	numericAddresses := make([]string, len(addresses))
 	for i, address := range addresses {
@@ -127,7 +147,7 @@ func NewTrustTunnelDevice(ctx context.Context, accepted map[string]any, cache *d
 	// The callback captures this attempt, rather than consulting a mutable
 	// "current generation" when native code eventually creates a socket.
 	d.trusttunnelInstance.SetProtectSocketCallback(func(fd int) int {
-		return protectTrustTunnelSocket(ctx, numericAddresses, fd)
+		return protectTrustTunnelSocket(d.ctx, numericAddresses, fd)
 	})
 
 	endpointHostname, _ := endpoint["hostname"].(string)
@@ -170,6 +190,23 @@ func numericEndpointIPs(addresses []any) ([]net.IP, error) {
 func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	if d == nil {
 		return errors.New("trusttunnel device is not initialized")
+	}
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
+	if d.closed {
+		return errNativeStopped
+	}
+	if d.nativeOwned {
+		return errors.New("TrustTunnel native transport already opened")
+	}
+	select {
+	case <-d.ctx.Done():
+		return d.ctx.Err()
+	case nativeOwner <- struct{}{}:
+		d.nativeOwned = true
+	}
+	if err := d.ctx.Err(); err != nil {
+		return err
 	}
 
 	startedAt := time.Now()
@@ -219,6 +256,26 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	return nil
 }
 
+// WaitReady uses the caller's existing readiness-attempt deadline. Accepting
+// native Start is asynchronous and is not evidence of an upstream connection.
+func (d *TrustTunnelDevice) WaitReady(ctx context.Context) error {
+	if d == nil || d.readiness == nil {
+		return errors.New("TrustTunnel native readiness unavailable")
+	}
+	started := time.Now()
+	err := d.readiness.wait(ctx)
+	errorText := ""
+	if err != nil {
+		errorText = err.Error()
+	}
+	log.Info("trusttunnel", "TrustTunnel native readiness wait finished", map[string]any{
+		"socks_address": d.socksAddress,
+		"elapsed":       time.Since(started).Truncate(time.Millisecond).String(),
+		"error":         errorText,
+	})
+	return err
+}
+
 // UpstreamIPs returns the numeric addresses TrustTunnel can use for its native
 // upstream connection. The returned slices do not expose the device's state.
 func (d *TrustTunnelDevice) UpstreamIPs() []net.IP {
@@ -243,9 +300,25 @@ func (d *TrustTunnelDevice) Close() error {
 	if d == nil {
 		return errors.New("trusttunnel device is not initialized")
 	}
+	if d.readiness != nil {
+		d.readiness.close()
+	}
+	if d.cancel != nil {
+		d.cancel()
+	}
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
+	if d.closed {
+		return nil
+	}
+	d.closed = true
 	if d.trusttunnelInstance != nil {
+		d.trusttunnelInstance.SetStateChangedCallback(nil)
+	}
+	if d.nativeOwned {
 		d.trusttunnelInstance.Stop()
-		d.trusttunnelInstance = nil
+		<-nativeOwner
+		d.nativeOwned = false
 	}
 	return nil
 }

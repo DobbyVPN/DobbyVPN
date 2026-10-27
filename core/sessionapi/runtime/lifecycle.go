@@ -282,11 +282,20 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		}
 		return nil, err
 	}
+	initialReadiness := r.options.InitialReadiness
+	if lease.waitReady != nil {
+		initialReadiness = func(checkCtx context.Context, checkRef sessionapi.SessionRef, proxyAddr string) error {
+			if err := lease.waitReady(checkCtx); err != nil {
+				return fmt.Errorf("wait for protocol transport readiness: %w", err)
+			}
+			return r.options.InitialReadiness(checkCtx, checkRef, proxyAddr)
+		}
+	}
 	if err := waitForInitialReadiness(
 		ctx,
 		ref,
 		lease.proxyAddr,
-		r.options.InitialReadiness,
+		initialReadiness,
 		r.options.ReadinessAttempts,
 		r.options.ReadinessAttemptTimeout,
 		r.options.ReadinessRetryInterval,
@@ -398,6 +407,9 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		}
 	}
 	owned.proxyAddr, owned.bypass = device.GetProxyAddr(), bypass
+	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {
+		owned.waitReady = ready.WaitReady
+	}
 	if owned.proxyAddr == "" {
 		return fail(errors.New("protocol device returned an empty SOCKS endpoint"))
 	}
@@ -500,6 +512,7 @@ type lease struct {
 	socketContext context.Context
 	bypass        *tunnel.BypassPolicy
 	proxyAddr     string
+	waitReady     func(context.Context) error
 	stopMu        sync.Mutex
 	stopped       bool
 	undo          []func(context.Context) error

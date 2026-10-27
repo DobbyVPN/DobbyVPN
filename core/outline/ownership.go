@@ -1,12 +1,16 @@
 package outline
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"runtime/debug"
+	"runtime/pprof"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"core/log"
 )
@@ -189,8 +193,12 @@ func (d *OutlineDevice) track(conn net.Conn) (net.Conn, error) {
 // while its parent is still owned, so Close waits for relays as well as accept.
 func (d *OutlineDevice) Submit(work func()) error {
 	d.workers.Add(1)
+	d.activeWorkers.Add(1)
 	go func() {
-		defer d.workers.Done()
+		defer func() {
+			d.activeWorkers.Add(-1)
+			d.workers.Done()
+		}()
 		defer func() {
 			if value := recover(); value != nil {
 				log.Errorf(Category, "Outline worker panic: %v\n%s", value, debug.Stack())
@@ -222,9 +230,25 @@ func (d *OutlineDevice) Close() error {
 	if d == nil {
 		return errors.New("outline device is not initialized")
 	}
+	started := time.Now()
+	var phase atomic.Value
+	phase.Store("close-lock")
+	// This trigger only records diagnostics; cleanup still owns every resource.
+	timer := time.AfterFunc(3*time.Second, func() {
+		var stacks bytes.Buffer
+		err := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+		log.Warnf(Category, "Outline close slow phase=%s elapsed=%s activeWorkers=%d stackError=%v\n%s", phase.Load(), time.Since(started), d.activeWorkers.Load(), err, stacks.String())
+	})
+	defer timer.Stop()
+	setPhase := func(name string) { phase.Store(name) }
+	log.Infof(Category, "Outline close started activeWorkers=%d", d.activeWorkers.Load())
 	d.closeMu.Lock()
 	defer d.closeMu.Unlock()
+	setPhase("cancel")
+	phaseStarted := time.Now()
+	log.Infof(Category, "Outline close phase=cancel started activeWorkers=%d", d.activeWorkers.Load())
 	d.cancel()
+	log.Infof(Category, "Outline close phase=cancel finished elapsed=%s activeWorkers=%d", time.Since(phaseStarted), d.activeWorkers.Load())
 	d.mu.Lock()
 	d.closing = true
 	connections := make([]*ownedConn, 0, len(d.connections))
@@ -233,24 +257,47 @@ func (d *OutlineDevice) Close() error {
 	}
 	d.mu.Unlock()
 	var result error
+	setPhase("listener-close")
+	phaseStarted = time.Now()
+	log.Infof(Category, "Outline close phase=listener-close started connections=%d activeWorkers=%d", len(connections), d.activeWorkers.Load())
 	if err := d.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		result = fmt.Errorf("close Outline SOCKS listener: %w", err)
 	}
-	for _, conn := range connections {
-		result = errors.Join(result, conn.Close())
+	log.Infof(Category, "Outline close phase=listener-close finished elapsed=%s activeWorkers=%d error=%v", time.Since(phaseStarted), d.activeWorkers.Load(), result)
+	setPhase("connection-close")
+	for i, conn := range connections {
+		phaseStarted = time.Now()
+		log.Infof(Category, "Outline close phase=connection-close started index=%d count=%d type=%T activeWorkers=%d", i+1, len(connections), conn.Conn, d.activeWorkers.Load())
+		err := conn.Close()
+		result = errors.Join(result, err)
+		log.Infof(Category, "Outline close phase=connection-close finished index=%d count=%d type=%T elapsed=%s activeWorkers=%d error=%v", i+1, len(connections), conn.Conn, time.Since(phaseStarted), d.activeWorkers.Load(), err)
 	}
 	if result != nil {
+		log.Infof(Category, "Outline close finished elapsed=%s activeWorkers=%d error=%v", time.Since(started), d.activeWorkers.Load(), result)
 		return result
 	}
+	setPhase("worker-drain")
+	phaseStarted = time.Now()
+	log.Infof(Category, "Outline close phase=worker-drain started activeWorkers=%d", d.activeWorkers.Load())
 	d.workers.Wait()
+	log.Infof(Category, "Outline close phase=worker-drain finished elapsed=%s activeWorkers=%d", time.Since(phaseStarted), d.activeWorkers.Load())
+	setPhase("late-connection-snapshot")
 	d.mu.Lock()
 	connections = connections[:0]
 	for conn := range d.connections {
 		connections = append(connections, conn)
 	}
 	d.mu.Unlock()
-	for _, conn := range connections {
-		result = errors.Join(result, conn.Close())
+	setPhase("late-connection-close")
+	log.Infof(Category, "Outline close phase=late-connection-close started count=%d activeWorkers=%d", len(connections), d.activeWorkers.Load())
+	for i, conn := range connections {
+		phaseStarted = time.Now()
+		log.Infof(Category, "Outline close phase=late-connection-close item started index=%d count=%d type=%T activeWorkers=%d", i+1, len(connections), conn.Conn, d.activeWorkers.Load())
+		err := conn.Close()
+		result = errors.Join(result, err)
+		log.Infof(Category, "Outline close phase=late-connection-close item finished index=%d count=%d type=%T elapsed=%s activeWorkers=%d error=%v", i+1, len(connections), conn.Conn, time.Since(phaseStarted), d.activeWorkers.Load(), err)
 	}
+	setPhase("complete")
+	log.Infof(Category, "Outline close finished elapsed=%s activeWorkers=%d error=%v", time.Since(started), d.activeWorkers.Load(), result)
 	return result
 }
