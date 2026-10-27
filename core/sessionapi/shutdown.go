@@ -53,7 +53,7 @@ func (m *Manager) cleanupContext(s *session) context.Context {
 }
 
 // StopAndWait is an internal process/service lifecycle operation, never a
-// desktop wire method. It fences new work before asking the existing attempt
+// desktop wire method. It fences new runtime work before asking the existing attempt
 // worker to release its resources, and waits for confirmed completion.
 func (m *Manager) StopAndWait(ctx context.Context) error {
 	s := m.session

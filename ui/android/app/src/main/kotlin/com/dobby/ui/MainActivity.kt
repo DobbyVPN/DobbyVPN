@@ -596,6 +596,8 @@ internal class SessionController(
     }
 
     private fun startSourceLoad(request: SubscriptionRequest) {
+        NativeVpnBridge.recordDiagnostic(activity, "subscription.load_started",
+            "Loading subscription revision=${request.revision} source=${request.source}")
         state = state.copy(loading = true)
         loadWorker.execute {
             val outcome = runCatching {
@@ -612,6 +614,15 @@ internal class SessionController(
             }
             main.post {
                 sourceLoads.complete(request, succeeded = outcome.isSuccess) { current ->
+                    val failure = outcome.exceptionOrNull()
+                    val message = "Subscription revision=${request.revision} source=${request.source} " +
+                        "current=$current succeeded=${outcome.isSuccess}"
+                    if (!current && failure != null) {
+                        NativeVpnBridge.recordDiagnostic(activity, "subscription.load_completed",
+                            "$message superseded_failure=${failure.stackTraceToString()}")
+                    } else {
+                        NativeVpnBridge.recordDiagnostic(activity, "subscription.load_completed", message, failure)
+                    }
                     state = state.copy(loading = false)
                     if (outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
                     if (current) {

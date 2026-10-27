@@ -473,11 +473,14 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 	return result, nil
 }
 
+// Configuration belongs to the application, which may outlive its mobile VPN
+// provider. Confirmed provider cleanup permits profile loads while closing still
+// fences Start until a new provider explicitly resumes the runtime.
 func validateConfigureBeforeLoad(ctx context.Context, s *session, expectedSequence uint64) error {
 	if s.sequence != expectedSequence {
 		return failure(FailureConflict, "session changed; refresh its snapshot before configuring")
 	}
-	if s.closing || s.cleanupFailed {
+	if s.cleanupFailed || (s.closing && !s.cleanupDone) {
 		return failure(FailureConflict, "session is shutting down or cleanup has failed")
 	}
 	if err := ctx.Err(); err != nil {
@@ -493,7 +496,7 @@ func validateConfigureBeforeAccept(ctx context.Context, s *session, request uint
 	if err := ctx.Err(); err != nil {
 		return failureWithCause(FailureCanceled, "configuration was canceled before it was accepted", err)
 	}
-	if s.closing || s.cleanupFailed {
+	if s.cleanupFailed || (s.closing && !s.cleanupDone) {
 		return failure(FailureConflict, "session is shutting down or cleanup has failed")
 	}
 	return nil
