@@ -3,6 +3,8 @@ package protected_dialer
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/netip"
 	"sync"
 )
 
@@ -119,6 +121,9 @@ func protectContextFD(ctx context.Context, fd uintptr, network, address string) 
 // Native libraries that expose only the descriptor supply their retained,
 // numeric upstream inventory. No global "current attempt" callback is used.
 func ProtectSocketDestinations(ctx context.Context, fd int, addresses []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	network, err := socketNetworkFromDescriptor(fd)
 	if err != nil {
 		return err
@@ -126,7 +131,28 @@ func ProtectSocketDestinations(ctx context.Context, fd int, addresses []string) 
 	if len(addresses) == 0 {
 		return errors.New("native socket has no authorized destinations")
 	}
+	// Native engines may resolve both families before creating individual
+	// sockets. Authorize only peers that this descriptor can reach; passing
+	// the entire mixed list to a per-family guard rejects a valid socket.
+	var matching []string
+	ipv4 := network == networkTCP4 || network == networkUDP4
 	for _, address := range addresses {
+		ip, parseErr := netip.ParseAddr(address)
+		if parseErr != nil {
+			peer, portErr := netip.ParseAddrPort(address)
+			if portErr != nil {
+				return fmt.Errorf("native socket destination is not numeric: %q: %w", address, portErr)
+			}
+			ip = peer.Addr()
+		}
+		if ip.Unmap().Is4() == ipv4 {
+			matching = append(matching, address)
+		}
+	}
+	if len(matching) == 0 {
+		return fmt.Errorf("native socket has no %s destination among %v", network, addresses)
+	}
+	for _, address := range matching {
 		if err := protectContextFD(ctx, uintptr(fd), network, address); err != nil {
 			return err
 		}
