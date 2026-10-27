@@ -898,6 +898,21 @@ public sealed partial class MainWindow : Window
         var source = SourceEditor.Text.Trim();
         var valid = ValidSubscription(source);
         var revision = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
+        _diagnostics.RecordInfo(
+            "subscription.source-edited",
+            "Edited the subscription source",
+            new
+            {
+                source,
+                input_kind = kind.ToString(),
+                revision,
+                valid,
+                session_id = _snapshot?.SessionId,
+                sequence = _snapshot?.Sequence,
+                source_dirty = _subscriptionLoad.SourceDirty,
+                is_loading = _subscriptionLoad.IsLoading,
+                busy = Busy
+            });
         _loadError = "";
         _errors.Operation = "";
         _importError = "";
@@ -1008,28 +1023,102 @@ public sealed partial class MainWindow : Window
     {
         if (_lifetime.IsClosing) return;
         var source = request.Source;
+        _diagnostics.RecordInfo(
+            "subscription.load-started",
+            "Started a subscription load",
+            new
+            {
+                request_revision = request.Revision,
+                latest_revision = _subscriptionLoad.Revision,
+                source,
+                is_current = _subscriptionLoad.IsCurrent(request),
+                session_id = _snapshot?.SessionId,
+                sequence = _snapshot?.Sequence
+            });
         Render();
         try
         {
             var snapshotBeforeConfigure = _snapshot;
-            _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-start", "Started the preflight Snapshot before Configure", new { source, session_id = snapshotBeforeConfigure?.SessionId });
+            _diagnostics.RecordInfo(
+                "subscription.configure-preflight-snapshot-start",
+                "Started the preflight Snapshot before Configure",
+                new
+                {
+                    source,
+                    request_revision = request.Revision,
+                    latest_revision = _subscriptionLoad.Revision,
+                    session_id = snapshotBeforeConfigure?.SessionId
+                });
             var current = await ReadSnapshotAsync(cancellationToken);
             if (_lifetime.IsClosing) return;
-            _diagnostics.RecordInfo("subscription.configure-preflight-snapshot-end", "Completed the preflight Snapshot before Configure", new { source, session_id = current.SessionId, sequence = current.Sequence });
+            _diagnostics.RecordInfo(
+                "subscription.configure-preflight-snapshot-end",
+                "Completed the preflight Snapshot before Configure",
+                new
+                {
+                    source,
+                    request_revision = request.Revision,
+                    latest_revision = _subscriptionLoad.Revision,
+                    session_id = current.SessionId,
+                    sequence = current.Sequence
+                });
             _diagnostics.RecordInfo(
                 "subscription.configure-submit",
                 "Submitting a subscription URL to the Go backend",
-                new { source, session_id = current.SessionId, expected_sequence = current.Sequence });
+                new
+                {
+                    source,
+                    request_revision = request.Revision,
+                    latest_revision = _subscriptionLoad.Revision,
+                    session_id = current.SessionId,
+                    expected_sequence = current.Sequence
+                });
             var configured = await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source }, cancellationToken);
             if (_lifetime.IsClosing) return;
             if (_subscriptionLoad.MarkAccepted(request))
             {
                 _acceptedSequence = configured.GetProperty("sequence").GetInt64();
                 MarkSourceAccepted(source);
+                _diagnostics.RecordInfo(
+                    "subscription.load-accepted",
+                    "Accepted a subscription load",
+                    new
+                    {
+                        request_revision = request.Revision,
+                        latest_revision = _subscriptionLoad.Revision,
+                        source,
+                        is_current = _subscriptionLoad.IsCurrent(request),
+                        sequence = _acceptedSequence
+                    });
+            }
+            else
+            {
+                _diagnostics.RecordInfo(
+                    "subscription.load-superseded",
+                    "A completed subscription load was superseded",
+                    new
+                    {
+                        request_revision = request.Revision,
+                        latest_revision = _subscriptionLoad.Revision,
+                        source,
+                        is_current = _subscriptionLoad.IsCurrent(request),
+                        sequence = current.Sequence
+                    });
             }
         }
         catch (Exception error) when (!_lifetime.IsClosing)
         {
+            _diagnostics.RecordInfo(
+                "subscription.load-failed",
+                "A subscription load failed",
+                new
+                {
+                    error = error.ToString(),
+                    is_current = _subscriptionLoad.IsCurrent(request),
+                    request_revision = request.Revision,
+                    latest_revision = _subscriptionLoad.Revision,
+                    source
+                });
             if (_subscriptionLoad.IsCurrent(request))
             {
                 _loadError = error.Message;
@@ -1046,6 +1135,19 @@ public sealed partial class MainWindow : Window
             finally
             {
                 next = _subscriptionLoad.Finish(request, LoadNow);
+                _diagnostics.RecordInfo(
+                    "subscription.load-finished",
+                    "Finished a subscription load",
+                    new
+                    {
+                        request_revision = request.Revision,
+                        latest_revision = _subscriptionLoad.Revision,
+                        source,
+                        next_revision = next?.Revision,
+                        next_source = next?.Source,
+                        source_dirty = _subscriptionLoad.SourceDirty,
+                        is_loading = _subscriptionLoad.IsLoading
+                    });
                 if (!_lifetime.IsClosing) Render();
             }
             if (!_lifetime.IsClosing && next is not null) await ExecuteLoadAsync(next, cancellationToken);
