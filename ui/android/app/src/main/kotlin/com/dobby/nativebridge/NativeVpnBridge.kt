@@ -98,13 +98,6 @@ object NativeVpnBridge {
             return 0
         }
         val ready = try {
-            val intent = Intent(context, DobbyVpnService::class.java)
-                .setAction(DobbyVpnService.ACTION_PREPARE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
             awaitService(context)
         } catch (error: Exception) {
             recordDiagnostic(context, "vpn.prepare_failed", "Android VPN service could not be started", error)
@@ -163,6 +156,10 @@ object NativeVpnBridge {
     internal fun attach(candidate: DobbyVpnService) {
         synchronized(serviceLock) {
             check(service == null || service === candidate) { "Previous VPN service still owns cleanup" }
+            // A rejected replacement must never resume the previous owner's
+            // closing Go manager. Publish the candidate only after Resume succeeds.
+            val failure = NativeGoSession.resume()
+            check(failure.isEmpty()) { failure }
             service = candidate
             serviceLock.notifyAll()
         }
@@ -176,9 +173,23 @@ object NativeVpnBridge {
 
     private fun awaitService(context: Context): Boolean {
         synchronized(serviceLock) {
-            if (service != null) return true
             val deadline = System.nanoTime() + 2_000_000_000L
-            while (service == null) {
+            var startRequested = false
+            while (service?.isReadyForTunnel() != true) {
+                if (System.nanoTime() >= deadline) return false
+                // An old service may still be in onDestroy. Let it finish
+                // before asking Android to create a replacement; otherwise
+                // the start Intent can be delivered to the retiring instance.
+                if (service == null && !startRequested) {
+                    val intent = Intent(context, DobbyVpnService::class.java)
+                        .setAction(DobbyVpnService.ACTION_PREPARE)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                    startRequested = true
+                }
                 val remaining = deadline - System.nanoTime()
                 if (remaining <= 0) return false
                 val millis = remaining / 1_000_000L
