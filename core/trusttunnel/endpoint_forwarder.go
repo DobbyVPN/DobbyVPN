@@ -131,13 +131,18 @@ func (f *endpointForwarder) acceptTCP() {
 				return
 			}
 			defer func() { _ = f.release(ownedRemote) }()
+			copyStream := func(destination, source *endpointConn) {
+				if _, copyErr := io.Copy(destination, source); copyErr != nil {
+					_ = f.release(destination)
+					_ = f.release(source)
+					return
+				}
+				closeWrite(destination)
+			}
 			var copies sync.WaitGroup
 			copies.Add(1)
-			go func() { defer copies.Done(); _, _ = io.Copy(ownedRemote, ownedLocal); closeWrite(ownedRemote) }()
-			_, _ = io.Copy(ownedLocal, ownedRemote)
-			// Closing both sides also interrupts the other copy on abrupt EOF.
-			_ = f.release(ownedLocal)
-			_ = f.release(ownedRemote)
+			go func() { defer copies.Done(); copyStream(ownedRemote, ownedLocal) }()
+			copyStream(ownedLocal, ownedRemote)
 			copies.Wait()
 		}()
 	}

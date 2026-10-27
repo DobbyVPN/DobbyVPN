@@ -10,6 +10,7 @@ require (
 	github.com/go-ole/go-ole v1.3.0
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/nftables v0.3.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
 	github.com/miekg/dns v1.1.72
 	github.com/sirupsen/logrus v1.10.2
@@ -65,7 +66,6 @@ require (
 require (
 	github.com/apernet/quic-go v0.61.1-0.20260728022005-eb994cc4b0cd // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect

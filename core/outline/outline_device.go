@@ -204,8 +204,18 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 
 			return d.track(newTruncatedDNSConn())
 		}
+		scope := newPendingStreamConnScope(ctx)
+		ctx = context.WithValue(ctx, streamConnScopeContextKey{}, scope)
+		defer scope.discard()
 
 		conn, err := d.packetDialer.DialPacket(ctx, addr)
+		if err == nil && !scope.handoff() {
+			_ = conn.Close()
+			err = ctx.Err()
+			if err == nil {
+				err = net.ErrClosed
+			}
+		}
 		if err != nil {
 			writeLog := log.Errorf
 			if errors.Is(ctx.Err(), context.Canceled) {

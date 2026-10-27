@@ -57,5 +57,7 @@ func NewOutlineProviders(owner context.Context, dnsCache *dnscache.Cache, regist
 		PacketListeners: configurl.NewExtensibleProvider[transport.PacketListener](&transport.UDPListener{}),
 	}
 	log.Debugf(Category, "[Protect][Outline] SDK providers use attempt-scoped protected stream/packet dialers")
-	return configurl.RegisterDefaultProviders(providers)
+	configurl.RegisterDefaultProviders(providers)
+	registerOutlineWebsocketPackets(providers)
+	return providers
 }
