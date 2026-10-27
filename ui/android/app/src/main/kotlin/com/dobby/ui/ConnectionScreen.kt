@@ -249,7 +249,8 @@ private fun StopButton(controller: SessionController, modifier: Modifier = Modif
 @Composable
 private fun Connections(controller: SessionController, modifier: Modifier) {
     val session = controller.state.session
-    Box(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Tray)) {
+    Box(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Tray)
+        .testTag("connection.profiles")) {
         val orphan = controller.orphanProfile
         if (session.profiles.isEmpty() && orphan == null && controller.state.loadError.isNotEmpty()) {
             Column(
