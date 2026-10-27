@@ -39,6 +39,8 @@ type TrustTunnelDevice struct {
 	closed              bool
 }
 
+const socksAddressLogField = "socks_address"
+
 var protectSocket = protected_dialer.ProtectSocketDestinations
 
 func protectTrustTunnelSocket(ctx context.Context, addresses []string, fd int) int {
@@ -133,7 +135,7 @@ func NewTrustTunnelDevice(ctx context.Context, accepted map[string]any, cache *d
 	d.trusttunnelInstance.SetStateChangedCallback(func(state tt.VpnState) {
 		if d.readiness.update(state) {
 			log.Info("trusttunnel", "TrustTunnel native transport state changed", map[string]any{
-				"socks_address":      socksAddress,
+				socksAddressLogField: socksAddress,
 				"native_state":       nativeStateName(state),
 				"native_state_value": int(state),
 			})
@@ -155,7 +157,7 @@ func NewTrustTunnelDevice(ctx context.Context, accepted map[string]any, cache *d
 		"endpoint_hostname":    endpointHostname,
 		"endpoint_addresses":   addresses,
 		"selected_address":     ip.String(),
-		"socks_address":        socksAddress,
+		socksAddressLogField:   socksAddress,
 		"socks_listener_state": "not_started",
 		"preparation_elapsed":  time.Since(startedAt).Truncate(time.Millisecond).String(),
 		"vpn_dns_servers":      dns,
@@ -247,7 +249,7 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 	log.Info("trusttunnel", "TrustTunnel native start accepted; local SOCKS listener readiness is not observed here", map[string]any{
 		"endpoint_hostname":        endpointHostname,
 		"selected_address":         d.svrIP.String(),
-		"socks_address":            d.socksAddress,
+		socksAddressLogField:       d.socksAddress,
 		"native_start_result":      "accepted",
 		"socks_listener_readiness": "unobserved",
 		"start_elapsed":            time.Since(startedAt).Truncate(time.Millisecond).String(),
@@ -269,9 +271,9 @@ func (d *TrustTunnelDevice) WaitReady(ctx context.Context) error {
 		errorText = err.Error()
 	}
 	log.Info("trusttunnel", "TrustTunnel native readiness wait finished", map[string]any{
-		"socks_address": d.socksAddress,
-		"elapsed":       time.Since(started).Truncate(time.Millisecond).String(),
-		"error":         errorText,
+		socksAddressLogField: d.socksAddress,
+		"elapsed":            time.Since(started).Truncate(time.Millisecond).String(),
+		"error":              errorText,
 	})
 	return err
 }
