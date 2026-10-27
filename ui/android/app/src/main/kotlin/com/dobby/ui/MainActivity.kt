@@ -782,7 +782,24 @@ internal class SessionController(
     }
 
     fun connectOrDisconnect(index: Int? = null) {
-        if (!canAct(index)) return
+        val allowed = canAct(index)
+        val displayed = state.session
+        val latestSnapshot = latest
+        NativeVpnBridge.recordDiagnostic(
+            activity,
+            "ui.connect_or_disconnect",
+            "requested_index=${index ?: "auto"} allowed=$allowed stop_target=${isStopTarget(index)} " +
+                "displayed_session_id=${displayed.sessionId} displayed_generation=${displayed.generation} " +
+                "displayed_active_profile_index=${displayed.activeProfileIndex} " +
+                "displayed_sequence=${displayed.sequence} " +
+                "latest_session_id=${latestSnapshot.sessionId} latest_generation=${latestSnapshot.generation} " +
+                "latest_active_profile_index=${latestSnapshot.activeProfileIndex} " +
+                "latest_sequence=${latestSnapshot.sequence} busy=${state.busy} " +
+                "source_dirty=${state.sourceDirty} loading=${state.loading} " +
+                "permission_target_present=${permissionTarget != null} " +
+                "source_revision=${sourceLoads.revision}",
+        )
+        if (!allowed) return
         if (isStopTarget(index)) { stop(); return }
         dismissedErrors = emptySet()
         val current = latest
@@ -912,8 +929,20 @@ internal class SessionController(
                     canSwitch = canSwitch,
                 )
                 if (target.retry && !retryStillCurrent) {
+                    NativeVpnBridge.recordDiagnostic(
+                        activity,
+                        "ui.permission_selection_discarded",
+                        "reason=retry_target_stale selection=${target.selection} " +
+                            "fence=${target.fence} snapshot=$freshSnapshot",
+                    )
                     null
                 } else if (!target.retry && !PermissionTargetFence.mayStartAfterConsent(target.fence, freshSnapshot)) {
+                    NativeVpnBridge.recordDiagnostic(
+                        activity,
+                        "ui.permission_selection_discarded",
+                        "reason=consent_fence_rejected selection=${target.selection} " +
+                            "fence=${target.fence} snapshot=$freshSnapshot",
+                    )
                     null
                 } else if (target.retry) {
                     NativeGoSession.startSelection(
