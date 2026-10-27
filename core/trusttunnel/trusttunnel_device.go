@@ -31,6 +31,8 @@ type TrustTunnelDevice struct {
 	socksAddress        string
 	svrIP               net.IP
 	upstreamIPs         []net.IP
+	cache               *dnscache.Cache
+	forwarders          []*endpointForwarder
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	readiness           *nativeReadiness
@@ -126,6 +128,7 @@ func NewTrustTunnelDevice(ctx context.Context, accepted map[string]any, cache *d
 		socksAddress:        socksAddress,
 		svrIP:               ip,
 		upstreamIPs:         upstreamIPs,
+		cache:               cache,
 		ctx:                 deviceContext,
 		cancel:              cancelDevice,
 		readiness:           newNativeReadiness(),
@@ -213,6 +216,22 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 
 	startedAt := time.Now()
 	parsedConfig := d.config
+	endpoint, _ := parsedConfig["endpoint"].(map[string]any)
+	addresses, _ := endpoint["addresses"].([]any)
+	localAddresses := make([]any, 0, len(addresses))
+	for _, value := range addresses {
+		address, _ := value.(string)
+		forwarder, err := newEndpointForwarder(d.ctx, d.cache, address)
+		if err != nil {
+			return fmt.Errorf("prepare protected native endpoint %s: %w", address, err)
+		}
+		d.forwarders = append(d.forwarders, forwarder)
+		localAddresses = append(localAddresses, forwarder.localAddress())
+		log.Info("trusttunnel", "TrustTunnel protected endpoint forwarder ready", map[string]any{
+			"destination": address, "local_address": forwarder.localAddress(), "transports": "TCP,UDP",
+		})
+	}
+	endpoint["addresses"] = localAddresses
 
 	routingIface, ok := parsedConfig["routing"]
 	if !ok {
@@ -244,7 +263,6 @@ func (d *TrustTunnelDevice) Open(routingTableID int, uplinkIface string) error {
 		return fmt.Errorf("failed to start trusttunnel: %w", err)
 	}
 
-	endpoint, _ := parsedConfig["endpoint"].(map[string]any)
 	endpointHostname, _ := endpoint["hostname"].(string)
 	log.Info("trusttunnel", "TrustTunnel native start accepted; local SOCKS listener readiness is not observed here", map[string]any{
 		"endpoint_hostname":        endpointHostname,
@@ -313,12 +331,21 @@ func (d *TrustTunnelDevice) Close() error {
 	if d.closed {
 		return nil
 	}
-	d.closed = true
 	if d.trusttunnelInstance != nil {
 		d.trusttunnelInstance.SetStateChangedCallback(nil)
 	}
 	if d.nativeOwned {
 		d.trusttunnelInstance.Stop()
+	}
+	var closeErr error
+	for _, forwarder := range d.forwarders {
+		closeErr = errors.Join(closeErr, forwarder.Close())
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	d.closed = true
+	if d.nativeOwned {
 		<-nativeOwner
 		d.nativeOwned = false
 	}

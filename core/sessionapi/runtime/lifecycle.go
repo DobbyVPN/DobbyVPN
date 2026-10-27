@@ -398,8 +398,8 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	if device == nil {
 		return fail(errors.New("protocol device unavailable"))
 	}
-	// The native TrustTunnel pinger uses numeric upstreams directly. Preserve
-	// those addresses in this attempt's direct policy, including IPv6 answers.
+	// Retain the device-reported numeric upstream inventory in this
+	// attempt's direct policy, including IPv6 answers.
 	if upstreams, ok := device.(interface{ UpstreamIPs() []net.IP }); ok {
 		bypass, err = bypass.WithNumericIPs(upstreams.UpstreamIPs())
 		if err != nil {
