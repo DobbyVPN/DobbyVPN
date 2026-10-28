@@ -294,8 +294,13 @@ def _validate_run(
         raise ReleaseGuardError("linked Test must be its first workflow attempt")
     if run.get("head_sha") != candidate["product_sha"]:
         raise ReleaseGuardError("linked Test product SHA does not match the reservation")
-    if run.get("status") not in {"in_progress", "completed"}:
-        raise ReleaseGuardError("linked Test is not active or completed")
+    # GitHub can report the aggregate run queued while its jobs execute;
+    # claim accepts that state only after the exact identity checks above.
+    if run.get("status") not in ("queued", "in_progress", "completed"):
+        raise ReleaseGuardError(
+            f"linked Test is not active or completed: status={run.get('status')!r} "
+            f"conclusion={run.get('conclusion')!r}"
+        )
     if run.get("status") == "completed" and run.get("conclusion") not in ({"success"} | NON_SUCCESS_CONCLUSIONS):
         raise ReleaseGuardError("completed Test has an unknown conclusion")
     return run
@@ -564,7 +569,7 @@ def claim(
     retry_attempt = None
     if latest is not None and latest.get("state") == "in_progress" and _log_url(latest) == _run_url(repository, test_run_id):
         run = _get_run(api, repository, test_run_id, candidate, allow_retried=True)
-        if run.get("status") == "in_progress" and _status_attempt(latest) == run["run_attempt"]:
+        if run.get("status") in ("queued", "in_progress") and _status_attempt(latest) == run["run_attempt"]:
             _ensure_no_blockers(api, repository, exclude_id=deployment["id"])
             return {"deployment_id": deployment["id"], "test_run_id": test_run_id,
                     "log_url": _run_url(repository, test_run_id), "state": "in_progress"}
@@ -582,8 +587,11 @@ def claim(
     if retry_attempt is None and test_run_id in _known_run_ids(api, repository):
         raise ReleaseGuardError("this Test run is already linked to a reservation")
     run = _get_run(api, repository, test_run_id, candidate, allow_retried=retry_attempt is not None)
-    if run.get("status") != "in_progress":
-        raise ReleaseGuardError("claim must run inside the active Test workflow")
+    if run.get("status") not in ("queued", "in_progress"):
+        raise ReleaseGuardError(
+            f"claim must run inside the active Test workflow: status={run.get('status')!r} "
+            f"conclusion={run.get('conclusion')!r}"
+        )
     if retry_attempt is not None and run.get("run_attempt") != retry_attempt:
         raise ReleaseGuardError("active Test attempt does not match the authorized retry")
     _post_status(api, repository, deployment, "in_progress", run_id=test_run_id,
