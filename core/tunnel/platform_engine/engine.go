@@ -7,7 +7,7 @@ import (
 	"net/url"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
-	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
+	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
@@ -22,7 +22,7 @@ type EngineConfig struct {
 	ProxyAddr        string
 	FD               int    // Linux / Mobile
 	UplinkIface      string // Windows
-	TransportHandler adapter.TransportHandler
+	TransportHandler stackAdapter.TransportHandler
 }
 
 func StartPlatformEngine(cfg EngineConfig) (bool, error) {
