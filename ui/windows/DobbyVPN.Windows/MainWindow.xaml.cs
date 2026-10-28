@@ -71,6 +71,8 @@ public sealed partial class MainWindow : Window
     private string? _lastLogScrollGestureDirection;
     private bool _logDirectManipulation;
     private bool _logScrollbarPointerDown;
+    private long _logScrollbarPressSequence;
+    private int _logScrollbarViewObservationsRemaining;
     private int _logPointerEntryObservations;
     private bool _pendingLogUpwardIntent;
     private bool _logTailChangeViewPending;
@@ -1304,11 +1306,15 @@ public sealed partial class MainWindow : Window
             {
                 ClearPendingLogDownScrollIntent();
                 _logScrollbarPointerDown = true;
+                _logScrollbarPressSequence++;
+                _logScrollbarViewObservationsRemaining = 12;
+                RecordLogScrollbarObservation("press");
             }
         }), true);
         LogsScroll.AddHandler(UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
             if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
+            RecordLogScrollbarObservation("release");
             ObserveLogScrollPosition();
             _logScrollbarPointerDown = false;
             if (_logPresentation.FollowsTail) QueueLogTailChangeView(_logRenderGeneration);
@@ -1316,6 +1322,7 @@ public sealed partial class MainWindow : Window
         LogsScroll.AddHandler(UIElement.PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
             if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
+            RecordLogScrollbarObservation("capture-lost");
             ObserveLogScrollPosition();
             _logScrollbarPointerDown = false;
             if (_logPresentation.FollowsTail) QueueLogTailChangeView(_logRenderGeneration);
@@ -1333,6 +1340,11 @@ public sealed partial class MainWindow : Window
         };
         LogsScroll.ViewChanged += (_, args) =>
         {
+            if (_logScrollbarViewObservationsRemaining > 0)
+            {
+                _logScrollbarViewObservationsRemaining--;
+                RecordLogScrollbarObservation("view-changed", args.IsIntermediate);
+            }
             ObserveLogScrollPosition(args.IsIntermediate);
             if (!_updatingLogs && !_logTailChangeViewPending && !_logDirectManipulation &&
                 !_logScrollbarPointerDown && _logPresentation.TryRequestSettledTailAlignment(
@@ -1341,6 +1353,26 @@ public sealed partial class MainWindow : Window
                 QueueLogTailChangeView(_logRenderGeneration);
         };
         StartWindowWork(RefreshLogsAsync);
+    }
+
+    private void RecordLogScrollbarObservation(string phase, bool? isIntermediate = null)
+    {
+        try
+        {
+            _diagnostics.RecordDebug("logs.scrollbar-observation", "Observed log scrollbar interaction", new
+            {
+                sequence = _logScrollbarPressSequence,
+                phase,
+                is_intermediate = isIntermediate,
+                offset_delta = phase == "view-changed" ? _logScroll?.VerticalOffset - _lastLogScrollOffset : null,
+                view_observations_remaining = _logScrollbarViewObservationsRemaining,
+                state = CaptureLogScrollDiagnosticState(),
+            });
+        }
+        catch (Exception error)
+        {
+            _diagnostics.Record(error.ToString(), "logs.scrollbar-observation.failure");
+        }
     }
 
     private void RegisterLogDownScrollIntent()
