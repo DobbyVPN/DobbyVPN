@@ -7,6 +7,7 @@ import (
 	"net/url"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
+	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
@@ -17,10 +18,11 @@ import (
 const TunnelMTU = 1280
 
 type EngineConfig struct {
-	Dialer      proxy.Proxy
-	ProxyAddr   string
-	FD          int    // Linux / Mobile
-	UplinkIface string // Windows
+	Dialer           proxy.Proxy
+	ProxyAddr        string
+	FD               int    // Linux / Mobile
+	UplinkIface      string // Windows
+	TransportHandler adapter.TransportHandler
 }
 
 func StartPlatformEngine(cfg EngineConfig) (bool, error) {
@@ -66,7 +68,11 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 		return true, fmt.Errorf("tunnel MTU %d is below IPv6 minimum %d", dev.MTU(), TunnelMTU)
 	}
 	tunnel.T().SetDialer(outbound)
-	ownedStack, err = core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: tunnel.T()})
+	handler := cfg.TransportHandler
+	if handler == nil {
+		handler = tunnel.T()
+	}
+	ownedStack, err = core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: handler})
 	if err == nil {
 		log.Infof(Category, "packet stack ready interface=%s mtu=%d ipv4=true ipv6=true", dev.Name(), dev.MTU())
 	}

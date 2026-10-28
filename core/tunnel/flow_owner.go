@@ -20,8 +20,21 @@ type flowOwner struct {
 	connections map[io.Closer]error
 	pending     int
 	settled     chan struct{}
+	retired     chan struct{}
 	tcpContext  context.Context
 	cancelTCP   context.CancelFunc
+}
+
+func (o *flowOwner) done() <-chan struct{} {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.retired == nil {
+		o.retired = make(chan struct{})
+		if o.closed {
+			close(o.retired)
+		}
+	}
+	return o.retired
 }
 
 func (o *flowOwner) beginDial() error {
@@ -114,7 +127,12 @@ func (o *flowOwner) residualErrorLocked() error {
 
 func (o *flowOwner) sealAndClose() {
 	o.mu.Lock()
-	o.closed = true
+	if !o.closed {
+		o.closed = true
+		if o.retired != nil {
+			close(o.retired)
+		}
+	}
 	connections := make([]io.Closer, 0, len(o.connections))
 	for conn := range o.connections {
 		connections = append(connections, conn)

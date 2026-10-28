@@ -13,6 +13,8 @@ import (
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
+	stackTunnel "github.com/xjasonlyu/tun2socks/v2/tunnel"
+	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
 
 	"core/dnscache"
 	"core/log"
@@ -53,10 +55,12 @@ type Engine struct {
 const udpAssociationIdleTimeout = 10 * time.Second
 
 type DobbyProxy struct {
-	vpn    proxy.Proxy
-	direct proxy.Proxy
-	bypass *BypassPolicy
-	flows  flowOwner
+	vpn        proxy.Proxy
+	direct     proxy.Proxy
+	bypass     *BypassPolicy
+	flows      flowOwner
+	generation uint64
+	udpRelay   *stackTunnel.Tunnel
 
 	activeTCP atomic.Int64
 	activeUDP atomic.Int64
@@ -354,6 +358,7 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 	// Install the stable router before the descriptor can receive packets.
 	// No transport exists until an attempt has passed its readiness check.
 	cfg.Dialer = handle.router
+	cfg.TransportHandler = handle.router
 	if cfg.ProxyAddr != "" {
 		if err := handle.attachLocked(context.Background(), 0, cfg.ProxyAddr, dnsCache, bypass); err != nil {
 			activeEngine = nil
@@ -365,7 +370,7 @@ func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache
 			return handle, true, err
 		}
 		activeEngine = nil
-		return nil, false, err
+		return nil, false, errors.Join(err, handle.detachLocked(context.Background()))
 	}
 	handle.ifaceName = platform_engine.InterfaceName()
 	log.Infof(Category, "[Engine] network owner active interface=%s", handle.ifaceName)
@@ -402,11 +407,15 @@ func (e *Engine) attachLocked(ctx context.Context, generation uint64, address st
 	if err != nil {
 		return err
 	}
-	wrapper := &DobbyProxy{vpn: outbound, direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: cache, OwnerContext: ctx}, bypass: bypass}
+	wrapper := &DobbyProxy{vpn: outbound, direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: cache, OwnerContext: ctx}, bypass: bypass, generation: generation}
 	wrapper.vpn, err = newSocksTCPProxy(outbound, address, &wrapper.flows)
 	if err != nil {
 		return err
 	}
+	// Bind the UDP dispatcher to this attempt. An admitted flow keeps its
+	// target even if dispatch runs after replacement of the active attempt.
+	wrapper.udpRelay = stackTunnel.New(wrapper, statistic.DefaultManager)
+	wrapper.udpRelay.ProcessAsync()
 	e.proxy, e.attempt = wrapper, generation
 	e.router.set(wrapper)
 	log.Infof(Category, "[Engine] transport attached generation=%d interface=%s", generation, e.ifaceName)
@@ -432,6 +441,9 @@ func (e *Engine) detachLocked(ctx context.Context) error {
 		return nil
 	}
 	e.proxy.flows.sealAndClose()
+	if e.proxy.udpRelay != nil {
+		e.proxy.udpRelay.Close()
+	}
 	if err := e.proxy.flows.wait(ctx); err != nil {
 		return err
 	}
