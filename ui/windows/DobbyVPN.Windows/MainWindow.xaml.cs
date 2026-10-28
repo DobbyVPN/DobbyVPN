@@ -71,6 +71,7 @@ public sealed partial class MainWindow : Window
     private string? _lastLogScrollGestureDirection;
     private bool _logDirectManipulation;
     private bool _logScrollbarPointerDown;
+    private int _logPointerEntryObservations;
     private bool _pendingLogUpwardIntent;
     private bool _logTailChangeViewPending;
     private readonly LogPresentationState _logPresentation = new();
@@ -1222,6 +1223,41 @@ public sealed partial class MainWindow : Window
         if (_lifetime.IsClosing) return;
         _logScroll = LogsScroll;
         CaptureLogScrollPosition();
+        try
+        {
+            _diagnostics.RecordDebug("logs.scroll-loaded", "Log scroll viewport loaded", new
+            {
+                state = CaptureLogScrollDiagnosticState(),
+            });
+        }
+        catch (Exception error)
+        {
+            _diagnostics.Record(error.ToString(), "logs.scroll-loaded.failure");
+        }
+        LogsScroll.AddHandler(UIElement.PointerEnteredEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
+        {
+            // Bound this observation even if layout changes repeatedly move the
+            // pointer across descendants while log rows are refreshed.
+            if (_logPointerEntryObservations >= 8) return;
+            _logPointerEntryObservations++;
+            try
+            {
+                var position = args.GetCurrentPoint(LogsScroll).Position;
+                _diagnostics.RecordDebug("logs.pointer-entry", "Pointer entered the log viewport", new
+                {
+                    observation = _logPointerEntryObservations,
+                    pointer_device = args.Pointer.PointerDeviceType.ToString(),
+                    source_type = args.OriginalSource?.GetType().FullName,
+                    x = position.X,
+                    y = position.Y,
+                    state = CaptureLogScrollDiagnosticState(),
+                });
+            }
+            catch (Exception error)
+            {
+                _diagnostics.Record(error.ToString(), "logs.pointer-entry.failure");
+            }
+        }), true);
         LogsScroll.AddHandler(UIElement.DoubleTappedEvent, new DoubleTappedEventHandler((_, args) =>
         {
             args.Handled = true;
@@ -1454,6 +1490,17 @@ public sealed partial class MainWindow : Window
                 follows_tail = _logPresentation.FollowsTail,
                 vertical_offset = _logScroll?.VerticalOffset,
                 scrollable_height = _logScroll?.ScrollableHeight,
+                requested_vertical_scrollbar_visibility = _logScroll?.VerticalScrollBarVisibility.ToString(),
+                computed_vertical_scrollbar_visibility = _logScroll?.ComputedVerticalScrollBarVisibility.ToString(),
+                viewport_width = _logScroll?.ViewportWidth,
+                viewport_height = _logScroll?.ViewportHeight,
+                extent_width = _logScroll?.ExtentWidth,
+                extent_height = _logScroll?.ExtentHeight,
+                actual_width = _logScroll?.ActualWidth,
+                actual_height = _logScroll?.ActualHeight,
+                enabled = _logScroll?.IsEnabled,
+                hit_test_visible = _logScroll?.IsHitTestVisible,
+                zoom_factor = _logScroll?.ZoomFactor,
                 render_generation = _logRenderGeneration,
                 updating_logs = _updatingLogs,
                 clearing_logs = _clearingLogs,
@@ -1467,7 +1514,7 @@ public sealed partial class MainWindow : Window
         catch (Exception error)
         {
             _diagnostics.Record(error.ToString(), "logs.scroll-diagnostic-geometry.failure");
-            throw;
+            return new { observation_error = error.ToString() };
         }
     }
 
@@ -1547,7 +1594,8 @@ public sealed partial class MainWindow : Window
     }
 
     private static List<NativeDiagnostics.Entry> Shown(IEnumerable<NativeDiagnostics.Entry> entries) =>
-        entries.Where(entry => entry.Level is not ("DEBUG" or "TRACE") && !entry.Raw.Contains("\"event\":\"logs.backend-ingested\"", StringComparison.Ordinal)).ToList();
+        entries.Where(entry => entry.Level is not ("DEBUG" or "TRACE")
+            && !entry.Raw.Contains("\"event\":\"logs.backend-ingested\"", StringComparison.Ordinal)).ToList();
 
     private void RenderLogs()
     {

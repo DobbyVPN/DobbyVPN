@@ -47,6 +47,11 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         lock (_gate) Write("INFO", category, message, fields);
     }
 
+    public void RecordDebug(string category, string message, object fields)
+    {
+        lock (_gate) Write("DEBUG", category, message, fields);
+    }
+
     private void Write(string level, string category, string message, object? fields)
     {
         try
