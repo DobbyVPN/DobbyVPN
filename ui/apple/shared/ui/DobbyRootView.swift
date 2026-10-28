@@ -93,6 +93,7 @@ public struct DobbyRootView: View {
             .frame(maxWidth: .infinity)
         }
         .disabled(showingError)
+        .accessibilityHidden(showingError)
         .background(Color.paper.ignoresSafeArea().onTapGesture { sourceFocused = false })
         .ignoresSafeArea(.keyboard)
         .overlay { errorPopup }
