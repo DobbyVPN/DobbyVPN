@@ -428,6 +428,8 @@ struct DobbyLogView: NSViewRepresentable {
         configureLogTextView(view)
         view.delegate = context.coordinator
         scroll.contentView.postsBoundsChangedNotifications = true
+        scroll.contentView.postsFrameChangedNotifications = true
+        view.postsFrameChangedNotifications = true
         let coordinator = context.coordinator
         coordinator.observers.append(NotificationCenter.default.addObserver(
             forName: NSScrollView.willStartLiveScrollNotification, object: scroll, queue: .main
@@ -438,7 +440,9 @@ struct DobbyLogView: NSViewRepresentable {
         coordinator.observers.append(NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak coordinator = context.coordinator, weak scroll] _ in
-            guard let coordinator, let scroll, !coordinator.updating, coordinator.userScrolling else { return }
+            guard let coordinator, let scroll else { return }
+            coordinator.scheduleTailAlignment(scroll)
+            guard !coordinator.updating, coordinator.userScrolling else { return }
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: scroll.contentView.bounds.maxY,
                 contentHeight: scroll.documentView?.bounds.height ?? 0
@@ -447,6 +451,14 @@ struct DobbyLogView: NSViewRepresentable {
                 DispatchQueue.main.async { coordinator.parent.following = atBottom }
             }
         })
+        for observed in [scroll.contentView, view] {
+            coordinator.observers.append(NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: observed, queue: .main
+            ) { [weak coordinator, weak scroll] _ in
+                guard let coordinator, let scroll else { return }
+                coordinator.scheduleTailAlignment(scroll)
+            })
+        }
         return scroll
     }
 
@@ -481,6 +493,7 @@ struct DobbyLogView: NSViewRepresentable {
         }
         coordinator.lastClear = clear
         coordinator.updating = false
+        coordinator.scheduleTailAlignment(scroll)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -490,7 +503,22 @@ struct DobbyLogView: NSViewRepresentable {
         var observers: [NSObjectProtocol] = []
         var userScrolling = false
         var entries: [DobbyLogEntry] = []
+        var alignmentQueued = false
         init(_ parent: DobbyLogView) { self.parent = parent }
+        func scheduleTailAlignment(_ scroll: NSScrollView) {
+            guard !updating, !userScrolling, parent.following, !alignmentQueued else { return }
+            alignmentQueued = true
+            DispatchQueue.main.async { [weak self, weak scroll] in
+                guard let self else { return }
+                self.alignmentQueued = false
+                guard let scroll, !self.updating, !self.userScrolling, self.parent.following,
+                      let document = scroll.documentView else { return }
+                let y = max(0, document.bounds.height - scroll.contentView.bounds.height)
+                guard abs(scroll.contentView.bounds.origin.y - y) > 0.5 else { return }
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+        }
         deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
     }
 }

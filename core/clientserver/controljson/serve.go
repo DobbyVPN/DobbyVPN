@@ -1,8 +1,8 @@
 package controljson
 
 import (
+	"core/log"
 	"errors"
-	"log"
 	"net"
 )
 
@@ -19,14 +19,14 @@ func Serve(listener net.Listener, handler Handler, authorize AuthorizeConn) erro
 		}
 		if authorize != nil {
 			if err := authorize(conn); err != nil {
-				log.Printf("desktop JSON client rejected: %v", err)
+				log.Warn("CONTROL", "desktop JSON client rejected", map[string]any{"error": err.Error()})
 				_ = conn.Close()
 				continue
 			}
 		}
 		go func() {
 			if err := handler.ServeConn(conn); err != nil {
-				log.Printf("desktop JSON request failed: %v", err)
+				log.Warn("CONTROL", "desktop JSON request failed", map[string]any{"error": err.Error()})
 			}
 		}()
 	}

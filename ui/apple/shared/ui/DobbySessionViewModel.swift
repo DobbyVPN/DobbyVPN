@@ -525,7 +525,7 @@ public final class DobbySessionViewModel: ObservableObject {
                 guard let self else { return }
                 self.logsInFlight = false
                 if revision == self.logsRevision && !self.logsClearInFlight {
-                    self.logEntries = result.entries
+                    self.logEntries = result.entries.filter(isShownOnScreen)
                     self.logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
                 } else {
                     self.logsRefreshPending = true

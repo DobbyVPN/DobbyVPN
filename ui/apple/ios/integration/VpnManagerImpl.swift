@@ -89,21 +89,21 @@ public final class VpnManagerImpl: NSObject {
             )
         }
         do {
-            let response = try sendOnce(messageData, timeout: timeout)
-            if let onDemandFailure = onDemandCompletion?() {
-                // Preserve the actual Go stop result even when the OS restart
-                // preference failed. The app must expose that failure.
-                logs.writeLog(level: "ERROR", log: "[provider] Go Stop response after On Demand failure: \(String(decoding: response, as: UTF8.self))")
-                return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED", message: onDemandFailure)
-            }
-            return response
+            return try performProviderMessage(commandData: messageData, send: {
+                let response = try sendOnce(messageData, timeout: timeout)
+                if let onDemandFailure = onDemandCompletion?() {
+                    // Preserve the actual Go stop result even when the OS restart
+                    // preference failed. The app must expose that failure.
+                    logs.writeLog(level: "ERROR", log: "[provider] Go Stop response after On Demand failure: \(String(decoding: response, as: UTF8.self))")
+                    return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED", message: onDemandFailure)
+                }
+                return response
+            }, onFailure: { error in
+                logs.writeLog(level: "ERROR", log: "[provider] sendProviderMessage failed:\n\(diagnosticErrorDescription(error))")
+            })
         } catch {
-            logs.writeLog(level: "ERROR", log: "[provider] sendProviderMessage failed:\n\(diagnosticErrorDescription(error))")
-            return transportFailureResponse(
-                for: messageData,
-                code: "PLATFORM_FAILED",
-                message: "provider request failed"
-            )
+            logs.writeLog(level: "ERROR", log: "[provider] transport failure response encoding failed:\n\(diagnosticErrorDescription(error))")
+            return Self.transportFailure("INTERNAL", message: "provider request failed")
         }
     }
 

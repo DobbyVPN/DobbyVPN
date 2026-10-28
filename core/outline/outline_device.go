@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	socks5 "github.com/things-go/go-socks5"
@@ -92,6 +93,7 @@ func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dns
 		socks5.WithResolver(od),
 		socks5.WithCredential(socks5.StaticCredentials{username: password}),
 		socks5.WithDial(od.handleDial),
+		socks5.WithAssociateHandle(od.handleAssociate),
 		socks5.WithLogger(socksLogger{device: od}),
 	)
 
@@ -126,18 +128,20 @@ type socksLogger struct {
 	device *OutlineDevice
 }
 
+func endsConnectionRoutinely(err error) bool {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "wsarecv: An existing connection was forcibly closed by the remote host.") || strings.Contains(message, "wsasend: An established connection was aborted by the software in your host machine.")
+}
+
 func (l socksLogger) Errorf(format string, args ...interface{}) {
 	// The upstream logger has only Errorf and also uses it for normal UDP
 	// association creation. Classify at this adapter, retaining the exact text.
 	if format == "client want to used addr %v, listen addr: %s" {
 		log.Debugf(Category, "[SOCKS5 internal] "+format, args...)
 		return
-	}
-	for _, arg := range args {
-		if err, ok := arg.(error); ok && errors.Is(err, net.ErrClosed) {
-			log.Debugf(Category, "[SOCKS5 internal] "+format, args...)
-			return
-		}
 	}
 	msg := fmt.Sprintf(format, args...)
 	if strings.Contains(msg, "chacha20poly1305: message authentication failed") && l.device != nil {
@@ -150,6 +154,12 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 			msg,
 		)
 		return
+	}
+	for _, arg := range args {
+		if err, ok := arg.(error); ok && endsConnectionRoutinely(err) {
+			log.Debugf(Category, "[SOCKS5 internal] "+format, args...)
+			return
+		}
 	}
 	log.Warnf(Category, "[SOCKS5 internal] %s", msg)
 }

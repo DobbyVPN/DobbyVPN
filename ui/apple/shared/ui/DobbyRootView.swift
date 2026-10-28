@@ -54,6 +54,7 @@ private let buttonShape = RoundedRectangle(cornerRadius: pt(10))
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.sizeCategory) private var sizeCategory
     @FocusState private var sourceFocused: Bool
     @State private var canPaste = false
     @State private var followingLogs = true
@@ -351,8 +352,10 @@ public struct DobbyRootView: View {
         let detail = model.visibleFailure
         if !detail.isEmpty {
             let loadFailed = detail == model.loadError
-            ZStack {
+            GeometryReader { geometry in
+              ZStack {
                 Color.black.opacity(0.32).ignoresSafeArea().onTapGesture(perform: model.closeFailure)
+                ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: pt(10)) {
                         SockIcon(holey: true).frame(width: pt(26), height: pt(32.5))
@@ -366,35 +369,33 @@ public struct DobbyRootView: View {
                             .foregroundColor(.muted)
                             .padding(.top, pt(8))
                     }
-                    HStack(spacing: pt(8)) {
-                        Text(detail)
-                            .dobbyFont(11.5, design: .monospaced)
-                            .foregroundColor(.ink)
-                            .lineLimit(4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityIdentifier("error.detail")
-                        Button { copy(detail) } label: {
+                    VStack(alignment: .leading, spacing: pt(6)) {
+                        ScrollView(.vertical) {
+                            Text(errorDisplayText(detail))
+                                .dobbyFont(11.5, design: .monospaced)
+                                .foregroundColor(.ink)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("error.detail")
+                        }
+                        .frame(maxHeight: min(240, max(0, geometry.size.height / 3)))
+                        .accessibilityIdentifier("error.detail.scroll")
+                        .layoutPriority(-1)
+                        Button { copyError(detail) } label: {
                             Text("Copy").underline().dobbyFont(12, .semibold).foregroundColor(.ink)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("error.copy")
                     }
                     .padding(.horizontal, pt(10))
                     .padding(.vertical, pt(8))
                     .overlay(RoundedRectangle(cornerRadius: pt(6)).stroke(Color.rule, lineWidth: 1))
                     .padding(.top, pt(10))
-                    HStack(spacing: pt(8)) {
-                        DialogButton(title: "Close", filled: false, action: model.closeFailure)
-                        if model.canRetryActiveSelection {
-                            DialogButton(title: "Retry", filled: true, action: model.retryActiveSelection)
-                                .accessibilityIdentifier("connection.retry")
-                        }
-                        if model.canStop {
-                            DialogButton(title: "Stop", filled: false, action: model.stop)
-                                .accessibilityIdentifier("failure.stop")
-                        }
-                        if loadFailed {
-                            DialogButton(title: "Retry", filled: true) { model.retryLoad() }
-                                .accessibilityIdentifier("subscription.retry")
+                    Group {
+                        if sizeCategory.isAccessibilityCategory {
+                            VStack(spacing: pt(8)) { failureActions(loadFailed: loadFailed) }
+                        } else {
+                            HStack(spacing: pt(8)) { failureActions(loadFailed: loadFailed) }
                         }
                     }
                     .padding(.top, pt(14))
@@ -408,17 +409,29 @@ public struct DobbyRootView: View {
                 .accessibilityIdentifier("error.dialog")
                 .accessibilityValue(model.status)
                 .accessibilityAddTraits(.isModal)
+                }
+                .frame(maxHeight: max(0, geometry.size.height - pt(24)))
+                .accessibilityIdentifier("error.dialog.scroll")
+              }
             }
         }
     }
 
-    private func copy(_ text: String) {
-#if os(iOS)
-        UIPasteboard.general.string = text
-#elseif os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-#endif
+    @ViewBuilder
+    private func failureActions(loadFailed: Bool) -> some View {
+        DialogButton(title: "Close", filled: false, action: model.closeFailure)
+        if model.canRetryActiveSelection {
+            DialogButton(title: "Retry", filled: true, action: model.retryActiveSelection)
+                .accessibilityIdentifier("connection.retry")
+        }
+        if model.canStop {
+            DialogButton(title: "Stop", filled: false, action: model.stop)
+                .accessibilityIdentifier("failure.stop")
+        }
+        if loadFailed {
+            DialogButton(title: "Retry", filled: true) { model.retryLoad() }
+                .accessibilityIdentifier("subscription.retry")
+        }
     }
 
     private func announceStatus(_ status: String) {
@@ -574,3 +587,19 @@ private struct SockIcon: View {
         return path
     }()
 }
+
+/// Limit presentation work without changing the original copied diagnostic.
+func errorDisplayText(_ raw: String) -> String {
+    let scalars = raw.unicodeScalars
+    guard scalars.count > 32_768 else { return raw }
+    return String(String.UnicodeScalarView(scalars.prefix(32_768))) + "\n[Display truncated; Copy includes the complete error.]"
+}
+
+#if os(macOS)
+func copyError(_ text: String, to pasteboard: NSPasteboard = .general) {
+    pasteboard.clearContents()
+    pasteboard.setString(text, forType: .string)
+}
+#elseif os(iOS)
+func copyError(_ text: String) { UIPasteboard.general.string = text }
+#endif

@@ -99,6 +99,8 @@ internal class StructuredLogs(private val paths: List<String>, private val bound
     }
 
     companion object {
+        fun isShownOnScreen(entry: LogEntry): Boolean = entry.level != "DEBUG" && entry.level != "TRACE"
+
         fun friendlyStream(name: String): String = when {
             name.contains("stderr") -> if (name.contains("tunnel")) "Tunnel stderr" else "Backend stderr"
             name.contains("ui") || name.contains("app") -> "App"

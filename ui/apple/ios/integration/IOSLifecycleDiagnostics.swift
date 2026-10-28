@@ -61,3 +61,21 @@ public func diagnosticErrorDescription(_ error: Error) -> String {
 
     return describe(error, indentation: "")
 }
+
+/// Execute the provider exchange and encode its original error in the normal response.
+public func performProviderMessage(commandData: Data, send: () throws -> Data, onFailure: (Error) -> Void) throws -> Data {
+    do { return try send() }
+    catch {
+        onFailure(error)
+        return try providerFailureResponse(commandData: commandData, error: error)
+    }
+}
+
+private func providerFailureResponse(commandData: Data, error: Error) throws -> Data {
+    let command = try IOSProviderCommand.decode(commandData)
+    let payload = try JSONSerialization.data(withJSONObject: [
+        "ok": false,
+        "error": ["code": "PLATFORM_FAILED", "message": "provider request failed:\n\(diagnosticErrorDescription(error))"],
+    ])
+    return try IOSProviderResponse(requestID: command.requestID, kind: .transport, payload: payload).encoded()
+}

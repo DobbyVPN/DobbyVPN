@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -416,6 +418,12 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
     }
 }
 
+internal fun displayErrorDetail(raw: String): String {
+    val limit = 32_768
+    if (raw.codePointCount(0, raw.length) <= limit) return raw
+    return raw.substring(0, raw.offsetByCodePoints(0, limit)) + "\n[Details truncated; Copy includes the complete error.]"
+}
+
 @Composable
 private fun ErrorDialog(controller: SessionController) {
     val errors = controller.errors
@@ -457,7 +465,8 @@ private fun ErrorDialog(controller: SessionController) {
                 )
             }
             Row(
-                Modifier.padding(top = 10.dp)
+                Modifier.weight(1f, fill = false).padding(top = 10.dp)
+                    .heightIn(max = 240.dp)
                     .fillMaxWidth()
                     .border(1.dp, Rule, RoundedCornerShape(6.dp))
                     .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -465,14 +474,12 @@ private fun ErrorDialog(controller: SessionController) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    detail,
+                    displayErrorDetail(detail),
                     color = Ink,
                     fontSize = 11.5.sp,
                     lineHeight = 16.sp,
                     fontFamily = FontFamily.Monospace,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).testTag("error.detail"),
                 )
                 Text(
                     "Copy",

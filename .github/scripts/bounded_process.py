@@ -217,48 +217,35 @@ def terminate_process_group(
                 pass
         else:
             time.sleep(wait_slice)
-    wait_error: subprocess.TimeoutExpired | None = None
-    try:
-        process.wait(timeout=max(grace_seconds, 0))
-    except subprocess.TimeoutExpired as error:
-        wait_error = error
-    if forced:
+    # SIGKILL delivery is asynchronous. Keep probing the group, independently
+    # of the leader, within the existing second grace window before collecting
+    # output or reporting its state.
+    final_deadline = deadline + max(grace_seconds, 0)
+    while True:
         try:
+            process.poll()  # Reap the owned leader so it cannot keep the group visible.
             os.killpg(group_id, 0)
         except ProcessLookupError:
-            if wait_error is not None:
-                raise ProcessCleanupError(
-                    f"process group={group_id} disappeared after SIGKILL, but the "
-                    f"owned child could not be reaped: {wait_error}; "
-                    "process-group-final-state=unknown"
-                ) from wait_error
+            break
         except OSError as error:
-            wait_detail = (
-                f"; owned child wait also timed out: {wait_error}"
-                if wait_error is not None
-                else ""
-            )
             raise ProcessCleanupError(
-                f"could not verify process group={group_id} after SIGKILL: {error}"
-                f"{wait_detail}; "
+                f"could not verify process group={group_id} after termination: {error}; "
                 "process-group-final-state=unknown"
             ) from error
-        else:
-            wait_detail = (
-                f"; owned child wait also timed out: {wait_error}"
-                if wait_error is not None
-                else ""
-            )
+        remaining = final_deadline - time.monotonic()
+        if remaining <= 0:
             raise ProcessCleanupError(
-                f"process group={group_id} still exists after SIGKILL; "
-                f"final probe confirmed members remain{wait_detail}; "
-                "process-group-final-state=unknown"
+                f"process group={group_id} still exists after {'SIGKILL' if forced else 'termination'}; "
+                "final probe confirmed members remain; process-group-final-state=unknown"
             )
-    elif wait_error is not None:
+        time.sleep(min(remaining, 0.05))
+    try:
+        process.wait(timeout=_remaining(final_deadline))
+    except subprocess.TimeoutExpired as error:
         raise ProcessCleanupError(
-            f"process group={group_id} disappeared, but the owned child could not "
-            f"be reaped: {wait_error}; process-group-final-state=unknown"
-        ) from wait_error
+            f"process group={group_id} disappeared {'after SIGKILL' if forced else 'after termination'}, "
+            f"but the owned child could not be reaped: {error}; process-group-final-state=unknown"
+        ) from error
     return "process-group=terminated"
 
 
@@ -458,7 +445,10 @@ def run_finite_capture(
             if terminate is None:
                 termination_outcome = terminate_process_group(
                     process,
-                    grace_seconds=max(termination_deadline - cleanup_started, 0),
+                    grace_seconds=min(
+                        max(termination_deadline - time.monotonic(), 0),
+                        _remaining(cleanup_deadline) / 2,
+                    ),
                 )
             else:
                 termination_outcome = terminate(process, termination_deadline)
@@ -577,7 +567,10 @@ def run_streamed(
         try:
             termination_outcome = terminate_process_group(
                 process,
-                grace_seconds=max(termination_deadline - time.monotonic(), 0),
+                grace_seconds=min(
+                    max(termination_deadline - time.monotonic(), 0),
+                    _remaining(cleanup_deadline) / 2,
+                ),
             )
         except BaseException as cleanup_error:
             cleanup_errors.append(cleanup_error)

@@ -280,7 +280,9 @@ class DobbyVpnService : VpnService() {
         val active = sessionID == activeSession && generation == activeGeneration
         val released = sessionID == lastClosedSession && generation == lastClosedGeneration && lastCloseSucceeded == true
         if ((!active && !released) || (vpnInterface != null && !active)) return
-        Log.i(TAG, "Go state=$state generation=$generation failure=$failureCode")
+        val message = "Go state=$state generation=$generation failure=$failureCode"
+        Log.i(TAG, message)
+        NativeVpnBridge.recordDiagnostic(this, "vpn.service.state", message)
         if (vpnInterface != null) {
             try {
                 ensureForeground()

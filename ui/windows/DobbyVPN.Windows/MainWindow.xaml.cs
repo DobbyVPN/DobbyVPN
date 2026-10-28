@@ -731,7 +731,7 @@ public sealed partial class MainWindow : Window
         ErrorHint.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
-        ErrorDetail.Text = detail;
+        ErrorDetail.Text = ErrorDisplayText.ForDisplay(detail);
         var shown = ErrorShown;
         ErrorOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (visible) KeepFocusInError();
@@ -775,7 +775,7 @@ public sealed partial class MainWindow : Window
     private void CopyError_Click(object sender, RoutedEventArgs e)
     {
         var package = new DataPackage();
-        package.SetText(ErrorDetail.Text);
+        package.SetText(ShownError);
         try { Clipboard.SetContent(package); }
         catch (Exception error) { RecordError(error.ToString()); }
     }
@@ -1391,7 +1391,7 @@ public sealed partial class MainWindow : Window
         }
         if (directManipulation || scrollbarInteraction)
             ObserveLogPresentationForScroll(directManipulation ? "direct-manipulation" : "scrollbar-interaction",
-                isIntermediate);
+                isIntermediate, offsetDelta < -0.5);
         if (!_updatingLogs && _logPresentation.FollowsTail) RenderLogs();
     }
 
@@ -1413,11 +1413,11 @@ public sealed partial class MainWindow : Window
             state = CaptureLogScrollDiagnosticState(),
         });
 
-    private void ObserveLogPresentationForScroll(string cause, bool isIntermediate,
+    private void ObserveLogPresentationForScroll(string cause, bool isIntermediate, bool movedTowardEarlierEntries,
         long? gestureId = null, string? direction = null)
     {
         var wasFollowingTail = _logPresentation.FollowsTail;
-        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
+        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom(), movedTowardEarlierEntries);
         RecordLogFollowTransition(cause, wasFollowingTail, gestureId, direction, isIntermediate);
     }
 
@@ -1547,7 +1547,7 @@ public sealed partial class MainWindow : Window
     }
 
     private static List<NativeDiagnostics.Entry> Shown(IEnumerable<NativeDiagnostics.Entry> entries) =>
-        entries.Where(entry => !entry.Raw.Contains("\"event\":\"logs.backend-ingested\"", StringComparison.Ordinal)).ToList();
+        entries.Where(entry => entry.Level is not ("DEBUG" or "TRACE") && !entry.Raw.Contains("\"event\":\"logs.backend-ingested\"", StringComparison.Ordinal)).ToList();
 
     private void RenderLogs()
     {

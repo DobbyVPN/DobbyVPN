@@ -20,6 +20,8 @@ func exportDiagnostics(paths: [URL], to url: URL, header: String) throws -> Stri
 
 typealias DobbyLogEntry = DiagnosticFiles.Entry
 
+func isShownOnScreen(_ entry: DobbyLogEntry) -> Bool { entry.level != "DEBUG" && entry.level != "TRACE" }
+
 func structuredPreview(paths: [URL], boundary: URL) -> (entries: [DobbyLogEntry], error: String) {
     DiagnosticFiles.entries(paths: paths, boundary: boundary)
 }
