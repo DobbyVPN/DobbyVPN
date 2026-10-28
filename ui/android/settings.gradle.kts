@@ -25,6 +25,8 @@ gradle.beforeProject {
             requested.group == "org.bitbucket.b_c" && requested.name == "jose4j" -> "0.9.6"
             requested.group == "org.jdom" && requested.name == "jdom2" -> "2.0.6.1"
             requested.group == "io.netty" && !requested.name.startsWith("netty-tcnative") -> "4.1.137.Final"
+            requested.group == "com.google.guava" && requested.name == "guava" ->
+                if (requested.version?.endsWith("-android") == true) "33.7.2-android" else "33.7.2-jre"
             else -> null
         }
         if (secureVersion != null) {
