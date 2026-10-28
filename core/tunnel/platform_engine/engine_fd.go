@@ -28,9 +28,7 @@ func stopPlatformEngine(_ context.Context, stopDevice func()) error {
 	// interruptible readers before device.Close releases that descriptor for
 	// reuse. iOS's io endpoint instead needs device.Close to unblock its reader.
 	if (runtime.GOOS == "linux" || runtime.GOOS == "android") && ownedStack != nil {
-		ownedStack.Close()
-		ownedStack.Wait()
-		ownedStack = nil
+		drainStack()
 		log.Debugf(Category, "[Engine][FD] stack_drained=true device_release=starting")
 	}
 	stopDevice()

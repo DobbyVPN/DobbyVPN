@@ -69,6 +69,9 @@ func dialWebsocketPacket(ctx context.Context, stream transport.StreamDialer, add
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()
 		}
+		if response != nil {
+			return nil, fmt.Errorf("WebSocket packet upgrade response=%q: %w", response.Status, err)
+		}
 		return nil, err
 	}
 	conn.SetReadLimit(65535)

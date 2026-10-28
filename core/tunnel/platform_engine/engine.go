@@ -5,6 +5,7 @@ import (
 	"core/log"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
 	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
@@ -80,14 +81,25 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 	return true, err
 }
 
+func stopPhase(name string, fn func()) {
+	started := time.Now()
+	log.Debugf(Category, "[Engine][Platform] phase=%s started", name)
+	fn()
+	log.Debugf(Category, "[Engine][Platform] phase=%s finished elapsed=%s", name, time.Since(started))
+}
+
+func drainStack() {
+	stopPhase("stack-close", ownedStack.Close)
+	stopPhase("stack-wait", ownedStack.Wait)
+	ownedStack = nil
+}
+
 func stopStack() {
 	if ownedDevice != nil {
-		ownedDevice.Close()
+		stopPhase("device-close", ownedDevice.Close)
 		ownedDevice = nil
 	}
 	if ownedStack != nil {
-		ownedStack.Close()
-		ownedStack.Wait()
-		ownedStack = nil
+		drainStack()
 	}
 }

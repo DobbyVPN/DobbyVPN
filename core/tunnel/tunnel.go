@@ -1,11 +1,13 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -474,20 +476,37 @@ func (e *Engine) Stop(ctx context.Context) error {
 	// Keep the reservation while cleanup runs, without making other sessions
 	// wait on a proxy handshake merely to discover that this owner is busy.
 	engineMu.Unlock()
+	started := time.Now()
+	generation, iface := e.attempt, e.ifaceName
+	var phase atomic.Value
+	phase.Store("starting")
+	timer := time.AfterFunc(3*time.Second, func() {
+		var stacks bytes.Buffer
+		err := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+		log.Warnf(Category, "[Engine] stop slow generation=%d interface=%s phase=%s elapsed=%s contextError=%v stackError=%v\n%s", generation, iface, phase.Load(), time.Since(started), ctx.Err(), err, stacks.String())
+	})
+	defer timer.Stop()
+	runPhase := func(name string, fn func()) {
+		phase.Store(name)
+		phaseStarted := time.Now()
+		log.Debugf(Category, "[Engine] stop phase=%s started generation=%d interface=%s", name, generation, iface)
+		fn()
+		log.Debugf(Category, "[Engine] stop phase=%s finished generation=%d interface=%s elapsed=%s", name, generation, iface, time.Since(phaseStarted))
+	}
 	log.Debugf(Category, "[Engine] stopping owned tun2socks engine")
 	if e.router != nil {
-		e.router.close()
+		runPhase("router-close", e.router.close)
 	}
 	if e.proxy != nil {
-		e.proxy.flows.sealAndClose()
+		runPhase("flow-close", e.proxy.flows.sealAndClose)
 	}
 	var platformErr error
 	if stopPlatform != nil {
-		platformErr = stopPlatform(ctx)
+		runPhase("platform-stop", func() { platformErr = stopPlatform(ctx) })
 	}
 	var flowErr error
 	if e.proxy != nil {
-		flowErr = e.proxy.flows.wait(ctx)
+		runPhase("flow-wait", func() { flowErr = e.proxy.flows.wait(ctx) })
 	}
 	e.stopErr = errors.Join(platformErr, flowErr)
 	if e.stopErr != nil {

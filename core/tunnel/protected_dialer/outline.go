@@ -58,6 +58,7 @@ func NewOutlineProviders(owner context.Context, dnsCache *dnscache.Cache, regist
 	}
 	log.Debugf(Category, "[Protect][Outline] SDK providers use attempt-scoped protected stream/packet dialers")
 	configurl.RegisterDefaultProviders(providers)
+	registerOutlineWebsocketStreams(providers)
 	registerOutlineWebsocketPackets(providers)
 	return providers
 }
