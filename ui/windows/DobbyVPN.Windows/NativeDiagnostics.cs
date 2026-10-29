@@ -42,6 +42,23 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         }
     }
 
+    private void RecordReadFailure(string path, Exception? error)
+    {
+        lock (_gate)
+        {
+            var key = "\0read:" + path;
+            if (error is null)
+            {
+                _lastErrors.Remove(key);
+                return;
+            }
+            var message = error.ToString();
+            if (_lastErrors.GetValueOrDefault(key) == message) return;
+            _lastErrors[key] = message;
+            Write("ERROR", "ui.logs.read_failed", message, new { path });
+        }
+    }
+
     public void RecordInfo(string category, string message, object fields)
     {
         lock (_gate) Write("INFO", category, message, fields);
@@ -153,8 +170,17 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         var entries = new List<Entry>();
         var issues = new List<string>();
         Dictionary<string, long> offsets;
-        try { offsets = File.Exists(uiPath + ".view") ? JsonSerializer.Deserialize<Dictionary<string, long>>(File.ReadAllText(uiPath + ".view")) ?? [] : []; }
-        catch (Exception error) { return (entries, $"Viewing boundary: {error}"); }
+        var boundary = uiPath + ".view";
+        try
+        {
+            offsets = File.Exists(boundary) ? JsonSerializer.Deserialize<Dictionary<string, long>>(File.ReadAllText(boundary)) ?? [] : [];
+            RecordReadFailure(boundary, null);
+        }
+        catch (Exception error)
+        {
+            RecordReadFailure(boundary, error);
+            return (entries, $"Viewing boundary: {error}");
+        }
         foreach (var path in _paths.SelectMany(path => new[] { path + ".previous", path }))
         {
             try
@@ -174,7 +200,7 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
                     if (!boundaryLine)
                     {
                         var newline = Array.IndexOf(bytes, (byte)10);
-                        if (newline < 0) continue;
+                        if (newline < 0) { RecordReadFailure(path, null); continue; }
                         position += newline + 1;
                         bytes = bytes[(newline + 1)..];
                     }
@@ -193,10 +219,11 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
                     if (raw.Length == 0 || index == lines.Length - 1 && raw.StartsWith('{')) continue;
                     entries.Add(ParseEntry(raw, entryId, stream));
                 }
+                RecordReadFailure(path, null);
             }
-            catch (FileNotFoundException) { }
-            catch (DirectoryNotFoundException) { }
-            catch (Exception error) { issues.Add($"{path}: {error}"); }
+            catch (FileNotFoundException) { RecordReadFailure(path, null); }
+            catch (DirectoryNotFoundException) { RecordReadFailure(path, null); }
+            catch (Exception error) { issues.Add($"{path}: {error}"); RecordReadFailure(path, error); }
         }
         if (WriteFailure.Length > 0) issues.Add(WriteFailure);
         var datedPositions = entries.Select((entry, index) => (entry, index)).Where(item => item.entry.Time is not null).ToArray();

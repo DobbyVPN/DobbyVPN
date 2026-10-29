@@ -720,6 +720,8 @@ public sealed partial class MainWindow : Window
 
     private string _lastObservedErrorDetail = "";
     private long _errorDetailObservationSequence;
+    private string? _renderedErrorDetail;
+    private int _errorDetailParagraphCount;
 
     private string ShownError => Errors.FirstOrDefault(text => !_dismissedErrors.Contains(text)) ?? "";
 
@@ -741,7 +743,7 @@ public sealed partial class MainWindow : Window
         {
             _lastObservedErrorDetail = detail;
             observationSequence = ++_errorDetailObservationSequence;
-            RecordErrorDetailObservation(observationSequence, "requested", detail.Length, null, renderStarted);
+            RecordErrorDetailObservation(observationSequence, "requested", detail.Length, null, null, renderStarted);
         }
         var loadFailure = visible && detail == _loadError;
         ErrorTitle.Text = loadFailure ? "Couldn't load the subscription" : "Something went wrong";
@@ -749,22 +751,38 @@ public sealed partial class MainWindow : Window
         ErrorHint.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
-        var displayDetail = ErrorDisplayText.ForDisplay(detail);
+        var displayDetail = visible ? ErrorDisplayText.ForDisplay(detail) : "";
+        var textChanged = visible ? _renderedErrorDetail != displayDetail : _renderedErrorDetail is not null;
+        var paragraphs = textChanged ? ErrorDisplayText.Paragraphs(displayDetail) : null;
         if (observeDetail)
-            RecordErrorDetailObservation(observationSequence, "display_prepared", detail.Length, displayDetail.Length, renderStarted);
-        ErrorDetail.Text = displayDetail;
+            RecordErrorDetailObservation(observationSequence, "display_prepared", detail.Length, displayDetail.Length,
+                paragraphs?.Count ?? _errorDetailParagraphCount, renderStarted);
+        if (textChanged)
+        {
+            ErrorDetail.Blocks.Clear();
+            foreach (var text in paragraphs!)
+            {
+                var paragraph = new Paragraph { Margin = new Thickness(0) };
+                paragraph.Inlines.Add(new Run { Text = text });
+                ErrorDetail.Blocks.Add(paragraph);
+            }
+            _renderedErrorDetail = visible ? displayDetail : null;
+            _errorDetailParagraphCount = paragraphs!.Count;
+            ErrorDetailViewport.ChangeView(null, 0, null, disableAnimation: true);
+        }
         if (observeDetail)
-            RecordErrorDetailObservation(observationSequence, "text_assigned", detail.Length, displayDetail.Length, renderStarted);
+            RecordErrorDetailObservation(observationSequence, textChanged ? "text_assigned" : "text_unchanged",
+                detail.Length, displayDetail.Length, _errorDetailParagraphCount, renderStarted);
         var shown = ErrorShown;
         ErrorOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (visible) KeepFocusInError();
         else if (shown) ClearFocus();
         if (observeDetail)
-            RecordErrorDetailObservation(observationSequence, "presentation_assigned", detail.Length, displayDetail.Length, renderStarted);
+            RecordErrorDetailObservation(observationSequence, "presentation_assigned", detail.Length, displayDetail.Length, _errorDetailParagraphCount, renderStarted);
     }
 
     private void RecordErrorDetailObservation(long sequence, string phase, int rawUtf16Length,
-        int? displayUtf16Length, long renderStarted)
+        int? displayUtf16Length, int? paragraphCount, long renderStarted)
     {
         try
         {
@@ -774,6 +792,9 @@ public sealed partial class MainWindow : Window
                 phase,
                 raw_utf16_length = rawUtf16Length,
                 display_utf16_length = displayUtf16Length,
+                paragraph_count = paragraphCount,
+                viewport_actual_width = ErrorDetailViewport.ActualWidth,
+                viewport_actual_height = ErrorDetailViewport.ActualHeight,
                 elapsed_ms = Stopwatch.GetElapsedTime(renderStarted).TotalMilliseconds,
                 detail_actual_width = ErrorDetail.ActualWidth,
                 detail_actual_height = ErrorDetail.ActualHeight,
