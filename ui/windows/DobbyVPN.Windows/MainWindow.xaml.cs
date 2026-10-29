@@ -73,6 +73,7 @@ public sealed partial class MainWindow : Window
     private bool _logScrollbarPointerDown;
     private long _logScrollbarPressSequence;
     private int _logScrollbarViewObservationsRemaining;
+    private int _logScrollbarMoveObservationsRemaining;
     private int _logPointerEntryObservations;
     private bool _pendingLogUpwardIntent;
     private bool _logTailChangeViewPending;
@@ -1308,13 +1309,14 @@ public sealed partial class MainWindow : Window
                 _logScrollbarPointerDown = true;
                 _logScrollbarPressSequence++;
                 _logScrollbarViewObservationsRemaining = 12;
-                RecordLogScrollbarObservation("press");
+                _logScrollbarMoveObservationsRemaining = 6;
+                RecordLogScrollbarObservation("press", pointer: args);
             }
         }), true);
         LogsScroll.AddHandler(UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
             if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
-            RecordLogScrollbarObservation("release");
+            RecordLogScrollbarObservation("release", pointer: args);
             ObserveLogScrollPosition();
             _logScrollbarPointerDown = false;
             if (_logPresentation.FollowsTail) QueueLogTailChangeView(_logRenderGeneration);
@@ -1322,10 +1324,16 @@ public sealed partial class MainWindow : Window
         LogsScroll.AddHandler(UIElement.PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
         {
             if (FindLogVerticalScrollBar(args.OriginalSource) is null) return;
-            RecordLogScrollbarObservation("capture-lost");
+            RecordLogScrollbarObservation("capture-lost", pointer: args);
             ObserveLogScrollPosition();
             _logScrollbarPointerDown = false;
             if (_logPresentation.FollowsTail) QueueLogTailChangeView(_logRenderGeneration);
+        }), true);
+        LogsScroll.AddHandler(UIElement.PointerMovedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, args) =>
+        {
+            if (!_logScrollbarPointerDown || _logScrollbarMoveObservationsRemaining <= 0) return;
+            _logScrollbarMoveObservationsRemaining--;
+            RecordLogScrollbarObservation("move", pointer: args);
         }), true);
         LogsScroll.DirectManipulationStarted += (_, _) =>
         {
@@ -1355,7 +1363,8 @@ public sealed partial class MainWindow : Window
         StartWindowWork(RefreshLogsAsync);
     }
 
-    private void RecordLogScrollbarObservation(string phase, bool? isIntermediate = null)
+    private void RecordLogScrollbarObservation(string phase, bool? isIntermediate = null,
+        Microsoft.UI.Xaml.Input.PointerRoutedEventArgs? pointer = null)
     {
         try
         {
@@ -1366,6 +1375,8 @@ public sealed partial class MainWindow : Window
                 is_intermediate = isIntermediate,
                 offset_delta = phase == "view-changed" ? _logScroll?.VerticalOffset - _lastLogScrollOffset : null,
                 view_observations_remaining = _logScrollbarViewObservationsRemaining,
+                move_observations_remaining = _logScrollbarMoveObservationsRemaining,
+                pointer = pointer is null ? null : CaptureLogScrollbarPointer(pointer),
                 state = CaptureLogScrollDiagnosticState(),
             });
         }
@@ -1373,6 +1384,28 @@ public sealed partial class MainWindow : Window
         {
             _diagnostics.Record(error.ToString(), "logs.scrollbar-observation.failure");
         }
+    }
+
+    private object CaptureLogScrollbarPointer(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs args)
+    {
+        var point = args.GetCurrentPoint(LogsScroll);
+        var ancestry = new List<object>();
+        var current = args.OriginalSource as DependencyObject;
+        while (current is not null && ancestry.Count < 8)
+        {
+            ancestry.Add(new { type = current.GetType().FullName, automation_id = AutomationProperties.GetAutomationId(current) });
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return new
+        {
+            pointer_id = args.Pointer.PointerId,
+            pointer_device = args.Pointer.PointerDeviceType.ToString(),
+            x = point.Position.X,
+            y = point.Position.Y,
+            in_contact = point.IsInContact,
+            left_button_pressed = point.Properties.IsLeftButtonPressed,
+            source_ancestry = ancestry,
+        };
     }
 
     private void RegisterLogDownScrollIntent()
