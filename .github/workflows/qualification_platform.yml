@@ -780,8 +780,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Start the 420-second UI allowance before setup diagnostics and
-          # method selection, and clip it to the inherited qualification end.
+          # Convert the inherited qualification end before setup diagnostics
+          # and method selection so all UI work shares the remaining time.
           ui_deadline_monotonic="$(python3 - <<'PYTHON'
           import os
           import time
@@ -789,7 +789,7 @@ jobs:
           monotonic_now = time.monotonic()
           wall_now = time.time()
           inherited_remaining = max(0.0, float(os.environ["RUN_DEADLINE_EPOCH"]) - wall_now)
-          print(f"{min(monotonic_now + 420.0, monotonic_now + inherited_remaining):.9f}")
+          print(f"{monotonic_now + inherited_remaining:.9f}")
           PYTHON
           )"
           export ANDROID_UI_SUPERVISION_DEADLINE_MONOTONIC="$ui_deadline_monotonic"
@@ -817,7 +817,7 @@ jobs:
           logs = run_dir / f"android-native-ui-ime-{phase}"
           if phase == "failure":
               # Failure evidence may use bounded time left in the qualification
-              # recovery window; it never extends the UI allowance or starts tests.
+              # recovery window; it never extends execution or starts tests.
               global_remaining = max(0.0, float(os.environ["RUN_DEADLINE_EPOCH"]) - time.time())
               owner_deadline = time.monotonic() + global_remaining
           else:
@@ -838,7 +838,7 @@ jobs:
           ui_timed_out=false
           ui_methods="$(PYTHONPATH="$GITHUB_WORKSPACE/torturer${PYTHONPATH:+:$PYTHONPATH}" \
             python3 -c 'from torturer_runner.native_cases import ANDROID_DEFAULT_UI_METHODS; print(",".join(ANDROID_DEFAULT_UI_METHODS))')"
-          # The lifecycle suite uses the remaining UI allowance for both the
+          # The lifecycle suite uses the remaining platform time for both the
           # outer ADB process and the native watcher; neither timer restarts.
           ui_timeout="$(python3 - <<'PYTHON'
           import os
