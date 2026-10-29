@@ -325,7 +325,8 @@ public struct DobbyRootView: View {
 #else
             DobbyLogView(
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
-                interactive: !showingError, onSendLogs: sendLogs, onClear: { followingLogs = true; model.clearLogs() }
+                interactive: !showingError, onSendLogs: sendLogs, onClear: { followingLogs = true; model.clearLogs() },
+                onReadingPositionRestored: model.recordMacLogRestore
             )
             .accessibilityIdentifier("Connection logs")
 #endif

@@ -412,6 +412,7 @@ struct DobbyLogView: NSViewRepresentable {
     let interactive: Bool
     let onSendLogs: () -> Void
     let onClear: () -> Void
+    var onReadingPositionRestored: (MacLogRestoreObservation) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -431,32 +432,40 @@ struct DobbyLogView: NSViewRepresentable {
         scroll.contentView.postsFrameChangedNotifications = true
         view.postsFrameChangedNotifications = true
         let coordinator = context.coordinator
+        coordinator.viewportSize = scroll.contentView.bounds.size
         coordinator.observers.append(NotificationCenter.default.addObserver(
             forName: NSScrollView.willStartLiveScrollNotification, object: scroll, queue: .main
-        ) { [weak coordinator] _ in coordinator?.userScrolling = true })
+        ) { [weak coordinator] _ in
+            coordinator?.userScrolling = true
+            coordinator?.gestureGeneration += 1
+        })
         coordinator.observers.append(NotificationCenter.default.addObserver(
             forName: NSScrollView.didEndLiveScrollNotification, object: scroll, queue: .main
-        ) { [weak coordinator] _ in coordinator?.userScrolling = false })
+        ) { [weak coordinator, weak scroll] _ in
+            guard let coordinator, let scroll else { return }
+            coordinator.endUserScrolling(scroll)
+        })
         coordinator.observers.append(NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak coordinator = context.coordinator, weak scroll] _ in
             guard let coordinator, let scroll else { return }
-            coordinator.scheduleTailAlignment(scroll)
+            if coordinator.viewportSizeChanged(scroll) {
+                coordinator.scheduleGeometryAlignment(scroll)
+                return
+            }
             guard !coordinator.updating, coordinator.userScrolling else { return }
             let atBottom = shouldFollowLogUpdates(
                 viewportBottom: scroll.contentView.bounds.maxY,
                 contentHeight: scroll.documentView?.bounds.height ?? 0
             )
-            if coordinator.parent.following != atBottom {
-                DispatchQueue.main.async { coordinator.parent.following = atBottom }
-            }
+            coordinator.observeUserScroll(atBottom: atBottom, anchor: atBottom ? nil : captureMacLogReadingAnchor(scroll))
         })
         for observed in [scroll.contentView, view] {
             coordinator.observers.append(NotificationCenter.default.addObserver(
                 forName: NSView.frameDidChangeNotification, object: observed, queue: .main
             ) { [weak coordinator, weak scroll] _ in
                 guard let coordinator, let scroll else { return }
-                coordinator.scheduleTailAlignment(scroll)
+                coordinator.scheduleGeometryAlignment(scroll)
             })
         }
         return scroll
@@ -464,36 +473,35 @@ struct DobbyLogView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
+        let coordinator = context.coordinator
         view.onSendLogs = onSendLogs
-        view.onClear = onClear
+        view.onClear = { [weak coordinator] in
+            coordinator?.resetForClear()
+            onClear()
+        }
         if view.isSelectable != interactive {
             view.isSelectable = interactive
             view.window?.invalidateCursorRects(for: view)
         }
-        let coordinator = context.coordinator
         coordinator.parent = self
-        if clear != coordinator.lastClear { resetLogFollowingForClear(following: $following) }
-        guard following else { return }
+        if clear != coordinator.lastClear {
+            coordinator.resetForClear()
+        }
+        guard coordinator.desiredFollowing else { return }
         coordinator.entries = entries
         let attributed = logText(entries)
         let text = attributed.string
         coordinator.updating = true
-        let origin = scroll.contentView.bounds.origin
         let selection = view.selectedRange()
         if view.string != text {
             storage.setAttributedString(attributed)
             if NSMaxRange(selection) <= storage.length { view.setSelectedRange(selection) }
         }
         if let container = view.textContainer { view.layoutManager?.ensureLayout(for: container) }
-        if following || clear != coordinator.lastClear {
-            view.scrollRangeToVisible(NSRange(location: storage.length, length: 0))
-        } else {
-            scroll.contentView.scroll(to: origin)
-            scroll.reflectScrolledClipView(scroll.contentView)
-        }
+        view.scrollRangeToVisible(NSRange(location: storage.length, length: 0))
         coordinator.lastClear = clear
         coordinator.updating = false
-        coordinator.scheduleTailAlignment(scroll)
+        coordinator.scheduleGeometryAlignment(scroll)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -504,14 +512,79 @@ struct DobbyLogView: NSViewRepresentable {
         var userScrolling = false
         var entries: [DobbyLogEntry] = []
         var alignmentQueued = false
+        var readingAnchor: MacLogReadingAnchor?
+        var viewportSize: CGSize?
+        var gestureGeneration = 0
+        private var pendingFollowing: Bool?
+        private var followChangeQueued = false
+        var desiredFollowing: Bool { pendingFollowing ?? parent.following }
         init(_ parent: DobbyLogView) { self.parent = parent }
+
+        func observeUserScroll(atBottom: Bool, anchor: MacLogReadingAnchor?) {
+            readingAnchor = atBottom ? nil : anchor
+            pendingFollowing = atBottom
+            guard !followChangeQueued else { return }
+            followChangeQueued = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.followChangeQueued = false
+                guard let desired = self.pendingFollowing else { return }
+                self.pendingFollowing = nil
+                if self.parent.following != desired { self.parent.following = desired }
+            }
+        }
+
+        func resetForClear() {
+            pendingFollowing = nil
+            readingAnchor = nil
+            parent.following = true
+        }
+
+        func endUserScrolling(_ scroll: NSScrollView) {
+            userScrolling = false
+            // Let any pre-gesture queued alignment retire before scheduling
+            // against the latest gesture and geometry.
+            DispatchQueue.main.async { [weak self, weak scroll] in
+                guard let self, let scroll else { return }
+                self.scheduleGeometryAlignment(scroll)
+            }
+        }
+
+        func viewportSizeChanged(_ scroll: NSScrollView) -> Bool {
+            let size = scroll.contentView.bounds.size
+            defer { viewportSize = size }
+            guard let previous = viewportSize else { return true }
+            return abs(size.width - previous.width) > 0.5 || abs(size.height - previous.height) > 0.5
+        }
+
+        func scheduleGeometryAlignment(_ scroll: NSScrollView) {
+            if desiredFollowing { scheduleTailAlignment(scroll) }
+            else { scheduleReadingPositionRestore(scroll) }
+        }
+
+        func scheduleReadingPositionRestore(_ scroll: NSScrollView) {
+            guard !updating, !userScrolling, !desiredFollowing, readingAnchor != nil, !alignmentQueued else { return }
+            alignmentQueued = true
+            let scheduledGeneration = gestureGeneration
+            DispatchQueue.main.async { [weak self, weak scroll] in
+                guard let self else { return }
+                self.alignmentQueued = false
+                guard let scroll, !self.updating, !self.userScrolling, !self.desiredFollowing,
+                      self.gestureGeneration == scheduledGeneration,
+                      let anchor = self.readingAnchor else { return }
+                if let observation = restoreMacLogReadingAnchor(anchor, in: scroll) {
+                    self.parent.onReadingPositionRestored(observation)
+                }
+            }
+        }
+
         func scheduleTailAlignment(_ scroll: NSScrollView) {
-            guard !updating, !userScrolling, parent.following, !alignmentQueued else { return }
+            guard !updating, !userScrolling, desiredFollowing, !alignmentQueued else { return }
             alignmentQueued = true
             DispatchQueue.main.async { [weak self, weak scroll] in
                 guard let self else { return }
                 self.alignmentQueued = false
-                guard let scroll, !self.updating, !self.userScrolling, self.parent.following,
+                guard let scroll, !self.updating, !self.userScrolling, self.desiredFollowing,
                       let document = scroll.documentView else { return }
                 let y = max(0, document.bounds.height - scroll.contentView.bounds.height)
                 guard abs(scroll.contentView.bounds.origin.y - y) > 0.5 else { return }
@@ -521,6 +594,52 @@ struct DobbyLogView: NSViewRepresentable {
         }
         deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
     }
+}
+// A UTF-16 character identity survives wrapping above the frozen viewport.
+struct MacLogReadingAnchor {
+    let characterIndex: Int
+    let viewportY: CGFloat
+}
+
+func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? {
+    guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage,
+          let layout = view.layoutManager, let container = view.textContainer, storage.length > 0 else { return nil }
+    layout.ensureLayout(for: container)
+    guard layout.numberOfGlyphs > 0 else { return nil }
+    let point = NSPoint(x: 1, y: max(0, scroll.contentView.bounds.minY - view.textContainerOrigin.y + 1))
+    let glyph = min(layout.glyphIndex(for: point, in: container), layout.numberOfGlyphs - 1)
+    let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+    return MacLogReadingAnchor(characterIndex: layout.characterIndexForGlyph(at: glyph),
+                               viewportY: line.minY + view.textContainerOrigin.y - scroll.contentView.bounds.minY)
+}
+
+struct MacLogRestoreObservation {
+    let anchor: MacLogReadingAnchor
+    let previousOrigin: CGPoint
+    let restoredOrigin: CGPoint
+    let viewportSize: CGSize
+    let contentSize: CGSize
+}
+
+@discardableResult
+func restoreMacLogReadingAnchor(_ anchor: MacLogReadingAnchor, in scroll: NSScrollView) -> MacLogRestoreObservation? {
+    guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage,
+          let layout = view.layoutManager, let container = view.textContainer,
+          anchor.characterIndex >= 0, anchor.characterIndex < storage.length else { return nil }
+    layout.ensureLayout(for: container)
+    let glyph = layout.glyphIndexForCharacter(at: anchor.characterIndex)
+    guard glyph < layout.numberOfGlyphs else { return nil }
+    let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+    let maxY = max(0, view.bounds.height - scroll.contentView.bounds.height)
+    let y = min(max(line.minY + view.textContainerOrigin.y - anchor.viewportY, 0), maxY)
+    guard abs(scroll.contentView.bounds.minY - y) > 0.5 else { return nil }
+    let previous = scroll.contentView.bounds.origin
+    scroll.contentView.scroll(to: NSPoint(x: previous.x, y: y))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    let restored = scroll.contentView.bounds.origin
+    guard abs(restored.y - previous.y) > 0.5 else { return nil }
+    return MacLogRestoreObservation(anchor: anchor, previousOrigin: previous, restoredOrigin: restored,
+                                    viewportSize: scroll.contentView.bounds.size, contentSize: view.bounds.size)
 }
 #endif
 
