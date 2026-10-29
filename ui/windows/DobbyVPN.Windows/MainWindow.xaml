@@ -181,12 +181,10 @@
                      Text="Check the link and whether another VPN is blocking it." />
           <Border Grid.Row="2" MaxHeight="240" Margin="0,7.5,0,0" Padding="7.5,6" CornerRadius="4.5" BorderThickness="1" BorderBrush="{StaticResource Rule}">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                            AutomationProperties.AutomationId="error.detail.viewport">
-              <TextBox x:Name="ErrorDetail" FontFamily="{StaticResource Mono}" FontSize="9.8" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" Foreground="{StaticResource Ink}"
-                       Background="Transparent" BorderThickness="0" Padding="0" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                       AutomationProperties.Name="Error details" AutomationProperties.AutomationId="error.detail" />
-              </ScrollViewer>
+              <local:ErrorDetailBox x:Name="ErrorDetail" FontFamily="{StaticResource Mono}" FontSize="9.8" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" Foreground="{StaticResource Ink}"
+                                    Background="Transparent" BorderThickness="0" Padding="0" MinHeight="0" IsSpellCheckEnabled="False" IsTextPredictionEnabled="False"
+                                    ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                    AutomationProperties.Name="Error details" AutomationProperties.AutomationId="error.detail" />
               <Button Grid.Column="1" Style="{StaticResource PlainButton}" VerticalAlignment="Center" Click="CopyError_Click"
                       AutomationProperties.Name="Copy">
                 <TextBlock Text="Copy" FontSize="10.2" FontWeight="SemiBold" TextDecorations="Underline" Foreground="{StaticResource Ink}" />

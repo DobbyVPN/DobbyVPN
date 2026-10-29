@@ -750,6 +750,8 @@ public sealed partial class MainWindow : Window
         RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
         var displayDetail = ErrorDisplayText.ForDisplay(detail);
+        if (observeDetail)
+            RecordErrorDetailObservation(observationSequence, "display_prepared", detail.Length, displayDetail.Length, renderStarted);
         ErrorDetail.Text = displayDetail;
         if (observeDetail)
             RecordErrorDetailObservation(observationSequence, "text_assigned", detail.Length, displayDetail.Length, renderStarted);
