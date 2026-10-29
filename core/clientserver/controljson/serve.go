@@ -32,7 +32,7 @@ func routineDisconnect(err error) bool {
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		return routineDisconnect(wrapped.Unwrap())
 	}
-	return err == io.EOF || err == net.ErrClosed || err == syscall.EPIPE || err == syscall.ECONNRESET
+	return errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET)
 }
 
 func Serve(listener net.Listener, handler Handler, authorize AuthorizeConn) error {

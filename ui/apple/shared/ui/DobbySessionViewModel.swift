@@ -486,17 +486,6 @@ public final class DobbySessionViewModel: ObservableObject {
         recordDiagnostic(message)
     }
 
-#if os(macOS)
-    func recordMacLogRestore(_ observation: MacLogRestoreObservation) {
-        recordDiagnostic(
-            "character_index=\(observation.anchor.characterIndex) anchor_viewport_y=\(observation.anchor.viewportY) " +
-            "previous_origin=\(observation.previousOrigin) restored_origin=\(observation.restoredOrigin) " +
-            "viewport_size=\(observation.viewportSize) content_size=\(observation.contentSize)",
-            event: "logs.frozen-position-restored", level: "DEBUG"
-        )
-    }
-#endif
-
     private func recordDiagnostic(
         _ message: String,
         event: String = "ui.failure",
@@ -778,3 +767,16 @@ func subscriptionFromLink(_ value: String) throws -> String? {
 }
 
 private struct ConfigurationReceipt: Decodable { let sequence: Int64 }
+
+#if os(macOS)
+extension DobbySessionViewModel {
+    func recordMacLogRestore(_ observation: MacLogRestoreObservation) {
+        recordDiagnostic(
+            "character_index=\(observation.anchor.characterIndex) anchor_viewport_y=\(observation.anchor.viewportY) " +
+            "previous_origin=\(observation.previousOrigin) restored_origin=\(observation.restoredOrigin) " +
+            "viewport_size=\(observation.viewportSize) content_size=\(observation.contentSize)",
+            event: "logs.frozen-position-restored", level: "DEBUG"
+        )
+    }
+}
+#endif
