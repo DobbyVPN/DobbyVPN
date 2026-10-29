@@ -52,7 +52,7 @@ func (bridge zapBridge) Write(entry zapcore.Entry, fields []zapcore.Field) error
 		field.AddTo(attributes)
 	}
 	level := slog.Level(entry.Level) * 4
-	if entry.Level == zapcore.WarnLevel && closedTunTCPDial(entry.Message) {
+	if entry.Level == zapcore.WarnLevel && routineTunDial(entry.Message) {
 		level = slog.LevelDebug
 	}
 	if level > slog.LevelError {
@@ -62,16 +62,56 @@ func (bridge zapBridge) Write(entry zapcore.Entry, fields []zapcore.Field) error
 	return nil
 }
 
-// closedTunTCPDial recognizes the pinned tun2socks producer's complete message.
-func closedTunTCPDial(message string) bool {
-	const prefix = "[TCP] dial "
+// routineTunDial recognizes only the pinned tun2socks producer's complete
+// closed-connection messages, including the observed canceled TCP read.
+func routineTunDial(message string) bool {
 	const suffix = ": use of closed network connection"
-	if !strings.HasPrefix(message, prefix) || !strings.HasSuffix(message, suffix) {
+	var tcp bool
+	switch {
+	case strings.HasPrefix(message, "[TCP] dial "):
+		message = strings.TrimPrefix(message, "[TCP] dial ")
+		tcp = true
+	case strings.HasPrefix(message, "[UDP] dial "):
+		message = strings.TrimPrefix(message, "[UDP] dial ")
+	default:
 		return false
 	}
-	address := strings.TrimSuffix(strings.TrimPrefix(message, prefix), suffix)
-	_, err := netip.ParseAddrPort(address)
-	return err == nil
+	if !strings.HasSuffix(message, suffix) {
+		return false
+	}
+	message = strings.TrimSuffix(message, suffix)
+	address, read, compound := strings.Cut(message, ": context canceled\nread tcp ")
+	if !validTunEndpoint(address) {
+		return false
+	}
+	if !compound {
+		return true
+	}
+	if !tcp {
+		return false
+	}
+	source, destination, ok := strings.Cut(read, "->")
+	if !ok {
+		return false
+	}
+	if !validTunEndpoint(source) {
+		return false
+	}
+	return validTunEndpoint(destination)
+}
+
+func validTunEndpoint(address string) bool {
+	endpoint, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return false
+	}
+	for _, char := range endpoint.Addr().Zone() {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+			char >= '0' && char <= '9' || char == '_' || char == '.' || char == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func (zapBridge) Sync() error { return nil }
