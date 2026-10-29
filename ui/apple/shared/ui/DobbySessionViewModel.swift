@@ -704,12 +704,21 @@ extension DobbySessionViewModel {
     /// Import guidance is cleared; other failures stay set while their cause persists, so polling cannot reopen them.
     public func closeFailure() {
         let shown = visibleFailure
-        guard !shown.isEmpty else { return }
-        if shown == importError {
-            dismissError()
-        } else {
-            dismissedFailures.insert(shown)
+        let branch = shown.isEmpty ? "none" : shown == importError ? "import" : shown == loadError ? "load" : "retained"
+        let scalarCount = shown.unicodeScalars.count
+        recordDiagnostic("phase=requested branch=\(branch) scalar_count=\(scalarCount) visible_before=\(!shown.isEmpty)",
+                         event: "ui.error_close", level: "DEBUG")
+        if !shown.isEmpty {
+            if shown == importError {
+                dismissError()
+            } else {
+                dismissedFailures.insert(shown)
+            }
         }
+        recordDiagnostic("phase=completed branch=\(branch) scalar_count=\(scalarCount) " +
+                         "same_failure_retained=\(!shown.isEmpty && failures.contains(shown)) " +
+                         "same_failure_visible=\(!shown.isEmpty && visibleFailure == shown) visible_after=\(!visibleFailure.isEmpty)",
+                         event: "ui.error_close", level: "DEBUG")
     }
 
     private func acknowledgeDisplayedTransportFailure() {

@@ -459,6 +459,7 @@ public struct DobbyRootView: View {
     @ViewBuilder
     private func failureActions(loadFailed: Bool) -> some View {
         DialogButton(title: "Close", filled: false, action: model.closeFailure)
+            .accessibilityIdentifier("error.close")
         if model.canRetryActiveSelection {
             DialogButton(title: "Retry", filled: true, action: model.retryActiveSelection)
                 .accessibilityIdentifier("connection.retry")
