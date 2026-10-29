@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
                     append(" duration_ns=${finishedNs - startedNs}")
                 }
             }
-            NativeVpnBridge.recordDiagnostic(this, "ui.focus", message, callbackFailure)
+            NativeVpnBridge.recordDiagnostic(this, "ui.focus", message, callbackFailure, level = "DEBUG")
         } catch (diagnosticFailure: Exception) {
             reportFocusDiagnosticFailure("ui.focus $phase", diagnosticFailure, callbackFailure)
         }
@@ -289,7 +289,7 @@ class MainActivity : ComponentActivity() {
             if (observerBoundary) append(" measurement=observer_callback_boundary gpu_wait_included=false")
             if (mainQueueReturn) append(" measurement=main_queue_return_boundary gpu_wait_included=false")
         }
-        NativeVpnBridge.recordDiagnostic(this, "ui.startup", message, observation.failure)
+        NativeVpnBridge.recordDiagnostic(this, "ui.startup", message, observation.failure, level = "DEBUG")
     }
 
     private fun reportStartupDiagnosticFailure(

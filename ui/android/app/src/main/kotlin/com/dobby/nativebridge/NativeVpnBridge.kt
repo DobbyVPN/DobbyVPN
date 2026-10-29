@@ -350,16 +350,18 @@ object NativeVpnBridge {
         recordDiagnostic(context, "app.started", "app started · doBBYVPN $version · $commit")
     }
 
-    internal fun recordDiagnostic(context: Context, event: String, message: String) {
-        recordDiagnostic(context, event, message, null)
-    }
-
-    internal fun recordDiagnostic(context: Context, event: String, message: String, failure: Throwable?) {
+    internal fun recordDiagnostic(
+        context: Context,
+        event: String,
+        message: String,
+        failure: Throwable? = null,
+        level: String = "INFO",
+    ) {
         synchronized(diagnosticLock) {
             val record = JSONObject()
                 .put("schema", "dobby.log/v1")
                 .put("timestamp", isoTimestamp())
-                .put("level", if (failure == null) "INFO" else "ERROR")
+                .put("level", if (failure == null) level else "ERROR")
                 .put("source", "android-native")
                 .put("process_id", android.os.Process.myPid())
                 .put("run_id", diagnosticRun)
