@@ -5,6 +5,7 @@ import (
 	"fmt"
 	stdlog "log"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -51,12 +52,28 @@ func (bridge zapBridge) Write(entry zapcore.Entry, fields []zapcore.Field) error
 		field.AddTo(attributes)
 	}
 	level := slog.Level(entry.Level) * 4
+	if entry.Level == zapcore.WarnLevel && closedTunTCPDial(entry.Message) {
+		level = slog.LevelDebug
+	}
 	if level > slog.LevelError {
 		level = slog.LevelError
 	}
 	writeEventAt(entry.Time, level, "library.log", "TUN2SOCKS", entry.Message, attributes.Fields)
 	return nil
 }
+
+// closedTunTCPDial recognizes the pinned tun2socks producer's complete message.
+func closedTunTCPDial(message string) bool {
+	const prefix = "[TCP] dial "
+	const suffix = ": use of closed network connection"
+	if !strings.HasPrefix(message, prefix) || !strings.HasSuffix(message, suffix) {
+		return false
+	}
+	address := strings.TrimSuffix(strings.TrimPrefix(message, prefix), suffix)
+	_, err := netip.ParseAddrPort(address)
+	return err == nil
+}
+
 func (zapBridge) Sync() error { return nil }
 
 type netstackEmitter struct{}

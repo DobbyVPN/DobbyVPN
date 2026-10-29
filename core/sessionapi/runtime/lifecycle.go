@@ -300,7 +300,11 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		r.options.ReadinessAttemptTimeout,
 		r.options.ReadinessRetryInterval,
 	); err != nil {
-		log.Warnf(category, "initial readiness failed generation=%d; rolling back runtime lease: %v", ref.Generation, err)
+		if ctx.Err() == context.Canceled && onlyCanceledLeaves(err) {
+			log.Debugf(category, "initial readiness failed generation=%d; rolling back runtime lease: %v", ref.Generation, err)
+		} else {
+			log.Warnf(category, "initial readiness failed generation=%d; rolling back runtime lease: %v", ref.Generation, err)
+		}
 		cleanupErr := lease.Stop(sessionapi.CleanupContext(ctx))
 		if cleanupErr == nil {
 			r.active = false
@@ -422,6 +426,32 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	}
 	log.Infof(category, "protocol opened generation=%d network_generation=%d protocol=%s", ref.Generation, n.ref.Generation, profile.Summary.Protocol)
 	return owned, nil
+}
+
+// onlyCanceledLeaves excludes joined failures that include a genuine error.
+func onlyCanceledLeaves(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		found := false
+		for _, child := range joined.Unwrap() {
+			if child == nil {
+				continue
+			}
+			found = true
+			if !onlyCanceledLeaves(child) {
+				return false
+			}
+		}
+		return found
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return onlyCanceledLeaves(child)
+		}
+	}
+	return errors.Is(err, context.Canceled)
 }
 
 func waitForInitialReadiness(
