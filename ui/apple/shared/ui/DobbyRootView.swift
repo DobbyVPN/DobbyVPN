@@ -420,7 +420,7 @@ public struct DobbyRootView: View {
                         .accessibilityIdentifier("error.detail.scroll")
                         .layoutPriority(-1)
 #endif
-                        Button { copyError(detail) } label: {
+                        Button { copyError(detail, onObservation: model.recordErrorCopy) } label: {
                             Text("Copy").underline().dobbyFont(12, .semibold).foregroundColor(.ink)
                         }
                         .buttonStyle(.plain)
@@ -634,11 +634,35 @@ func errorDisplayText(_ raw: String) -> String {
     return String(String.UnicodeScalarView(scalars.prefix(32_768))) + "\n[Display truncated; Copy includes the complete error.]"
 }
 
+struct ErrorCopyObservation {
+    let phase: String
+    let scalarCount: Int
+    let utf8Count: Int
+    let changeCount: Int
+    let accepted: Bool?
+}
+
 #if os(macOS)
-func copyError(_ text: String, to pasteboard: NSPasteboard = .general) {
+func copyError(_ text: String, to pasteboard: NSPasteboard = .general,
+               onObservation: (ErrorCopyObservation) -> Void = { _ in }) {
+    let scalarCount = text.unicodeScalars.count
+    let utf8Count = text.utf8.count
+    onObservation(ErrorCopyObservation(phase: "requested", scalarCount: scalarCount, utf8Count: utf8Count,
+                                       changeCount: pasteboard.changeCount, accepted: nil))
     pasteboard.clearContents()
-    pasteboard.setString(text, forType: .string)
+    let accepted = pasteboard.setString(text, forType: .string)
+    onObservation(ErrorCopyObservation(phase: "completed", scalarCount: scalarCount, utf8Count: utf8Count,
+                                       changeCount: pasteboard.changeCount, accepted: accepted))
 }
 #elseif os(iOS)
-func copyError(_ text: String) { UIPasteboard.general.string = text }
+func copyError(_ text: String, onObservation: (ErrorCopyObservation) -> Void = { _ in }) {
+    let pasteboard = UIPasteboard.general
+    let scalarCount = text.unicodeScalars.count
+    let utf8Count = text.utf8.count
+    onObservation(ErrorCopyObservation(phase: "requested", scalarCount: scalarCount, utf8Count: utf8Count,
+                                       changeCount: pasteboard.changeCount, accepted: nil))
+    pasteboard.string = text
+    onObservation(ErrorCopyObservation(phase: "completed", scalarCount: scalarCount, utf8Count: utf8Count,
+                                       changeCount: pasteboard.changeCount, accepted: nil))
+}
 #endif

@@ -766,6 +766,17 @@ func subscriptionFromLink(_ value: String) throws -> String? {
     return source
 }
 
+extension DobbySessionViewModel {
+    func recordErrorCopy(_ observation: ErrorCopyObservation) {
+        let accepted = observation.accepted.map { String($0) } ?? "unavailable"
+        recordDiagnostic(
+            "phase=\(observation.phase) unicode_scalars=\(observation.scalarCount) " +
+            "utf8_bytes=\(observation.utf8Count) pasteboard_change_count=\(observation.changeCount) accepted=\(accepted)",
+            event: "ui.error_copy", level: "DEBUG"
+        )
+    }
+}
+
 private struct ConfigurationReceipt: Decodable { let sequence: Int64 }
 
 #if os(macOS)
