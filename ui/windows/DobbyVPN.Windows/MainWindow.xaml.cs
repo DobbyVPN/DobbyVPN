@@ -74,6 +74,7 @@ public sealed partial class MainWindow : Window
     private long _logScrollbarPressSequence;
     private int _logScrollbarViewObservationsRemaining;
     private int _logScrollbarMoveObservationsRemaining;
+    private (string Phase, double CaptureMs, double WriteMs)? _lastLogScrollbarTiming;
     private int _logPointerEntryObservations;
     private bool _pendingLogUpwardIntent;
     private bool _logTailChangeViewPending;
@@ -1308,6 +1309,7 @@ public sealed partial class MainWindow : Window
                 ClearPendingLogDownScrollIntent();
                 _logScrollbarPointerDown = true;
                 _logScrollbarPressSequence++;
+                _lastLogScrollbarTiming = null;
                 _logScrollbarViewObservationsRemaining = 12;
                 _logScrollbarMoveObservationsRemaining = 6;
                 RecordLogScrollbarObservation("press", pointer: args);
@@ -1368,17 +1370,33 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            _diagnostics.RecordDebug("logs.scrollbar-observation", "Observed log scrollbar interaction", new
+            var captureStarted = Stopwatch.GetTimestamp();
+            var offsetDelta = phase == "view-changed" ? _logScroll?.VerticalOffset - _lastLogScrollOffset : null;
+            var pointerState = pointer is null ? null : CaptureLogScrollbarPointer(pointer);
+            var state = CaptureLogScrollDiagnosticState();
+            var captureMs = Stopwatch.GetElapsedTime(captureStarted).TotalMilliseconds;
+            var previous = _lastLogScrollbarTiming;
+            var fields = new
             {
                 sequence = _logScrollbarPressSequence,
                 phase,
                 is_intermediate = isIntermediate,
-                offset_delta = phase == "view-changed" ? _logScroll?.VerticalOffset - _lastLogScrollOffset : null,
+                offset_delta = offsetDelta,
                 view_observations_remaining = _logScrollbarViewObservationsRemaining,
                 move_observations_remaining = _logScrollbarMoveObservationsRemaining,
-                pointer = pointer is null ? null : CaptureLogScrollbarPointer(pointer),
-                state = CaptureLogScrollDiagnosticState(),
-            });
+                pointer = pointerState,
+                state,
+                capture_ms = captureMs,
+                previous_timing = previous is { } timing ? new
+                {
+                    phase = timing.Phase,
+                    capture_ms = timing.CaptureMs,
+                    write_duration_ms = timing.WriteMs,
+                } : null,
+            };
+            var writeStarted = Stopwatch.GetTimestamp();
+            _diagnostics.RecordDebug("logs.scrollbar-observation", "Observed log scrollbar interaction", fields);
+            _lastLogScrollbarTiming = (phase, captureMs, Stopwatch.GetElapsedTime(writeStarted).TotalMilliseconds);
         }
         catch (Exception error)
         {
