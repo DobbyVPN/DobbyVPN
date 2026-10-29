@@ -300,11 +300,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		r.options.ReadinessAttemptTimeout,
 		r.options.ReadinessRetryInterval,
 	); err != nil {
-		if ctx.Err() == context.Canceled && onlyCanceledLeaves(err) {
-			log.Debugf(category, "initial readiness failed generation=%d; rolling back runtime lease: %v", ref.Generation, err)
-		} else {
-			log.Warnf(category, "initial readiness failed generation=%d; rolling back runtime lease: %v", ref.Generation, err)
-		}
+		logReadinessFailure(ctx, ref.Generation, err)
 		cleanupErr := lease.Stop(sessionapi.CleanupContext(ctx))
 		if cleanupErr == nil {
 			r.active = false
@@ -426,6 +422,14 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	}
 	log.Infof(category, "protocol opened generation=%d network_generation=%d protocol=%s", ref.Generation, n.ref.Generation, profile.Summary.Protocol)
 	return owned, nil
+}
+
+func logReadinessFailure(ctx context.Context, generation uint64, err error) {
+	if ctx.Err() == context.Canceled && onlyCanceledLeaves(err) {
+		log.Debugf(category, "initial readiness failed generation=%d; rolling back runtime lease: %v", generation, err)
+	} else {
+		log.Warnf(category, "initial readiness failed generation=%d; rolling back runtime lease: %v", generation, err)
+	}
 }
 
 // onlyCanceledLeaves excludes joined failures that include a genuine error.
