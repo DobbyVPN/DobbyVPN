@@ -49,6 +49,37 @@ extension View {
     }
 }
 
+#if os(iOS)
+private struct DobbyErrorDetailView: UIViewRepresentable {
+    let text: String
+    @ScaledMetric(relativeTo: .caption) private var fontSize: CGFloat = 11.5
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = false
+        view.isScrollEnabled = true
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.accessibilityIdentifier = "error.detail"
+        view.isAccessibilityElement = true
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        let font = UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        if view.font != font { view.font = font }
+        view.textColor = DobbyPalette.ink
+        if view.text != text {
+            view.text = text
+            view.setContentOffset(.zero, animated: false)
+        }
+        view.accessibilityValue = text
+    }
+}
+#endif
+
 private let buttonShape = RoundedRectangle(cornerRadius: pt(10))
 
 public struct DobbyRootView: View {
@@ -372,6 +403,11 @@ public struct DobbyRootView: View {
                             .padding(.top, pt(8))
                     }
                     VStack(alignment: .leading, spacing: pt(6)) {
+#if os(iOS)
+                        DobbyErrorDetailView(text: errorDisplayText(detail))
+                            .frame(height: min(240, max(0, geometry.size.height / 3)))
+                            .layoutPriority(-1)
+#else
                         ScrollView(.vertical) {
                             Text(errorDisplayText(detail))
                                 .dobbyFont(11.5, design: .monospaced)
@@ -383,6 +419,7 @@ public struct DobbyRootView: View {
                         .frame(maxHeight: min(240, max(0, geometry.size.height / 3)))
                         .accessibilityIdentifier("error.detail.scroll")
                         .layoutPriority(-1)
+#endif
                         Button { copyError(detail) } label: {
                             Text("Copy").underline().dobbyFont(12, .semibold).foregroundColor(.ink)
                         }
