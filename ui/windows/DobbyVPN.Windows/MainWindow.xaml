@@ -183,8 +183,9 @@
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
               <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                             AutomationProperties.AutomationId="error.detail.viewport">
-              <TextBlock x:Name="ErrorDetail" FontFamily="{StaticResource Mono}" FontSize="9.8" TextWrapping="Wrap" IsTextSelectionEnabled="True" Foreground="{StaticResource Ink}"
-                         VerticalAlignment="Center" AutomationProperties.AutomationId="error.detail" />
+              <TextBox x:Name="ErrorDetail" FontFamily="{StaticResource Mono}" FontSize="9.8" TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True" Foreground="{StaticResource Ink}"
+                       Background="Transparent" BorderThickness="0" Padding="0" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                       AutomationProperties.Name="Error details" AutomationProperties.AutomationId="error.detail" />
               </ScrollViewer>
               <Button Grid.Column="1" Style="{StaticResource PlainButton}" VerticalAlignment="Center" Click="CopyError_Click"
                       AutomationProperties.Name="Copy">

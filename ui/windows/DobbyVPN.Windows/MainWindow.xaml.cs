@@ -718,6 +718,9 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private string _lastObservedErrorDetail = "";
+    private long _errorDetailObservationSequence;
+
     private string ShownError => Errors.FirstOrDefault(text => !_dismissedErrors.Contains(text)) ?? "";
 
     private bool ErrorShown => ErrorOverlay.Visibility == Visibility.Visible;
@@ -730,17 +733,53 @@ public sealed partial class MainWindow : Window
         _dismissedErrors.IntersectWith(currentErrors);
         var detail = ShownError;
         var visible = detail.Length > 0;
+        var observeDetail = visible && detail != _lastObservedErrorDetail;
+        if (!visible) _lastObservedErrorDetail = "";
+        var renderStarted = Stopwatch.GetTimestamp();
+        long observationSequence = 0;
+        if (observeDetail)
+        {
+            _lastObservedErrorDetail = detail;
+            observationSequence = ++_errorDetailObservationSequence;
+            RecordErrorDetailObservation(observationSequence, "requested", detail.Length, null, renderStarted);
+        }
         var loadFailure = visible && detail == _loadError;
         ErrorTitle.Text = loadFailure ? "Couldn't load the subscription" : "Something went wrong";
         AutomationProperties.SetName(ErrorCard, ErrorTitle.Text);
         ErrorHint.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
-        ErrorDetail.Text = ErrorDisplayText.ForDisplay(detail);
+        var displayDetail = ErrorDisplayText.ForDisplay(detail);
+        ErrorDetail.Text = displayDetail;
+        if (observeDetail)
+            RecordErrorDetailObservation(observationSequence, "text_assigned", detail.Length, displayDetail.Length, renderStarted);
         var shown = ErrorShown;
         ErrorOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (visible) KeepFocusInError();
         else if (shown) ClearFocus();
+        if (observeDetail)
+            RecordErrorDetailObservation(observationSequence, "presentation_assigned", detail.Length, displayDetail.Length, renderStarted);
+    }
+
+    private void RecordErrorDetailObservation(long sequence, string phase, int rawUtf16Length,
+        int? displayUtf16Length, long renderStarted)
+    {
+        try
+        {
+            _diagnostics.RecordDebug("ui.error_details", "Observed error details rendering", new
+            {
+                sequence,
+                phase,
+                raw_utf16_length = rawUtf16Length,
+                display_utf16_length = displayUtf16Length,
+                elapsed_ms = Stopwatch.GetElapsedTime(renderStarted).TotalMilliseconds,
+                detail_actual_width = ErrorDetail.ActualWidth,
+                detail_actual_height = ErrorDetail.ActualHeight,
+                dialog_actual_width = ErrorCard.ActualWidth,
+                dialog_actual_height = ErrorCard.ActualHeight,
+            });
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "ui.error_details.failure"); }
     }
 
     private void KeepFocusInError()
