@@ -56,10 +56,6 @@ internal sealed class SubscriptionLoadState
 
     internal bool IsCurrent(Request request) => request.Revision == _revision;
 
-    internal bool CanRestoreSource(bool configured, string source, string? renderedSource) =>
-        !configured && !SourceDirty && !IsLoading && source.Length > 0 &&
-        string.Equals(source, renderedSource, StringComparison.Ordinal);
-
     internal Request? BeginReady(TimeSpan now)
     {
         if (_inFlight is not null) return null;

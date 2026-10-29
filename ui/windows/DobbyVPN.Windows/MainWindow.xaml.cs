@@ -78,8 +78,7 @@ public sealed partial class MainWindow : Window
     private (string Phase, double CaptureMs, double WriteMs)? _lastLogScrollbarTiming;
     private int _logPointerEntryObservations;
     private bool _pendingLogUpwardIntent;
-    private long _logTailPendingQueueId;
-    private bool LogTailChangeViewPending => _logTailPendingQueueId != 0;
+    private bool _logTailChangeViewPending;
     private readonly LogPresentationState _logPresentation = new();
     private readonly Dictionary<LogRowKey, RenderedLogRow> _logRowCache = [];
     private List<RenderedLogRow> _renderedLogRows = [];
@@ -370,8 +369,7 @@ public sealed partial class MainWindow : Window
                 _sourceInitialized = true;
             }
             var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (_subscriptionLoad.CanRestoreSource(result.Configured, NormalizeSource(SourceEditor.Text), _renderedSource) &&
-                _restoredLoad != restoreKey)
+            if (!result.Configured && !_subscriptionLoad.SourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
                 await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);
@@ -721,11 +719,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private string _lastObservedErrorDetail = "";
-    private long _errorDetailObservationSequence;
-    private string? _renderedErrorDetail;
-    private int _errorDetailParagraphCount;
-
     private string ShownError => Errors.FirstOrDefault(text => !_dismissedErrors.Contains(text)) ?? "";
 
     private bool ErrorShown => ErrorOverlay.Visibility == Visibility.Visible;
@@ -738,74 +731,17 @@ public sealed partial class MainWindow : Window
         _dismissedErrors.IntersectWith(currentErrors);
         var detail = ShownError;
         var visible = detail.Length > 0;
-        var observeDetail = visible && detail != _lastObservedErrorDetail;
-        if (!visible) _lastObservedErrorDetail = "";
-        var renderStarted = Stopwatch.GetTimestamp();
-        long observationSequence = 0;
-        if (observeDetail)
-        {
-            _lastObservedErrorDetail = detail;
-            observationSequence = ++_errorDetailObservationSequence;
-            RecordErrorDetailObservation(observationSequence, "requested", detail.Length, null, null, renderStarted);
-        }
         var loadFailure = visible && detail == _loadError;
         ErrorTitle.Text = loadFailure ? "Couldn't load the subscription" : "Something went wrong";
         AutomationProperties.SetName(ErrorCard, ErrorTitle.Text);
         ErrorHint.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
-        var displayDetail = visible ? ErrorDisplayText.ForDisplay(detail) : "";
-        var textChanged = visible ? _renderedErrorDetail != displayDetail : _renderedErrorDetail is not null;
-        var paragraphs = textChanged ? ErrorDisplayText.Paragraphs(displayDetail) : null;
-        if (observeDetail)
-            RecordErrorDetailObservation(observationSequence, "display_prepared", detail.Length, displayDetail.Length,
-                paragraphs?.Count ?? _errorDetailParagraphCount, renderStarted);
-        if (textChanged)
-        {
-            ErrorDetail.Blocks.Clear();
-            foreach (var text in paragraphs!)
-            {
-                var paragraph = new Paragraph { Margin = new Thickness(0) };
-                paragraph.Inlines.Add(new Run { Text = text });
-                ErrorDetail.Blocks.Add(paragraph);
-            }
-            _renderedErrorDetail = visible ? displayDetail : null;
-            _errorDetailParagraphCount = paragraphs!.Count;
-            ErrorDetailViewport.ChangeView(null, 0, null, disableAnimation: true);
-        }
-        if (observeDetail)
-            RecordErrorDetailObservation(observationSequence, textChanged ? "text_assigned" : "text_unchanged",
-                detail.Length, displayDetail.Length, _errorDetailParagraphCount, renderStarted);
+        ErrorDetail.Text = detail;
         var shown = ErrorShown;
         ErrorOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (visible) KeepFocusInError();
         else if (shown) ClearFocus();
-        if (observeDetail)
-            RecordErrorDetailObservation(observationSequence, "presentation_assigned", detail.Length, displayDetail.Length, _errorDetailParagraphCount, renderStarted);
-    }
-
-    private void RecordErrorDetailObservation(long sequence, string phase, int rawUtf16Length,
-        int? displayUtf16Length, int? paragraphCount, long renderStarted)
-    {
-        try
-        {
-            _diagnostics.RecordDebug("ui.error_details", "Observed error details rendering", new
-            {
-                sequence,
-                phase,
-                raw_utf16_length = rawUtf16Length,
-                display_utf16_length = displayUtf16Length,
-                paragraph_count = paragraphCount,
-                viewport_actual_width = ErrorDetailViewport.ActualWidth,
-                viewport_actual_height = ErrorDetailViewport.ActualHeight,
-                elapsed_ms = Stopwatch.GetElapsedTime(renderStarted).TotalMilliseconds,
-                detail_actual_width = ErrorDetail.ActualWidth,
-                detail_actual_height = ErrorDetail.ActualHeight,
-                dialog_actual_width = ErrorCard.ActualWidth,
-                dialog_actual_height = ErrorCard.ActualHeight,
-            });
-        }
-        catch (Exception error) { _diagnostics.Record(error.ToString(), "ui.error_details.failure"); }
     }
 
     private void KeepFocusInError()
@@ -845,7 +781,7 @@ public sealed partial class MainWindow : Window
     private void CopyError_Click(object sender, RoutedEventArgs e)
     {
         var package = new DataPackage();
-        package.SetText(ShownError);
+        package.SetText(ErrorDetail.Text);
         try { Clipboard.SetContent(package); }
         catch (Exception error) { RecordError(error.ToString()); }
     }
@@ -1421,7 +1357,7 @@ public sealed partial class MainWindow : Window
                 RecordLogScrollbarObservation("view-changed", args.IsIntermediate);
             }
             ObserveLogScrollPosition(args.IsIntermediate);
-            if (!_updatingLogs && !LogTailChangeViewPending && !_logDirectManipulation &&
+            if (!_updatingLogs && !_logTailChangeViewPending && !_logDirectManipulation &&
                 !_logScrollbarPointerDown && _logPresentation.TryRequestSettledTailAlignment(
                     args.IsIntermediate, LogsScroll.VerticalOffset, LogsScroll.ScrollableHeight,
                     _logRenderGeneration))
@@ -1531,7 +1467,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (_updatingLogs || LogTailChangeViewPending)
+        if (_updatingLogs || _logTailChangeViewPending)
             _pendingLogUpwardIntent = true;
         RecordLogScrollGestureIntent(gestureId, "up");
     }
@@ -1556,7 +1492,7 @@ public sealed partial class MainWindow : Window
         CaptureLogScrollPosition();
         if (Math.Abs(offsetDelta) <= 0.5)
         {
-            if (!isIntermediate && !_updatingLogs && !LogTailChangeViewPending)
+            if (!isIntermediate && !_updatingLogs && !_logTailChangeViewPending)
                 ClearPendingLogDownScrollIntent();
             return;
         }
@@ -1575,7 +1511,7 @@ public sealed partial class MainWindow : Window
         }
         if (directManipulation || scrollbarInteraction)
             ObserveLogPresentationForScroll(directManipulation ? "direct-manipulation" : "scrollbar-interaction",
-                isIntermediate, offsetDelta < -0.5);
+                isIntermediate);
         if (!_updatingLogs && _logPresentation.FollowsTail) RenderLogs();
     }
 
@@ -1597,11 +1533,11 @@ public sealed partial class MainWindow : Window
             state = CaptureLogScrollDiagnosticState(),
         });
 
-    private void ObserveLogPresentationForScroll(string cause, bool isIntermediate, bool movedTowardEarlierEntries,
+    private void ObserveLogPresentationForScroll(string cause, bool isIntermediate,
         long? gestureId = null, string? direction = null)
     {
         var wasFollowingTail = _logPresentation.FollowsTail;
-        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom(), movedTowardEarlierEntries);
+        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
         RecordLogFollowTransition(cause, wasFollowingTail, gestureId, direction, isIntermediate);
     }
 
@@ -1656,14 +1592,13 @@ public sealed partial class MainWindow : Window
                 scrollbar_pointer_down = _logScrollbarPointerDown,
                 pending_down_scroll = _pendingLogDownScroll,
                 pending_upward_intent = _pendingLogUpwardIntent,
-                tail_change_view_pending = LogTailChangeViewPending,
-                tail_pending_queue_id = _logTailPendingQueueId,
+                tail_change_view_pending = _logTailChangeViewPending,
             };
         }
         catch (Exception error)
         {
             _diagnostics.Record(error.ToString(), "logs.scroll-diagnostic-geometry.failure");
-            return new { observation_error = error.ToString() };
+            throw;
         }
     }
 
@@ -1689,32 +1624,18 @@ public sealed partial class MainWindow : Window
         try
         {
             if (_clearingLogs) return;
-            var beforeInteraction = CaptureLogScrollDiagnosticState();
             _clearingLogs = true;
             _clearLogsError = "";
             ++_logRevision;
             ++_logRenderGeneration;
-            var manipulationCanceled = LogEntries.CancelDirectManipulations();
-            _logDirectManipulation = false;
-            _logScrollbarPointerDown = false;
             _updatingLogs = false;
             ClearPendingLogDownScrollIntent();
             _pendingLogUpwardIntent = false;
-            _logTailPendingQueueId = 0;
+            _logTailChangeViewPending = false;
             _pendingLogScrollGestureId = null;
             _pendingLogScrollGestureDirection = null;
             _lastLogScrollGestureId = null;
             _lastLogScrollGestureDirection = null;
-            try
-            {
-                _diagnostics.RecordDebug("logs.clear-interaction", "Cleared prior log scrolling interaction", new
-                {
-                    before = beforeInteraction,
-                    manipulation_canceled = manipulationCanceled,
-                    after = CaptureLogScrollDiagnosticState(),
-                });
-            }
-            catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.clear-interaction.failure"); }
             await _diagnostics.ClearViewAsync();
             if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
             RecordAppStarted();
@@ -1867,10 +1788,9 @@ public sealed partial class MainWindow : Window
                     renderGeneration, skipReason: "logs-updating");
             return;
         }
-        _logTailPendingQueueId = queueId;
+        _logTailChangeViewPending = true;
         var queued = EnqueueUiCallback(() =>
         {
-            if (_logTailPendingQueueId == queueId) _logTailPendingQueueId = 0;
             RecordLogTailQueueObservation(queueId, "callback-entered", renderGeneration);
             if (gestureId is { } callbackGestureId)
                 RecordLogTailGestureObservation(callbackGestureId, gestureDirection, "callback-entered", renderGeneration);
@@ -1902,6 +1822,7 @@ public sealed partial class MainWindow : Window
                 }
                 return;
             }
+            _logTailChangeViewPending = false;
             if (_pendingLogUpwardIntent)
             {
                 _pendingLogUpwardIntent = false;
@@ -1938,7 +1859,6 @@ public sealed partial class MainWindow : Window
                 RecordLogTailGestureObservation(alignedGestureId, gestureDirection, "change-view-returned",
                     renderGeneration, targetOffset: targetOffset, changeViewResult: changeViewResult);
         }, Microsoft.UI.Dispatching.DispatcherQueuePriority.Low);
-        if (!queued && _logTailPendingQueueId == queueId) _logTailPendingQueueId = 0;
         RecordLogTailQueueObservation(queueId, "queue-result", renderGeneration, queueAccepted: queued);
         if (gestureId is { } queuedGestureId)
             RecordLogTailGestureObservation(queuedGestureId, gestureDirection, "queue-result",

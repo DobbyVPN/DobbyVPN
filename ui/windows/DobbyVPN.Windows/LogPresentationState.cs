@@ -67,10 +67,10 @@ internal sealed class LogPresentationState
         ShowLatestEntries();
     }
 
-    public void ObserveUserScroll(bool isAtBottom, bool movedTowardEarlierEntries)
+    public void ObserveUserScroll(bool isAtBottom)
     {
         if (isAtBottom) FollowTail();
-        else if (movedTowardEarlierEntries) Freeze();
+        else Freeze();
     }
 
     public void ObserveDirectedDownScroll(bool isAtBottom)
