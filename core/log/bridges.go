@@ -105,9 +105,9 @@ func validTunEndpoint(address string) bool {
 	if err != nil {
 		return false
 	}
+	const allowedZoneChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
 	for _, char := range endpoint.Addr().Zone() {
-		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
-			char >= '0' && char <= '9' || char == '_' || char == '.' || char == '-') {
+		if !strings.ContainsRune(allowedZoneChars, char) {
 			return false
 		}
 	}
