@@ -75,10 +75,10 @@ func listenEndpointPair(ctx context.Context, listener endpointPairListener) (net
 			return nil, nil, errors.Join(last, err)
 		}
 		candidate := tcp.Addr().String()
-		if err := ctx.Err(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
 			closeErr := tcp.Close()
-			log.Warnf("trusttunnel", "endpoint pair attempt=%d candidate=%s network=tcp4 canceled=%v close=%v", attempt, candidate, err, closeErr)
-			return nil, nil, errors.Join(last, err, closeErr)
+			log.Warnf("trusttunnel", "endpoint pair attempt=%d candidate=%s network=tcp4 canceled=%v close=%v", attempt, candidate, ctxErr, closeErr)
+			return nil, nil, errors.Join(last, ctxErr, closeErr)
 		}
 		udp, err := listener.ListenPacket(ctx, "udp4", candidate)
 		if err == nil {
