@@ -12,10 +12,16 @@ import (
 const soProtocolInfoW = 0x2005
 
 func socketNetworkFromDescriptor(fd int) (string, error) {
+	handle := windows.Handle(uintptr(fd))
+	var pipeFlags uint32
+	if err := windows.GetNamedPipeInfo(handle, &pipeFlags, nil, nil, nil); err == nil {
+		return "", fmt.Errorf("descriptor is a pipe (flags=%#x)", pipeFlags)
+	}
+
 	var info windows.WSAProtocolInfo
 	length := int32(unsafe.Sizeof(info))
 	if err := windows.Getsockopt(
-		windows.Handle(uintptr(fd)),
+		handle,
 		windows.SOL_SOCKET,
 		soProtocolInfoW,
 		(*byte)(unsafe.Pointer(&info)),

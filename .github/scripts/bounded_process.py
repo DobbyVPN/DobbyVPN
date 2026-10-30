@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+import errno
 import math
 import os
 import signal
@@ -174,8 +175,39 @@ def terminate_process_group(
         _run_windows_taskkill(process.pid, grace_seconds)
         return "process-group=terminated"
 
+    def group_operation(operation: int) -> None:
+        process.poll()  # Reap the owned leader before signaling or probing.
+        try:
+            os.killpg(group_id, operation)
+        except PermissionError as original:
+            if original.errno != errno.EPERM:
+                raise
+            child_returncode = process.poll()
+            if child_returncode is None:
+                print(
+                    f"process group={group_id} operation={operation}: original {original!r}; "
+                    "owned child returncode=None; post-reap outcome=not retried (child running)",
+                    file=sys.stderr, flush=True,
+                )
+                raise
+            try:
+                os.killpg(group_id, operation)
+            except OSError as retry_error:
+                outcome = f"{type(retry_error).__name__}: {retry_error}"
+                print(
+                    f"process group={group_id} operation={operation}: original {original!r}; "
+                    f"owned child returncode={child_returncode}; post-reap outcome={outcome}",
+                    file=sys.stderr, flush=True,
+                )
+                raise
+            print(
+                f"process group={group_id} operation={operation}: original {original!r}; "
+                f"owned child returncode={child_returncode}; post-reap outcome=success",
+                file=sys.stderr, flush=True,
+            )
+
     try:
-        os.killpg(group_id, signal.SIGTERM)
+        group_operation(signal.SIGTERM)
     except ProcessLookupError:
         pass
     except OSError as error:
@@ -188,7 +220,7 @@ def terminate_process_group(
     forced = False
     while True:
         try:
-            os.killpg(group_id, 0)
+            group_operation(0)
         except ProcessLookupError:
             break
         except OSError as error:
@@ -199,7 +231,7 @@ def terminate_process_group(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             try:
-                os.killpg(group_id, signal.SIGKILL)
+                group_operation(signal.SIGKILL)
             except ProcessLookupError:
                 pass
             except OSError as error:
@@ -223,8 +255,7 @@ def terminate_process_group(
     final_deadline = deadline + max(grace_seconds, 0)
     while True:
         try:
-            process.poll()  # Reap the owned leader so it cannot keep the group visible.
-            os.killpg(group_id, 0)
+            group_operation(0)
         except ProcessLookupError:
             break
         except OSError as error:
