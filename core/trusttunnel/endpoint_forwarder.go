@@ -56,18 +56,57 @@ func (c *endpointConn) CloseWrite() error {
 	return nil
 }
 
+type endpointPairListener interface {
+	Listen(context.Context, string, string) (net.Listener, error)
+	ListenPacket(context.Context, string, string) (net.PacketConn, error)
+}
+
+// TCP and UDP have separate port namespaces; reserve TCP until UDP binds.
+func listenEndpointPair(ctx context.Context, listener endpointPairListener) (net.Listener, net.PacketConn, error) {
+	const maxAttempts = 16
+	var last error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, errors.Join(last, err)
+		}
+		tcp, err := listener.Listen(ctx, "tcp4", "127.0.0.1:0")
+		if err != nil {
+			log.Warnf("trusttunnel", "endpoint pair attempt=%d network=tcp4 listen failed: %v", attempt, err)
+			return nil, nil, errors.Join(last, err)
+		}
+		candidate := tcp.Addr().String()
+		if err := ctx.Err(); err != nil {
+			closeErr := tcp.Close()
+			log.Warnf("trusttunnel", "endpoint pair attempt=%d candidate=%s network=tcp4 canceled=%v close=%v", attempt, candidate, err, closeErr)
+			return nil, nil, errors.Join(last, err, closeErr)
+		}
+		udp, err := listener.ListenPacket(ctx, "udp4", candidate)
+		if err == nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				tcpErr, udpErr := tcp.Close(), udp.Close()
+				log.Warnf("trusttunnel", "endpoint pair attempt=%d candidate=%s canceled=%v tcp_close=%v udp_close=%v", attempt, candidate, ctxErr, tcpErr, udpErr)
+				return nil, nil, errors.Join(last, ctxErr, tcpErr, udpErr)
+			}
+			if attempt > 1 {
+				log.Infof("trusttunnel", "endpoint pair recovered attempt=%d candidate=%s", attempt, candidate)
+			}
+			return tcp, udp, nil
+		}
+		closeErr := tcp.Close()
+		log.Warnf("trusttunnel", "endpoint pair attempt=%d candidate=%s network=udp4 bind failed=%v tcp_close=%v", attempt, candidate, err, closeErr)
+		last = errors.Join(last, fmt.Errorf("endpoint pair attempt %d candidate %s udp4: %w", attempt, candidate, err))
+		if closeErr != nil || ctx.Err() != nil || !retryEndpointPairBind(err) {
+			return nil, nil, errors.Join(last, ctx.Err(), closeErr)
+		}
+	}
+	return nil, nil, fmt.Errorf("endpoint pair exhausted %d candidates: %w", maxAttempts, last)
+}
+
 func newEndpointForwarder(ctx context.Context, cache *dnscache.Cache, address string) (*endpointForwarder, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	lc := net.ListenConfig{}
-	tcp, err := lc.Listen(ctx, "tcp4", "127.0.0.1:0")
+	tcp, udp, err := listenEndpointPair(ctx, &net.ListenConfig{})
 	if err != nil {
 		cancel()
-		return nil, err
-	}
-	udp, err := lc.ListenPacket(ctx, "udp4", tcp.Addr().String())
-	if err != nil {
-		cancel()
-		_ = tcp.Close()
 		return nil, err
 	}
 	f := &endpointForwarder{ctx: ctx, cancel: cancel, address: address, tcp: tcp, udp: udp, cache: cache,
