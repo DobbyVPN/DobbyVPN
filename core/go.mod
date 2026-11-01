@@ -12,7 +12,7 @@ require (
 	github.com/google/nftables v0.3.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
-	github.com/miekg/dns v1.1.72
+	github.com/miekg/dns v1.1.73
 	github.com/sirupsen/logrus v1.10.2
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/things-go/go-socks5 v0.1.3
@@ -43,7 +43,6 @@ require (
 	github.com/sagernet/sing v0.5.1 // indirect
 	github.com/sagernet/sing-shadowsocks v0.2.7 // indirect
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
-	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/tarantool/go-gostcrypto v0.1.1-0.20260728125122-3791d459e0c3 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
@@ -74,12 +73,9 @@ require (
 	github.com/pion/transport/v4 v4.1.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/refraction-networking/utls v1.8.3-0.20260301010127-aa6edf4b11af // indirect
-	github.com/riobard/go-bloom v0.0.0-20200614022211-cdc8013cb5b3 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
-	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
 	golang.org/x/mobile v0.0.0-20260520154334-0e4426e1883d // indirect
