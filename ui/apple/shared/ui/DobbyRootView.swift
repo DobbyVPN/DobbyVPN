@@ -148,9 +148,11 @@ public struct DobbyRootView: View {
         }
 #endif
         .onOpenURL { model.importLink($0) }
+#if os(iOS)
         .sheet(isPresented: $showingExport, onDismiss: removeExport) {
             if let url = exportedLogsURL { DobbyShareSheet(url: url) }
         }
+#endif
     }
 
     /// Four connections when there is room; on short screens the logs keep a quarter of the height.
@@ -368,7 +370,11 @@ public struct DobbyRootView: View {
     private func sendLogs() {
         model.prepareLogsExport { url in
             exportedLogsURL = url
+#if os(macOS)
+            DobbyMacSharePresenter.present(url: url, finished: removeExport)
+#else
             showingExport = true
+#endif
         }
     }
 

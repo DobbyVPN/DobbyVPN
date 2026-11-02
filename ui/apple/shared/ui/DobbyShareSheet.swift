@@ -15,37 +15,50 @@ struct DobbyShareSheet: UIViewControllerRepresentable {
 import AppKit
 import SwiftUI
 
-struct DobbyShareSheet: NSViewRepresentable {
-    let url: URL
-    @Environment(\.dismiss) private var dismiss
+/// Shows the system sharing menu next to the pointer. Presenting it from a SwiftUI sheet gave
+/// the picker an empty view to hang from and left a blank sheet on screen.
+@MainActor
+final class DobbyMacSharePresenter: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {
+    private static var active: DobbyMacSharePresenter?
 
-    func makeCoordinator() -> Coordinator { Coordinator { dismiss() } }
+    private let finished: () -> Void
+    private var picker: NSSharingServicePicker?
+    private var done = false
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 80))
-        let picker = NSSharingServicePicker(items: [url])
-        picker.delegate = context.coordinator
-        context.coordinator.picker = picker
-        DispatchQueue.main.async {
-            picker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+    private init(finished: @escaping () -> Void) { self.finished = finished }
+
+    static func present(url: URL, finished: @escaping () -> Void) {
+        active?.finish()
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow, let view = window.contentView else {
+            finished()
+            return
         }
-        return view
+        let presenter = DobbyMacSharePresenter(finished: finished)
+        let picker = NSSharingServicePicker(items: [url])
+        picker.delegate = presenter
+        presenter.picker = picker
+        active = presenter
+        var point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        if !view.bounds.contains(point) { point = NSPoint(x: view.bounds.midX, y: view.bounds.midY) }
+        picker.show(relativeTo: NSRect(x: point.x, y: point.y, width: 1, height: 1), of: view, preferredEdge: .minY)
     }
 
-    func updateNSView(_ view: NSView, context: Context) {}
+    private func finish() {
+        guard !done else { return }
+        done = true
+        if Self.active === self { Self.active = nil }
+        finished()
+    }
 
-    final class Coordinator: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {
-        let finished: () -> Void
-        var picker: NSSharingServicePicker?
-        init(finished: @escaping () -> Void) { self.finished = finished }
-        func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, didChoose service: NSSharingService?) {
-            if let service { service.delegate = self } else { finished() }
-        }
-        func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) { finished() }
-        func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
-            NSAlert(error: error).runModal()
-            finished()
-        }
+    func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, didChoose service: NSSharingService?) {
+        if let service { service.delegate = self } else { finish() }
+    }
+
+    func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) { finish() }
+
+    func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
+        NSAlert(error: error).runModal()
+        finish()
     }
 }
 #endif
