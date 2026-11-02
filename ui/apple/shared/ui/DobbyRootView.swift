@@ -92,6 +92,7 @@ public struct DobbyRootView: View {
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
     @State private var rowHeight: CGFloat = 0
+    @State private var errorDetailHeight: CGFloat = 0
 
     public init(model: DobbySessionViewModel) {
         self.model = model
@@ -120,8 +121,15 @@ public struct DobbyRootView: View {
                 .accessibilityIdentifier("Connection controls")
                 logs
             }
+#if os(macOS)
+            // On macOS the window can be stretched arbitrarily wide; let the content follow it
+            // instead of leaving empty margins on either side, the way iOS's fixed screen width
+            // never needed a cap for.
+            .frame(maxWidth: .infinity)
+#else
             .frame(maxWidth: 480)
             .frame(maxWidth: .infinity)
+#endif
         }
         .disabled(showingError)
         .accessibilityHidden(showingError)
@@ -414,9 +422,13 @@ public struct DobbyRootView: View {
                                 .foregroundColor(.ink)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .background(GeometryReader { Color.clear.preference(key: ErrorDetailHeight.self, value: $0.size.height) })
                                 .accessibilityIdentifier("error.detail")
                         }
-                        .frame(maxHeight: min(240, max(0, geometry.size.height / 3)))
+                        .onPreferenceChange(ErrorDetailHeight.self) { errorDetailHeight = $0 }
+                        // Sized to the text itself up to a cap; past that it scrolls instead of
+                        // reserving a fixed block that is mostly empty for a short error.
+                        .frame(height: min(errorDetailHeight, min(240, max(0, geometry.size.height / 3))))
                         .accessibilityIdentifier("error.detail.scroll")
                         .layoutPriority(-1)
 #endif
@@ -448,6 +460,9 @@ public struct DobbyRootView: View {
                 .accessibilityIdentifier("error.dialog")
                 .accessibilityValue(model.status)
                 .accessibilityAddTraits(.isModal)
+                // Centers short content vertically; taller content still scrolls within the
+                // same available height, so this never fights the ScrollView below.
+                .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height - pt(24)), alignment: .center)
                 }
                 .frame(maxHeight: max(0, geometry.size.height - pt(24)))
                 .accessibilityIdentifier("error.dialog.scroll")
@@ -543,6 +558,11 @@ private struct ConnectionButton: View {
 }
 
 private struct RowHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct ErrorDetailHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
