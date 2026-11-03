@@ -15,7 +15,7 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/sirupsen/logrus v1.10.2
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
-	github.com/things-go/go-socks5 v0.1.3
+	github.com/things-go/go-socks5 v0.1.4
 	github.com/vishvananda/netlink v1.3.1
 	github.com/xjasonlyu/tun2socks/v2 v2.6.1-0.20251008121831-8fe75611866e
 	github.com/xtls/xray-core v1.260327.1-0.20260710210335-64fada32b5b9
