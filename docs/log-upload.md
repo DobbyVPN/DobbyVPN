@@ -43,7 +43,7 @@ settings.example {
 		}
 		handle @upload {
 			request_body {
-				max_size 500MB
+				max_size 150MB
 			}
 			# Store in the sub-account root; discard query parameters.
 			rewrite * /{re.archive.1}?
@@ -87,35 +87,29 @@ The app sends an ordinary PUT containing the completed gzip archive, with
 `Content-Type: application/gzip` and its actual compressed `Content-Length`.
 There is no separate signing request or custom receipt response.
 
-## Why the upload limit is 500 MB
+## Why the upload limit is 150 MB
 
 The limit applies to the **whole compressed archive**, not each input log.
-Each log rotates at 150,000,000 bytes and retains its current and previous
-generations. Files are created as their streams are used; a previous generation
-appears after rotation. The counts below are possible retained log files, not
-files preallocated on every device. The current inventories give these nominal
-raw sizes when every generation reaches the rotation threshold:
+The required retention budget is **at most four log files total on every
+platform, including current and rotated generations**, shared by backend,
+native UI, CLI and stderr diagnostics. It is not four files per component.
+The existing implementation exceeds this budget; correcting it is queued for
+1.5.11 and has not yet been implemented. The upload sizing below assumes that
+correction, not the existing larger inventories.
 
-| Export | Log streams | Maximum log files | Nominal total |
-| --- | ---: | ---: | ---: |
-| macOS / Windows app | 3 | 6 | 900 MB |
-| Android app | 4 | 8 | 1,200 MB |
-| iOS app / macOS CLI | 7 | 14 | 2,100 MB |
-| Linux CLI | 6 | 12 | 1,800 MB |
-| Windows CLI | 5 | 10 | 1,500 MB |
-
-`500MB` is 500,000,000 bytes of compressed data. Measurements of retained backend
-logs on 2026-11-03 reduced a 248.2 MB macOS sample to 37.9 MB (6.55:1), and a
-5.8 MB Linux sample to 1.0 MB (5.75:1), using gzip at its default compression
-level. At the lower measured ratio, the largest nominal 2.1 GB inventory would
-be about 365 MB, leaving approximately 135 MB of headroom. This is a practical
-initial service cap based on observed compression, not a guaranteed bound or a
-measurement of complete mobile exports. Missing files reduce actual size.
+At the existing 150,000,000-byte rotation threshold, four retained files give a
+nominal 600 MB raw inventory. Measurements of retained backend logs on
+2026-11-03 reduced a 248.2 MB macOS sample to 37.9 MB (6.55:1), and a 5.8 MB
+Linux sample to 1.0 MB (5.75:1), using gzip at its default compression level.
+At the lower measured ratio, 600 MB would compress to approximately 104 MB.
+`150MB` is 150,000,000 bytes, allowing approximately 46 MB of headroom. This is
+an initial service cap based on observed backend compression, not a guaranteed
+bound or a measurement of complete mobile exports.
 
 The 150 MB value is a rotation trigger, **not a strict per-file maximum**.
 Complete records and in-flight stderr writes may cross it, so no finite archive
 maximum follows from those thresholds alone. The proposed uploader checks the
-finished archive's actual size before sending. Above 500 MB it reports that the
+finished archive's actual size before sending. Above 150 MB it reports that the
 archive exceeds the upload limit and preserves the complete local export for
 manual sharing; it does not truncate logs to fit.
 
@@ -128,11 +122,11 @@ shown as successful.
 ## Planned Upload action and support reference
 
 When the provider enables uploads, double-tapping the mobile log view opens
-this action panel, with a full-width Upload button below Clear and Share:
+this action panel, with a full-width Upload button above Clear and Share:
 
 ```text
-[ Clear ]  [ Share ]
 [      Upload     ]
+[ Clear ]  [ Share ]
 ```
 
 Share keeps the existing archive-sharing action. Upload sends the archive to
