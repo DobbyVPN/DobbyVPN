@@ -56,8 +56,7 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
     private func finish() {
         guard !done else { return }
         done = true
-        do { try FileManager.default.removeItem(at: url) }
-        catch { reportError("Could not remove logs export: \(error.localizedDescription)") }
+        do { try FileManager.default.removeItem(at: url) } catch { reportError("Could not remove logs export: \(error.localizedDescription)") }
         picker?.delegate = nil
         if service?.delegate === self { service?.delegate = nil }
         picker = nil
