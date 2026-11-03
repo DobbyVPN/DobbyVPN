@@ -89,6 +89,8 @@ public sealed partial class MainWindow : Window
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
     private bool _exportingLogs;
+    private CancellationTokenSource? _logUploadCancellation;
+    private string _lastLogReference = "";
 
     private readonly record struct LogRowKey(string Id, string Raw);
     private sealed record RenderedLogRow(LogRowKey Key, UIElement[] Controls);
@@ -96,6 +98,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        RestoreLogUpload();
         SizeWindow();
         Column.SizeChanged += (_, _) => UpdateTrayHeight();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
@@ -350,6 +353,8 @@ public sealed partial class MainWindow : Window
                 result.Profiles = previous.Profiles;
             }
             _snapshot = result;
+            UploadLogsItem.Visibility = result.LogsUploadAvailable ? Visibility.Visible : Visibility.Collapsed;
+            UploadLogsItem.IsEnabled = _logUploadCancellation is null;
             _diagnostics.Record(result.LastFailure is null ? "" : $"{result.LastFailure.Message} ({result.LastFailure.Code})", "backend.failure");
             if (!_subscriptionLoad.SourceDirty && SourceEditor.FocusState == FocusState.Unfocused &&
                 (!_sourceInitialized || string.Equals(NormalizeSource(SourceEditor.Text), _renderedSource, StringComparison.Ordinal)))
@@ -1906,6 +1911,190 @@ public sealed partial class MainWindow : Window
     private string ExportHeader =>
         $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n";
 
+    private sealed class LogUploadPreparation
+    {
+        public string Reference { get; init; } = "";
+        public string Destination { get; init; } = "";
+        public string Authorization { get; init; } = "";
+        public string Provider { get; init; } = "";
+        [JsonPropertyName("max_bytes")] public long MaxBytes { get; init; }
+    }
+
+    private sealed record LastLogUpload(string Reference, string Provider, DateTimeOffset Time);
+    private static string LogUploadDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "LogUploads");
+    private void RestoreLogUpload()
+    {
+        try
+        {
+            Directory.CreateDirectory(LogUploadDirectory);
+            using var cleanupGate = new Mutex(false, @"Local\DobbyVPN.LogUploadCleanup");
+            cleanupGate.WaitOne();
+            try
+            {
+                foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
+                {
+                    FileStream lease;
+                    try { lease = new FileStream(Path.Combine(directory, ".lease"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+                    catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33) { continue; }
+                    catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup.lease"); continue; }
+                    try
+                    {
+                        using (lease)
+                            foreach (var file in Directory.EnumerateFiles(directory))
+                                if (Path.GetFileName(file) != ".lease") File.Delete(file);
+                        Directory.Delete(directory, true);
+                    }
+                    catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup.directory"); }
+                }
+            }
+            finally { cleanupGate.ReleaseMutex(); }
+            var metadata = Path.Combine(LogUploadDirectory, "latest.json");
+            if (!File.Exists(metadata)) return;
+            var latest = JsonSerializer.Deserialize<LastLogUpload>(File.ReadAllText(metadata));
+            if (latest is null) return;
+            _lastLogReference = latest.Reference;
+            UploadStatusText.Text = $"Uploaded: {latest.Reference} · {latest.Time.LocalDateTime:g} · {latest.Provider}";
+            UploadStatusPanel.Visibility = Visibility.Visible;
+            UploadProgress.Visibility = Visibility.Collapsed;
+            UploadCancelButton.Visibility = Visibility.Collapsed;
+            UploadCopyButton.Visibility = Visibility.Visible;
+            UploadShareButton.Visibility = Visibility.Visible;
+            UploadDismissButton.Visibility = Visibility.Visible;
+            CopyUploadItem.Text = $"Copy upload {latest.Reference} ({latest.Time.LocalDateTime:g})";
+            CopyUploadItem.Visibility = Visibility.Visible;
+            ShareUploadItem.Visibility = Visibility.Visible;
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.restore"); }
+    }
+
+    private void UploadLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(UploadLogsAsync);
+    private void CancelUpload_Click(object sender, RoutedEventArgs e) => _logUploadCancellation?.Cancel();
+    private void DismissUpload_Click(object sender, RoutedEventArgs e) => UploadStatusPanel.Visibility = Visibility.Collapsed;
+    [ComImport, Guid("3A3DCD6C-3EAB-43DC-BCDE-45671CE800C8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IDataTransferManagerInterop
+    {
+        IntPtr GetForWindow(IntPtr window, ref Guid iid);
+        void ShowShareUIForWindow(IntPtr window);
+    }
+
+    private DataTransferManager? _shareManager;
+    private void ShareUpload_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastLogReference.Length == 0) return;
+        try
+        {
+            var window = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            var interop = DataTransferManager.As<IDataTransferManagerInterop>();
+            if (_shareManager is null)
+            {
+                var iid = new Guid("a5caee9b-8708-49d1-8d36-67d25a8da00c");
+                var pointer = interop.GetForWindow(window, ref iid);
+                try { _shareManager = WinRT.MarshalInterface<DataTransferManager>.FromAbi(pointer); }
+                finally { Marshal.Release(pointer); }
+                _shareManager.DataRequested += (_, args) =>
+                {
+                    args.Request.Data.Properties.Title = "DobbyVPN logs";
+                    args.Request.Data.SetText("DobbyVPN logs: " + _lastLogReference);
+                };
+            }
+            interop.ShowShareUIForWindow(window);
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.share"); }
+    }
+
+    private void CopyUpload_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastLogReference.Length == 0) return;
+        var package = new DataPackage();
+        package.SetText(_lastLogReference);
+        Clipboard.SetContent(package);
+    }
+
+    private async Task UploadLogsAsync(CancellationToken cancellationToken)
+    {
+        if (_logUploadCancellation is not null || _snapshot is not { LogsUploadAvailable: true } snapshot) return;
+        using var upload = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _logUploadCancellation = upload;
+        UploadLogsItem.IsEnabled = false;
+        CancelUploadItem.Visibility = Visibility.Visible;
+        UploadLogsItem.Text = "Uploading logs…";
+        UploadStatusText.Text = "Preparing logs…";
+        UploadStatusPanel.Visibility = Visibility.Visible;
+        UploadProgress.Visibility = Visibility.Visible;
+        UploadCancelButton.Visibility = Visibility.Visible;
+        UploadCopyButton.Visibility = Visibility.Collapsed;
+        UploadShareButton.Visibility = Visibility.Collapsed;
+        UploadDismissButton.Visibility = Visibility.Collapsed;
+        string? temporary = null;
+        string? privateDirectory = null;
+        FileStream? lease = null;
+        var confirmed = false;
+        try
+        {
+            var prepared = await CallAsync<LogUploadPreparation>("PrepareLogUpload", new { session_id = snapshot.SessionId, digest = snapshot.Digest }, upload.Token);
+            var directory = LogUploadDirectory;
+            Directory.CreateDirectory(directory);
+            using (var createGate = new Mutex(false, @"Local\DobbyVPN.LogUploadCleanup"))
+            {
+                createGate.WaitOne();
+                try
+                {
+                    privateDirectory = Path.Combine(directory, "upload-" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(privateDirectory);
+                    lease = new FileStream(Path.Combine(privateDirectory, ".lease"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+                }
+                finally { createGate.ReleaseMutex(); }
+            }
+            temporary = Path.Combine(privateDirectory, prepared.Reference + ".gz");
+            await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
+                await _diagnostics.ExportAsync(output, ExportHeader, upload.Token, requireComplete: true);
+            upload.Token.ThrowIfCancellationRequested();
+            UploadStatusText.Text = "Uploading logs…";
+            await LogUpload.PutAsync(temporary, prepared.Destination, prepared.Authorization, prepared.MaxBytes, upload.Token);
+            confirmed = true;
+            _lastLogReference = prepared.Reference;
+            UploadStatusText.Text = "Uploaded: " + prepared.Reference;
+            UploadProgress.Visibility = Visibility.Collapsed;
+            UploadCancelButton.Visibility = Visibility.Collapsed;
+            UploadCopyButton.Visibility = Visibility.Visible;
+            UploadShareButton.Visibility = Visibility.Visible;
+            UploadDismissButton.Visibility = Visibility.Visible;
+            var latest = new LastLogUpload(prepared.Reference, prepared.Provider, DateTimeOffset.UtcNow);
+            UploadStatusText.Text = $"Uploaded: {latest.Reference} · {latest.Time.LocalDateTime:g} · {latest.Provider}";
+            CopyUploadItem.Text = $"Copy upload {latest.Reference} ({latest.Time.LocalDateTime:g})";
+            CopyUploadItem.Visibility = Visibility.Visible;
+            ShareUploadItem.Visibility = Visibility.Visible;
+            var metadata = Path.Combine(directory, "latest.json");
+            var staging = metadata + ".tmp";
+            await File.WriteAllTextAsync(staging, JsonSerializer.Serialize(latest));
+            File.Move(staging, metadata, true);
+        }
+        catch (OperationCanceledException) when (upload.IsCancellationRequested) { UploadStatusPanel.Visibility = Visibility.Collapsed; }
+        catch (Exception error) when (!_lifetime.IsClosing)
+        {
+            RecordError(error.ToString());
+            _exportError = confirmed ? "Logs were uploaded, but the reference could not be saved." : "Logs could not be uploaded.";
+            if (!confirmed) UploadStatusPanel.Visibility = Visibility.Collapsed;
+            RenderError();
+        }
+        finally
+        {
+            try
+            {
+                lease?.Dispose();
+                if (privateDirectory is not null) Directory.Delete(privateDirectory, true);
+            }
+            catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup"); }
+            _logUploadCancellation = null;
+            if (!_lifetime.IsClosing)
+            {
+                CancelUploadItem.Visibility = Visibility.Collapsed;
+                UploadLogsItem.Text = "Upload logs";
+                UploadLogsItem.IsEnabled = true;
+            }
+        }
+    }
+
     private void SendLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(SendLogsAsync);
 
     private async Task SendLogsAsync(CancellationToken cancellationToken)
@@ -1961,6 +2150,7 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("can_retry")] public bool CanRetry { get; init; }
         [JsonPropertyName("state")] public string State { get; init; } = "IDLE";
         [JsonPropertyName("primary_action")] public string PrimaryAction { get; init; } = "NONE";
+        [JsonPropertyName("logs_upload_available")] public bool LogsUploadAvailable { get; init; }
         [JsonPropertyName("configured")] public bool Configured { get; set; }
         [JsonPropertyName("source_url")] public string SourceUrl { get; set; } = "";
         [JsonPropertyName("source_error")] public string SourceError { get; init; } = "";

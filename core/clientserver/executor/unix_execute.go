@@ -130,18 +130,9 @@ func prepareUnmanagedLocalLog(root, path string) error {
 }
 
 func defaultDesktopLogPath() (root, path string, err error) {
-	switch {
-	case runtime.GOOS == "darwin" && os.Getuid() == 0:
+	root = "/var/log/dobbyvpn"
+	if runtime.GOOS == "darwin" {
 		root = "/Library/Logs/DobbyVPN"
-	case os.Getuid() == 0:
-		root = "/var/log/dobbyvpn"
-	default:
-		var base string
-		base, err = os.UserConfigDir()
-		if err != nil {
-			return "", "", err
-		}
-		root = filepath.Join(base, "DobbyVPN", "Logs")
 	}
 	return root, filepath.Join(root, "backend.jsonl"), nil
 }

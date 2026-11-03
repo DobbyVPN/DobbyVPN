@@ -58,6 +58,14 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published var clearRevision = 0
     @Published public private(set) var logsError = ""
     @Published public private(set) var exportingLogs = false
+    @Published var uploadStatus = ""
+    @Published var uploadError = ""
+    @Published var latestUpload: DobbyUploadReference?
+    private var uploadTask: Task<Void, Never>?
+    private var uploadCancellation: DobbyUploadCancellation?
+    private let uploadReferenceKey = "DobbyVPN.latestLogUpload"
+    private static var cleanedUploadDirectories = false
+
     @Published public var sourceText = "" {
         didSet {
             sourceIsDirty = sourceText != acceptedSource
@@ -109,7 +117,16 @@ public final class DobbySessionViewModel: ObservableObject {
     ) {
         self.client = client
         self.debounceScheduler = debounceScheduler
+        if let data = UserDefaults.standard.data(forKey: uploadReferenceKey) {
+            latestUpload = try? JSONDecoder().decode(DobbyUploadReference.self, from: data)
+        }
+        if !Self.cleanedUploadDirectories {
+            Self.cleanedUploadDirectories = true
+            do { try DobbyUploadDirectory.removeAbandoned() }
+            catch { uploadError = "Could not clean abandoned uploads: \(String(reflecting: error))" }
+        }
         recordAppStarted()
+        if !uploadError.isEmpty { recordError(uploadError) }
         refreshSnapshot()
         refreshOnDemandPreference()
         if automaticallyPoll {
@@ -492,9 +509,10 @@ public final class DobbySessionViewModel: ObservableObject {
         level: String = "ERROR"
     ) {
         let path = client.uiDiagnosticPath
+        let excludedPaths = client.diagnosticPaths
         logWorker.async { [weak self] in
             do {
-                try appendUIDiagnostic(message, to: path, event: event, level: level)
+                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
                 Task { @MainActor [weak self] in
                     guard let self, self.logsVisible else { return }
                     self.refreshLogs()
@@ -557,6 +575,70 @@ public final class DobbySessionViewModel: ObservableObject {
                 case let .failure(error): self.reportLogsError(error.localizedDescription)
                 }
                 self.refreshLogs()
+            }
+        }
+    }
+
+    func cancelLogsUpload() { uploadCancellation?.cancel(); uploadTask?.cancel() }
+
+    func startLogsUpload() {
+        guard uploadTask == nil, snapshot.logsUploadAvailable else { return }
+        let client = client
+        let sessionID = snapshot.sessionID
+        let digest = snapshot.digest
+        let writeError = diagnosticWriteError
+        uploadError = ""
+        uploadStatus = "Preparing logs…"
+        let cancellation = DobbyUploadCancellation()
+        uploadCancellation = cancellation
+        uploadTask = Task { [weak self] in
+            guard let self else { return }
+            var directory: DobbyUploadDirectory?
+            defer {
+                if let directory {
+                    do { try directory.remove() }
+                    catch {
+                        let cleanup = "Could not remove upload temporary: \(String(reflecting: error))"
+                        self.uploadError = [self.uploadError, cleanup].filter { !$0.isEmpty }.joined(separator: "\n")
+                        self.recordError(cleanup)
+                    }
+                }
+                self.uploadTask = nil
+                self.uploadCancellation = nil
+                self.uploadStatus = ""
+            }
+            do {
+                let preparation = try await Task.detached {
+                    try DobbyResponse.result(from: client.call("PrepareLogUpload", parameters: ["session_id": sessionID, "digest": digest]), as: DobbyUploadPreparation.self)
+                }.value
+                try Task.checkCancellation()
+                let dir = try DobbyUploadDirectory()
+                directory = dir
+                let file = dir.url.appendingPathComponent(preparation.reference + ".gz")
+                let header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\nCaptured: \(ISO8601DateFormatter().string(from: Date()))\n\n" + writeError
+                let issues = try await withTaskCancellationHandler {
+                    try await Task.detached {
+                        try exportDiagnostics(paths: client.diagnosticPaths, to: file, header: header, checkCancellation: cancellation.check)
+                    }.value
+                } onCancel: {
+                    cancellation.cancel()
+                }
+                guard issues.isEmpty else { throw DobbyClientError.diagnostics(issues) }
+                try Task.checkCancellation()
+                self.uploadStatus = "Uploading logs…"
+                try await uploadDiagnostics(preparation, file: file)
+                let result = DobbyUploadReference(reference: preparation.reference, completed: Date(), provider: preparation.provider)
+                self.latestUpload = result
+                UserDefaults.standard.set(try JSONEncoder().encode(result), forKey: self.uploadReferenceKey)
+            } catch is CancellationError {
+                self.uploadError = "Log upload cancelled"
+            } catch {
+                if Task.isCancelled {
+                    self.uploadError = "Log upload cancelled"
+                } else {
+                    self.uploadError = "Log upload failed: \(error.localizedDescription)"
+                    self.recordError(self.uploadError)
+                }
             }
         }
     }

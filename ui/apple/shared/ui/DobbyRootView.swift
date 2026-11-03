@@ -91,6 +91,8 @@ public struct DobbyRootView: View {
     @State private var followingLogs = true
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
+    @State private var showingLogMenu = false
+    @State private var showingReferenceShare = false
     @State private var rowHeight: CGFloat = 0
     @State private var errorDetailHeight: CGFloat = 240
 
@@ -157,6 +159,9 @@ public struct DobbyRootView: View {
 #endif
         .onOpenURL { model.importLink($0) }
 #if os(iOS)
+        .sheet(isPresented: $showingReferenceShare) {
+            if let latest = model.latestUpload { DobbyShareSheet(url: nil, text: latest.shareText) }
+        }
         .sheet(isPresented: $showingExport, onDismiss: removeExport) {
             if let url = exportedLogsURL { DobbyShareSheet(url: url) }
         }
@@ -361,18 +366,70 @@ public struct DobbyRootView: View {
         VStack(spacing: 0) {
             Rectangle().fill(Color.ink).frame(height: 1.5)
 #if os(iOS)
-            DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs, onClear: model.clearLogs)
+            if showingLogMenu {
+                VStack(spacing: 4) {
+                    if model.snapshot.logsUploadAvailable {
+                        Button("Upload logs") { showingLogMenu = false; model.startLogsUpload() }
+                            .frame(maxWidth: .infinity).accessibilityIdentifier("logs.upload")
+                            .disabled(!model.uploadStatus.isEmpty)
+                    }
+                    HStack {
+                        Button("Clear") { showingLogMenu = false; model.clearLogs() }.accessibilityIdentifier("logs.clear")
+                        Spacer()
+                        Button("Send logs") { showingLogMenu = false; sendLogs() }.accessibilityIdentifier("logs.share")
+                    }
+                }.padding().background(Color.surface)
+            }
+#endif
+            if !model.uploadError.isEmpty {
+                Text(model.uploadError).accessibilityIdentifier("logs.upload.error").padding()
+            }
+            if !model.uploadStatus.isEmpty {
+                HStack {
+                    ProgressView(); Text(model.uploadStatus)
+                    Spacer(); Button("Cancel") { model.cancelLogsUpload() }.accessibilityIdentifier("logs.upload.cancel")
+                }.padding()
+            }
+            if let latest = model.latestUpload {
+                VStack(alignment: .leading) {
+                    Text(latest.reference).textSelection(.enabled).accessibilityIdentifier("logs.upload.reference")
+                    Text("\(latest.completed.formatted()) · \(latest.provider)").font(.caption)
+                    HStack {
+                        Button("Copy reference") { copyUploadReference(latest.reference) }.accessibilityIdentifier("logs.upload.copy")
+                        Button("Share reference") { shareUploadReference(latest.shareText) }.accessibilityIdentifier("logs.upload.share")
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding()
+            }
+#if os(iOS)
+            DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs, onShowMenu: { showingLogMenu.toggle() }, onClear: model.clearLogs)
                 .accessibilityIdentifier("Connection logs")
 #else
             DobbyLogView(
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
-                interactive: !showingError, onSendLogs: sendLogs, onClear: { followingLogs = true; model.clearLogs() },
+                interactive: !showingError, onSendLogs: sendLogs, onUploadLogs: model.snapshot.logsUploadAvailable ? { model.startLogsUpload() } : nil, onClear: { followingLogs = true; model.clearLogs() },
                 onReadingPositionRestored: model.recordMacLogRestore
             )
             .accessibilityIdentifier("Connection logs")
 #endif
         }
         .background(Color.surface.ignoresSafeArea(edges: .bottom))
+    }
+
+    private func copyUploadReference(_ text: String) {
+#if os(iOS)
+        UIPasteboard.general.string = text
+#else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+#endif
+    }
+
+    private func shareUploadReference(_ text: String) {
+#if os(iOS)
+        showingReferenceShare = true
+#else
+        DobbyMacSharePresenter.present(text: text, reportError: model.reportLogsError)
+#endif
     }
 
     private func sendLogs() {

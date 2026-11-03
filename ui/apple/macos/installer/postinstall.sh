@@ -33,6 +33,15 @@ if [ ! -e "$LOG_PATH" ]; then
     chown root:wheel "$LOG_PATH"
     chmod 644 "$LOG_PATH"
 fi
+# The backend owns the lock, while the unprivileged app and CLI need shared
+# read locks to capture a stable diagnostic snapshot.
+if [ -L "$LOG_PATH.lock" ]; then
+    echo "Refusing symlinked diagnostic lock: $LOG_PATH.lock" >&2
+    exit 1
+fi
+touch "$LOG_PATH.lock"
+chown root:wheel "$LOG_PATH.lock"
+chmod 644 "$LOG_PATH.lock"
 cp "$PLIST_SRC" "$PLIST_DEST"
 # Source-built candidates and installed packages use this same launchd owner.
 /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $RESOURCES/dobbyvpn-backend" "$PLIST_DEST"
@@ -43,8 +52,8 @@ cp "$PLIST_SRC" "$PLIST_DEST"
 /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_PATH string $LOG_PATH" "$PLIST_DEST"
 /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_ROOT string $LOG_ROOT" "$PLIST_DEST"
 /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DOBBY_LOG_PRECREATED string 1" "$PLIST_DEST"
-/usr/libexec/PlistBuddy -c "Set :StandardOutPath ${DOBBY_SERVICE_STDOUT_PATH:-$LOG_PATH.stdout}" "$PLIST_DEST"
-/usr/libexec/PlistBuddy -c "Set :StandardErrorPath ${DOBBY_SERVICE_STDERR_PATH:-$LOG_PATH.stderr}" "$PLIST_DEST"
+/usr/libexec/PlistBuddy -c "Set :StandardOutPath $LOG_PATH" "$PLIST_DEST"
+/usr/libexec/PlistBuddy -c "Set :StandardErrorPath $LOG_PATH" "$PLIST_DEST"
 chown root:wheel "$PLIST_DEST"
 chmod 644 "$PLIST_DEST"
 

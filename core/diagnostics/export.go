@@ -2,6 +2,7 @@ package diagnostics
 
 import (
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -87,7 +88,24 @@ func (input Input) CopyTo(output io.Writer, offset int64) (int64, error) {
 
 // ExportGzip leaves a complete gzip only after every retained input and the
 // destination close succeed. Missing streams are normal with a stopped backend.
-func ExportGzip(destination string, paths []string, header string) (resultErr error) {
+func ExportGzip(destination string, paths []string, header string) error {
+	return ExportGzipContext(context.Background(), destination, paths, header)
+}
+
+type contextWriter struct {
+	ctx    context.Context
+	writer io.Writer
+}
+
+func (writer contextWriter) Write(data []byte) (int, error) {
+	if err := writer.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return writer.writer.Write(data)
+}
+
+// ExportGzipContext stops copying at a chunk boundary when ctx is cancelled.
+func ExportGzipContext(ctx context.Context, destination string, paths []string, header string) (resultErr error) {
 	snapshot, captureErr := Capture(paths)
 	var output *os.File
 	defer func() {
@@ -111,14 +129,15 @@ func ExportGzip(destination string, paths []string, header string) (resultErr er
 
 	compressor := gzip.NewWriter(output)
 	defer func() { resultErr = errors.Join(resultErr, compressor.Close()) }()
-	if _, err := io.WriteString(compressor, header); err != nil {
+	outputWriter := contextWriter{ctx: ctx, writer: compressor}
+	if _, err := io.WriteString(outputWriter, header); err != nil {
 		return err
 	}
 	for _, input := range snapshot.Inputs {
-		if _, err := fmt.Fprintf(compressor, "\n--- %s ---\n", input.Path); err != nil {
+		if _, err := fmt.Fprintf(outputWriter, "\n--- %s ---\n", input.Path); err != nil {
 			return err
 		}
-		if _, err := input.CopyTo(compressor, 0); err != nil {
+		if _, err := input.CopyTo(outputWriter, 0); err != nil {
 			return err
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"core/log"
 	sessionruntime "core/sessionapi/runtime"
 	"fmt"
+	"runtime"
 )
 
 type Executor struct {
@@ -23,8 +24,21 @@ func initExplicitLocalLog() error {
 	if err != nil {
 		return err
 	}
-	if err := diagnostics.CaptureStderr(path+".stderr", path); err != nil {
-		return fmt.Errorf("capture backend stderr: %w", err)
+	sources := []diagnostics.LegacySource{{Path: path + ".stderr", Label: "stderr"}}
+	if runtime.GOOS == "darwin" {
+		sources = append(sources, diagnostics.LegacySource{Path: path + ".stdout", Label: "stdout"})
 	}
-	return log.SetPath(path)
+	if err := diagnostics.MigrateLegacy(path, sources); err != nil {
+		return fmt.Errorf("migrate backend diagnostics: %w", err)
+	}
+	var captureErr error
+	if runtime.GOOS == "darwin" {
+		captureErr = diagnostics.CaptureOutput(path, path)
+	} else {
+		captureErr = diagnostics.CaptureStderr(path, path)
+	}
+	if captureErr != nil {
+		return fmt.Errorf("capture backend output: %w", captureErr)
+	}
+	return log.SetAppenderPath(path)
 }

@@ -16,16 +16,22 @@ public enum DiagnosticFiles {
 
     public static func append(
         _ message: String, event: String, level: String, source: String, to path: URL,
-        fields: [String: Any] = [:]
+        fields: [String: Any] = [:], rotating: Bool = true, legacyDesktop: Bool = false, legacyExcludedPaths: [String] = [], legacyHome: URL? = nil
     ) throws {
         processLock.lock()
         defer { processLock.unlock() }
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
         try withLock(path, writing: true) {
-            if !initialized.contains(path.path) {
-                try migrate(path)
+#if os(macOS)
+            if rotating && !initialized.contains(path.path) {
+                let home = legacyHome ?? FileManager.default.homeDirectoryForCurrentUser
+                let configured = ProcessInfo.processInfo.environment["DOBBY_UI_LOG_PATH"].flatMap { $0.isEmpty ? nil : $0 }
+                    ?? home.appendingPathComponent("Library/Logs/DobbyVPN/ui_diagnostics.jsonl").path
+                let ownsLegacy = legacyDesktop && (legacyHome != nil || path.standardizedFileURL.path == URL(fileURLWithPath: configured).standardizedFileURL.path)
+                try migrateDesktopLegacy(path, includeLegacy: ownsLegacy, excluding: legacyExcludedPaths, homeDirectory: home)
                 initialized.insert(path.path)
             }
+#endif
             sequence += 1
 #if DEBUG
             let configuration = "Debug"
@@ -44,7 +50,9 @@ public enum DiagnosticFiles {
             if !fields.isEmpty { recordWithFields["fields"] = fields }
             var data = try JSONSerialization.data(withJSONObject: recordWithFields)
             data.append(0x0A)
-            if try size(path) >= threshold { try rotate(path) }
+            if rotating {
+                if try size(path) >= threshold { try rotate(path) }
+            }
             try withFile(try open(path, flags: O_WRONLY | O_CREAT | O_APPEND)) { try $0.write(contentsOf: data) }
         }
     }
@@ -98,11 +106,11 @@ public enum DiagnosticFiles {
         guard size > threshold else { return false }
         return try withFile(open(path, flags: O_RDONLY)) { file in
             try file.seek(toOffset: threshold - 1)
-            var remaining = size - threshold // Exclude the final byte: a newline at EOF completes the crossing record.
+            var remaining = size - threshold
             while remaining > 0 {
                 let data = try file.read(upToCount: Int(min(remaining, 65_536))) ?? Data()
                 guard !data.isEmpty else { return false }
-                if data.contains(0x0A) { return true }
+                if data.contains(10) { return true }
                 remaining -= UInt64(data.count)
             }
             return false
@@ -119,60 +127,147 @@ public enum DiagnosticFiles {
 
     private static func rotate(_ path: URL) throws { try move(path, previous(path)) }
 
-    private static func migrate(_ path: URL) throws {
-        let paths = [previous(path), path]
-        var needsMigration = false
-        for source in paths {
-            let sourceSize = try size(source)
-            if sourceSize > threshold, try hasRecordAfterThreshold(source, size: sourceSize) {
-                needsMigration = true
-                break
+#if os(macOS)
+    private struct LegacySource: Codable, Equatable { let Path: String; let Label: String }
+    private struct LegacyCommit: Codable {
+        let Sources: [LegacySource]?
+        let Previous: Bool
+        private enum CodingKeys: String, CodingKey { case Sources, Previous }
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            if let Sources { try values.encode(Sources, forKey: .Sources) }
+            else { try values.encodeNil(forKey: .Sources) }
+            try values.encode(Previous, forKey: .Previous)
+        }
+    }
+
+    private static func syncDirectory(_ url: URL) throws {
+        let fd = Darwin.open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        defer { Darwin.close(fd) }
+        guard fsync(fd) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+    }
+
+    // Shares the Go owner's durable marker and staging protocol while holding
+    // the same destination lock. Never delete legacy input before publication.
+    private static func migrateDesktopLegacy(_ path: URL, includeLegacy: Bool, excluding: [String], homeDirectory: URL) throws {
+        let home = homeDirectory.appendingPathComponent(".dobbyvpn/app_logs.txt").path
+        let oldBackend = homeDirectory.appendingPathComponent("Library/Application Support/DobbyVPN/Logs/backend.jsonl").path
+        var sources: [LegacySource] = []
+        if includeLegacy {
+            sources = [LegacySource(Path: home, Label: "cli"), LegacySource(Path: home + ".stderr", Label: "stderr")]
+            if !excluding.contains(oldBackend) && oldBackend != path.path {
+                sources += [LegacySource(Path: oldBackend, Label: "backend"), LegacySource(Path: oldBackend + ".stderr", Label: "stderr")]
+            }
+            sources = sources.filter { $0.Path != path.path }
+        }
+        let stage = URL(fileURLWithPath: path.path + ".legacy-stage")
+        let marker = URL(fileURLWithPath: path.path + ".legacy-commit")
+        func finish(_ commit: LegacyCommit) throws {
+            guard commit.Sources == nil || commit.Sources == sources else { throw Failure("Legacy migration sources changed during recovery") }
+            for isPrevious in [true, false] {
+                let destination = isPrevious ? previous(path) : path
+                let staged = isPrevious ? previous(stage) : stage
+                if isPrevious && !commit.Previous { try remove(destination); continue }
+                if FileManager.default.fileExists(atPath: staged.path) { try move(staged, destination) }
+                try syncDirectory(path.deletingLastPathComponent())
+            }
+            for source in commit.Sources ?? [] {
+                for suffix in [".previous", ""] { try remove(URL(fileURLWithPath: source.Path + suffix)) }
+                let parent = URL(fileURLWithPath: source.Path).deletingLastPathComponent()
+                if FileManager.default.fileExists(atPath: parent.path) { try syncDirectory(parent) }
+            }
+            try syncDirectory(path.deletingLastPathComponent())
+            try remove(marker)
+            try syncDirectory(path.deletingLastPathComponent())
+        }
+        if FileManager.default.fileExists(atPath: marker.path) {
+            let commit = try JSONDecoder().decode(LegacyCommit.self, from: Data(contentsOf: marker))
+            try finish(commit)
+            if commit.Sources != nil { return }
+        }
+        try remove(stage); try remove(previous(stage))
+        let hasLegacy = sources.contains(where: { source in
+            [".previous", ""].contains { FileManager.default.fileExists(atPath: source.Path + $0) }
+        })
+        var normalize = false
+        if !hasLegacy {
+            for existing in [previous(path), path] {
+                let existingSize = try size(existing)
+                if try hasRecordAfterThreshold(existing, size: existingSize) { normalize = true; break }
             }
         }
-        guard needsMigration else { return }
-        let stage = URL(fileURLWithPath: path.path + ".migration-" + UUID().uuidString)
-        var output: FileHandle? = try open(stage, flags: O_CREAT | O_EXCL | O_WRONLY)
-        var failure: Error?
-        do {
-            var count: UInt64 = 0
-            var atStart = true
-            for source in paths {
+        guard hasLegacy || normalize else { return }
+        var count: UInt64 = 0
+        var atStart = true
+        let streams = [LegacySource(Path: path.path, Label: "existing")] + (normalize ? [] : sources)
+        for source in streams {
+            for suffix in [".previous", ""] {
+                let inputPath = URL(fileURLWithPath: source.Path + suffix)
                 let input: FileHandle
-                do { input = try open(source, flags: O_RDONLY) }
+                do { input = try open(inputPath, flags: O_RDONLY) }
                 catch let error as POSIXError where error.code == .ENOENT { continue }
                 try withFile(input) { file in
-                    while let data = try file.read(upToCount: 65_536), !data.isEmpty {
-                        var offset = data.startIndex
-                        while offset < data.endIndex {
-                            if atStart && count >= threshold {
-                                try output?.close(); output = nil
-                                try rotate(stage)
-                                output = try open(stage, flags: O_CREAT | O_EXCL | O_WRONLY)
-                                count = 0
+                    var header = try JSONSerialization.data(withJSONObject: ["event": "diagnostics.legacy", "source": source.Label, "generation": suffix], options: [.sortedKeys])
+                    header.append(10)
+                    if normalize { header.removeAll() }
+                    if !atStart && !header.isEmpty { header.insert(10, at: 0); atStart = true }
+                    var needsHeader = !header.isEmpty
+                    var output: FileHandle?
+                    do {
+                        while let data = try file.read(upToCount: 65_536), !data.isEmpty {
+                            var offset = data.startIndex
+                            while offset < data.endIndex {
+                                if atStart && count >= threshold {
+                                    try output?.close(); output = nil
+                                    try rotate(stage); count = 0; needsHeader = !header.isEmpty
+                                }
+                                if output == nil { output = try open(stage, flags: O_WRONLY | O_CREAT | O_APPEND) }
+                                let newline = data[offset...].firstIndex(of: 10)
+                                let end = newline.map { data.index(after: $0) } ?? data.endIndex
+                                if needsHeader { try output?.write(contentsOf: header); count += UInt64(header.count); needsHeader = false }
+                                try output?.write(contentsOf: data[offset..<end])
+                                count += UInt64(end - offset)
+                                atStart = newline != nil
+                                offset = end
                             }
-                            let newline = data[offset...].firstIndex(of: 0x0A)
-                            let end = newline.map { data.index(after: $0) } ?? data.endIndex
-                            try output?.write(contentsOf: data[offset..<end])
-                            count += UInt64(end - offset)
-                            atStart = newline != nil
-                            offset = end
                         }
+                        try output?.close(); output = nil
+                    } catch {
+                        let original = error
+                        do { try output?.close() }
+                        catch { throw Failure("\(String(reflecting: original))\nClose migration: \(String(reflecting: error))") }
+                        throw original
                     }
                 }
             }
-            try output?.close(); output = nil
-            try remove(previous(path))
-            if FileManager.default.fileExists(atPath: previous(stage).path) { try move(previous(stage), previous(path)) }
-            try move(stage, path)
-        } catch { failure = error }
-        var cleanup: [String] = []
-        do { try output?.close() } catch { cleanup.append(String(reflecting: error)) }
-        for temporary in [stage, previous(stage)] {
-            do { try remove(temporary) } catch { cleanup.append(String(reflecting: error)) }
         }
-        if let failure { cleanup.insert(String(reflecting: failure), at: 0) }
-        if !cleanup.isEmpty { throw Failure(cleanup.joined(separator: "\n")) }
+        var destinationInfo = stat()
+        let hasDestination = lstat(path.path, &destinationInfo) == 0
+        if !hasDestination && errno != ENOENT { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        for staged in [previous(stage), stage] where FileManager.default.fileExists(atPath: staged.path) {
+            try withFile(open(staged, flags: O_WRONLY | O_APPEND)) { output in
+                if hasDestination {
+                    guard fchmod(output.fileDescriptor, destinationInfo.st_mode & 0o777) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+                    if geteuid() == 0 && fchown(output.fileDescriptor, destinationInfo.st_uid, destinationInfo.st_gid) != 0 {
+                        throw POSIXError(.init(rawValue: errno) ?? .EIO)
+                    }
+                }
+                try output.synchronize()
+            }
+        }
+        let commit = LegacyCommit(Sources: normalize ? nil : sources, Previous: FileManager.default.fileExists(atPath: previous(stage).path))
+        let temporary = URL(fileURLWithPath: marker.path + ".tmp")
+        try remove(temporary)
+        try withFile(open(temporary, flags: O_WRONLY | O_CREAT | O_EXCL)) { output in
+            try output.write(contentsOf: JSONEncoder().encode(commit))
+            try output.synchronize()
+        }
+        try move(temporary, marker)
+        try syncDirectory(path.deletingLastPathComponent())
+        try finish(commit)
     }
+#endif
 
     private struct Input { let path: URL; let file: FileHandle; let length: UInt64 }
 
@@ -318,7 +413,7 @@ public enum DiagnosticFiles {
                      message: capture ? "Stderr capture initialized" : value["message"] as? String ?? raw, raw: raw, date: date)
     }
 
-    public static func export(paths: [URL], to path: URL, header: String) throws -> String {
+    public static func export(paths: [URL], to path: URL, header: String, checkCancellation: () throws -> Void = {}) throws -> String {
         var issues: [String] = []
         let inputs = capture(paths, issues: &issues)
         var compressor: gzFile?
@@ -336,9 +431,11 @@ public enum DiagnosticFiles {
             }
             try writeGzip(Data(header.utf8), to: compressor)
             for input in inputs {
+                try checkCancellation()
                 try writeGzip(Data("\n--- \(input.path.lastPathComponent) ---\n".utf8), to: compressor)
                 var remaining = input.length
                 while remaining > 0 {
+                    try checkCancellation()
                     let data: Data
                     do {
                         data = try input.file.read(upToCount: Int(min(65_536, remaining))) ?? Data()

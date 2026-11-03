@@ -118,7 +118,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     // encrypted Keychain mailbox before asking NetworkExtension to start; the
     // provider is the only process that hands them to Go's configuration parser.
 
-    var logs = IOSAppCompositionRoot.logsRepository
+    private let loggerError = DobbyvpnInitLoggerError(IOSAppCompositionRoot.goLogFilePath().path)
+    lazy var logs = DobbyLogStore(path: IOSAppCompositionRoot.goLogFilePath(), enabled: loggerError.isEmpty)
     private let secrets = SharedKeychainSecretStore.shared
     let commandQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.session-command", attributes: .concurrent)
     let settingsQueue = DispatchQueue(label: "vpn.dobby.app.tunnel.settings")
@@ -277,6 +278,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func startTunnel(options: [String: NSObject]?) async throws {
+        guard loggerError.isEmpty else { throw sessionError("LOGGER_INITIALIZATION_FAILED: \(loggerError)") }
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
@@ -286,12 +288,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
         logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
 
-        let path = IOSAppCompositionRoot.goLogFilePath().path
-        logs.writeLog(log: "Starting Go tunnel logger using local storage")
-        guard DobbyvpnInitLogger(path) else {
-            logs.writeLog(level: "ERROR", log: "service_logger_init result=failed failure_code=LOCAL_LOGGER_REJECTED")
-            throw sessionError("LOGGER_INITIALIZATION_FAILED")
-        }
         // Initialize diagnostics before retaining OS callbacks. A failed
         // logger must not leave a callback cycle owning a rejected provider.
         try registerPlatform()

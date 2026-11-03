@@ -27,7 +27,8 @@ class DobbyVpnService : VpnService() {
 
     private fun recordFailure(event: String, failure: Throwable) {
         operationFailure = failure
-        NativeVpnBridge.recordNativeFailure(this, event, failure)
+        if (NativeGoSession.isLoggerReady()) NativeVpnBridge.recordServiceDiagnostic(this, event, "Android native bridge operation failed", failure)
+        else NativeVpnBridge.recordNativeFailure(this, event, failure)
     }
 
     private var activeSession: String? = null
@@ -51,7 +52,7 @@ class DobbyVpnService : VpnService() {
             stopSelf()
             return
         }
-        NativeVpnBridge.recordDiagnostic(this, "vpn.service.attached", "service=${System.identityHashCode(this)}")
+        NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.attached", "service=${System.identityHashCode(this)}")
         Log.i(TAG, "VPN service created")
     }
 
@@ -80,7 +81,7 @@ class DobbyVpnService : VpnService() {
                 try {
                     val reply = JSONObject(NativeGoSession.restore(onlyPreviouslyEnabled))
                     check(reply.optBoolean("ok")) { reply.toString() }
-                    NativeVpnBridge.recordDiagnostic(this, "vpn.service.restored", reply.toString())
+                    NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.restored", reply.toString())
                     if (reply.getJSONObject("result").optLong("generation") == 0L) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf(startId)
@@ -137,7 +138,7 @@ class DobbyVpnService : VpnService() {
             activeSession = sessionID
             activeGeneration = generation
             val owner = UnderlyingNetworkOwner(this) {
-                NativeVpnBridge.recordDiagnostic(this, "vpn.underlying_network", it)
+                NativeVpnBridge.recordServiceDiagnostic(this, "vpn.underlying_network", it)
             }
             underlyingNetwork = owner
             val physical = owner.start()
@@ -282,7 +283,7 @@ class DobbyVpnService : VpnService() {
         if ((!active && !released) || (vpnInterface != null && !active)) return
         val message = "Go state=$state generation=$generation failure=$failureCode"
         Log.i(TAG, message)
-        NativeVpnBridge.recordDiagnostic(this, "vpn.service.state", message)
+        NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.state", message)
         if (vpnInterface != null) {
             try {
                 ensureForeground()
@@ -321,18 +322,18 @@ class DobbyVpnService : VpnService() {
             // Retire synchronously before Android can create another service;
             // a delayed global Stop would otherwise stop that replacement.
             NativeVpnBridge.detach(this)
-            NativeVpnBridge.recordDiagnostic(this, "vpn.service.detached", "$owner mode=confirmed_stop")
+            NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.detached", "$owner mode=confirmed_stop")
             return
         }
         // OS callbacks run on the main thread. Keep this service reachable by
         // Go's release callback until the one owner confirms cleanup.
-        NativeVpnBridge.recordDiagnostic(this, "vpn.service.shutdown", "$owner mode=stop_and_wait")
+        NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.shutdown", "$owner mode=stop_and_wait")
         Thread({
             val failure = NativeGoSession.stopAndWait()
             if (failure.isEmpty()) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 NativeVpnBridge.detach(this)
-                NativeVpnBridge.recordDiagnostic(this, "vpn.service.detached", "$owner mode=stop_and_wait")
+                NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.detached", "$owner mode=stop_and_wait")
             } else {
                 recordFailure("vpn.service.shutdown_failed", IllegalStateException(failure))
             }

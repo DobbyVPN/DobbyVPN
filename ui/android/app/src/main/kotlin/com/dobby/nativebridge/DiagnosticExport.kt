@@ -7,12 +7,13 @@ import java.util.zip.GZIPOutputStream
 import org.json.JSONObject
 
 /** Export exact retained bytes with bounded memory and explicit collection errors. */
-internal fun writeDiagnosticArchive(destination: OutputStream, paths: List<File>, metadata: JSONObject) {
+internal fun writeDiagnosticArchive(destination: OutputStream, paths: List<File>, metadata: JSONObject, checkCancellation: () -> Unit = {}, requireComplete: Boolean = false) {
     val inputs = mutableListOf<DiagnosticFiles.Input>()
     val errors = mutableListOf<String>()
     var original: Throwable? = null
     try {
         for (file in paths) {
+            checkCancellation()
             try { inputs.addAll(DiagnosticFiles.capture(file)) }
             catch (failure: Exception) { errors.add("${file.path}: ${failure.stackTraceToString()}") }
         }
@@ -23,6 +24,7 @@ internal fun writeDiagnosticArchive(destination: OutputStream, paths: List<File>
                 output.write("${JSONObject().put("diagnostic_file", file.name)}\n".toByteArray(Charsets.UTF_8))
                 var remaining = length
                 while (remaining > 0) {
+                    checkCancellation()
                     val count = try {
                         input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt()).also {
                             if (it < 0) throw IOException("Log shortened during export: ${file.path}")
@@ -40,6 +42,7 @@ internal fun writeDiagnosticArchive(destination: OutputStream, paths: List<File>
                 try { input.close() } catch (failure: Exception) { errors.add("${file.path}: ${failure.stackTraceToString()}") }
             }
             inputs.clear()
+            if (requireComplete && errors.isNotEmpty()) throw IOException("Diagnostic collection failed: " + errors.joinToString("\n"))
             val issues = JSONObject().put("collection_errors", errors.joinToString("\n"))
             output.write("$issues\n".toByteArray(Charsets.UTF_8))
         }

@@ -21,7 +21,7 @@ final class MacDesktopSessionClient: DobbySessionClient {
 
     var diagnosticPaths: [URL] {
         [URL(fileURLWithPath: backendLogPath),
-         URL(fileURLWithPath: backendLogPath + ".stderr"), uiDiagnosticPath]
+         uiDiagnosticPath]
     }
 
     var uiDiagnosticPath: URL {
@@ -87,7 +87,7 @@ final class MacDesktopSessionClient: DobbySessionClient {
                     "parameters": ["source": source],
                     "succeeded": responseReceived && responseIsSuccessful,
                     "response_read_monotonic_uptime": ProcessInfo.processInfo.systemUptime,
-                ]
+                ], legacyDesktop: true, legacyExcludedPaths: [backendLogPath]
             )
         } catch {
             FileHandle.standardError.write(Data(

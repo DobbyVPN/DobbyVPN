@@ -1,5 +1,6 @@
 package com.dobby.ui
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ClipDescription
 import android.content.Intent
@@ -24,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.dobby.nativebridge.LogUploader
 import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.presentation.LoadTrigger
@@ -454,6 +456,7 @@ internal data class SessionData(
     val state: String = "IDLE",
     val primaryAction: String = "NONE",
     val configured: Boolean = false,
+    val logsUploadAvailable: Boolean = false,
     val sourceUrl: String = "",
     val digest: String = "",
     val profiles: List<ProfileData> = emptyList(),
@@ -499,7 +502,14 @@ internal data class ScreenState(
     val logs: List<LogEntry> = emptyList(),
     val clearRevision: Int = 0,
     val logsError: String = "",
+    val uploadError: String = "",
     val exportingLogs: Boolean = false,
+    val uploadingLogs: Boolean = false,
+    val uploadPhase: String = "",
+    val uploadedReference: String = "",
+    val uploadedProvider: String = "",
+    val uploadedTime: String = "",
+    val showUploadSuccess: Boolean = false,
 )
 
 internal class SessionController(
@@ -512,12 +522,15 @@ internal class SessionController(
     var state by mutableStateOf(ScreenState(
         source = restoredSourceEditorState?.getString(SOURCE_TEXT).orEmpty(),
         sourceDirty = restoredSourceEditorState?.getBoolean(SOURCE_DIRTY) == true,
+        uploadedReference = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("reference", "").orEmpty(),
+        uploadedProvider = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("provider", "").orEmpty(),
+        uploadedTime = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("time", "").orEmpty(),
         loadError = restoredSourceEditorState?.getString(SOURCE_LOAD_ERROR).orEmpty(),
     ))
         private set
 
     val errors: List<String> get() =
-        listOf(state.loadError, state.error, state.session.failure, state.logsError).filter(String::isNotEmpty).distinct()
+        listOf(state.loadError, state.error, state.session.failure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
 
     /** Messages the user closed; they stay hidden until they clear or the user makes a new attempt. */
     var dismissedErrors by mutableStateOf(restoredDismissedErrors)
@@ -526,6 +539,8 @@ internal class SessionController(
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
+    private val uploadWorker = Executors.newSingleThreadExecutor()
+    private var uploader: LogUploader? = null
     @Volatile private var visible = false
     @Volatile private var latest = SessionData()
     private var permissionTarget: PendingPermissionAction? = null
@@ -559,6 +574,7 @@ internal class SessionController(
 
 
     init {
+        LogUploader.cleanupStartup(activity.applicationContext)
         clipboard.addPrimaryClipChangedListener(clipboardListener)
         worker.scheduleWithFixedDelay({
             refreshSnapshot()
@@ -1082,8 +1098,45 @@ internal class SessionController(
         }
     }
 
+    fun uploadLogs() {
+        if (state.uploadingLogs || !latest.logsUploadAvailable) return
+        val selected = latest
+        val attempt = LogUploader(activity.applicationContext, phase = { phase ->
+            main.post { if (state.uploadingLogs) state = state.copy(uploadPhase = phase) }
+        })
+        uploader = attempt
+        state = state.copy(uploadingLogs = true, uploadPhase = "Preparing logs…", uploadError = "")
+        uploadWorker.execute {
+            val outcome = runCatching { attempt.upload(selected.sessionId, selected.digest) }
+            NativeVpnBridge.recordDiagnostic(activity.applicationContext, "logs.upload_completed",
+                if (outcome.isSuccess) "Diagnostic upload completed" else "Diagnostic upload failed",
+                outcome.exceptionOrNull())
+            main.post {
+                if (uploader === attempt) {
+                    uploader = null
+                    state = state.copy(uploadingLogs = false,
+                        uploadedReference = outcome.getOrNull()?.reference ?: state.uploadedReference,
+                        uploadedProvider = outcome.getOrNull()?.provider ?: state.uploadedProvider,
+                        uploadedTime = outcome.getOrNull()?.time ?: state.uploadedTime,
+                        showUploadSuccess = outcome.isSuccess,
+                        uploadError = outcome.exceptionOrNull()?.message ?: outcome.getOrNull()?.persistenceError.orEmpty())
+                }
+            }
+        }
+    }
+
+    fun cancelUpload() { uploader?.cancel() }
+    fun dismissUploadSuccess() { state = state.copy(showUploadSuccess = false) }
+    fun copyUploadReference() { clipboard.setPrimaryClip(ClipData.newPlainText("DobbyVPN logs", state.uploadedReference)) }
+    fun shareUploadReference() {
+        activity.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, "DobbyVPN logs: ${state.uploadedReference}"), "Share log reference"))
+    }
+
     fun close() {
         clipboard.removePrimaryClipChangedListener(clipboardListener)
+        uploader?.cancel()
+        uploadWorker.shutdownNow()
         worker.shutdownNow()
         logWorker.shutdownNow()
         loadWorker.shutdownNow()
@@ -1114,6 +1167,7 @@ internal class SessionController(
                 state = snapshot.optString("state", "IDLE"),
                 primaryAction = snapshot.optString("primary_action", "NONE"),
                 configured = snapshot.optBoolean("configured"),
+                logsUploadAvailable = snapshot.optBoolean("logs_upload_available"),
                 sourceUrl = snapshot.optString("source_url"),
                 digest = snapshot.optString("digest"),
                 profiles = snapshot.optJSONArray("profiles")?.let { profiles ->

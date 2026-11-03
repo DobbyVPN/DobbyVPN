@@ -3,10 +3,11 @@ import SwiftUI
 import UIKit
 
 struct DobbyShareSheet: UIViewControllerRepresentable {
-    let url: URL
+    let url: URL?
+    var text: String? = nil
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        UIActivityViewController(activityItems: text.map { [$0] } ?? url.map { [$0] } ?? [], applicationActivities: nil)
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
@@ -20,7 +21,8 @@ import SwiftUI
 final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePickerDelegate, NSSharingServiceDelegate {
     private static var live: [ObjectIdentifier: DobbyMacSharePresenter] = [:]
 
-    let url: URL
+    let url: URL?
+    private let item: Any
     private let reportError: (String) -> Void
     private var picker: NSSharingServicePicker?
     private var service: NSSharingService?
@@ -28,9 +30,23 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
 
     init(url: URL, reportError: @escaping (String) -> Void) {
         self.url = url
+        self.item = url
         self.reportError = reportError
         super.init()
         Self.live[ObjectIdentifier(self)] = self
+    }
+
+    init(text: String, reportError: @escaping (String) -> Void) {
+        self.url = nil
+        self.item = text
+        self.reportError = reportError
+        super.init()
+        Self.live[ObjectIdentifier(self)] = self
+    }
+
+    static func present(text: String, reportError: @escaping (String) -> Void) {
+        let presenter = DobbyMacSharePresenter(text: text, reportError: reportError)
+        presenter.present(in: (NSApp.keyWindow ?? NSApp.mainWindow)?.contentView)
     }
 
     static func present(url: URL, reportError: @escaping (String) -> Void) {
@@ -45,7 +61,7 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
             finish()
             return
         }
-        let picker = NSSharingServicePicker(items: [url])
+        let picker = NSSharingServicePicker(items: [item])
         picker.delegate = self
         self.picker = picker
         var point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
@@ -56,7 +72,9 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
     private func finish() {
         guard !done else { return }
         done = true
-        do { try FileManager.default.removeItem(at: url) } catch { reportError("Could not remove logs export: \(error.localizedDescription)") }
+        if let url {
+            do { try FileManager.default.removeItem(at: url) } catch { reportError("Could not remove logs export: \(error.localizedDescription)") }
+        }
         picker?.delegate = nil
         if service?.delegate === self { service?.delegate = nil }
         picker = nil
@@ -86,10 +104,8 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
 #if os(iOS)
 private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     var onSendLogs: () -> Void = {}
+    var onShowMenu: () -> Void = {}
     var onClear: () -> Void = {}
-    private var editMenu: AnyObject?
-    private var editMenuDelegate: AnyObject?
-    private var showingLegacyMenu = false
     var preservesReadingPosition = false
     private(set) var isRestoringReadingPosition = false
     private(set) var readingPositionRestoreCount = 0
@@ -102,14 +118,8 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         doubleTap.numberOfTapsRequired = 2
         doubleTap.delegate = self
         addGestureRecognizer(doubleTap)
-        if #available(iOS 16.0, *) {
-            let delegate = LogsEditMenu(self)
-            let interaction = UIEditMenuInteraction(delegate: delegate)
-            addInteraction(interaction)
-            editMenu = interaction
-            editMenuDelegate = delegate
-        }
         accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "Show log actions") { [weak self] _ in self?.onShowMenu(); return true },
             UIAccessibilityCustomAction(name: "Send logs") { [weak self] _ in self?.onSendLogs(); return true },
             UIAccessibilityCustomAction(name: "Clear") { [weak self] _ in self?.onClear(); return true },
         ]
@@ -121,35 +131,7 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     }
 
     @objc private func showLogsMenu(_ gesture: UITapGestureRecognizer) {
-        let point = gesture.location(in: self)
-        if #available(iOS 16.0, *), let interaction = editMenu as? UIEditMenuInteraction {
-            interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
-        } else {
-            showingLegacyMenu = true
-            becomeFirstResponder()
-            UIMenuController.shared.menuItems = [
-                UIMenuItem(title: "Send logs", action: #selector(sendLogsFromMenu)),
-                UIMenuItem(title: "Clear", action: #selector(clearFromMenu)),
-            ]
-            UIMenuController.shared.showMenu(from: self, rect: CGRect(origin: point, size: .zero))
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(legacyMenuHidden), name: UIMenuController.willHideMenuNotification, object: nil
-            )
-        }
-    }
-
-    @objc private func sendLogsFromMenu() { onSendLogs() }
-    @objc private func clearFromMenu() { onClear() }
-
-    @objc private func legacyMenuHidden() {
-        showingLegacyMenu = false
-        UIMenuController.shared.menuItems = nil
-        NotificationCenter.default.removeObserver(self, name: UIMenuController.willHideMenuNotification, object: nil)
-    }
-
-    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
-        if action == #selector(sendLogsFromMenu) || action == #selector(clearFromMenu) { return showingLegacyMenu }
-        return !showingLegacyMenu && super.canPerformAction(action, withSender: sender)
+        onShowMenu()
     }
 
     override func layoutSubviews() {
@@ -217,25 +199,11 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
 }
 
 @available(iOS 16.0, *)
-private final class LogsEditMenu: NSObject, UIEditMenuInteractionDelegate {
-    private weak var view: DobbyLogTextView?
-
-    init(_ view: DobbyLogTextView) { self.view = view }
-
-    func editMenuInteraction(
-        _ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]
-    ) -> UIMenu? {
-        UIMenu(children: [
-            UIAction(title: "Send logs") { [weak view] _ in view?.onSendLogs() },
-            UIAction(title: "Clear") { [weak view] _ in view?.onClear() },
-        ])
-    }
-}
-
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     let clear: Int
     let onSendLogs: () -> Void
+    var onShowMenu: () -> Void = {}
     let onClear: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -265,6 +233,7 @@ struct DobbyLogView: UIViewRepresentable {
         let coordinator = context.coordinator
         if let logView = view as? DobbyLogTextView {
             logView.onSendLogs = onSendLogs
+            logView.onShowMenu = onShowMenu
             logView.onClear = onClear
         }
         coordinator.latestEntries = entries
@@ -403,10 +372,12 @@ struct DobbyLogView: UIViewRepresentable {
 #elseif os(macOS)
 private final class DobbyLogTextView: NSTextView {
     var onSendLogs: () -> Void = {}
+    var onUploadLogs: (() -> Void)?
     var onClear: () -> Void = {}
 
     private var logsMenu: NSMenu {
         let menu = NSMenu()
+        if let onUploadLogs { menu.addItem(LogsMenuItem("Upload logs", handler: onUploadLogs)) }
         menu.addItem(LogsMenuItem("Send logs") { [weak self] in self?.onSendLogs() })
         menu.addItem(LogsMenuItem("Clear") { [weak self] in self?.onClear() })
         return menu
@@ -456,6 +427,7 @@ struct DobbyLogView: NSViewRepresentable {
     /// Off while a popup covers the logs, so the text cursor does not show through it.
     let interactive: Bool
     let onSendLogs: () -> Void
+    var onUploadLogs: (() -> Void)? = nil
     let onClear: () -> Void
     var onReadingPositionRestored: (MacLogRestoreObservation) -> Void = { _ in }
 
@@ -524,6 +496,7 @@ struct DobbyLogView: NSViewRepresentable {
         guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
         let coordinator = context.coordinator
         view.onSendLogs = onSendLogs
+        view.onUploadLogs = onUploadLogs
         view.onClear = { [weak coordinator] in
             coordinator?.resetForClear()
             onClear()

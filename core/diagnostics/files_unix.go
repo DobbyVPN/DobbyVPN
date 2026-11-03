@@ -19,6 +19,7 @@ func openLocalFile(path string, flags int) (*os.File, error) {
 	}
 	return os.NewFile(uintptr(fd), path), nil
 }
+func openLegacyInput(path string) (*os.File, error) { return openLocalFile(path, unix.O_RDONLY) }
 func openAppend(path string) (*os.File, error) {
 	return openLocalFile(path, unix.O_CREAT|unix.O_WRONLY|unix.O_APPEND)
 }

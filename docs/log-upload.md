@@ -1,10 +1,9 @@
 # HTTPS diagnostic upload endpoint
 
-**Preview: DobbyVPN does not implement log uploads yet.** This page describes
-the proposed provider configuration and support reference. Current releases
-reject the `logs_endpoint` setting; do not add it to their subscriptions.
-Automatic uploads on reconnection/failure and automatic analysis are deferred.
-The initial transport is WebDAV over HTTPS; SFTP and S3 are deferred.
+DobbyVPN 1.5.11 supports manual log uploads when the subscription provider enables
+them. Older clients reject the `logs_endpoint` setting; omit it from settings for
+older or unknown versions. Automatic uploads, analysis, S3 and SFTP are outside
+this feature. This guide configures a provider endpoint; it does not deploy one.
 
 ## Provider setup
 
@@ -39,7 +38,7 @@ settings.example {
 
 		@upload {
 			method PUT
-			path_regexp archive ^/logs/([A-Za-z0-9_-]{16,96}\.gz)$
+			path_regexp archive ^/logs/([0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.gz)$
 		}
 		handle @upload {
 			request_body {
@@ -72,20 +71,38 @@ certificate verification. Public reads, listings, deletion and directory
 creation are rejected; support uses separate authenticated read-only access.
 Retention cleanup needs separate operator access with deletion permission.
 This example does not configure cleanup jobs, request-rate limits or storage
-quotas. Storage Box sub-accounts share the box's capacity without individual
-storage quotas.
+quotas. Storage Box sub-accounts **do not provide independent storage quotas**. They
+share the box's capacity; a per-request body limit does not impose a cumulative
+quota. Operators must manage available capacity separately.
 
-For a future supporting DobbyVPN release, place this optional setting before
-any TOML tables. Omit it for older or unrecognized clients, or to disable uploads:
+For DobbyVPN 1.5.11 and later, place this optional setting before any TOML
+tables. Omit it for older or unrecognized clients, or to disable uploads:
 
 ```toml
 logs_endpoint = "https://upload:APP_PASSWORD@settings.example/logs/"
 ```
 
+Versioned 1.5.11 builds send `User-Agent: DobbyVPN/1.5.11`. Enable this setting
+only for recognized compatible versions. Older builds may send `DobbyVPN/dev`,
+and development builds may send `DobbyVPN/development`; omit the key for these
+and any unknown version. When responses vary by User-Agent, send `Vary: User-Agent`
+and configure shared caches to honor it, or use `Cache-Control: private, no-store`. An older
+client must never receive a cached response containing the new key. Static Caddy
+matchers can select compatible settings files; dynamic settings generators can
+make the same version check.
+
 Keep the trailing slash and percent-encode URL-reserved password characters.
+The endpoint must use HTTPS and must not have a query or fragment. The app
+extracts URL userinfo into Basic authentication; credentials are not part of
+the request path or support reference.
 The app sends an ordinary PUT containing the completed gzip archive, with
 `Content-Type: application/gzip` and its actual compressed `Content-Length`.
-There is no separate signing request or custom receipt response.
+The request includes `If-None-Match: *`; the proxy forces it upstream even if a
+client omits it. Only `201 Created` confirms success. Redirects, 412, interrupted
+connections and lost responses are failures or unconfirmed uploads. There is no
+separate signing request, receipt response or automatic retry. The transfer is
+cancellable and has a 15-minute overall deadline. A new manual attempt uses a
+new complete archive and reference.
 
 ## Why the upload limit is 150 MB
 
@@ -93,9 +110,9 @@ The limit applies to the **whole compressed archive**, not each input log.
 The required retention budget is **at most four log files total on every
 platform, including current and rotated generations**, shared by backend,
 native UI, CLI and stderr diagnostics. It is not four files per component.
-The existing implementation exceeds this budget; correcting it is queued for
-1.5.11 and has not yet been implemented. The upload sizing below assumes that
-correction, not the existing larger inventories.
+DobbyVPN 1.5.11 consolidates producers into two destinations, each retaining its
+current and previous generation. Temporary export/upload attachments have
+separate lifetimes and are not additional retained log history.
 
 At the existing 150,000,000-byte rotation threshold, four retained files give a
 nominal 600 MB raw inventory. Measurements of retained backend logs on
@@ -108,10 +125,11 @@ bound or a measurement of complete mobile exports.
 
 The 150 MB value is a rotation trigger, **not a strict per-file maximum**.
 Complete records and in-flight stderr writes may cross it, so no finite archive
-maximum follows from those thresholds alone. The proposed uploader checks the
+maximum follows from those thresholds alone. The uploader checks the
 finished archive's actual size before sending. Above 150 MB it reports that the
-archive exceeds the upload limit and preserves the complete local export for
-manual sharing; it does not truncate logs to fit.
+archive exceeds the upload limit. Complete manual export and sharing remain
+available; logs are not truncated to fit. The failed upload's temporary archive
+is removed when its upload interaction finishes.
 
 Caddy enforces the body limit while streaming. Oversized or interrupted uploads
 may already have sent bytes to storage. Before deployment, verify Storage Box's
@@ -119,7 +137,7 @@ partial-file handling and that `If-None-Match: *` atomically refuses an existing
 filename, including concurrent PUTs. A rejected or ambiguous upload must not be
 shown as successful.
 
-## Planned Upload action and support reference
+## Upload action and support reference
 
 When the provider enables uploads, double-tapping the mobile log view opens
 this action panel, with a full-width Upload button above Clear and Share:
@@ -131,7 +149,8 @@ this action panel, with a full-width Upload button above Clear and Share:
 
 Share keeps the existing archive-sharing action. Upload sends the archive to
 the configured provider and shows progress while preventing duplicate taps.
-Desktop log context menus expose the same Upload action. Upload is absent when
+Desktop log context menus expose the same Upload action; Linux uses
+`dobby-cli logs upload`. Upload is absent when
 the provider has not configured an endpoint. Accessible actions remain available.
 
 For each new archive, the app uses a standard UUIDv7 generator. The UUID is
@@ -147,7 +166,7 @@ database. UUIDv7 includes its creation time, but no device ID or account name.
 Create-only storage writes prevent an existing archive from being overwritten.
 A reference alone does not permit downloading the archive.
 
-Only after the server confirms `201 Created`, the planned Logs screen shows:
+Only after the server confirms `201 Created`, Logs shows:
 
 ```text
 Logs uploaded
@@ -157,9 +176,11 @@ Reference: 019a4a6b-7c80-7d21-9f63-248e8b4c5a90
 ```
 
 Copy reference copies the exact reference. Share opens the system share menu
-with text such as `DobbyVPN logs: 019a4a6b-7c80-7d21-9f63-248e8b4c5a90`, without the archive,
+with exactly `DobbyVPN logs: 019a4a6b-7c80-7d21-9f63-248e8b4c5a90`, without the archive,
 endpoint password or an authenticated URL. The latest successful reference and
-upload time remain available in Logs after reopening the app. Support looks for
+upload time and provider association remain available in Logs after reopening
+the app. Replacing configuration does not change the destination of an upload
+already prepared. Upload credentials are never stored with the reference. Support looks for
 that reference plus `.gz` in its private storage; a user can paste the reference
 into a public issue. Failed or oversized uploads show their error and retain the
 existing manual export option.

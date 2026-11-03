@@ -59,7 +59,7 @@ object NativeVpnBridge {
     @JvmStatic
     fun prepare(context: Context): Int {
         consentLaunchState = CONSENT_LAUNCH_NOT_REQUESTED
-        recordDiagnostic(context, "vpn.prepare", "Android VPN preparation requested")
+        recordServiceDiagnostic(context, "vpn.prepare", "Android VPN preparation requested")
         val permission = VpnService.prepare(context)
         if (permission != null) {
             // JNI may call this bridge from a Go-attached thread. Android's
@@ -86,7 +86,7 @@ object NativeVpnBridge {
             }
             val launched = launchConsentOnMainThread(context, launchConsent)
             if (!launched) {
-                recordDiagnostic(
+                recordServiceDiagnostic(
                     context,
                     "vpn.prepare_failed",
                     "Android VPN consent could not be scheduled",
@@ -94,17 +94,17 @@ object NativeVpnBridge {
                 )
                 return -1
             }
-            recordDiagnostic(context, "vpn.permission", "Android VPN consent is required")
+            recordServiceDiagnostic(context, "vpn.permission", "Android VPN consent is required")
             return 0
         }
         val ready = try {
             awaitService(context)
         } catch (error: Exception) {
-            recordDiagnostic(context, "vpn.prepare_failed", "Android VPN service could not be started", error)
+            recordServiceDiagnostic(context, "vpn.prepare_failed", "Android VPN service could not be started", error)
             false
         }
         if (!ready) {
-            recordDiagnostic(
+            recordServiceDiagnostic(
                 context,
                 "vpn.prepare_failed",
                 "Android VPN service did not become ready",
@@ -131,7 +131,7 @@ object NativeVpnBridge {
             } catch (error: RuntimeException) {
                 consentLaunchState = CONSENT_LAUNCH_FAILED
                 Log.e("DobbyVPN", "Android VPN consent launch failed", error)
-                recordDiagnostic(context, "vpn.consent_launch_failed", "Android VPN consent launch failed", error)
+                recordServiceDiagnostic(context, "vpn.consent_launch_failed", "Android VPN consent launch failed", error)
                 false
             }
         }
@@ -146,7 +146,7 @@ object NativeVpnBridge {
             } catch (error: RuntimeException) {
                 consentLaunchState = CONSENT_LAUNCH_FAILED
                 Log.e("DobbyVPN", "Android VPN consent launch failed", error)
-                recordDiagnostic(context, "vpn.consent_launch_failed", "Android VPN consent launch failed", error)
+                recordServiceDiagnostic(context, "vpn.consent_launch_failed", "Android VPN consent launch failed", error)
             }
         }
         if (!posted) consentLaunchState = CONSENT_LAUNCH_FAILED
@@ -198,7 +198,7 @@ object NativeVpnBridge {
                     serviceLock.wait(millis, nanos)
                 } catch (failure: InterruptedException) {
                     Thread.currentThread().interrupt()
-                    recordDiagnostic(
+                    recordServiceDiagnostic(
                         context,
                         "vpn.prepare_failed",
                         "Interrupted while waiting for the VPN service",
@@ -324,9 +324,7 @@ object NativeVpnBridge {
         val directory = diagnosticsDirectory(context)
         return listOf(
             File(directory, UI_DIAGNOSTIC_FILE),
-            File(directory, NATIVE_DIAGNOSTIC_FILE),
             File(directory, GO_DIAGNOSTIC_FILE),
-            File(directory, GO_DIAGNOSTIC_FILE + ".stderr"),
         ).joinToString("\n") { it.absolutePath }
     }
 
@@ -350,12 +348,16 @@ object NativeVpnBridge {
         recordDiagnostic(context, "app.started", "app started · doBBYVPN $version · $commit")
     }
 
+    internal fun recordServiceDiagnostic(context: Context, event: String, message: String, failure: Throwable? = null, level: String = "INFO") =
+        recordDiagnostic(context, event, message, failure, level, serviceRecord = true)
+
     internal fun recordDiagnostic(
         context: Context,
         event: String,
         message: String,
         failure: Throwable? = null,
         level: String = "INFO",
+        serviceRecord: Boolean = false,
     ) {
         synchronized(diagnosticLock) {
             val record = JSONObject()
@@ -375,11 +377,20 @@ object NativeVpnBridge {
                     if (failure != null) put("error_detail", stackTrace(failure))
                 }
                 .toString()
-            storeNativeDiagnostic(
-                { File(diagnosticsDirectory(context), NATIVE_DIAGNOSTIC_FILE) },
-                record,
-                ::reportNativeDiagnosticWriteFailure,
-            )
+            if (serviceRecord) {
+                try {
+                    val failure = NativeGoSession.appendServiceDiagnostic(goDiagnosticPath(context), record + "\n")
+                    if (failure.isNotEmpty()) reportNativeDiagnosticWriteFailure(record, IOException(failure))
+                } catch (failure: Throwable) {
+                    reportNativeDiagnosticWriteFailure(record, IOException("Go diagnostic appender unavailable", failure))
+                }
+            } else {
+                storeNativeDiagnostic(
+                    { File(diagnosticsDirectory(context), UI_DIAGNOSTIC_FILE) },
+                    record,
+                    ::reportNativeDiagnosticWriteFailure,
+                )
+            }
         }
     }
 

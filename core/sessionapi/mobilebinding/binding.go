@@ -42,6 +42,7 @@ type managerAPI interface {
 	Start(context.Context, string, uint64, sessionapi.StartTarget) (sessionapi.StartResult, error)
 	Stop(context.Context, string, uint64) (sessionapi.StopResult, error)
 	Snapshot(context.Context, string) (sessionapi.SnapshotResult, error)
+	PrepareLogUpload(context.Context, string, string) (sessionapi.LogUploadPreparation, error)
 }
 
 // Binding is a thin synchronous JSON boundary over one process manager.
@@ -216,6 +217,15 @@ func (b *Binding) StopContext(ctx context.Context, sessionID string, generation 
 	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
 }
 
+// PrepareLogUpload returns fenced, immutable parameters for a native upload.
+func (b *Binding) PrepareLogUpload(sessionID, digest string) string {
+	result, err := b.manager.PrepareLogUpload(context.Background(), sessionID, digest)
+	if err != nil {
+		return failed(err)
+	}
+	return success(result)
+}
+
 // Snapshot attaches to the process-owned session when sessionID is empty.
 func (b *Binding) Snapshot(sessionID string) string {
 	return b.SnapshotContext(context.Background(), sessionID)
@@ -265,6 +275,12 @@ func (b *Binding) CallJSONWithConfiguration(
 		}
 	}
 	switch method {
+	case "PrepareLogUpload":
+		result, err := b.manager.PrepareLogUpload(ctx, value.SessionID, value.Digest)
+		if err != nil {
+			return failed(err)
+		}
+		return success(result)
 	case "Snapshot":
 		return b.SnapshotContext(ctx, value.SessionID)
 	case "Configure":

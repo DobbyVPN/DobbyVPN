@@ -2,6 +2,7 @@ package sessionapi
 
 import (
 	"context"
+	"core/buildinfo"
 	"errors"
 	"fmt"
 	"io"
@@ -97,7 +98,11 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 		}
 		return nil
 	}
-	request.Header.Set("User-Agent", "DobbyVPN/"+versionOrDev(l.Version))
+	version := l.Version
+	if strings.TrimSpace(version) == "" {
+		version = buildinfo.Version
+	}
+	request.Header.Set("User-Agent", "DobbyVPN/"+versionOrDev(version))
 	response, err := client.Do(request)
 	if err != nil {
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)

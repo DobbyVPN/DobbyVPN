@@ -37,6 +37,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let activeIndex: Int
     public let pendingTarget: DobbySelection?
     public let canSwitch: Bool
+    public let logsUploadAvailable: Bool
 
     public static let empty = Self(
         sessionID: "", sequence: 0, generation: 0, state: "IDLE", primaryAction: "NONE",
@@ -61,6 +62,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         case activeIndex = "active_index"
         case pendingTarget = "pending_target"
         case canSwitch = "can_switch"
+        case logsUploadAvailable = "logs_upload_available"
     }
 
     public init(from decoder: Decoder) throws {
@@ -86,6 +88,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         activeIndex = try values.decodeIfPresent(Int.self, forKey: .activeIndex) ?? 0
         pendingTarget = try values.decodeIfPresent(DobbySelection.self, forKey: .pendingTarget)
         canSwitch = try values.decodeIfPresent(Bool.self, forKey: .canSwitch) ?? false
+        logsUploadAvailable = try values.decodeIfPresent(Bool.self, forKey: .logsUploadAvailable) ?? false
     }
 
     public init(
@@ -115,6 +118,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         activeIndex = 0
         pendingTarget = nil
         canSwitch = false
+        logsUploadAvailable = false
     }
 }
 

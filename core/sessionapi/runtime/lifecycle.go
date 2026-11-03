@@ -208,6 +208,9 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 	if n.core == nil {
 		return n, errors.New("network core is unavailable")
 	}
+	if owner, ok := n.core.(interface{ setNetworkRef(sessionapi.SessionRef) }); ok {
+		owner.setNetworkRef(ref)
+	}
 	// The native network worker must not inherit a protocol cancellation. Link
 	// acquisition cancellation only until Connect has settled; Stop owns it after.
 	networkCtx, cancel := context.WithCancel(context.Background())

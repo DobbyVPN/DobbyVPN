@@ -6,13 +6,20 @@ public let appGroupIdentifier = "group.vpn.dobby.app"
 /// owns the VPN log schema; Swift records only native lifecycle diagnostics.
 public final class DobbyLogStore {
     public let path: URL
-    public init(path: URL) { self.path = path }
+    private let enabled: Bool
+    public init(path: URL, enabled: Bool = true) { self.path = path; self.enabled = enabled }
 
     @discardableResult
     public func writeLog(level: String = "INFO", log: String) -> Bool {
+        guard enabled else {
+            let message = "Native diagnostic unavailable before Go logger initialization. Original record: \(log)\n"
+            do { try FileHandle.standardError.write(contentsOf: Data(message.utf8)) }
+            catch { return false }
+            return false
+        }
         do {
             let source = Bundle.main.bundleIdentifier?.hasSuffix(".tunnel") == true ? "ios-tunnel" : "ios-app"
-            try DiagnosticFiles.append(log, event: "native.lifecycle", level: level, source: source, to: path)
+            try DiagnosticFiles.append(log, event: "native.lifecycle", level: level, source: source, to: path, rotating: false)
             return true
         } catch {
             let message = "Native diagnostic write failed path=\(path.path): \(String(reflecting: error))\nOriginal record: \(log)\n"
@@ -43,7 +50,7 @@ public enum IOSAppCompositionRoot {
     }
 
     public static func appLogPath() -> URL {
-        sharedLogPath(Bundle.main.bundleIdentifier?.hasSuffix(".tunnel") == true ? "tunnel_native.jsonl" : "app_logs.txt")
+        goLogFilePath()
     }
 
     public static func goLogFilePath() -> URL {
@@ -53,15 +60,7 @@ public enum IOSAppCompositionRoot {
 
     /// Fixed files owned by the iOS app group and packet tunnel.
     public static func diagnosticPaths() -> [URL] {
-        [
-            sharedLogPath("ui_diagnostics.jsonl"),
-            sharedLogPath("app_logs.txt"),
-            sharedLogPath("tunnel_native.jsonl"),
-            sharedLogPath("go_app_logs.jsonl"),
-            sharedLogPath("go_app_logs.jsonl.stderr"),
-            sharedLogPath("go_tunnel_logs.jsonl"),
-            sharedLogPath("go_tunnel_logs.jsonl.stderr"),
-        ]
+        [sharedLogPath("go_app_logs.jsonl"), sharedLogPath("go_tunnel_logs.jsonl")]
     }
 
     public static let logsRepository: DobbyLogStore = {

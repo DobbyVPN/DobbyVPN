@@ -152,3 +152,8 @@ func redirectCRTStderr(dll *windows.LazyDLL, handle windows.Handle) error {
 	}
 	return err
 }
+
+// Combined output capture is only used by the macOS daemon.
+func redirectStdout(*os.File) error {
+	return errors.New("combined output capture is unavailable on Windows")
+}

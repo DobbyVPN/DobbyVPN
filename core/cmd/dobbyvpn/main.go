@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"core/sessionapi/wire"
 
 	"core/clientserver/controljson"
+	"core/diagnostics"
 	applicationlog "core/log"
 	"core/sessionapi"
 )
@@ -39,7 +41,13 @@ func run(args []string) int {
 		printHelp()
 		return exitOK
 	}
+	if err := cleanupAbandonedUploads(); err != nil {
+		fmt.Fprintf(os.Stderr, "dobby-cli: upload temporary cleanup: %v\n", err)
+	}
 	if args[0] == "logs" {
+		if err := prepareCLIHistory(); err != nil {
+			return reportFailure(err)
+		}
 		return runLogs(args[1:])
 	}
 	if err := initApplicationLogger(); err != nil {
@@ -58,11 +66,54 @@ func run(args []string) int {
 }
 
 func initApplicationLogger() error {
+	if err := prepareCLIHistory(); err != nil {
+		return err
+	}
 	path, err := cliLogPath()
 	if err != nil {
 		return err
 	}
 	return applicationlog.SetPath(path)
+}
+
+func prepareCLIHistory() error {
+	path, err := cliLogPath()
+	if err != nil {
+		return err
+	}
+	var sources []diagnostics.LegacySource
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		legacy := applicationLogPath(home)
+		sources = append(sources, diagnostics.LegacySource{Path: legacy, Label: "cli"}, diagnostics.LegacySource{Path: legacy + ".stderr", Label: "stderr"})
+	} else {
+		sources = append(sources, diagnostics.LegacySource{Path: path + ".stderr", Label: "stderr"})
+	}
+	if runtime.GOOS != "windows" {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			return err
+		}
+		legacyBackend := filepath.Join(base, "DobbyVPN", "Logs", "backend.jsonl")
+		selectedBackend := os.Getenv("DOBBY_LOG_PATH")
+		if filepath.Clean(legacyBackend) != filepath.Clean(path) && (selectedBackend == "" || filepath.Clean(legacyBackend) != filepath.Clean(selectedBackend)) {
+			sources = append(sources, diagnostics.LegacySource{Path: legacyBackend, Label: "backend"}, diagnostics.LegacySource{Path: legacyBackend + ".stderr", Label: "stderr"})
+		}
+	}
+	filtered := sources[:0]
+	for _, source := range sources {
+		if filepath.Clean(source.Path) != filepath.Clean(path) {
+			filtered = append(filtered, source)
+		}
+	}
+	sources = filtered
+	if err := diagnostics.MigrateLegacy(path, sources); err != nil {
+		return err
+	}
+	return nil
 }
 
 func isHelpCommand(args []string) bool {
@@ -626,5 +677,5 @@ func usage(message string) int {
 }
 
 func printHelp() {
-	fmt.Println("dobby-cli configure <file-or-https-url> | start (--auto | --profile <index>) [--session-id <id> --config-digest <digest>] | stop [--session-id <id> --generation <number>] | snapshot | logs [--follow] | logs export <new-file> | logs clear | external-ip")
+	fmt.Println("dobby-cli configure <file-or-https-url> | start (--auto | --profile <index>) [--session-id <id> --config-digest <digest>] | stop [--session-id <id> --generation <number>] | snapshot | logs [--follow] | logs export <new-file> | logs upload | logs clear | external-ip")
 }

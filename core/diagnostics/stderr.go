@@ -22,6 +22,7 @@ type rawCapture struct {
 	limit      int64
 	run        string
 	generation uint64
+	stdout     bool
 }
 
 // Raw descriptors have no whole-record framing. Preserve their file identities;
@@ -70,11 +71,20 @@ func openRawCapture(path string) (*os.File, error) {
 // The monitor replaces descriptors; an in-flight write keeps the old inode,
 // which remains the previous generation and may exceed the rotation threshold.
 func CaptureStderr(path, permissionsFrom string) error {
+	return captureOutput(path, permissionsFrom, false)
+}
+
+// CaptureOutput owns stdout and stderr together for the macOS daemon.
+func CaptureOutput(path, permissionsFrom string) error {
+	return captureOutput(path, permissionsFrom, true)
+}
+
+func captureOutput(path, permissionsFrom string, stdout bool) error {
 	stderrMu.Lock()
 	defer stderrMu.Unlock()
 	if stderrCapture != nil {
-		if stderrCapture.path != path {
-			return fmt.Errorf("stderr already captured at %s", stderrCapture.path)
+		if stderrCapture.path != path || stderrCapture.stdout != stdout {
+			return fmt.Errorf("process output already captured at %s", stderrCapture.path)
 		}
 		return nil
 	}
@@ -87,16 +97,25 @@ func CaptureStderr(path, permissionsFrom string) error {
 			return errors.Join(modeErr, file.Close())
 		}
 	}
-	capture := &rawCapture{path: path, file: file, limit: Threshold, run: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())}
+	capture := &rawCapture{path: path, file: file, limit: Threshold, run: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()), stdout: stdout}
 	if err := capture.writeHeader(file); err != nil {
 		return errors.Join(err, file.Close())
 	}
-	if err := redirectStderr(file); err != nil {
+	if err := capture.redirect(file); err != nil {
 		return errors.Join(err, file.Close())
 	}
 	stderrCapture = capture
 	go capture.monitor()
 	return nil
+}
+
+func (capture *rawCapture) redirect(file *os.File) error {
+	if capture.stdout {
+		if err := redirectStdout(file); err != nil {
+			return err
+		}
+	}
+	return redirectStderr(file)
 }
 
 func (capture *rawCapture) writeHeader(file *os.File) error {
@@ -149,7 +168,7 @@ func (capture *rawCapture) rotate() error {
 		if err := capture.writeHeader(next); err != nil {
 			return errors.Join(err, next.Close())
 		}
-		if err := redirectStderr(next); err != nil {
+		if err := capture.redirect(next); err != nil {
 			return errors.Join(err, next.Close())
 		}
 		previous := capture.file

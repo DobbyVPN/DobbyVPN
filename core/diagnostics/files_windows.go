@@ -38,6 +38,7 @@ func openShared(path string, access, disposition uint32) (*os.File, error) {
 func openLock(path string) (*os.File, error) {
 	return openShared(path, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.OPEN_ALWAYS)
 }
+func openLegacyInput(path string) (*os.File, error) { return OpenInput(path) }
 func openAppend(path string) (*os.File, error) {
 	return openShared(path, windows.FILE_APPEND_DATA|windows.FILE_READ_ATTRIBUTES, windows.OPEN_ALWAYS)
 }

@@ -29,6 +29,7 @@ import (
 )
 
 type App struct {
+	NetworkRef     sessionapi.SessionRef
 	cleanupMu      sync.Mutex
 	cleanup        []func(context.Context) error
 	cleanupErr     error

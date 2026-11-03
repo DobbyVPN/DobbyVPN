@@ -75,13 +75,19 @@ On Linux and other desktop platforms, use `dobby-cli logs` to view diagnostics,
 `dobby-cli logs export diagnostics.gz` to save a compressed snapshot to a new file.
 `dobby-cli logs clear` hides earlier entries in the CLI view without removing
 retained diagnostics from exports. `DOBBY_CLI_LOG_PATH` selects the CLI log
-and its saved view boundary. Each independently owned log keeps a current and previous
-generation, rotating after 150 MB while preserving complete records. Product
+and its saved view boundary. Diagnostics use two destinations, each with current and previous
+generations (at most four retained files in total), rotating after 150 MB while preserving complete records. Product
 logs and exports remain unsanitized.
 
-For providers, the [HTTPS log-upload guide](docs/log-upload.md) documents a
-proposed Caddy/Storage Box endpoint. This is a preview; current apps do not
-upload logs or accept its subscription setting.
+When enabled by your provider, Upload in the log menu sends a complete compressed
+snapshot and shows a support reference after the server confirms it. You can
+cancel the upload, copy the full reference, or share its text. Linux and other
+desktop platforms also support `dobby-cli logs upload`. Manual Share/Save remains
+available if an upload fails or exceeds the size limit.
+
+For providers, the [HTTPS log-upload guide](docs/log-upload.md) explains the
+optional subscription setting, version compatibility and a stock Caddy example.
+
 
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 

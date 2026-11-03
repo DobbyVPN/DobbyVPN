@@ -162,30 +162,31 @@ type StateChange struct {
 }
 
 type SnapshotResult struct {
-	SessionID          string
-	Sequence           uint64
-	Generation         uint64
-	NetworkGeneration  uint64
-	VPNActive          bool
-	CanRetry           bool
-	State              State
-	Configured         bool
-	Digest             string
-	SourceKind         ConfigSourceKind
-	SourceURL          string
-	SourceError        string
-	Profiles           []ProfileSummary
-	ActiveDigest       string
-	ActiveMode         StartMode
-	ActiveIndex        int
-	PendingTarget      *Selection
-	CanSwitch          bool
-	ActiveProfile      *ProfileSummary
-	LastFailure        FailureCode
-	LastFailureMessage string
-	CleanupComplete    bool
-	Recovering         bool
-	PrimaryAction      string
+	SessionID           string
+	Sequence            uint64
+	Generation          uint64
+	NetworkGeneration   uint64
+	VPNActive           bool
+	CanRetry            bool
+	State               State
+	Configured          bool
+	LogsUploadAvailable bool
+	Digest              string
+	SourceKind          ConfigSourceKind
+	SourceURL           string
+	SourceError         string
+	Profiles            []ProfileSummary
+	ActiveDigest        string
+	ActiveMode          StartMode
+	ActiveIndex         int
+	PendingTarget       *Selection
+	CanSwitch           bool
+	ActiveProfile       *ProfileSummary
+	LastFailure         FailureCode
+	LastFailureMessage  string
+	CleanupComplete     bool
+	Recovering          bool
+	PrimaryAction       string
 }
 
 // SessionRef is passed to every platform/runtime operation.  It prevents a
@@ -279,15 +280,16 @@ type session struct {
 	stopRequested         bool
 	startOriginGeneration uint64
 
-	id          string
-	state       State
-	generation  uint64
-	configured  bool
-	digest      string
-	sourceKind  ConfigSourceKind
-	sourceURL   string
-	sourceError string
-	profiles    []RuntimeProfile
+	id           string
+	state        State
+	generation   uint64
+	configured   bool
+	logsEndpoint string
+	digest       string
+	sourceKind   ConfigSourceKind
+	sourceURL    string
+	sourceError  string
+	profiles     []RuntimeProfile
 
 	switchOriginGeneration     uint64
 	configureRequest           uint64
@@ -457,6 +459,7 @@ func (m *Manager) Configure(ctx context.Context, sessionID string, expectedSeque
 		}
 	}
 	s.profiles, s.digest, s.sourceKind, s.sourceURL, s.configured = parsed.profiles, parsed.digest, loaded.Kind, loaded.SourceURL, true
+	s.logsEndpoint = parsed.logsEndpoint
 	s.sourceError = ""
 	if s.cleanupDone && !s.cleanupFailed && !s.recovering && s.pending == nil {
 		s.active, s.lastFailure, s.lastFailureMessage, s.state = nil, "", "", StateConfigured
@@ -1136,7 +1139,7 @@ func snapshotLocked(s *session) SnapshotResult {
 	return SnapshotResult{
 		SessionID: s.id, Sequence: s.sequence, Generation: s.generation, State: s.state,
 		VPNActive: s.vpnActive, NetworkGeneration: s.networkGeneration, CanRetry: canRetry(s),
-		Configured: s.configured, Digest: s.digest, SourceKind: s.sourceKind, SourceURL: s.sourceURL, SourceError: s.sourceError,
+		Configured: s.configured, LogsUploadAvailable: s.logsEndpoint != "", Digest: s.digest, SourceKind: s.sourceKind, SourceURL: s.sourceURL, SourceError: s.sourceError,
 		ActiveDigest: s.activeDigest, ActiveMode: s.activeTarget.Mode, ActiveIndex: s.activeTarget.Index, PendingTarget: pending, CanSwitch: canSwitch(s),
 		Profiles:      summaries(s.profiles),
 		ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure,

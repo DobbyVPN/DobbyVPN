@@ -13,6 +13,8 @@ public final class NativeGoSession {
     }
 
     private NativeGoSession() {}
+    private static volatile boolean loggerReady;
+    static boolean isLoggerReady() { return loggerReady; }
 
     /**
      * Initializes complete Go diagnostics before attaching platform callbacks.
@@ -30,6 +32,7 @@ public final class NativeGoSession {
             NativeVpnBridge.recordNativeFailure(context, "go.logger_init_failed", error);
             throw error;
         }
+        loggerReady = true;
         String sourcePath = NativeVpnBridge.sourceURLPath(context);
         String attachFailure = attachNative(context.getApplicationContext(), sourcePath);
         if (attachFailure == null || !attachFailure.isEmpty()) {
@@ -43,6 +46,8 @@ public final class NativeGoSession {
     }
 
     private static native String initializeLogger(String path);
+
+    static native String appendServiceDiagnostic(String path, String record);
 
     private static native String attachNative(Context context, String sourcePath);
 
@@ -67,4 +72,5 @@ public final class NativeGoSession {
     static native String restore(boolean onlyPreviouslyEnabled);
 
     public static native String snapshot(String sessionId);
+    public static native String prepareLogUpload(String sessionId, String digest);
 }

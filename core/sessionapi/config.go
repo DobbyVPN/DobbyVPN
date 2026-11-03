@@ -18,10 +18,11 @@ import (
 // protocol-specific normalizers and runtimes. TOML metadata preserves the
 // order in which the root protocol array tables appeared.
 type configRoot struct {
-	ExcludeIPs  excludeIPsConfig         `toml:"ExcludeIPs"`
-	Outline     []map[string]interface{} `toml:"Outline"`
-	Xray        []map[string]interface{} `toml:"Xray"`
-	TrustTunnel []map[string]interface{} `toml:"TrustTunnel"`
+	LogsEndpoint string                   `toml:"logs_endpoint"`
+	ExcludeIPs   excludeIPsConfig         `toml:"ExcludeIPs"`
+	Outline      []map[string]interface{} `toml:"Outline"`
+	Xray         []map[string]interface{} `toml:"Xray"`
+	TrustTunnel  []map[string]interface{} `toml:"TrustTunnel"`
 }
 
 type excludeIPsConfig struct {
@@ -29,8 +30,9 @@ type excludeIPsConfig struct {
 }
 
 type parsedConfig struct {
-	digest   string
-	profiles []RuntimeProfile
+	digest       string
+	profiles     []RuntimeProfile
+	logsEndpoint string
 }
 
 const (
@@ -49,8 +51,23 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
+	if root.LogsEndpoint != "" {
+		u, err := url.Parse(root.LogsEndpoint)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || !strings.HasSuffix(u.EscapedPath(), "/") || u.RawQuery != "" || u.ForceQuery || strings.Contains(root.LogsEndpoint, "#") || u.Opaque != "" {
+			return parsedConfig{}, failure(FailureMalformedConfig, "logs_endpoint must be an HTTPS directory URL without query or fragment")
+		}
+		if port := u.Port(); port != "" {
+			value, err := strconv.Atoi(port)
+			if err != nil || value < 1 || value > 65535 {
+				return parsedConfig{}, failure(FailureMalformedConfig, "logs_endpoint has an invalid port")
+			}
+		}
+		if u.User != nil && strings.Contains(u.User.Username(), ":") {
+			return parsedConfig{}, failure(FailureMalformedConfig, "logs_endpoint Basic username cannot contain a colon")
+		}
+	}
 	digest := sha256.Sum256(raw)
-	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles}, nil
+	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles, logsEndpoint: root.LogsEndpoint}, nil
 }
 
 func decodeConfig(raw []byte) (configRoot, []string, error) {
@@ -64,6 +81,9 @@ func decodeConfig(raw []byte) (configRoot, []string, error) {
 	metadata, err := toml.Decode(string(raw), &root)
 	if err != nil {
 		return configRoot{}, nil, failureWithCause(FailureMalformedConfig, "TOML could not be parsed", err)
+	}
+	if metadata.IsDefined("logs_endpoint") && root.LogsEndpoint == "" {
+		return configRoot{}, nil, failure(FailureMalformedConfig, "logs_endpoint must not be empty")
 	}
 	if err := validateRootKeys(metadata.Keys()); err != nil {
 		return configRoot{}, nil, err
@@ -160,11 +180,14 @@ func validateRootKeys(keys []toml.Key) error {
 		if len(key) == 0 {
 			continue
 		}
+		if key[0] == "logs_endpoint" && len(key) != 1 {
+			return failure(FailureMalformedConfig, "logs_endpoint must be a URL string")
+		}
 		if key[0] == "ExcludeIPs" && len(key) > 1 && (key[1] != "IPs" || len(key) > 2) {
 			return failure(FailureUnsupported, "configuration contains an unsupported ExcludeIPs setting")
 		}
 		switch key[0] {
-		case configSectionOutline, configSectionXray, configSectionTrustTunnel, "ExcludeIPs":
+		case configSectionOutline, configSectionXray, configSectionTrustTunnel, "ExcludeIPs", "logs_endpoint":
 		default:
 			return failure(FailureUnsupported, "configuration contains an unsupported section")
 		}

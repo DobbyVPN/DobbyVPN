@@ -48,9 +48,10 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 }
 
 type Logger struct {
-	file    *diagnostics.Writer
-	logger  *slog.Logger
-	pending []pendingEntry
+	file         *diagnostics.Writer
+	logger       *slog.Logger
+	pending      []pendingEntry
+	sharedStderr bool
 }
 
 type pendingEntry struct {
@@ -100,21 +101,34 @@ func Close() error {
 	}
 	lg.file = nil
 	lg.logger = nil
+	lg.sharedStderr = false
 	return err
 }
 
 // SetPath creates or reuses the local log file.
-func SetPath(path string) error {
+func SetPath(path string) error { return setPath(path, false) }
+
+// SetAppenderPath shares a destination with its stderr rotation owner.
+func SetAppenderPath(path string) error { return setPath(path, true) }
+
+func setPath(path string, sharedStderr bool) error {
 	initMu.Lock()
 	defer initMu.Unlock()
 	if lg.logger != nil {
 		return nil
 	}
-	file, err := diagnostics.OpenWriter(path)
+	var file *diagnostics.Writer
+	var err error
+	if sharedStderr {
+		file, err = diagnostics.OpenAppender(path)
+	} else {
+		file, err = diagnostics.OpenWriter(path)
+	}
 	if err != nil {
-		return fmt.Errorf("open rotating log: %w", err)
+		return fmt.Errorf("open diagnostic log: %w", err)
 	}
 	lg.file = file
+	lg.sharedStderr = sharedStderr
 	lg.logger = slog.New(newJSONLineHandler(policyWriter{writer: file}))
 
 	lg.dumpBuffer()
@@ -280,7 +294,7 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 	}
 	record := slog.NewRecord(occurredAt, level, fmt.Sprintf("[%s] %s", category, message), 0)
 	record.AddAttrs(attrs...)
-	if level >= slog.LevelError {
+	if level >= slog.LevelError && !lg.sharedStderr {
 		if err := newJSONLineHandler(diagnostics.Stderr).Handle(ctx, record.Clone()); err != nil {
 			_, _ = fmt.Fprintf(diagnostics.Stderr, "mirror structured error failed: %v\n", err)
 		}

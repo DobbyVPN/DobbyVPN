@@ -10,6 +10,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace DobbyVPN.Windows;
 
@@ -24,7 +25,7 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "Logs", "ui_diagnostics.jsonl")
             : Environment.GetEnvironmentVariable("DOBBY_UI_LOG_PATH")!);
     private readonly object _gate = new();
-    private readonly string[] _paths = [backendPath, backendPath + ".stderr", uiPath];
+    private readonly string[] _paths = [backendPath, uiPath];
     private readonly Dictionary<string, string> _lastErrors = new();
     private readonly string _run = Guid.NewGuid().ToString("N");
     private long _sequence;
@@ -251,7 +252,7 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         { return new Entry(id, "", "RAW", stream, raw, raw, null); }
     }
 
-    public async Task ExportAsync(Stream destination, string header)
+    public async Task ExportAsync(Stream destination, string header, CancellationToken cancellationToken = default, bool requireComplete = false)
     {
         var inputs = new List<(string Path, FileStream File, long Length)>();
         var issues = new List<string>();
@@ -283,22 +284,23 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
                 catch (Exception error) { issues.Add($"{path}: {error}"); }
             }
             await using var output = new GZipStream(destination, CompressionLevel.Optimal, leaveOpen: true);
-            await output.WriteAsync(Encoding.UTF8.GetBytes(header));
+            await output.WriteAsync(Encoding.UTF8.GetBytes(header), cancellationToken);
             var buffer = new byte[65536];
             foreach (var (path, input, length) in inputs)
             {
-                await output.WriteAsync(Encoding.UTF8.GetBytes($"\n--- {Path.GetFileName(path)} ---\n"));
+                await output.WriteAsync(Encoding.UTF8.GetBytes($"\n--- {Path.GetFileName(path)} ---\n"), cancellationToken);
                 var remaining = length;
                 while (remaining > 0)
                 {
                     int count;
                     try
                     {
-                        count = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)));
+                        count = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), cancellationToken);
                         if (count == 0) throw new EndOfStreamException("Log shortened during export");
                     }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                     catch (Exception error) { issues.Add($"{path}: {error}"); break; }
-                    await output.WriteAsync(buffer.AsMemory(0, count));
+                    await output.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
                     remaining -= count;
                 }
             }
@@ -309,8 +311,9 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
             }
             inputs.Clear();
             if (!string.IsNullOrEmpty(WriteFailure)) issues.Add(WriteFailure);
+            if (issues.Count > 0 && requireComplete) throw new IOException("Diagnostic collection failed: " + string.Join("\n", issues));
             if (issues.Count > 0)
-                await output.WriteAsync(Encoding.UTF8.GetBytes("\nCollection errors\n" + string.Join("\n", issues) + "\n"));
+                await output.WriteAsync(Encoding.UTF8.GetBytes("\nCollection errors\n" + string.Join("\n", issues) + "\n"), cancellationToken);
         }
         catch (Exception error) { original = error; throw; }
         finally
@@ -385,71 +388,140 @@ internal static class NativeLogFiles
 
     private static void Rotate(string path) { File.Delete(path + ".previous"); File.Move(path, path + ".previous"); }
 
+    private sealed record LegacySource(string Path, string Label);
+    private sealed record LegacyCommit(LegacySource[]? Sources, bool Previous);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool MoveFileEx(string existing, string destination, uint flags);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint GetNamedSecurityInfo(string name, int type, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint SetNamedSecurityInfo(string name, int type, uint information, IntPtr owner, IntPtr group, IntPtr dacl, IntPtr sacl);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetSecurityDescriptorControl(IntPtr descriptor, out ushort control, out uint revision);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    private static void PreserveAcl(string source, string destination)
+    {
+        if (!File.Exists(source)) return;
+        var status = GetNamedSecurityInfo(source, 1, 4, out _, out _, out var dacl, out _, out var descriptor);
+        if (status != 0) throw new Win32Exception((int)status);
+        try
+        {
+            if (!GetSecurityDescriptorControl(descriptor, out var control, out _)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            var flags = 4u | ((control & 0x1000) != 0 ? 0x80000000u : 0x20000000u);
+            status = SetNamedSecurityInfo(destination, 1, flags, IntPtr.Zero, IntPtr.Zero, dacl, IntPtr.Zero);
+            if (status != 0) throw new Win32Exception((int)status);
+        }
+        finally { LocalFree(descriptor); }
+    }
+
+    private static void Publish(string source, string destination)
+    {
+        // MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH, matching Go.
+        if (!MoveFileEx(source, destination, 9)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+
     private static void Migrate(string path)
     {
-        var paths = new[] {path + ".previous", path};
-        var oversized = false;
-        foreach (var name in paths)
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var cli = Path.Combine(home, ".dobbyvpn", "app_logs.txt");
+        var configuredPath = Environment.GetEnvironmentVariable("DOBBY_UI_LOG_PATH");
+        if (string.IsNullOrEmpty(configuredPath)) configuredPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "Logs", "ui_diagnostics.jsonl");
+        LegacySource[] sources = string.Equals(Path.GetFullPath(configuredPath), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase)
+            ? new[] {new LegacySource(cli, "cli"), new LegacySource(cli + ".stderr", "stderr")}
+                .Where(source => !string.Equals(Path.GetFullPath(source.Path), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase)).ToArray()
+            : Array.Empty<LegacySource>();
+        var marker = path + ".legacy-commit";
+        var stage = path + ".legacy-stage";
+        if (File.Exists(marker))
         {
-            if (!File.Exists(name)) continue;
-            using var input = new FileStream(name, FileMode.Open, FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete, 65536);
-            var size = input.Length;
-            if (size > Threshold && HasRecordAfterLimit(input, size))
-            {
-                oversized = true;
-                break;
-            }
+            var pending = JsonSerializer.Deserialize<LegacyCommit>(File.ReadAllText(marker))
+                ?? throw new InvalidDataException("Invalid diagnostic migration marker.");
+            // An oversized-only Go migration has an empty source list.
+            if (pending.Sources is { Length: > 0 } && !pending.Sources.SequenceEqual(sources))
+                throw new InvalidDataException("Diagnostic migration sources changed during recovery.");
+            FinishMigration(path, stage, marker, pending);
         }
-        if (!oversized) return;
-        var stage = path + ".migration-" + Guid.NewGuid().ToString("N");
+        var found = sources.Any(source => File.Exists(source.Path) || File.Exists(source.Path + ".previous"));
+        var oversized = new[] {path + ".previous", path}.Any(name =>
+        {
+            if (!File.Exists(name)) return false;
+            using var input = new FileStream(name, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return input.Length > Threshold && HasRecordAfterLimit(input, input.Length);
+        });
+        if (!found && !oversized) return;
+        var migratingSources = found ? sources : Array.Empty<LegacySource>();
+        File.Delete(stage);
+        File.Delete(stage + ".previous");
         FileStream? output = null;
-        Exception? original = null;
+        var size = 0L;
+        var atStart = true;
         try
         {
             output = new FileStream(stage, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-            var buffer = new byte[65536];
-            var atStart = true;
-            foreach (var name in paths)
+            foreach (var source in new[] {new LegacySource(path, "existing")}.Concat(migratingSources))
+            foreach (var suffix in new[] {".previous", ""})
             {
-                if (!File.Exists(name)) continue;
-                using var input = new FileStream(name, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var inputPath = source.Path + suffix;
+                if (!File.Exists(inputPath)) continue;
+                if ((File.GetAttributes(inputPath) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+                    throw new IOException("Diagnostic migration input is not a regular file: " + inputPath);
+                using var input = new FileStream(inputPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var header = migratingSources.Length == 0 ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(
+                    JsonSerializer.Serialize(new Dictionary<string, string> { ["event"] = "diagnostics.legacy", ["source"] = source.Label, ["generation"] = suffix }) + "\n");
+                if (!atStart && header.Length > 0) { header = new byte[] {10}.Concat(header).ToArray(); atStart = true; }
+                var needHeader = header.Length > 0;
+                var buffer = new byte[65536];
                 int count;
-                while ((count = input.Read(buffer)) > 0)
+                while ((count = input.Read(buffer, 0, buffer.Length)) > 0)
                 {
                     var offset = 0;
                     while (offset < count)
                     {
-                        if (atStart && output.Length >= Threshold)
+                        if (atStart && size >= Threshold)
                         {
-                            output.Dispose(); output = null; Rotate(stage);
+                            output.Flush(true); output.Dispose(); output = null;
+                            Rotate(stage);
                             output = new FileStream(stage, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                            size = 0; needHeader = header.Length > 0;
                         }
+                        if (needHeader) { output.Write(header, 0, header.Length); size += header.Length; needHeader = false; }
                         var newline = Array.IndexOf(buffer, (byte)10, offset, count - offset);
                         var length = newline < 0 ? count - offset : newline - offset + 1;
-                        output.Write(buffer, offset, length);
-                        atStart = newline >= 0;
-                        offset += length;
+                        output.Write(buffer, offset, length); size += length;
+                        atStart = newline >= 0; offset += length;
                     }
                 }
             }
-            output.Dispose(); output = null;
-            File.Delete(path + ".previous");
-            if (File.Exists(stage + ".previous")) File.Move(stage + ".previous", path + ".previous");
-            File.Move(stage, path, true);
+            output.Flush(true); output.Dispose(); output = null;
+            if (File.Exists(stage + ".previous")) PreserveAcl(path, stage + ".previous");
+            PreserveAcl(path, stage);
+            var commit = new LegacyCommit(found ? migratingSources : null, File.Exists(stage + ".previous"));
+            var temp = marker + ".tmp";
+            using (var markerFile = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            { JsonSerializer.Serialize(markerFile, commit); markerFile.Flush(true); }
+            Publish(temp, marker);
+            FinishMigration(path, stage, marker, commit);
         }
-        catch (Exception error) { original = error; throw; }
-        finally
+        finally { output?.Dispose(); }
+    }
+
+    private static void FinishMigration(string path, string stage, string marker, LegacyCommit commit)
+    {
+        if (!commit.Previous) File.Delete(path + ".previous");
+        else if (File.Exists(stage + ".previous")) Publish(stage + ".previous", path + ".previous");
+        if (File.Exists(stage)) Publish(stage, path);
+        foreach (var source in commit.Sources ?? Array.Empty<LegacySource>())
         {
-            var failures = new List<Exception>();
-            foreach (var operation in new Action[] { () => output?.Dispose(), () => File.Delete(stage), () => File.Delete(stage + ".previous") })
-                try { operation(); } catch (Exception error) { failures.Add(error); }
-            if (failures.Count > 0)
-            {
-                if (original is not null) failures.Insert(0, original);
-                throw new AggregateException(failures);
-            }
+            File.Delete(source.Path + ".previous");
+            File.Delete(source.Path);
         }
+        File.Delete(marker);
     }
 
     private static bool HasRecordAfterLimit(FileStream input, long size)

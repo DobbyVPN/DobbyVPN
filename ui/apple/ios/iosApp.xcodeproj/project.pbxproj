@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        F20000000000000000000043 /* DobbyVPNRuntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */; };
         F20000000000000000000042 /* DiagnosticFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000042 /* DiagnosticFiles.swift */; };
 		F20000000000000000000040 /* DobbyDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000040 /* DobbyDiagnostics.swift */; };
 		8C7731F12E566DCD00B3782E /* DobbyVPNRuntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */; };
@@ -148,6 +149,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F20000000000000000000001 /* IOSIntegration.framework in Frameworks */,
+                F20000000000000000000043 /* DobbyVPNRuntime.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

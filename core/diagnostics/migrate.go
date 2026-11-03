@@ -9,64 +9,18 @@ import (
 
 // Migrate only oversized histories. A record is streamed in pieces when it is
 // larger than the buffer; rotation occurs solely between records.
-func migrateHistory(path string, limit int64) (resultErr error) {
-	oversized, original, err := historyNeedsMigration(path, limit)
-	if err != nil {
+func migrateHistory(path string, limit int64) error {
+	// Resume an interrupted publication before inspecting the visible files.
+	if _, err := os.Stat(path + ".legacy-commit"); err == nil {
+		return migrateLegacyTransaction(path, nil, limit, true)
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if !oversized {
-		return nil
-	}
-	stage := path + ".migration"
-	if err := removeIfPresent(stage); err != nil {
+	oversized, _, err := historyNeedsMigration(path, limit)
+	if err != nil || !oversized {
 		return err
 	}
-	if err := removeIfPresent(stage + PreviousSuffix); err != nil {
-		return err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, removeIfPresent(stage), removeIfPresent(stage+PreviousSuffix))
-	}()
-	var size int64
-	atStart := true
-	for _, name := range []string{path + PreviousSuffix, path} {
-		input, err := OpenInput(name)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		err = streamMigration(input, stage, limit, &size, &atStart)
-		if closeErr := errors.Join(err, input.Close()); closeErr != nil {
-			return closeErr
-		}
-	}
-	// Inputs are never truncated. Readers holding their old handles keep the
-	// captured bytes through both renames.
-	if err := removeIfPresent(path + PreviousSuffix); err != nil {
-		return err
-	}
-	for _, suffix := range []string{PreviousSuffix, ""} {
-		file, err := openExistingAppend(stage + suffix)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		err = preservePermissions(file, original)
-		if closeErr := errors.Join(err, file.Close()); closeErr != nil {
-			return closeErr
-		}
-		if suffix != "" {
-			if err := os.Rename(stage+suffix, path+suffix); err != nil {
-				return err
-			}
-		}
-	}
-
-	return os.Rename(stage, path)
+	return migrateLegacyTransaction(path, nil, limit, true)
 }
 
 func historyNeedsMigration(path string, limit int64) (needsMigration bool, original os.FileInfo, resultErr error) {
@@ -121,7 +75,13 @@ func hasRecordAfterLimit(path string, limit, size int64) (found bool, resultErr 
 }
 
 func streamMigration(input io.Reader, path string, limit int64, size *int64, atStart *bool) (resultErr error) {
+	return streamMigrationLabeled(input, path, limit, size, atStart, nil)
+}
+
+// A source marker is written with the first record in every retained generation.
+func streamMigrationLabeled(input io.Reader, path string, limit int64, size *int64, atStart *bool, header []byte) (resultErr error) {
 	reader := bufio.NewReaderSize(input, 64*1024)
+	needHeader := len(header) != 0
 	output, err := openAppend(path)
 	if err != nil {
 		return err
@@ -154,6 +114,18 @@ func streamMigration(input io.Reader, path string, limit int64, size *int64, atS
 				return err
 			}
 			*size = 0
+			needHeader = len(header) != 0
+		}
+		if needHeader {
+			n, headerErr := output.Write(header)
+			*size += int64(n)
+			if headerErr != nil {
+				return headerErr
+			}
+			if n != len(header) {
+				return io.ErrShortWrite
+			}
+			needHeader = false
 		}
 		n, writeErr := output.Write(record)
 		*size += int64(n)

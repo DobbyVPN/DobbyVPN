@@ -74,10 +74,22 @@ type Writer struct {
 	path   string
 	limit  int64
 	closed bool
+	rotate bool
+	lastID string
 }
 
 func OpenWriter(path string) (*Writer, error) { return openWriter(path, Threshold) }
+
+// OpenAppender writes complete records under the destination lock without
+// rotating. Use it when CaptureStderr owns rotation of the same destination.
+func OpenAppender(path string) (*Writer, error) {
+	return openWriterMode(path, Threshold, false)
+}
 func openWriter(path string, limit int64) (*Writer, error) {
+	return openWriterMode(path, limit, true)
+}
+
+func openWriterMode(path string, limit int64, rotate bool) (*Writer, error) {
 	if limit <= 0 {
 		return nil, errors.New("rotation threshold must be positive")
 	}
@@ -88,10 +100,12 @@ func openWriter(path string, limit int64) (*Writer, error) {
 	if mkdirErr := os.MkdirAll(filepath.Dir(absolute), 0o700); mkdirErr != nil {
 		return nil, mkdirErr
 	}
-	w := &Writer{path: absolute, limit: limit}
+	w := &Writer{path: absolute, limit: limit, rotate: rotate}
 	err = withFileLock(absolute, func() error {
-		if migrateErr := migrateHistory(absolute, limit); migrateErr != nil {
-			return migrateErr
+		if rotate {
+			if migrateErr := migrateHistory(absolute, limit); migrateErr != nil {
+				return migrateErr
+			}
 		}
 		file, openErr := openAppend(absolute)
 		if openErr != nil {
@@ -128,7 +142,15 @@ func (w *Writer) WriteRecord(encode func(firstInGeneration bool) ([]byte, error)
 			return errors.Join(err, file.Close())
 		}
 		first := info.Size() == 0
-		if info.Size() >= w.limit {
+		if !w.rotate {
+			id, identityErr := Identity(file)
+			if identityErr != nil {
+				return errors.Join(identityErr, file.Close())
+			}
+			first = id != w.lastID
+			w.lastID = id
+		}
+		if w.rotate && info.Size() >= w.limit {
 			first = true
 			if closeErr := file.Close(); closeErr != nil {
 				return closeErr
