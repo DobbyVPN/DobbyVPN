@@ -136,6 +136,37 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
             : NSLocalizedString("New entries are held while you read earlier logs. Scroll to the bottom to resume.", comment: "")
     }
 
+    // The rendered log can hold thousands of lines. Exposing the whole text makes
+    // every accessibility query walk paragraph bounds for all of it, which stalls
+    // automation and can trip the scene-update watchdog. Report a bounded tail
+    // instead; the visual text and touch selection stay unchanged.
+    static let accessibilitySummaryLineLimit = 24
+    static let accessibilitySummaryCharacterLimit = 2_048
+
+    func installAccessibilitySummary() {
+        // One element for the whole log: the platform no longer enumerates the
+        // text view's paragraphs for hit-testing and attribute lookups.
+        isAccessibilityElement = true
+        accessibilityLabel = NSLocalizedString("Connection logs", comment: "")
+    }
+
+    var accessibilitySummaryText: String {
+        let content = textStorage.string as NSString
+        guard content.length > 0 else {
+            return NSLocalizedString("No log entries yet.", comment: "")
+        }
+        let start = max(0, content.length - Self.accessibilitySummaryCharacterLimit)
+        let tail = content.substring(with: NSRange(location: start, length: content.length - start))
+        let lines = tail.split(separator: "\n", omittingEmptySubsequences: false)
+        let newest = lines.suffix(Self.accessibilitySummaryLineLimit).joined(separator: "\n")
+        return NSLocalizedString("Newest log entries:", comment: "") + "\n" + newest
+    }
+
+    override var accessibilityValue: String? {
+        get { accessibilitySummaryText }
+        set { super.accessibilityValue = newValue }
+    }
+
     func restoreScrollExtent(to height: CGFloat) {
         guard height.isFinite, height > contentSize.height + 1 else { return }
         contentSize = CGSize(width: contentSize.width, height: height)
@@ -222,6 +253,7 @@ struct DobbyLogView: UIViewRepresentable {
         view.textContainer.lineFragmentPadding = 0
         view.adjustsFontForContentSizeCategory = true
         view.installLogsMenu()
+        view.installAccessibilitySummary()
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
         view.updateFollowingAccessibilityHint(isFollowing: true)
