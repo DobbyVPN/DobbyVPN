@@ -90,11 +90,7 @@ func migrateLegacyTransaction(path string, sources []LegacySource, limit int64, 
 		return findErr
 	}
 	if !found {
-		oversized, scanErr := historyNeedsMigration(path, limit)
-		if scanErr != nil || !oversized {
-			return scanErr
-		}
-		return migrateLegacyTransaction(path, nil, limit, true)
+		return nil
 	}
 	if err := stageLegacyStreams(path, stage, sources, limit, force); err != nil {
 		return err
