@@ -17,7 +17,7 @@ import SwiftUI
 
 /// Each pending picker owns its export until its selected service completes.
 @MainActor
-final class DobbyMacSharePresenter: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {
+final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePickerDelegate, NSSharingServiceDelegate {
     private static var live: [ObjectIdentifier: DobbyMacSharePresenter] = [:]
 
     let url: URL
@@ -58,6 +58,8 @@ final class DobbyMacSharePresenter: NSObject, NSSharingServicePickerDelegate, NS
         done = true
         do { try FileManager.default.removeItem(at: url) }
         catch { reportError("Could not remove logs export: \(error.localizedDescription)") }
+        picker?.delegate = nil
+        if service?.delegate === self { service?.delegate = nil }
         picker = nil
         service = nil
         Self.live.removeValue(forKey: ObjectIdentifier(self))
