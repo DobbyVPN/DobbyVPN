@@ -369,8 +369,10 @@ public struct DobbyRootView: View {
             if showingLogMenu {
                 VStack(spacing: 4) {
                     if model.snapshot.logsUploadAvailable {
-                        Button("Upload logs") { showingLogMenu = false; model.startLogsUpload() }
-                            .frame(maxWidth: .infinity).accessibilityIdentifier("logs.upload")
+                        Button { showingLogMenu = false; model.startLogsUpload() } label: {
+                            Text("Upload logs").frame(maxWidth: .infinity).contentShape(Rectangle())
+                        }
+                            .accessibilityIdentifier("logs.upload")
                             .disabled(!model.uploadStatus.isEmpty)
                     }
                     HStack {
