@@ -92,7 +92,7 @@ public struct DobbyRootView: View {
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
     @State private var rowHeight: CGFloat = 0
-    @State private var errorDetailHeight: CGFloat = 0
+    @State private var errorDetailHeight: CGFloat = 240
 
     public init(model: DobbySessionViewModel) {
         self.model = model
@@ -377,10 +377,10 @@ public struct DobbyRootView: View {
 
     private func sendLogs() {
         model.prepareLogsExport { url in
-            exportedLogsURL = url
 #if os(macOS)
-            DobbyMacSharePresenter.present(url: url, finished: removeExport)
+            DobbyMacSharePresenter.present(url: url, reportError: model.reportLogsError)
 #else
+            exportedLogsURL = url
             showingExport = true
 #endif
         }
@@ -466,9 +466,10 @@ public struct DobbyRootView: View {
                 .accessibilityIdentifier("error.dialog")
                 .accessibilityValue(model.status)
                 .accessibilityAddTraits(.isModal)
-                // Centers short content vertically; taller content still scrolls within the
-                // same available height, so this never fights the ScrollView below.
+#if os(macOS)
+                // Center short dialogs while keeping tall content scrollable.
                 .frame(maxWidth: .infinity, minHeight: max(0, geometry.size.height - pt(24)), alignment: .center)
+#endif
                 }
                 .frame(maxHeight: max(0, geometry.size.height - pt(24)))
                 .accessibilityIdentifier("error.dialog.scroll")

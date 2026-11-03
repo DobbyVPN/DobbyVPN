@@ -15,29 +15,39 @@ struct DobbyShareSheet: UIViewControllerRepresentable {
 import AppKit
 import SwiftUI
 
-/// Shows the system sharing menu next to the pointer. Presenting it from a SwiftUI sheet gave
-/// the picker an empty view to hang from and left a blank sheet on screen.
+/// Each pending picker owns its export until its selected service completes.
 @MainActor
 final class DobbyMacSharePresenter: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {
-    private static var active: DobbyMacSharePresenter?
+    private static var live: [ObjectIdentifier: DobbyMacSharePresenter] = [:]
 
-    private let finished: () -> Void
+    let url: URL
+    private let reportError: (String) -> Void
     private var picker: NSSharingServicePicker?
+    private var service: NSSharingService?
     private var done = false
 
-    private init(finished: @escaping () -> Void) { self.finished = finished }
+    init(url: URL, reportError: @escaping (String) -> Void) {
+        self.url = url
+        self.reportError = reportError
+        super.init()
+        Self.live[ObjectIdentifier(self)] = self
+    }
 
-    static func present(url: URL, finished: @escaping () -> Void) {
-        active?.finish()
-        guard let window = NSApp.keyWindow ?? NSApp.mainWindow, let view = window.contentView else {
-            finished()
+    static func present(url: URL, reportError: @escaping (String) -> Void) {
+        let presenter = DobbyMacSharePresenter(url: url, reportError: reportError)
+        presenter.present(in: (NSApp.keyWindow ?? NSApp.mainWindow)?.contentView)
+    }
+
+    func present(in view: NSView?) {
+        guard !done else { return }
+        guard let view, let window = view.window else {
+            reportError("Could not present the logs sharing menu: no app window is available")
+            finish()
             return
         }
-        let presenter = DobbyMacSharePresenter(finished: finished)
         let picker = NSSharingServicePicker(items: [url])
-        picker.delegate = presenter
-        presenter.picker = picker
-        active = presenter
+        picker.delegate = self
+        self.picker = picker
         var point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
         if !view.bounds.contains(point) { point = NSPoint(x: view.bounds.midX, y: view.bounds.midY) }
         picker.show(relativeTo: NSRect(x: point.x, y: point.y, width: 1, height: 1), of: view, preferredEdge: .minY)
@@ -46,21 +56,30 @@ final class DobbyMacSharePresenter: NSObject, NSSharingServicePickerDelegate, NS
     private func finish() {
         guard !done else { return }
         done = true
-        if Self.active === self { Self.active = nil }
-        finished()
+        do { try FileManager.default.removeItem(at: url) }
+        catch { reportError("Could not remove logs export: \(error.localizedDescription)") }
+        picker = nil
+        service = nil
+        Self.live.removeValue(forKey: ObjectIdentifier(self))
     }
 
     func sharingServicePicker(_ sharingServicePicker: NSSharingServicePicker, didChoose service: NSSharingService?) {
-        if let service { service.delegate = self } else { finish() }
+        guard !done else { return }
+        if let service {
+            self.service = service
+            service.delegate = self
+        } else { finish() }
     }
 
     func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) { finish() }
 
     func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
-        NSAlert(error: error).runModal()
+        guard !done else { return }
+        reportError(error.localizedDescription)
         finish()
     }
 }
+
 #endif
 
 #if os(iOS)
