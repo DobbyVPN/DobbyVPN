@@ -1,7 +1,6 @@
 package com.dobby.nativebridge
 
 import android.app.Activity
-import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
@@ -10,7 +9,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.util.Log
-import androidx.core.content.FileProvider
 import com.dobby.ui.MainActivity
 import java.io.File
 import java.io.IOException
@@ -248,70 +246,51 @@ object NativeVpnBridge {
         recordDiagnostic(context, event, "Android native bridge operation failed", failure)
     }
 
-    /** Compress diagnostics and open Android's explicit share chooser. */
+    /** Prepare one private archive; the Activity owns its chooser and lifetime. */
     @JvmStatic
-    fun exportLogs(context: Context): Boolean {
+    fun prepareLogExport(context: Context): File {
         val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
-        // Keep concurrent exports independent. A timestamp-only name can
-        // collide when two UI callbacks run in the same second and would
-        // make one chooser point at the other export's contents.
-        var archive: File? = null
-        return try {
-            val outputArchive = File.createTempFile(
-                "DobbyVPN_logs_${stamp}_",
-                ".jsonl.gz",
-                context.cacheDir,
-            )
-            archive = outputArchive
+        val archive = File.createTempFile("DobbyVPN_logs_${stamp}_", ".jsonl.gz", context.cacheDir)
+        try {
             val metadata = JSONObject().put("app_version", com.dobby.vpn.BuildConfig.VERSION_NAME)
                 .put("source_commit", com.dobby.vpn.BuildConfig.PROJECT_REPOSITORY_COMMIT)
                 .put("platform", "Android ${Build.VERSION.RELEASE}")
                 .put("captured_at", java.time.Instant.now().toString())
                 .put("native_diagnostics_unavailable", nativeDiagnosticsUnavailable())
             val paths = diagnosticPaths(context).lineSequence().filter(String::isNotBlank).map(::File).toList()
-            outputArchive.outputStream().use { writeDiagnosticArchive(it, paths, metadata) }
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                outputArchive,
-            )
-            val share = Intent(Intent.ACTION_SEND)
-                .setType("application/gzip")
-                .putExtra(Intent.EXTRA_STREAM, uri)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            share.setClipData(ClipData.newUri(context.contentResolver, "DobbyVPN logs", uri))
-            context.startActivity(
-                Intent.createChooser(share, "Export logs")
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-            recordDiagnostic(context, "logs.export_started", "Diagnostic export share chooser opened")
-            true
-        } catch (error: Exception) {
-            // A failed chooser or FileProvider setup must not leave a private
-            // archive in the cache on every attempted export. A successful
-            // chooser keeps the file alive for the receiving application.
-            val cleanupError = try {
-                val createdArchive = archive
-                if (createdArchive != null && createdArchive.exists() && !createdArchive.delete()) {
-                    IOException("partial diagnostic archive could not be deleted: ${createdArchive.absolutePath}")
-                } else {
-                    null
-                }
-            } catch (cleanup: Exception) {
-                cleanup
+            archive.outputStream().use { writeDiagnosticArchive(it, paths, metadata) }
+            return archive
+        } catch (failure: Throwable) {
+            try { deleteLogExport(context, archive) } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
+            throw failure
+        }
+    }
+
+    @JvmStatic
+    fun ownedLogExport(context: Context, name: String?): File? {
+        if (name == null || !name.startsWith("DobbyVPN_logs_") || !name.endsWith(".jsonl.gz") ||
+            name != File(name).name) return null
+        val cache = context.cacheDir.canonicalFile
+        val file = File(cache, name)
+        return if (file.canonicalFile.parentFile == cache) file else null
+    }
+
+    @JvmStatic
+    fun deleteLogExport(context: Context, file: File) {
+        val owned = ownedLogExport(context, file.name)
+        require(owned != null && owned == file.canonicalFile) { "Unrecognized diagnostic archive" }
+        if (owned.exists() && !owned.delete()) throw IOException("Diagnostic archive could not be deleted: ${owned.absolutePath}")
+    }
+
+    @JvmStatic
+    fun cleanupLogExports(context: Context, preservedName: String?) {
+        val files = context.cacheDir.listFiles() ?: throw IOException("Could not list diagnostic archive cache")
+        for (file in files) {
+            if (file.name == preservedName) continue
+            val owned = ownedLogExport(context, file.name) ?: continue
+            try { deleteLogExport(context, owned) } catch (failure: Exception) {
+                recordDiagnostic(context, "logs.export_cleanup_failed", "Abandoned diagnostic archive cleanup failed", failure)
             }
-            recordDiagnostic(context, "logs.export_failed", "Diagnostic export chooser failed", error)
-            Log.e("DobbyVPN", "Log export failed", error)
-            if (cleanupError != null) {
-                recordDiagnostic(
-                    context,
-                    "logs.export_cleanup_failed",
-                    "Partial diagnostic archive cleanup failed",
-                    cleanupError,
-                )
-                Log.e("DobbyVPN", "Partial diagnostic archive cleanup failed", cleanupError)
-            }
-            false
         }
     }
 

@@ -19,6 +19,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -57,12 +58,35 @@ internal data class FrozenLogViewState(
 
 internal class RetainedLogViewModel : ViewModel() {
     var frozenView: FrozenLogViewState? = null
+    val exportWorker = Executors.newSingleThreadExecutor()
+    var exportPreparing = false
+    var exportFile: File? = null
+    var exportLaunched = false
+    var exportReturned = false
+    var exportDeparted = false
+    var exportOwnerCleared = false
+    var exportContext: android.content.Context? = null
+    override fun onCleared() {
+        exportOwnerCleared = true
+        val context = exportContext
+        val archive = exportFile
+        exportFile = null
+        if (context != null && archive != null) {
+            try { NativeVpnBridge.deleteLogExport(context, archive) }
+            catch (failure: Exception) { NativeVpnBridge.recordDiagnostic(context, "logs.export_cleanup_failed", "Diagnostic archive owner cleanup failed", failure) }
+        }
+        exportWorker.shutdown()
+    }
 }
 
 class MainActivity : ComponentActivity() {
     companion object {
         private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
         private const val DISMISSED_ERRORS = "com.dobby.ui.DISMISSED_ERRORS"
+        private const val EXPORT_NAME = "com.dobby.ui.EXPORT_NAME"
+        private const val EXPORT_LAUNCHED = "com.dobby.ui.EXPORT_LAUNCHED"
+        private const val EXPORT_RETURNED = "com.dobby.ui.EXPORT_RETURNED"
+        private const val EXPORT_DEPARTED = "com.dobby.ui.EXPORT_DEPARTED"
         internal const val CONNECTION_CONTROLS_DESCRIPTION = "Connection controls"
 
         @Volatile
@@ -85,6 +109,11 @@ class MainActivity : ComponentActivity() {
     private var firstOnDrawListener: ViewTreeObserver.OnDrawListener? = null
     private var firstPreDrawSeen = false
     private var firstOnDrawSeen = false
+    private var activityResumed = false
+    private val exportLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        retainedLogViewModel.exportReturned = true
+        advanceLogExport()
+    }
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -107,6 +136,9 @@ class MainActivity : ComponentActivity() {
         try {
             recordWindowFocusDiagnostic("entry", hasFocus, pid, tid, startedNs)
             super.onWindowFocusChanged(hasFocus)
+            if (!hasFocus && ::retainedLogViewModel.isInitialized && retainedLogViewModel.exportLaunched)
+                retainedLogViewModel.exportDeparted = true
+            if (hasFocus && ::retainedLogViewModel.isInitialized) advanceLogExport()
         } catch (failure: Throwable) {
             callbackFailure = failure
             throw failure
@@ -196,6 +228,22 @@ class MainActivity : ComponentActivity() {
                 NativeGoSession.attach(this)
             }
             retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
+            retainedLogViewModel.exportContext = applicationContext
+            if (retainedLogViewModel.exportFile == null && !retainedLogViewModel.exportPreparing) {
+                savedInstanceState?.getString(EXPORT_NAME)?.let { name ->
+                    val restored = NativeVpnBridge.ownedLogExport(this, name)
+                    if (restored != null) {
+                        retainedLogViewModel.exportFile = restored
+                        retainedLogViewModel.exportLaunched = savedInstanceState?.getBoolean(EXPORT_LAUNCHED) == true
+                        retainedLogViewModel.exportReturned = savedInstanceState?.getBoolean(EXPORT_RETURNED) == true
+                        retainedLogViewModel.exportDeparted = savedInstanceState?.getBoolean(EXPORT_DEPARTED) == true
+                    }
+                }
+            }
+            if (!retainedLogViewModel.exportPreparing) {
+                try { NativeVpnBridge.cleanupLogExports(this, retainedLogViewModel.exportFile?.name) }
+                catch (failure: Exception) { NativeVpnBridge.recordDiagnostic(this, "logs.export_cleanup_failed", "Diagnostic archive cleanup failed", failure) }
+            }
             startupDiagnostics.observe("MainActivity.onCreate.sessionControllerInitialization") {
                 controller = SessionController(
                     this,
@@ -204,6 +252,7 @@ class MainActivity : ComponentActivity() {
                     retainedLogViewModel,
                     savedInstanceState?.getStringArrayList(DISMISSED_ERRORS).orEmpty().toSet(),
                 )
+                controller.setExportingLogs(retainedLogViewModel.exportPreparing || retainedLogViewModel.exportFile != null)
                 if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) {
                     controller.importLink(intent.dataString.orEmpty())
                 }
@@ -217,6 +266,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
+        if (::retainedLogViewModel.isInitialized) {
+            retainedLogViewModel.exportFile?.let { outState.putString(EXPORT_NAME, it.name) }
+            outState.putBoolean(EXPORT_LAUNCHED, retainedLogViewModel.exportLaunched)
+            outState.putBoolean(EXPORT_RETURNED, retainedLogViewModel.exportReturned)
+            outState.putBoolean(EXPORT_DEPARTED, retainedLogViewModel.exportDeparted)
+        }
         if (::controller.isInitialized) {
             controller.saveLogViewState()?.let { outState.putBundle(LOG_VIEW_STATE, it) }
             controller.saveSourceEditorState()?.let { outState.putBundle(SOURCE_EDITOR_STATE, it) }
@@ -241,12 +296,83 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         startupDiagnostics.observe("MainActivity.onResume") {
             super.onResume()
+            activityResumed = true
+            if (::retainedLogViewModel.isInitialized) advanceLogExport()
         }
     }
 
     override fun onStop() {
         if (::controller.isInitialized) controller.setVisible(false)
         super.onStop()
+    }
+
+    override fun onPause() {
+        activityResumed = false
+        if (::retainedLogViewModel.isInitialized && retainedLogViewModel.exportLaunched)
+            retainedLogViewModel.exportDeparted = true
+        super.onPause()
+    }
+
+    internal fun beginLogExport() {
+        val owner = retainedLogViewModel
+        if (owner.exportPreparing || owner.exportFile != null) return
+        owner.exportPreparing = true
+        controller.setExportingLogs(true)
+        val app = applicationContext
+        try { owner.exportWorker.execute {
+            val result = runCatching { NativeVpnBridge.prepareLogExport(app) }
+            Handler(Looper.getMainLooper()).post {
+                owner.exportPreparing = false
+                val archive = result.getOrNull()
+                if (owner.exportOwnerCleared && archive != null) {
+                    try { NativeVpnBridge.deleteLogExport(app, archive) }
+                    catch (failure: Exception) { NativeVpnBridge.recordDiagnostic(app, "logs.export_cleanup_failed", "Late diagnostic archive cleanup failed", failure) }
+                    return@post
+                }
+                owner.exportFile = archive
+                val activity = current?.takeIf { it.retainedLogViewModel === owner }
+                if (result.isFailure) {
+                    NativeVpnBridge.recordDiagnostic(app, "logs.export_failed", "Diagnostic archive preparation failed", result.exceptionOrNull())
+                    activity?.controller?.setExportingLogs(false, "Android could not export diagnostics. See logs for details.")
+                } else activity?.advanceLogExport()
+            }
+        } } catch (failure: java.util.concurrent.RejectedExecutionException) {
+            owner.exportPreparing = false
+            NativeVpnBridge.recordDiagnostic(app, "logs.export_failed", "Diagnostic archive preparation could not start", failure)
+            controller.setExportingLogs(false, "Android could not export diagnostics. See logs for details.")
+        }
+    }
+
+    private fun advanceLogExport() {
+        if (!activityResumed || !hasWindowFocus() || !::controller.isInitialized) return
+        val owner = retainedLogViewModel
+        val archive = owner.exportFile ?: return
+        if (owner.exportReturned && owner.exportDeparted) {
+            releaseLogExport(archive)
+        } else if (!owner.exportLaunched) {
+            try {
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", archive)
+                val share = Intent(Intent.ACTION_SEND).setType("application/gzip")
+                    .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                share.clipData = ClipData.newUri(contentResolver, "DobbyVPN logs", uri)
+                owner.exportLaunched = true
+                exportLauncher.launch(Intent.createChooser(share, "Export logs"))
+                NativeVpnBridge.recordDiagnostic(this, "logs.export_started", "Diagnostic export share chooser opened")
+            } catch (failure: Exception) {
+                NativeVpnBridge.recordDiagnostic(this, "logs.export_failed", "Diagnostic export chooser failed", failure)
+                releaseLogExport(archive, "Android could not export diagnostics. See logs for details.")
+            }
+        }
+    }
+
+    private fun releaseLogExport(archive: File, message: String = "") {
+        try { NativeVpnBridge.deleteLogExport(this, archive) }
+        catch (failure: Exception) { NativeVpnBridge.recordDiagnostic(this, "logs.export_cleanup_failed", "Diagnostic archive cleanup failed", failure) }
+        retainedLogViewModel.exportFile = null
+        retainedLogViewModel.exportLaunched = false
+        retainedLogViewModel.exportReturned = false
+        retainedLogViewModel.exportDeparted = false
+        controller.setExportingLogs(false, message)
     }
 
     internal fun launchVpnConsent(permission: Intent) {
@@ -1085,17 +1211,11 @@ internal class SessionController(
     }
 
     fun exportLogs() {
-        if (state.exportingLogs) return
-        state = state.copy(exportingLogs = true)
-        logWorker.execute {
-            val succeeded = NativeVpnBridge.exportLogs(activity)
-            main.post {
-                state = state.copy(
-                    exportingLogs = false,
-                    logsError = if (succeeded) "" else "Android could not export diagnostics. See logs for details.",
-                )
-            }
-        }
+        activity.beginLogExport()
+    }
+
+    fun setExportingLogs(exporting: Boolean, error: String = "") {
+        state = state.copy(exportingLogs = exporting, logsError = error)
     }
 
     fun uploadLogs() {
