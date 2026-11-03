@@ -2,15 +2,9 @@ package main
 
 import (
 	"context"
-	"core/buildinfo"
-	"core/clientserver/controljson"
-	"core/diagnostics"
-	"core/sessionapi"
-
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"io"
 	"net/http"
 	"os"
@@ -20,9 +14,17 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"core/buildinfo"
+	"core/clientserver/controljson"
+	"core/diagnostics"
+	"core/sessionapi"
+
+	"github.com/google/uuid"
 )
 
 const windowsPlatform = "windows"
+const darwinPlatform = "darwin"
 
 func cliLogPath() (string, error) {
 	if path := os.Getenv("DOBBY_CLI_LOG_PATH"); path != "" {
@@ -33,7 +35,7 @@ func cliLogPath() (string, error) {
 		return "", err
 	}
 	switch runtime.GOOS {
-	case "darwin":
+	case darwinPlatform:
 		return filepath.Join(home, "Library", "Logs", "DobbyVPN", "ui_diagnostics.jsonl"), nil
 	case windowsPlatform:
 		return filepath.Join(os.Getenv("LOCALAPPDATA"), "DobbyVPN", "Logs", "ui_diagnostics.jsonl"), nil
@@ -48,13 +50,14 @@ func diagnosticPaths() ([]string, error) {
 		switch runtime.GOOS {
 		case windowsPlatform:
 			backend = filepath.Join(os.Getenv("ProgramData"), "DobbyVPN", "Logs", "backend.jsonl")
-		case "darwin":
+		case darwinPlatform:
 			backend = "/Library/Logs/DobbyVPN/backend.jsonl"
 		default:
 			backend = "/var/log/dobbyvpn/backend.jsonl"
 		}
 	}
-	paths := []string{backend}
+	paths := make([]string, 0, 2)
+	paths = append(paths, backend)
 	cli, err := cliLogPath()
 	if err != nil {
 		return nil, err
@@ -269,9 +272,9 @@ func uploadDiagnostics(ctx context.Context, client controljson.Client, paths []s
 }
 
 func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, paths []string, transport *http.Client) (resultErr error) {
-	snapshot, err := callSnapshot(ctx, client, "")
-	if err != nil {
-		return err
+	snapshot, snapshotErr := callSnapshot(ctx, client, "")
+	if snapshotErr != nil {
+		return snapshotErr
 	}
 	var prepared sessionapi.LogUploadPreparation
 	if err := client.Call(ctx, "PrepareLogUpload", struct {
@@ -280,17 +283,17 @@ func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, p
 	}{snapshot.SessionID, snapshot.Digest}, &prepared); err != nil {
 		return err
 	}
-	logPath, err := cliLogPath()
-	if err != nil {
-		return err
+	logPath, pathErr := cliLogPath()
+	if pathErr != nil {
+		return pathErr
 	}
 	tempDir := filepath.Join(filepath.Dir(logPath), "upload-temp")
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {
 		return err
 	}
-	lock, err := os.OpenFile(filepath.Join(tempDir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
+	lock, lockErr := os.OpenFile(filepath.Join(tempDir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if lockErr != nil {
+		return lockErr
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
 	if err := tryUploadLock(lock); err != nil {
@@ -304,8 +307,8 @@ func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, p
 		return err
 	}
 	// The UUID comes from the fenced preparation, and is the remote filename.
-	id, err := uuid.Parse(prepared.Reference)
-	if err != nil || id.Version() != 7 || id.String() != prepared.Reference {
+	id, parseErr := uuid.Parse(prepared.Reference)
+	if parseErr != nil || id.Version() != 7 || id.String() != prepared.Reference {
 		return errors.New("invalid upload reference")
 	}
 	name := filepath.Join(tempDir, prepared.Reference+".gz")
@@ -319,6 +322,13 @@ func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, p
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	return sendLogArchive(ctx, transport, name, prepared, func() error {
+		fmt.Println(prepared.Reference)
+		return saveUploadPreference(prepared)
+	})
+}
+
+func sendLogArchive(ctx context.Context, transport *http.Client, name string, prepared sessionapi.LogUploadPreparation, onCreated func() error) (resultErr error) {
 	file, err := os.Open(name)
 	if err != nil {
 		return err
@@ -351,17 +361,20 @@ func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, p
 	if response.StatusCode != http.StatusCreated {
 		return fmt.Errorf("log upload returned HTTP %d", response.StatusCode)
 	}
-	fmt.Println(prepared.Reference)
-	path, err := cliLogPath()
-	if err != nil {
-		return err
+	return onCreated()
+}
+
+func saveUploadPreference(prepared sessionapi.LogUploadPreparation) (resultErr error) {
+	path, pathErr := cliLogPath()
+	if pathErr != nil {
+		return pathErr
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".upload-preference-*")
-	if err != nil {
-		return err
+	temp, tempErr := os.CreateTemp(filepath.Dir(path), ".upload-preference-*")
+	if tempErr != nil {
+		return tempErr
 	}
 	defer func() { resultErr = errors.Join(resultErr, removeViewTemp(temp.Name())) }()
 	metadata := struct {
@@ -403,17 +416,17 @@ func cleanupUploadTemps(dir string) error {
 }
 
 func cleanupAbandonedUploads() (resultErr error) {
-	path, err := cliLogPath()
-	if err != nil {
-		return err
+	path, pathErr := cliLogPath()
+	if pathErr != nil {
+		return pathErr
 	}
 	dir := filepath.Join(filepath.Dir(path), "upload-temp")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
+		return mkdirErr
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
+	lock, openErr := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if openErr != nil {
+		return openErr
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
 	if err := tryUploadLock(lock); err != nil {

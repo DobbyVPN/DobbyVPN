@@ -45,11 +45,7 @@ func explicitLocalLogPaths() (logRoot, logPath string, resultErr error) {
 	requested := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
 	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
 	if requested == "" {
-		var pathErr error
-		root, requested, pathErr = defaultDesktopLogPath()
-		if pathErr != nil {
-			return "", "", pathErr
-		}
+		root, requested = defaultDesktopLogPath()
 	} else if root == "" {
 		var rootErr error
 		root, rootErr = explicitLogRoot()
@@ -129,12 +125,12 @@ func prepareUnmanagedLocalLog(root, path string) error {
 	return nil
 }
 
-func defaultDesktopLogPath() (root, path string, err error) {
+func defaultDesktopLogPath() (root, path string) {
 	root = "/var/log/dobbyvpn"
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == darwinPlatform {
 		root = "/Library/Logs/DobbyVPN"
 	}
-	return root, filepath.Join(root, "backend.jsonl"), nil
+	return root, filepath.Join(root, "backend.jsonl")
 }
 
 func run() {

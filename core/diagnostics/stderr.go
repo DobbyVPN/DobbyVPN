@@ -154,15 +154,15 @@ func openFailedStartupGeneration(path string) (file *os.File, resultErr error) {
 		Sources  json.RawMessage
 		Previous *bool
 	}
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return nil, fmt.Errorf("decode migration marker: %w", err)
+	if decodeErr := json.Unmarshal(data, &decoded); decodeErr != nil {
+		return nil, fmt.Errorf("decode migration marker: %w", decodeErr)
 	}
 	if len(decoded.Sources) == 0 || decoded.Previous == nil {
 		return nil, errors.New("migration marker missing required fields")
 	}
 	var sources []LegacySource
-	if err := json.Unmarshal(decoded.Sources, &sources); err != nil {
-		return nil, fmt.Errorf("decode migration sources: %w", err)
+	if decodeErr := json.Unmarshal(decoded.Sources, &sources); decodeErr != nil {
+		return nil, fmt.Errorf("decode migration sources: %w", decodeErr)
 	}
 	stage, err := openExistingFailedStartup(path + ".legacy-stage")
 	if err == nil {

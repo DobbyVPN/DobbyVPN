@@ -51,23 +51,31 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
-	if root.LogsEndpoint != "" {
-		u, err := url.Parse(root.LogsEndpoint)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || !strings.HasSuffix(u.EscapedPath(), "/") || u.RawQuery != "" || u.ForceQuery || strings.Contains(root.LogsEndpoint, "#") || u.Opaque != "" {
-			return parsedConfig{}, failure(FailureMalformedConfig, "logs_endpoint must be an HTTPS directory URL without query or fragment")
-		}
-		if port := u.Port(); port != "" {
-			value, err := strconv.Atoi(port)
-			if err != nil || value < 1 || value > 65535 {
-				return parsedConfig{}, failure(FailureMalformedConfig, "logs_endpoint has an invalid port")
-			}
-		}
-		if u.User != nil && strings.Contains(u.User.Username(), ":") {
-			return parsedConfig{}, failure(FailureMalformedConfig, "logs_endpoint Basic username cannot contain a colon")
-		}
+	if validateErr := validateLogsEndpoint(root.LogsEndpoint); validateErr != nil {
+		return parsedConfig{}, validateErr
 	}
 	digest := sha256.Sum256(raw)
 	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles, logsEndpoint: root.LogsEndpoint}, nil
+}
+
+func validateLogsEndpoint(endpoint string) error {
+	if endpoint == "" {
+		return nil
+	}
+	u, parseErr := url.Parse(endpoint)
+	if parseErr != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || !strings.HasSuffix(u.EscapedPath(), "/") || u.RawQuery != "" || u.ForceQuery || strings.Contains(endpoint, "#") || u.Opaque != "" {
+		return failure(FailureMalformedConfig, "logs_endpoint must be an HTTPS directory URL without query or fragment")
+	}
+	if port := u.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return failure(FailureMalformedConfig, "logs_endpoint has an invalid port")
+		}
+	}
+	if u.User != nil && strings.Contains(u.User.Username(), ":") {
+		return failure(FailureMalformedConfig, "logs_endpoint Basic username cannot contain a colon")
+	}
+	return nil
 }
 
 func decodeConfig(raw []byte) (configRoot, []string, error) {

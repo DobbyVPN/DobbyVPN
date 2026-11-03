@@ -170,6 +170,31 @@ public enum DiagnosticFiles {
         }
     }
 
+    private static func finishCommittedMigration(
+        _ commit: LegacyCommit, destination path: URL, stage: URL, marker: URL, expectedSources: [LegacySource]
+    ) throws {
+        guard commit.sources == nil || commit.sources == expectedSources else { throw Failure("Legacy migration sources changed during recovery") }
+        for isPrevious in [true, false] {
+            let destination = isPrevious ? previous(path) : path
+            let staged = isPrevious ? previous(stage) : stage
+            if isPrevious && !commit.previous { try remove(destination); continue }
+            if FileManager.default.fileExists(atPath: staged.path) { try move(staged, destination) }
+            try syncDirectory(path.deletingLastPathComponent())
+        }
+        // A missing staged file is valid only if an earlier attempt already
+        // published a regular destination. Never discard inputs otherwise.
+        try withFile(open(path, flags: O_RDONLY | O_NONBLOCK)) { _ in }
+        if commit.previous { try withFile(open(previous(path), flags: O_RDONLY | O_NONBLOCK)) { _ in } }
+        for source in commit.sources ?? [] {
+            for suffix in [".previous", ""] { try remove(URL(fileURLWithPath: source.path + suffix)) }
+            let parent = URL(fileURLWithPath: source.path).deletingLastPathComponent()
+            if FileManager.default.fileExists(atPath: parent.path) { try syncDirectory(parent) }
+        }
+        try syncDirectory(path.deletingLastPathComponent())
+        try remove(marker)
+        try syncDirectory(path.deletingLastPathComponent())
+    }
+
     // Shares the Go owner's durable marker and staging protocol while holding
     // the same destination lock. Never delete legacy input before publication.
     private static func migrateDesktopLegacy(_ path: URL, includeLegacy: Bool, excluding: [String], homeDirectory: URL) throws {
@@ -185,32 +210,10 @@ public enum DiagnosticFiles {
         }
         let stage = URL(fileURLWithPath: path.path + ".legacy-stage")
         let marker = URL(fileURLWithPath: path.path + ".legacy-commit")
-        func finish(_ commit: LegacyCommit) throws {
-            guard commit.sources == nil || commit.sources == sources else { throw Failure("Legacy migration sources changed during recovery") }
-            for isPrevious in [true, false] {
-                let destination = isPrevious ? previous(path) : path
-                let staged = isPrevious ? previous(stage) : stage
-                if isPrevious && !commit.previous { try remove(destination); continue }
-                if FileManager.default.fileExists(atPath: staged.path) { try move(staged, destination) }
-                try syncDirectory(path.deletingLastPathComponent())
-            }
-            // A missing staged file is valid only if an earlier attempt already
-            // published a regular destination. Never discard inputs otherwise.
-            try withFile(open(path, flags: O_RDONLY | O_NONBLOCK)) { _ in }
-            if commit.previous { try withFile(open(previous(path), flags: O_RDONLY | O_NONBLOCK)) { _ in } }
-            for source in commit.sources ?? [] {
-                for suffix in [".previous", ""] { try remove(URL(fileURLWithPath: source.path + suffix)) }
-                let parent = URL(fileURLWithPath: source.path).deletingLastPathComponent()
-                if FileManager.default.fileExists(atPath: parent.path) { try syncDirectory(parent) }
-            }
-            try syncDirectory(path.deletingLastPathComponent())
-            try remove(marker)
-            try syncDirectory(path.deletingLastPathComponent())
-        }
         let markerData = try readMigrationMarker(marker)
         if let markerData {
             let commit = try JSONDecoder().decode(LegacyCommit.self, from: markerData)
-            try finish(commit)
+            try finishCommittedMigration(commit, destination: path, stage: stage, marker: marker, expectedSources: sources)
             if commit.sources != nil { return }
         }
         try remove(stage); try remove(previous(stage))
@@ -296,7 +299,7 @@ public enum DiagnosticFiles {
         }
         try move(temporary, marker)
         try syncDirectory(path.deletingLastPathComponent())
-        try finish(commit)
+        try finishCommittedMigration(commit, destination: path, stage: stage, marker: marker, expectedSources: sources)
     }
 #endif
 

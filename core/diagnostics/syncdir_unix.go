@@ -7,12 +7,12 @@ import (
 	"os"
 )
 
-func syncDirectory(path string) error {
+func syncDirectory(path string) (resultErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
 	return file.Sync()
 }
 

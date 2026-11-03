@@ -31,6 +31,7 @@ const (
 	exitConnect              = 3
 	exitRuntime              = 4
 	exitConflict             = 8
+	stderrLabel              = "stderr"
 	sessionIDRequiredMessage = "--session-id requires one value"
 )
 
@@ -82,15 +83,15 @@ func prepareCLIHistory() error {
 		return err
 	}
 	var sources []diagnostics.LegacySource
-	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+	if runtime.GOOS == darwinPlatform || runtime.GOOS == "windows" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return err
 		}
 		legacy := applicationLogPath(home)
-		sources = append(sources, diagnostics.LegacySource{Path: legacy, Label: "cli"}, diagnostics.LegacySource{Path: legacy + ".stderr", Label: "stderr"})
+		sources = append(sources, diagnostics.LegacySource{Path: legacy, Label: "cli"}, diagnostics.LegacySource{Path: legacy + ".stderr", Label: stderrLabel})
 	} else {
-		sources = append(sources, diagnostics.LegacySource{Path: path + ".stderr", Label: "stderr"})
+		sources = append(sources, diagnostics.LegacySource{Path: path + ".stderr", Label: stderrLabel})
 	}
 	if runtime.GOOS != "windows" {
 		base, err := os.UserConfigDir()
@@ -100,7 +101,7 @@ func prepareCLIHistory() error {
 		legacyBackend := filepath.Join(base, "DobbyVPN", "Logs", "backend.jsonl")
 		selectedBackend := os.Getenv("DOBBY_LOG_PATH")
 		if filepath.Clean(legacyBackend) != filepath.Clean(path) && (selectedBackend == "" || filepath.Clean(legacyBackend) != filepath.Clean(selectedBackend)) {
-			sources = append(sources, diagnostics.LegacySource{Path: legacyBackend, Label: "backend"}, diagnostics.LegacySource{Path: legacyBackend + ".stderr", Label: "stderr"})
+			sources = append(sources, diagnostics.LegacySource{Path: legacyBackend, Label: "backend"}, diagnostics.LegacySource{Path: legacyBackend + ".stderr", Label: stderrLabel})
 		}
 	}
 	filtered := sources[:0]

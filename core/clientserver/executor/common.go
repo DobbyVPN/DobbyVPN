@@ -11,6 +11,8 @@ import (
 	"runtime"
 )
 
+const darwinPlatform = "darwin"
+
 type Executor struct {
 }
 
@@ -33,14 +35,14 @@ func initExplicitLocalLog() (resultErr error) {
 		}
 	}()
 	sources := []diagnostics.LegacySource{{Path: path + ".stderr", Label: "stderr"}}
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == darwinPlatform {
 		sources = append(sources, diagnostics.LegacySource{Path: path + ".stdout", Label: "stdout"})
 	}
 	if err := diagnostics.MigrateLegacy(path, sources); err != nil {
 		return fmt.Errorf("migrate backend diagnostics: %w", err)
 	}
 	var captureErr error
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == darwinPlatform {
 		captureErr = diagnostics.CaptureOutput(path, path)
 	} else {
 		captureErr = diagnostics.CaptureStderr(path, path)

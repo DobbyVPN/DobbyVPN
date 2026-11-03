@@ -16,35 +16,34 @@ func migrateHistory(path string, limit int64) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	oversized, _, err := historyNeedsMigration(path, limit)
+	oversized, err := historyNeedsMigration(path, limit)
 	if err != nil || !oversized {
 		return err
 	}
 	return migrateLegacyTransaction(path, nil, limit, true)
 }
 
-func historyNeedsMigration(path string, limit int64) (needsMigration bool, original os.FileInfo, resultErr error) {
+func historyNeedsMigration(path string, limit int64) (needsMigration bool, resultErr error) {
 	for _, name := range []string{path + PreviousSuffix, path} {
 		info, err := os.Stat(name)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return false, nil, err
+			return false, err
 		}
 		if !info.Mode().IsRegular() {
-			return false, nil, &os.PathError{Op: "migrate diagnostic", Path: name, Err: os.ErrInvalid}
+			return false, &os.PathError{Op: "migrate diagnostic", Path: name, Err: os.ErrInvalid}
 		}
 		if info.Size() > limit {
 			recordAfterLimit, scanErr := hasRecordAfterLimit(name, limit, info.Size())
 			if scanErr != nil {
-				return false, nil, scanErr
+				return false, scanErr
 			}
 			needsMigration = needsMigration || recordAfterLimit
 		}
-		original = info
 	}
-	return needsMigration, original, nil
+	return needsMigration, nil
 }
 
 // A complete record may cross the rotation threshold because WriteRecord
@@ -72,10 +71,6 @@ func hasRecordAfterLimit(path string, limit, size int64) (found bool, resultErr 
 			return false, err
 		}
 	}
-}
-
-func streamMigration(input io.Reader, path string, limit int64, size *int64, atStart *bool) (resultErr error) {
-	return streamMigrationLabeled(input, path, limit, size, atStart, nil)
 }
 
 // A source marker is written with the first record in every retained generation.
