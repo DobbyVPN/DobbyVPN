@@ -43,7 +43,7 @@ settings.example {
 		}
 		handle @upload {
 			request_body {
-				max_size 2500MB
+				max_size 500MB
 			}
 			# Store in the sub-account root; discard query parameters.
 			rewrite * /{re.archive.1}?
@@ -87,13 +87,16 @@ The app sends an ordinary PUT containing the completed gzip archive, with
 `Content-Type: application/gzip` and its actual compressed `Content-Length`.
 There is no separate signing request or custom receipt response.
 
-## Why the upload limit is 2500 MB
+## Why the upload limit is 500 MB
 
 The limit applies to the **whole compressed archive**, not each input log.
 Each log rotates at 150,000,000 bytes and retains its current and previous
-generations. The current export inventories give these nominal raw sizes:
+generations. Files are created as their streams are used; a previous generation
+appears after rotation. The counts below are possible retained log files, not
+files preallocated on every device. The current inventories give these nominal
+raw sizes when every generation reaches the rotation threshold:
 
-| Export | Log streams | Retained files | Nominal total |
+| Export | Log streams | Maximum log files | Nominal total |
 | --- | ---: | ---: | ---: |
 | macOS / Windows app | 3 | 6 | 900 MB |
 | Android app | 4 | 8 | 1,200 MB |
@@ -101,15 +104,18 @@ generations. The current export inventories give these nominal raw sizes:
 | Linux CLI | 6 | 12 | 1,800 MB |
 | Windows CLI | 5 | 10 | 1,500 MB |
 
-`2500MB` is 2,500,000,000 bytes: the largest nominal inventory plus 400 MB of
-headroom for framing, gzip overhead and rotation overshoot. Compression normally
-reduces text logs, but it cannot guarantee a reduction; the limit assumes no
-compression benefit. Missing files reduce the actual archive size.
+`500MB` is 500,000,000 bytes of compressed data. Measurements of retained backend
+logs on 2026-11-03 reduced a 248.2 MB macOS sample to 37.9 MB (6.55:1), and a
+5.8 MB Linux sample to 1.0 MB (5.75:1), using gzip at its default compression
+level. At the lower measured ratio, the largest nominal 2.1 GB inventory would
+be about 365 MB, leaving approximately 135 MB of headroom. This is a practical
+initial service cap based on observed compression, not a guaranteed bound or a
+measurement of complete mobile exports. Missing files reduce actual size.
 
 The 150 MB value is a rotation trigger, **not a strict per-file maximum**.
 Complete records and in-flight stderr writes may cross it, so no finite archive
 maximum follows from those thresholds alone. The proposed uploader checks the
-finished archive's actual size before sending. Above 2.5 GB it reports that the
+finished archive's actual size before sending. Above 500 MB it reports that the
 archive exceeds the upload limit and preserves the complete local export for
 manual sharing; it does not truncate logs to fit.
 
@@ -119,31 +125,45 @@ partial-file handling and that `If-None-Match: *` atomically refuses an existing
 filename, including concurrent PUTs. A rejected or ambiguous upload must not be
 shown as successful.
 
-## Planned support reference
+## Planned Upload action and support reference
 
-For each new archive, the app generates 12 cryptographically random bytes and
-encodes them as 20 uppercase Base32 characters, without padding. Groups of four
-make the reference easier to read; the hyphens are part of the stored filename:
+When the provider enables uploads, double-tapping the mobile log view opens
+this action panel, with a full-width Upload button below Clear and Share:
 
 ```text
-M7KD-2PXC-VR6N-4TJB-H5AQ.gz
+[ Clear ]  [ Share ]
+[      Upload     ]
+```
+
+Share keeps the existing archive-sharing action. Upload sends the archive to
+the configured provider and shows progress while preventing duplicate taps.
+Desktop log context menus expose the same Upload action. Upload is absent when
+the provider has not configured an endpoint. Accessible actions remain available.
+
+For each new archive, the app uses a standard UUIDv7 generator. The UUID is
+time-ordered and contains random bits to make collisions negligibly unlikely;
+the full UUID, including its hyphens, becomes the filename:
+
+```text
+019a4a6b-7c80-7d21-9f63-248e8b4c5a90.gz
 ```
 
 The filename stem is the reference: no second ID, receipt service or lookup
-database. It contains no device ID, account name or timestamp. A reference alone
-does not permit downloading the archive.
+database. UUIDv7 includes its creation time, but no device ID or account name.
+Create-only storage writes prevent an existing archive from being overwritten.
+A reference alone does not permit downloading the archive.
 
 Only after the server confirms `201 Created`, the planned Logs screen shows:
 
 ```text
 Logs uploaded
-Reference: M7KD-2PXC-VR6N-4TJB-H5AQ
+Reference: 019a4a6b-7c80-7d21-9f63-248e8b4c5a90
 
 [Copy reference]  [Share]
 ```
 
 Copy reference copies the exact reference. Share opens the system share menu
-with text such as `DobbyVPN logs: M7KD-2PXC-VR6N-4TJB-H5AQ`, without the archive,
+with text such as `DobbyVPN logs: 019a4a6b-7c80-7d21-9f63-248e8b4c5a90`, without the archive,
 endpoint password or an authenticated URL. The latest successful reference and
 upload time remain available in Logs after reopening the app. Support looks for
 that reference plus `.gz` in its private storage; a user can paste the reference
