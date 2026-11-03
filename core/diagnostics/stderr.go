@@ -109,6 +109,75 @@ func captureOutput(path, permissionsFrom string, stdout bool) error {
 	return nil
 }
 
+// CaptureFailedStartup binds stderr to the validated destination when normal
+// initialization has failed. The process is exiting, so it neither rotates nor
+// takes the lock that may itself have caused the failure.
+func CaptureFailedStartup(path string) error {
+	stderrMu.Lock()
+	defer stderrMu.Unlock()
+	if stderrCapture != nil {
+		if stderrCapture.path != path {
+			return fmt.Errorf("process output already captured at %s", stderrCapture.path)
+		}
+		return nil
+	}
+	file, err := openFailedStartupGeneration(path)
+	if err != nil {
+		return err
+	}
+	if _, err := regularFile(file); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	capture := &rawCapture{path: path, file: file, run: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())}
+	if err := capture.writeHeader(file); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := redirectStderr(file); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	stderrCapture = capture
+	return nil
+}
+
+// openFailedStartupGeneration chooses the current staged generation only after
+// validating its committed marker. A missing stage requires an existing
+// published current generation.
+func openFailedStartupGeneration(path string) (file *os.File, resultErr error) {
+	data, err := readLegacyMarker(path + ".legacy-commit")
+	if errors.Is(err, os.ErrNotExist) {
+		return openFailedStartup(path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var decoded struct {
+		Sources  json.RawMessage
+		Previous *bool
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return nil, fmt.Errorf("decode migration marker: %w", err)
+	}
+	if len(decoded.Sources) == 0 || decoded.Previous == nil {
+		return nil, errors.New("migration marker missing required fields")
+	}
+	var sources []LegacySource
+	if err := json.Unmarshal(decoded.Sources, &sources); err != nil {
+		return nil, fmt.Errorf("decode migration sources: %w", err)
+	}
+	stage, err := openExistingFailedStartup(path + ".legacy-stage")
+	if err == nil {
+		return stage, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("open staged diagnostics: %w", err)
+	}
+	current, err := openExistingFailedStartup(path)
+	if err != nil {
+		return nil, fmt.Errorf("open published diagnostics: %w", err)
+	}
+	return current, nil
+}
+
 func (capture *rawCapture) redirect(file *os.File) error {
 	if capture.stdout {
 		if err := redirectStdout(file); err != nil {

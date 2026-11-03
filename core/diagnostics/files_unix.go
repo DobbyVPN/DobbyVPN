@@ -23,6 +23,15 @@ func openLegacyInput(path string) (*os.File, error) { return openLocalFile(path,
 func openAppend(path string) (*os.File, error) {
 	return openLocalFile(path, unix.O_CREAT|unix.O_WRONLY|unix.O_APPEND)
 }
+func openStartupMarker(path string) (*os.File, error) {
+	return openLocalFile(path, unix.O_RDONLY|unix.O_NONBLOCK)
+}
+func openExistingFailedStartup(path string) (*os.File, error) {
+	return openLocalFile(path, unix.O_WRONLY|unix.O_APPEND|unix.O_NONBLOCK)
+}
+func openFailedStartup(path string) (*os.File, error) {
+	return openLocalFile(path, unix.O_CREAT|unix.O_WRONLY|unix.O_APPEND|unix.O_NONBLOCK)
+}
 func openLock(path string) (*os.File, error)  { return openLocalFile(path, unix.O_CREAT|unix.O_RDWR) }
 func OpenInput(path string) (*os.File, error) { return os.Open(path) }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -37,6 +38,28 @@ func MigrateLegacy(path string, sources []LegacySource) error {
 	return withFileLock(absolute, func() error { return migrateLegacyLocked(absolute, sources, Threshold) })
 }
 
+// readLegacyMarker bounds the committed metadata and rejects links or
+// nonregular files before reading; a broken FIFO cannot stall startup.
+func readLegacyMarker(path string) (data []byte, resultErr error) {
+	file, err := openStartupMarker(path)
+	if err != nil {
+		return nil, fmt.Errorf("open migration marker: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	if _, err := regularFile(file); err != nil {
+		return nil, err
+	}
+	const maxMarker = 1024 * 1024
+	data, err = io.ReadAll(io.LimitReader(file, maxMarker+1))
+	if err != nil {
+		return nil, fmt.Errorf("read migration marker: %w", err)
+	}
+	if len(data) > maxMarker {
+		return nil, errors.New("migration marker exceeds size limit")
+	}
+	return data, nil
+}
+
 type legacyCommit struct {
 	Sources  []LegacySource
 	Previous bool
@@ -48,7 +71,7 @@ func migrateLegacyLocked(path string, sources []LegacySource, limit int64) error
 
 func migrateLegacyTransaction(path string, sources []LegacySource, limit int64, force bool) error {
 	stage, marker := path+".legacy-stage", path+".legacy-commit"
-	data, err := os.ReadFile(marker)
+	data, err := readLegacyMarker(marker)
 	if err == nil {
 		var commit legacyCommit
 		if err := json.Unmarshal(data, &commit); err != nil {
@@ -186,6 +209,22 @@ func finishLegacyCommit(path, stage, marker string, commit legacyCommit) error {
 		}
 		if err := syncDirectory(filepath.Dir(path)); err != nil {
 			return err
+		}
+	}
+	// A missing staged file means it was already published only if the
+	// corresponding regular destination actually exists. Never delete legacy
+	// sources while either committed generation is missing or unsafe.
+	for _, suffix := range []string{"", PreviousSuffix} {
+		if suffix == PreviousSuffix && !commit.Previous {
+			continue
+		}
+		file, err := openStartupMarker(path + suffix)
+		if err != nil {
+			return fmt.Errorf("open published diagnostics %s: %w", path+suffix, err)
+		}
+		_, statErr := regularFile(file)
+		if err := errors.Join(statErr, file.Close()); err != nil {
+			return fmt.Errorf("validate published diagnostics %s: %w", path+suffix, err)
 		}
 	}
 	for _, source := range commit.Sources {

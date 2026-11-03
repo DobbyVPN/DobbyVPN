@@ -128,16 +128,20 @@ public enum DiagnosticFiles {
     private static func rotate(_ path: URL) throws { try move(path, previous(path)) }
 
 #if os(macOS)
-    private struct LegacySource: Codable, Equatable { let Path: String; let Label: String }
+    private struct LegacySource: Codable, Equatable {
+        let path: String
+        let label: String
+        private enum CodingKeys: String, CodingKey { case path = "Path", label = "Label" }
+    }
     private struct LegacyCommit: Codable {
-        let Sources: [LegacySource]?
-        let Previous: Bool
-        private enum CodingKeys: String, CodingKey { case Sources, Previous }
+        let sources: [LegacySource]?
+        let previous: Bool
+        private enum CodingKeys: String, CodingKey { case sources = "Sources", previous = "Previous" }
         func encode(to encoder: Encoder) throws {
             var values = encoder.container(keyedBy: CodingKeys.self)
-            if let Sources { try values.encode(Sources, forKey: .Sources) }
-            else { try values.encodeNil(forKey: .Sources) }
-            try values.encode(Previous, forKey: .Previous)
+            if let sources { try values.encode(sources, forKey: .sources) }
+            else { try values.encodeNil(forKey: .sources) }
+            try values.encode(previous, forKey: .previous)
         }
     }
 
@@ -148,6 +152,24 @@ public enum DiagnosticFiles {
         guard fsync(fd) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
     }
 
+    private static func readMigrationMarker(_ marker: URL) throws -> Data? {
+        do {
+            return try withFile(open(marker, flags: O_RDONLY | O_NONBLOCK)) { file in
+                let limit = 1_048_576
+                var data = Data()
+                while data.count <= limit {
+                    let chunk = try file.read(upToCount: min(65_536, limit + 1 - data.count)) ?? Data()
+                    if chunk.isEmpty { break }
+                    data.append(chunk)
+                }
+                guard data.count <= limit else { throw Failure("Diagnostic migration marker exceeds size limit") }
+                return data
+            }
+        } catch let error as POSIXError where error.code == .ENOENT {
+            return nil
+        }
+    }
+
     // Shares the Go owner's durable marker and staging protocol while holding
     // the same destination lock. Never delete legacy input before publication.
     private static func migrateDesktopLegacy(_ path: URL, includeLegacy: Bool, excluding: [String], homeDirectory: URL) throws {
@@ -155,40 +177,45 @@ public enum DiagnosticFiles {
         let oldBackend = homeDirectory.appendingPathComponent("Library/Application Support/DobbyVPN/Logs/backend.jsonl").path
         var sources: [LegacySource] = []
         if includeLegacy {
-            sources = [LegacySource(Path: home, Label: "cli"), LegacySource(Path: home + ".stderr", Label: "stderr")]
+            sources = [LegacySource(path: home, label: "cli"), LegacySource(path: home + ".stderr", label: "stderr")]
             if !excluding.contains(oldBackend) && oldBackend != path.path {
-                sources += [LegacySource(Path: oldBackend, Label: "backend"), LegacySource(Path: oldBackend + ".stderr", Label: "stderr")]
+                sources += [LegacySource(path: oldBackend, label: "backend"), LegacySource(path: oldBackend + ".stderr", label: "stderr")]
             }
-            sources = sources.filter { $0.Path != path.path }
+            sources = sources.filter { $0.path != path.path }
         }
         let stage = URL(fileURLWithPath: path.path + ".legacy-stage")
         let marker = URL(fileURLWithPath: path.path + ".legacy-commit")
         func finish(_ commit: LegacyCommit) throws {
-            guard commit.Sources == nil || commit.Sources == sources else { throw Failure("Legacy migration sources changed during recovery") }
+            guard commit.sources == nil || commit.sources == sources else { throw Failure("Legacy migration sources changed during recovery") }
             for isPrevious in [true, false] {
                 let destination = isPrevious ? previous(path) : path
                 let staged = isPrevious ? previous(stage) : stage
-                if isPrevious && !commit.Previous { try remove(destination); continue }
+                if isPrevious && !commit.previous { try remove(destination); continue }
                 if FileManager.default.fileExists(atPath: staged.path) { try move(staged, destination) }
                 try syncDirectory(path.deletingLastPathComponent())
             }
-            for source in commit.Sources ?? [] {
-                for suffix in [".previous", ""] { try remove(URL(fileURLWithPath: source.Path + suffix)) }
-                let parent = URL(fileURLWithPath: source.Path).deletingLastPathComponent()
+            // A missing staged file is valid only if an earlier attempt already
+            // published a regular destination. Never discard inputs otherwise.
+            try withFile(open(path, flags: O_RDONLY | O_NONBLOCK)) { _ in }
+            if commit.previous { try withFile(open(previous(path), flags: O_RDONLY | O_NONBLOCK)) { _ in } }
+            for source in commit.sources ?? [] {
+                for suffix in [".previous", ""] { try remove(URL(fileURLWithPath: source.path + suffix)) }
+                let parent = URL(fileURLWithPath: source.path).deletingLastPathComponent()
                 if FileManager.default.fileExists(atPath: parent.path) { try syncDirectory(parent) }
             }
             try syncDirectory(path.deletingLastPathComponent())
             try remove(marker)
             try syncDirectory(path.deletingLastPathComponent())
         }
-        if FileManager.default.fileExists(atPath: marker.path) {
-            let commit = try JSONDecoder().decode(LegacyCommit.self, from: Data(contentsOf: marker))
+        let markerData = try readMigrationMarker(marker)
+        if let markerData {
+            let commit = try JSONDecoder().decode(LegacyCommit.self, from: markerData)
             try finish(commit)
-            if commit.Sources != nil { return }
+            if commit.sources != nil { return }
         }
         try remove(stage); try remove(previous(stage))
         let hasLegacy = sources.contains(where: { source in
-            [".previous", ""].contains { FileManager.default.fileExists(atPath: source.Path + $0) }
+            [".previous", ""].contains { FileManager.default.fileExists(atPath: source.path + $0) }
         })
         var normalize = false
         if !hasLegacy {
@@ -200,15 +227,15 @@ public enum DiagnosticFiles {
         guard hasLegacy || normalize else { return }
         var count: UInt64 = 0
         var atStart = true
-        let streams = [LegacySource(Path: path.path, Label: "existing")] + (normalize ? [] : sources)
+        let streams = [LegacySource(path: path.path, label: "existing")] + (normalize ? [] : sources)
         for source in streams {
             for suffix in [".previous", ""] {
-                let inputPath = URL(fileURLWithPath: source.Path + suffix)
+                let inputPath = URL(fileURLWithPath: source.path + suffix)
                 let input: FileHandle
                 do { input = try open(inputPath, flags: O_RDONLY) }
                 catch let error as POSIXError where error.code == .ENOENT { continue }
                 try withFile(input) { file in
-                    var header = try JSONSerialization.data(withJSONObject: ["event": "diagnostics.legacy", "source": source.Label, "generation": suffix], options: [.sortedKeys])
+                    var header = try JSONSerialization.data(withJSONObject: ["event": "diagnostics.legacy", "source": source.label, "generation": suffix], options: [.sortedKeys])
                     header.append(10)
                     if normalize { header.removeAll() }
                     if !atStart && !header.isEmpty { header.insert(10, at: 0); atStart = true }
@@ -242,6 +269,10 @@ public enum DiagnosticFiles {
                 }
             }
         }
+        // Empty legacy inputs still publish an empty current generation.
+        if !FileManager.default.fileExists(atPath: stage.path) {
+            try withFile(open(stage, flags: O_WRONLY | O_CREAT | O_EXCL)) { _ in }
+        }
         var destinationInfo = stat()
         let hasDestination = lstat(path.path, &destinationInfo) == 0
         if !hasDestination && errno != ENOENT { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
@@ -256,7 +287,7 @@ public enum DiagnosticFiles {
                 try output.synchronize()
             }
         }
-        let commit = LegacyCommit(Sources: normalize ? nil : sources, Previous: FileManager.default.fileExists(atPath: previous(stage).path))
+        let commit = LegacyCommit(sources: normalize ? nil : sources, previous: FileManager.default.fileExists(atPath: previous(stage).path))
         let temporary = URL(fileURLWithPath: marker.path + ".tmp")
         try remove(temporary)
         try withFile(open(temporary, flags: O_WRONLY | O_CREAT | O_EXCL)) { output in

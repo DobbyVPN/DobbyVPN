@@ -578,7 +578,9 @@ public final class DobbySessionViewModel: ObservableObject {
             }
         }
     }
+}
 
+extension DobbySessionViewModel {
     func cancelLogsUpload() { uploadCancellation?.cancel(); uploadTask?.cancel() }
 
     func startLogsUpload() {

@@ -198,7 +198,6 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     }
 }
 
-@available(iOS 16.0, *)
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     let clear: Int

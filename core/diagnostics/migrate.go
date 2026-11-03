@@ -11,7 +11,7 @@ import (
 // larger than the buffer; rotation occurs solely between records.
 func migrateHistory(path string, limit int64) error {
 	// Resume an interrupted publication before inspecting the visible files.
-	if _, err := os.Stat(path + ".legacy-commit"); err == nil {
+	if _, err := os.Lstat(path + ".legacy-commit"); err == nil {
 		return migrateLegacyTransaction(path, nil, limit, true)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err

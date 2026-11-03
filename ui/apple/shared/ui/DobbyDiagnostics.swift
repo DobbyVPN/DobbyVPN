@@ -48,7 +48,12 @@ struct DobbyUploadPreparation: Decodable, Sendable {
     let destination: URL
     let authorization: String
     let provider: String
-    let max_bytes: Int64
+    let maxBytes: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case reference, destination, authorization, provider
+        case maxBytes = "max_bytes"
+    }
 }
 
 struct DobbyUploadReference: Codable, Sendable {
@@ -72,7 +77,7 @@ func uploadDiagnostics(_ preparation: DobbyUploadPreparation, file: URL,
         throw DobbyClientError.diagnostics("The upload destination must use HTTPS")
     }
     let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-    guard size > 0, Int64(size) <= preparation.max_bytes else {
+    guard size > 0, Int64(size) <= preparation.maxBytes else {
         throw DobbyClientError.diagnostics("The compressed logs exceed the upload size limit")
     }
     configuration.timeoutIntervalForRequest = timeout

@@ -438,9 +438,10 @@ internal static class NativeLogFiles
             : Array.Empty<LegacySource>();
         var marker = path + ".legacy-commit";
         var stage = path + ".legacy-stage";
-        if (File.Exists(marker))
+        var markerData = ReadMigrationMarker(marker);
+        if (markerData != null)
         {
-            var pending = JsonSerializer.Deserialize<LegacyCommit>(File.ReadAllText(marker))
+            var pending = JsonSerializer.Deserialize<LegacyCommit>(markerData)
                 ?? throw new InvalidDataException("Invalid diagnostic migration marker.");
             // An oversized-only Go migration has an empty source list.
             if (pending.Sources is { Length: > 0 } && !pending.Sources.SequenceEqual(sources))
@@ -511,17 +512,50 @@ internal static class NativeLogFiles
         finally { output?.Dispose(); }
     }
 
+    private static byte[]? ReadMigrationMarker(string marker)
+    {
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(marker); }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
+        if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0)
+            throw new IOException("Diagnostic migration marker is not a regular file: " + marker);
+        const int limit = 1_048_576;
+        using var input = new FileStream(marker, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var data = new MemoryStream();
+        var buffer = new byte[65536];
+        int count;
+        while ((count = input.Read(buffer, 0, Math.Min(buffer.Length, limit + 1 - (int)data.Length))) > 0)
+        {
+            data.Write(buffer, 0, count);
+            if (data.Length > limit) throw new InvalidDataException("Diagnostic migration marker exceeds size limit.");
+        }
+        return data.ToArray();
+    }
+
     private static void FinishMigration(string path, string stage, string marker, LegacyCommit commit)
     {
         if (!commit.Previous) File.Delete(path + ".previous");
         else if (File.Exists(stage + ".previous")) Publish(stage + ".previous", path + ".previous");
         if (File.Exists(stage)) Publish(stage, path);
+        // A missing stage is valid only when an earlier attempt already
+        // published the corresponding regular file.
+        RequireRegularPublishedFile(path);
+        if (commit.Previous) RequireRegularPublishedFile(path + ".previous");
         foreach (var source in commit.Sources ?? Array.Empty<LegacySource>())
         {
             File.Delete(source.Path + ".previous");
             File.Delete(source.Path);
         }
         File.Delete(marker);
+    }
+
+    private static void RequireRegularPublishedFile(string path)
+    {
+        var attributes = File.GetAttributes(path);
+        if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+            throw new IOException("Published diagnostic is not a regular file: " + path);
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
     }
 
     private static bool HasRecordAfterLimit(FileStream input, long size)

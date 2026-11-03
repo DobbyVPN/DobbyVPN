@@ -42,6 +42,11 @@ func openLegacyInput(path string) (*os.File, error) { return OpenInput(path) }
 func openAppend(path string) (*os.File, error) {
 	return openShared(path, windows.FILE_APPEND_DATA|windows.FILE_READ_ATTRIBUTES, windows.OPEN_ALWAYS)
 }
+func openStartupMarker(path string) (*os.File, error) { return OpenInput(path) }
+func openExistingFailedStartup(path string) (*os.File, error) {
+	return openShared(path, windows.FILE_APPEND_DATA|windows.FILE_READ_ATTRIBUTES, windows.OPEN_EXISTING)
+}
+func openFailedStartup(path string) (*os.File, error) { return openAppend(path) }
 func OpenInput(path string) (*os.File, error) {
 	return openShared(path, windows.GENERIC_READ, windows.OPEN_EXISTING)
 }
