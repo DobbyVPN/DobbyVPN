@@ -79,6 +79,10 @@ and its saved view boundary. Each independently owned log keeps a current and pr
 generation, rotating after 150 MB while preserving complete records. Product
 logs and exports remain unsanitized.
 
+For providers, the [HTTPS log-upload guide](docs/log-upload.md) documents a
+proposed Caddy/Storage Box endpoint. This is a preview; current apps do not
+upload logs or accept its subscription setting.
+
 AppStore: https://apps.apple.com/us/app/dobbyvpn-do-better-by-vpn/id6741442515
 
 Android: [Add the DobbyVPN repository to F-Droid](https://fdroid.link/#https://f-repo.dobbyvpn.com/fdroid/repo?fingerprint=F22F23E62C095BEED3A71C4B0D69C7F3A768E52DFE6A83AAF6A2E6AB9E2FEDC4).
