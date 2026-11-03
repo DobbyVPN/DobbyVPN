@@ -12,7 +12,7 @@ require (
 	github.com/google/nftables v0.3.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
-	github.com/miekg/dns v1.1.72
+	github.com/miekg/dns v1.1.73
 	github.com/sirupsen/logrus v1.10.2
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/things-go/go-socks5 v0.1.4
