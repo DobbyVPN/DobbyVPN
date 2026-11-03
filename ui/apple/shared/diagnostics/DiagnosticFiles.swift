@@ -195,42 +195,9 @@ public enum DiagnosticFiles {
         try syncDirectory(path.deletingLastPathComponent())
     }
 
-    // Shares the Go owner's durable marker and staging protocol while holding
-    // the same destination lock. Never delete legacy input before publication.
-    private static func migrateDesktopLegacy(_ path: URL, includeLegacy: Bool, excluding: [String], homeDirectory: URL) throws {
-        let home = homeDirectory.appendingPathComponent(".dobbyvpn/app_logs.txt").path
-        let oldBackend = homeDirectory.appendingPathComponent("Library/Application Support/DobbyVPN/Logs/backend.jsonl").path
-        var sources: [LegacySource] = []
-        if includeLegacy {
-            sources = [LegacySource(path: home, label: "cli"), LegacySource(path: home + ".stderr", label: "stderr")]
-            if !excluding.contains(oldBackend) && oldBackend != path.path {
-                sources += [LegacySource(path: oldBackend, label: "backend"), LegacySource(path: oldBackend + ".stderr", label: "stderr")]
-            }
-            sources = sources.filter { $0.path != path.path }
-        }
-        let stage = URL(fileURLWithPath: path.path + ".legacy-stage")
-        let marker = URL(fileURLWithPath: path.path + ".legacy-commit")
-        let markerData = try readMigrationMarker(marker)
-        if let markerData {
-            let commit = try JSONDecoder().decode(LegacyCommit.self, from: markerData)
-            try finishCommittedMigration(commit, destination: path, stage: stage, marker: marker, expectedSources: sources)
-            if commit.sources != nil { return }
-        }
-        try remove(stage); try remove(previous(stage))
-        let hasLegacy = sources.contains(where: { source in
-            [".previous", ""].contains { FileManager.default.fileExists(atPath: source.path + $0) }
-        })
-        var normalize = false
-        if !hasLegacy {
-            for existing in [previous(path), path] {
-                let existingSize = try size(existing)
-                if try hasRecordAfterThreshold(existing, size: existingSize) { normalize = true; break }
-            }
-        }
-        guard hasLegacy || normalize else { return }
+    private static func stageLegacyStreams(_ streams: [LegacySource], stage: URL, normalize: Bool) throws {
         var count: UInt64 = 0
         var atStart = true
-        let streams = [LegacySource(path: path.path, label: "existing")] + (normalize ? [] : sources)
         for source in streams {
             for suffix in [".previous", ""] {
                 let inputPath = URL(fileURLWithPath: source.path + suffix)
@@ -276,6 +243,43 @@ public enum DiagnosticFiles {
         if !FileManager.default.fileExists(atPath: stage.path) {
             try withFile(open(stage, flags: O_WRONLY | O_CREAT | O_EXCL)) { _ in }
         }
+    }
+
+    // Shares the Go owner's durable marker and staging protocol while holding
+    // the same destination lock. Never delete legacy input before publication.
+    private static func migrateDesktopLegacy(_ path: URL, includeLegacy: Bool, excluding: [String], homeDirectory: URL) throws {
+        let home = homeDirectory.appendingPathComponent(".dobbyvpn/app_logs.txt").path
+        let oldBackend = homeDirectory.appendingPathComponent("Library/Application Support/DobbyVPN/Logs/backend.jsonl").path
+        var sources: [LegacySource] = []
+        if includeLegacy {
+            sources = [LegacySource(path: home, label: "cli"), LegacySource(path: home + ".stderr", label: "stderr")]
+            if !excluding.contains(oldBackend) && oldBackend != path.path {
+                sources += [LegacySource(path: oldBackend, label: "backend"), LegacySource(path: oldBackend + ".stderr", label: "stderr")]
+            }
+            sources = sources.filter { $0.path != path.path }
+        }
+        let stage = URL(fileURLWithPath: path.path + ".legacy-stage")
+        let marker = URL(fileURLWithPath: path.path + ".legacy-commit")
+        let markerData = try readMigrationMarker(marker)
+        if let markerData {
+            let commit = try JSONDecoder().decode(LegacyCommit.self, from: markerData)
+            try finishCommittedMigration(commit, destination: path, stage: stage, marker: marker, expectedSources: sources)
+            if commit.sources != nil { return }
+        }
+        try remove(stage); try remove(previous(stage))
+        let hasLegacy = sources.contains(where: { source in
+            [".previous", ""].contains { FileManager.default.fileExists(atPath: source.path + $0) }
+        })
+        var normalize = false
+        if !hasLegacy {
+            for existing in [previous(path), path] {
+                let existingSize = try size(existing)
+                if try hasRecordAfterThreshold(existing, size: existingSize) { normalize = true; break }
+            }
+        }
+        guard hasLegacy || normalize else { return }
+        let streams = [LegacySource(path: path.path, label: "existing")] + (normalize ? [] : sources)
+        try stageLegacyStreams(streams, stage: stage, normalize: normalize)
         var destinationInfo = stat()
         let hasDestination = lstat(path.path, &destinationInfo) == 0
         if !hasDestination && errno != ENOENT { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
