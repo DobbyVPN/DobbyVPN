@@ -744,8 +744,9 @@ func (m *Manager) ProtectSocket(ctx context.Context, ref SessionRef, fd int, loo
 	return nil
 }
 
-// reportHealthFailure cleans up a failed connected generation before
-// AUTO_SELECT failover. PROFILE_INDEX fails without changing profile identity.
+// reportHealthFailure cleans up a failed connected generation and restarts the
+// same target. AUTO_SELECT may fail over to another profile; PROFILE_INDEX
+// restarts the profile it was started with.
 func (m *Manager) reportHealthFailure(s *session, generation uint64, cause error) {
 	if cause == nil {
 		cause = errors.New("connected health check failed")
@@ -764,13 +765,6 @@ func (m *Manager) reportHealthFailure(s *session, generation uint64, cause error
 }
 
 func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cause error) {
-	if s.activeTarget.Mode != AutoSelect {
-		s.failureAfterCleanup = FailureRuntime
-		s.failureMessageAfterCleanup = fmt.Sprintf("connected health check failed: %v", cause)
-		s.recovering = false
-		s.recoveryOriginGeneration = 0
-		return
-	}
 	healthFailure := fmt.Sprintf("connected health check failed: %v", cause)
 	if s.recovering && s.lastFailureMessage != "" {
 		healthFailure = s.lastFailureMessage + "; " + healthFailure
