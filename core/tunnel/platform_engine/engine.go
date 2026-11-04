@@ -88,18 +88,60 @@ func stopPhase(name string, fn func()) {
 	log.Debugf(Category, "[Engine][Platform] phase=%s finished elapsed=%s", name, time.Since(started))
 }
 
-func drainStack() {
-	stopPhase("stack-close", ownedStack.Close)
-	stopPhase("stack-wait", ownedStack.Wait)
-	ownedStack = nil
+type phaseRun struct {
+	started time.Time
+	done    chan struct{}
 }
 
-func stopStack() {
+// stopPhases memoizes teardown phases so a phase that outlived its deadline is
+// awaited again by the next stop instead of being invoked twice. Entries are
+// cleared once the whole stack teardown succeeds. Accessed only from the
+// serialized stop path; the background goroutine only closes done.
+var stopPhases = map[string]*phaseRun{}
+
+func stopPhaseCtx(ctx context.Context, name string, fn func()) error {
+	run := stopPhases[name]
+	if run == nil {
+		run = &phaseRun{started: time.Now(), done: make(chan struct{})}
+		stopPhases[name] = run
+		go func() {
+			defer close(run.done)
+			stopPhase(name, fn)
+		}()
+	}
+	select {
+	case <-run.done:
+		return nil
+	case <-ctx.Done():
+		err := ctx.Err()
+		log.Debugf(Category, "[Engine][Platform] phase=%s timed_out=true elapsed=%s err=%v", name, time.Since(run.started), err)
+		return fmt.Errorf("platform stop phase %s exceeded cleanup deadline: %w", name, err)
+	}
+}
+
+func drainStack(ctx context.Context) error {
+	if err := stopPhaseCtx(ctx, "stack-close", ownedStack.Close); err != nil {
+		return err
+	}
+	if err := stopPhaseCtx(ctx, "stack-wait", ownedStack.Wait); err != nil {
+		return err
+	}
+	ownedStack = nil
+	return nil
+}
+
+func stopStack(ctx context.Context) error {
 	if ownedDevice != nil {
-		stopPhase("device-close", ownedDevice.Close)
+		if err := stopPhaseCtx(ctx, "device-close", ownedDevice.Close); err != nil {
+			return err
+		}
 		ownedDevice = nil
 	}
 	if ownedStack != nil {
-		drainStack()
+		if err := drainStack(ctx); err != nil {
+			return err
+		}
 	}
+	clear(stopPhases)
+	return nil
 }

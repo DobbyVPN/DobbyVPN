@@ -166,10 +166,10 @@ func resetTun2SocksInterfaceBinding() {
 	dialer.DefaultDialer.InterfaceIndex.Store(0)
 }
 
-func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
+func stopPlatformEngine(ctx context.Context, stopDevice func(context.Context) error) error {
 	adapterName := adapter.ownedAdapterName
 	configurationErr := cleanupWindowsState()
-	stopDevice()
+	stopErr := stopDevice(ctx)
 	removalErr := waitForWindowsAdapterRemoval(ctx, adapterName)
 	var guardCloseErr error
 	if removalErr == nil && adapter.networkGuard != nil {
@@ -184,7 +184,7 @@ func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
 	} else if removalErr != nil && adapter.networkGuard != nil {
 		log.Errorf(Category, "[Engine][Windows] retaining network guard until owned adapter removal is confirmed iface=%s err=%v", adapter.lastIface, removalErr)
 	}
-	err := errors.Join(configurationErr, removalErr, guardCloseErr)
+	err := errors.Join(configurationErr, stopErr, removalErr, guardCloseErr)
 	if err != nil {
 		log.Errorf(Category, "[Engine][Windows] platform cleanup: %v", err)
 	}

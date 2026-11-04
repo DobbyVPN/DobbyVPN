@@ -23,7 +23,7 @@ func startPlatformEngine(cfg EngineConfig) (bool, error) {
 	})
 }
 
-func stopPlatformEngine(_ context.Context, stopDevice func()) error {
+func stopPlatformEngine(ctx context.Context, stopDevice func(context.Context) error) error {
 	// Linux's fd endpoint borrows the descriptor. Stop its packet writers and
 	// interruptible readers before device.Close releases that descriptor for
 	// reuse. iOS's io endpoint instead needs device.Close to unblock its reader.
@@ -32,12 +32,15 @@ func stopPlatformEngine(_ context.Context, stopDevice func()) error {
 		// first, outside those locks: an ingress callback may need FindRoute
 		// before it can return. The borrowed descriptor stays open until drain.
 		if ownedDevice != nil {
-			stopPhase("link-detach", func() { ownedDevice.Attach(nil) })
+			if err := stopPhaseCtx(ctx, "link-detach", func() { ownedDevice.Attach(nil) }); err != nil {
+				return err
+			}
 		}
-		drainStack()
+		if err := drainStack(ctx); err != nil {
+			return err
+		}
 		log.Debugf(Category, "[Engine][FD] stack_drained=true device_release=starting")
 	}
-	stopDevice()
-	return nil
+	return stopDevice(ctx)
 }
 func platformInterfaceName() string { return "" }
