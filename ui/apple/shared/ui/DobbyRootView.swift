@@ -159,11 +159,24 @@ public struct DobbyRootView: View {
 #endif
         .onOpenURL { model.importLink($0) }
 #if os(iOS)
-        .sheet(isPresented: $showingReferenceShare) {
-            if let latest = model.latestUpload { DobbyShareSheet(url: nil, text: latest.shareText) }
+        .sheet(isPresented: $showingReferenceShare, onDismiss: {
+            model.recordLogsShare(kind: "reference", phase: "dismissed")
+        }) {
+            if let latest = model.latestUpload {
+                DobbyShareSheet(url: nil, text: latest.shareText) {
+                    model.recordLogsShare(kind: "reference", phase: "controller-created")
+                }.onAppear { model.recordLogsShare(kind: "reference", phase: "view-appeared") }
+            }
         }
-        .sheet(isPresented: $showingExport, onDismiss: removeExport) {
-            if let url = exportedLogsURL { DobbyShareSheet(url: url) }
+        .sheet(isPresented: $showingExport, onDismiss: {
+            model.recordLogsShare(kind: "archive", phase: "dismissed")
+            removeExport()
+        }) {
+            if let url = exportedLogsURL {
+                DobbyShareSheet(url: url) {
+                    model.recordLogsShare(kind: "archive", phase: "controller-created")
+                }.onAppear { model.recordLogsShare(kind: "archive", phase: "view-appeared") }
+            }
         }
 #endif
     }
@@ -428,6 +441,7 @@ public struct DobbyRootView: View {
 
     private func shareUploadReference(_ text: String) {
 #if os(iOS)
+        model.recordLogsShare(kind: "reference", phase: "requested", context: "scene=\(String(describing: scenePhase)) reference_binding=\(showingReferenceShare) archive_binding=\(showingExport) menu_open=\(showingLogMenu)")
         showingReferenceShare = true
 #else
         DobbyMacSharePresenter.present(text: text, reportError: model.reportLogsError)
@@ -435,6 +449,9 @@ public struct DobbyRootView: View {
     }
 
     private func sendLogs() {
+#if os(iOS)
+        model.recordLogsShare(kind: "archive", phase: "requested", context: "scene=\(String(describing: scenePhase)) reference_binding=\(showingReferenceShare) archive_binding=\(showingExport) menu_open=\(showingLogMenu)")
+#endif
         model.prepareLogsExport { url in
 #if os(macOS)
             DobbyMacSharePresenter.present(url: url, reportError: model.reportLogsError)

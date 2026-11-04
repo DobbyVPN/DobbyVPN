@@ -530,6 +530,11 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
+    func recordLogsShare(kind: String, phase: String, context: String = "") {
+        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
+                         event: "ui.logs_share", level: "INFO")
+    }
+
     public func refreshLogs() {
         guard !logsInFlight else { logsRefreshPending = true; return }
         logsInFlight = true

@@ -5,9 +5,12 @@ import UIKit
 struct DobbyShareSheet: UIViewControllerRepresentable {
     let url: URL?
     var text: String? = nil
+    var onControllerCreated: () -> Void = {}
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: text.map { [$0] } ?? url.map { [$0] } ?? [], applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: text.map { [$0] } ?? url.map { [$0] } ?? [], applicationActivities: nil)
+        onControllerCreated()
+        return controller
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
