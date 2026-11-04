@@ -14,6 +14,13 @@ const (
 	xrayLogLevelWarning     = "warning"
 	xrayLogLevelError       = "error"
 	xrayStreamSecurityTLS   = "tls"
+
+	// defaultGrpcIdleTimeoutSeconds makes the gRPC client send an HTTP/2 PING
+	// well inside any 60s idle timeout a middlebox or server applies to a
+	// gRPC stream that has carried no data for a while (see issue #342).
+	defaultGrpcIdleTimeoutSeconds        = 10
+	defaultGrpcHealthCheckTimeoutSeconds = 20
+	defaultGrpcPermitWithoutStream       = true
 )
 
 func DefaultXrayLogLevel() xrayLog.Severity {
