@@ -31,6 +31,10 @@ internal sealed class SubscriptionLoadState
     internal bool SourceDirty { get; private set; }
     internal bool IsLoading => _inFlight is not null;
 
+    internal bool CanRestore(string? acceptedSource, string editorSource) =>
+        !SourceDirty && !string.IsNullOrEmpty(acceptedSource) &&
+        string.Equals(acceptedSource, editorSource, StringComparison.Ordinal);
+
     internal long Edit(string source, bool valid, SubscriptionInputKind kind, TimeSpan now)
     {
         _revision++;

@@ -373,8 +373,8 @@ public sealed partial class MainWindow : Window
                 _renderedSource = sourceToDisplay;
                 _sourceInitialized = true;
             }
-            var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (!result.Configured && !_subscriptionLoad.SourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
+            var restoreKey = result.SessionId + "|" + _acceptedInThisWindow;
+            if (!result.Configured && _subscriptionLoad.CanRestore(_acceptedInThisWindow, SourceEditor.Text) && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
                 await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);
@@ -915,6 +915,9 @@ public sealed partial class MainWindow : Window
             new
             {
                 source,
+                accepted_source = _acceptedInThisWindow,
+                source_initialized = _sourceInitialized,
+                editor_focus_state = SourceEditor.FocusState.ToString(),
                 input_kind = kind.ToString(),
                 revision,
                 valid,
