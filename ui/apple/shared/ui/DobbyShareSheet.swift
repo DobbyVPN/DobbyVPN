@@ -9,7 +9,6 @@ struct DobbyShareSheet: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(activityItems: text.map { [$0] } ?? url.map { [$0] } ?? [], applicationActivities: nil)
-        controller.view.accessibilityIdentifier = "logs.share.sheet"
         onControllerCreated()
         return controller
     }

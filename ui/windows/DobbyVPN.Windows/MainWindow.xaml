@@ -150,7 +150,11 @@
       <Rectangle Grid.Row="1" Height="1.5" Fill="{StaticResource Ink}" />
 
       <Grid Grid.Row="2">
-      <ScrollViewer x:Name="LogsScroll" Background="{StaticResource Surface}" Padding="9,4.5,9,4.5"
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+      </Grid.RowDefinitions>
+      <ScrollViewer Grid.Row="1" x:Name="LogsScroll" Background="{StaticResource Surface}" Padding="9,4.5,9,4.5"
                     VerticalScrollBarVisibility="Auto" Loaded="LogsText_Loaded"
                     AutomationProperties.AutomationId="Connection logs">
         <ScrollViewer.ContextFlyout>
