@@ -155,7 +155,16 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         guard content.length > 0 else {
             return NSLocalizedString("No log entries yet.", comment: "")
         }
-        let start = max(0, content.length - Self.accessibilitySummaryCharacterLimit)
+        var start = max(0, content.length - Self.accessibilitySummaryCharacterLimit)
+        if start > 0 {
+            // A fixed UTF-16 offset can land inside a surrogate pair; including
+            // the pair costs at most one extra unit and never starts the summary
+            // with half a character.
+            let firstUnit = content.character(at: start)
+            if firstUnit >= 0xDC00, firstUnit <= 0xDFFF {
+                start -= 1
+            }
+        }
         let tail = content.substring(with: NSRange(location: start, length: content.length - start))
         let lines = tail.split(separator: "\n", omittingEmptySubsequences: false)
         let newest = lines.suffix(Self.accessibilitySummaryLineLimit).joined(separator: "\n")
