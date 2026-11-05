@@ -103,13 +103,13 @@ internal static class Program
 
     // Permanent DEBUG evidence for a surviving frontend: the version strings
     // identify whether the running target is the launch being redirected.
-    private static void LogInstanceVersions(int targetProcessId)
+    private static void LogInstanceVersions(uint targetProcessId)
     {
         string? targetPath = null;
         string? targetError = null;
         try
         {
-            using var process = Process.GetProcessById(targetProcessId);
+            using var process = Process.GetProcessById(checked((int)targetProcessId));
             targetPath = process.MainModule?.FileName;
         }
         catch (Exception error) { targetError = error.ToString(); }
