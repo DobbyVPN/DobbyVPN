@@ -181,9 +181,13 @@
                      Text="Check the link and whether another VPN is blocking it." />
           <Border Margin="0,7.5,0,0" Padding="7.5,6" CornerRadius="4.5" BorderThickness="1" BorderBrush="{StaticResource Rule}">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-              <TextBlock x:Name="ErrorDetail" FontFamily="{StaticResource Mono}" FontSize="9.8" TextWrapping="Wrap" MaxLines="4"
-                         TextTrimming="CharacterEllipsis" IsTextSelectionEnabled="True" Foreground="{StaticResource Ink}"
-                         VerticalAlignment="Center" AutomationProperties.AutomationId="error.detail" />
+              <ScrollViewer x:Name="ErrorDetailViewport" MaxHeight="240" VerticalScrollBarVisibility="Auto"
+                            HorizontalScrollBarVisibility="Disabled" VerticalAlignment="Center"
+                            AutomationProperties.AutomationId="error.detail.viewport">
+                <RichTextBlock x:Name="ErrorDetail" FontFamily="{StaticResource Mono}" FontSize="9.8" TextWrapping="Wrap"
+                               IsTextSelectionEnabled="True" Foreground="{StaticResource Ink}"
+                               AutomationProperties.Name="Error details" AutomationProperties.AutomationId="error.detail" />
+              </ScrollViewer>
               <Button Grid.Column="1" Style="{StaticResource PlainButton}" VerticalAlignment="Center" Click="CopyError_Click"
                       AutomationProperties.Name="Copy">
                 <TextBlock Text="Copy" FontSize="10.2" FontWeight="SemiBold" TextDecorations="Underline" Foreground="{StaticResource Ink}" />

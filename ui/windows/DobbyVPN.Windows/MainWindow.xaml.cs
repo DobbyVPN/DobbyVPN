@@ -50,6 +50,10 @@ public sealed partial class MainWindow : Window
     private string _exportError = "";
     private string _clearLogsError = "";
     private readonly HashSet<string> _dismissedErrors = [];
+    private string _lastObservedErrorDetail = "";
+    private string? _renderedErrorDetail;
+    private int _errorDetailParagraphCount;
+    private string _errorDetailOriginal = "";
     private string _lastSourceError = "";
     private bool _canPaste;
     private double _rowHeight;
@@ -731,13 +735,42 @@ public sealed partial class MainWindow : Window
         _dismissedErrors.IntersectWith(currentErrors);
         var detail = ShownError;
         var visible = detail.Length > 0;
+        var observeDetail = visible && detail != _lastObservedErrorDetail;
+        if (!visible) _lastObservedErrorDetail = "";
         var loadFailure = visible && detail == _loadError;
         ErrorTitle.Text = loadFailure ? "Couldn't load the subscription" : "Something went wrong";
         AutomationProperties.SetName(ErrorCard, ErrorTitle.Text);
         ErrorHint.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
-        ErrorDetail.Text = detail;
+        var displayDetail = visible ? ErrorDisplayText.ForDisplay(detail) : "";
+        var textChanged = visible ? _renderedErrorDetail != displayDetail : _renderedErrorDetail is not null;
+        if (textChanged)
+        {
+            var paragraphs = ErrorDisplayText.Paragraphs(displayDetail);
+            ErrorDetail.Blocks.Clear();
+            foreach (var text in paragraphs)
+            {
+                var paragraph = new Paragraph { Margin = new Thickness(0) };
+                paragraph.Inlines.Add(new Run { Text = text });
+                ErrorDetail.Blocks.Add(paragraph);
+            }
+            _renderedErrorDetail = visible ? displayDetail : null;
+            _errorDetailParagraphCount = paragraphs.Count;
+            ErrorDetailViewport.ChangeView(null, 0, null, disableAnimation: true);
+            if (visible && detail.EnumerateRunes().Count() > ErrorDisplayText.Limit)
+                _diagnostics.RecordDebug("ui.error.details.truncated",
+                    $"error detail truncated for display: scalars={detail.EnumerateRunes().Count()} paragraphs={paragraphs.Count}",
+                    new { paragraphs = paragraphs.Count, original_utf16_length = detail.Length });
+        }
+        else if (observeDetail)
+        {
+            _diagnostics.RecordDebug("ui.error.details.render-skipped",
+                "error detail re-render skipped: unchanged",
+                new { paragraphs = _errorDetailParagraphCount, original_utf16_length = detail.Length });
+        }
+        if (observeDetail) _lastObservedErrorDetail = detail;
+        _errorDetailOriginal = detail;
         var shown = ErrorShown;
         ErrorOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (visible) KeepFocusInError();
@@ -781,7 +814,7 @@ public sealed partial class MainWindow : Window
     private void CopyError_Click(object sender, RoutedEventArgs e)
     {
         var package = new DataPackage();
-        package.SetText(ErrorDetail.Text);
+        package.SetText(_errorDetailOriginal);
         try { Clipboard.SetContent(package); }
         catch (Exception error) { RecordError(error.ToString()); }
     }
