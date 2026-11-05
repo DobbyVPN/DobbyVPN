@@ -51,11 +51,13 @@ func openOwnedFileDevice(fd int, mtu uint32, offset int) (device.Device, error) 
 	if file == nil {
 		return nil, fmt.Errorf("open packet-flow descriptor %d", fd)
 	}
+	dev := &ownedFileDevice{file: file, name: name}
 	endpoint, err := iobased.New(file, mtu, offset)
 	if err != nil {
-		return nil, fmt.Errorf("create packet endpoint: %w", err)
+		return dev, fmt.Errorf("create packet endpoint: %w", err)
 	}
-	return &ownedFileDevice{Endpoint: endpoint, file: file, name: name}, nil
+	dev.Endpoint = endpoint
+	return dev, nil
 }
 
 func (d *ownedFileDevice) Name() string { return d.name }
@@ -67,8 +69,12 @@ func (d *ownedFileDevice) Type() string { return fdbased.Driver }
 // alone does not. The endpoint close then stops the outbound queue goroutine.
 func (d *ownedFileDevice) Close() {
 	d.once.Do(func() {
-		_ = d.file.Close()
-		d.Endpoint.Close()
+		if err := d.file.Close(); err != nil {
+			log.Warnf(Category, "[Engine][FD] close packet-flow file: %v", err)
+		}
+		if d.Endpoint != nil {
+			d.Endpoint.Close()
+		}
 	})
 }
 

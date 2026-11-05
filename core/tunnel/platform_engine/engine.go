@@ -1,12 +1,10 @@
 package platform_engine
 
 import (
-	"bytes"
 	"context"
 	"core/log"
 	"fmt"
 	"net/url"
-	"runtime"
 	"time"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
@@ -14,7 +12,6 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
-	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
@@ -64,10 +61,12 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 		}
 	}
 	dev, err := open()
-	if err != nil {
-		return false, err
+	if dev != nil {
+		ownedDevice = dev
 	}
-	ownedDevice = dev
+	if err != nil {
+		return dev != nil, err
+	}
 	if dev.MTU() < TunnelMTU {
 		return true, fmt.Errorf("tunnel MTU %d is below IPv6 minimum %d", dev.MTU(), TunnelMTU)
 	}
@@ -102,65 +101,8 @@ type phaseRun struct {
 // serialized stop path; the background goroutine only closes done.
 var stopPhases = map[string]*phaseRun{}
 
-// goroutineDumpLimit bounds the timeout snapshot so a wedged teardown cannot
-// flood the rotating diagnostic log while the process is already unhealthy.
-const goroutineDumpLimit = 16 << 10
-
-// liveCounters reports only gauges reachable from this package without new
-// dependency state: tun2socks' process-wide flow trackers and gVisor's TCP
-// gauges on the owned stack. Engine.trackedConn lives in package tunnel and is
-// not importable here (tunnel imports this package), so its counter is omitted
-// rather than adding product API for a DEBUG line.
-func liveCounters() string {
-	conns := len(statistic.DefaultManager.Snapshot().Connections)
-	var established, connected uint64
-	if ownedStack != nil {
-		stats := ownedStack.Stats().TCP
-		if stats.CurrentEstablished != nil {
-			established = stats.CurrentEstablished.Value()
-		}
-		if stats.CurrentConnected != nil {
-			connected = stats.CurrentConnected.Value()
-		}
-	}
-	return fmt.Sprintf("tun2socks_conns=%d gvisor_tcp_established=%d gvisor_tcp_connected=%d", conns, established, connected)
-}
-
-// logTimeoutDump captures every goroutine once the cleanup deadline expires.
-// deadline-expires dump for #272 family diagnosis; DEBUG-only. It runs off the
-// stop path so a slow snapshot cannot delay publishing the cleanup failure.
-func logTimeoutDump(name string) {
-	buf := make([]byte, goroutineDumpLimit+1)
-	n := runtime.Stack(buf, true)
-	truncated := n > goroutineDumpLimit
-	if truncated {
-		n = goroutineDumpLimit
-	}
-	buf = buf[:n]
-	if truncated {
-		if cut := bytes.LastIndexByte(buf, '\n'); cut >= 0 {
-			buf = buf[:cut]
-		}
-	}
-	log.Debugf(Category, "[Engine][Platform] phase=%s timed_out goroutine dump:", name)
-	for len(buf) > 0 {
-		line := buf
-		if end := bytes.IndexByte(buf, '\n'); end >= 0 {
-			line, buf = buf[:end], buf[end+1:]
-		} else {
-			buf = nil
-		}
-		log.Debugf(Category, "[Engine][Platform] %s", line)
-	}
-	if truncated {
-		log.Debugf(Category, "[Engine][Platform] phase=%s timed_out dump (truncated)", name)
-	}
-	log.Debugf(Category, "[Engine][Platform] phase=%s timed_out dump_bytes=%d done=true", name, n)
-}
-
 func stopPhaseCtx(ctx context.Context, name string, fn func()) error {
 	run := stopPhases[name]
-	log.Debugf(Category, "[Engine][Platform] phase=%s point=before %s", name, liveCounters())
 	if run == nil {
 		run = &phaseRun{started: time.Now(), done: make(chan struct{})}
 		stopPhases[name] = run
@@ -169,14 +111,19 @@ func stopPhaseCtx(ctx context.Context, name string, fn func()) error {
 			stopPhase(name, fn)
 		}()
 	}
+	// A completed cleanup remains successful even if its caller's deadline
+	// expired before the retry observed it.
 	select {
 	case <-run.done:
-		log.Debugf(Category, "[Engine][Platform] phase=%s point=after %s", name, liveCounters())
+		return nil
+	default:
+	}
+	select {
+	case <-run.done:
 		return nil
 	case <-ctx.Done():
 		err := ctx.Err()
-		log.Debugf(Category, "[Engine][Platform] phase=%s timed_out=true elapsed=%s err=%v", name, time.Since(run.started), err)
-		go logTimeoutDump(name)
+		log.Warnf(Category, "[Engine][Platform] phase=%s timed_out=true elapsed=%s err=%v", name, time.Since(run.started), err)
 		return fmt.Errorf("platform stop phase %s exceeded cleanup deadline: %w", name, err)
 	}
 }
