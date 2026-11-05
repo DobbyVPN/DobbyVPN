@@ -67,10 +67,14 @@ internal sealed class LogPresentationState
         ShowLatestEntries();
     }
 
-    public void ObserveUserScroll(bool isAtBottom)
+    public void ObserveUserScroll(bool isAtBottom, bool movedTowardEarlierEntries)
     {
+        // A resume renders the held rows and grows ScrollableHeight while the
+        // vertical offset stays put, so "not at the bottom" alone is not an
+        // upward reading movement. Only a real move toward older entries may
+        // stop following.
         if (isAtBottom) FollowTail();
-        else Freeze();
+        else if (movedTowardEarlierEntries) Freeze();
     }
 
     public void ObserveDirectedDownScroll(bool isAtBottom)
