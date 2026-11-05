@@ -587,7 +587,20 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetItemStatus(ErrorCard, status);
         if (status == _status) return;
         var announce = _status.Length > 0;
+        var previousStatus = _status;
         _status = status;
+        _diagnostics.RecordDebug("ui.frontend-state-rendered",
+            $"frontend_state_rendered from={previousStatus} to={status} " +
+            $"generation={_snapshot?.Generation} sequence={_snapshot?.Sequence}",
+            new
+            {
+                from = previousStatus,
+                to = status,
+                generation = _snapshot?.Generation,
+                sequence = _snapshot?.Sequence,
+                snapshot_state = _snapshot?.State,
+                session_id = _snapshot?.SessionId,
+            });
         if (announce)
             FrameworkElementAutomationPeer.FromElement(ConnectionButton)?.RaiseNotificationEvent(
                 AutomationNotificationKind.ActionCompleted, AutomationNotificationProcessing.MostRecent, status, "connection.status");
