@@ -972,8 +972,8 @@ jobs:
           set -euo pipefail
           if [ "$PLATFORM" = windows ]; then
             SERVICE_WIN="$(cygpath -w "$SERVICE")"
-            SERVICE_OUT_WIN="$(cygpath -w "$RUN_DIR/service.log.stdout")"
-            SERVICE_ERR_WIN="$(cygpath -w "$RUN_DIR/service.log.stderr")"
+            SERVICE_OUT_WIN="$(cygpath -w "$RUN_DIR/service-launcher.stdout.log")"
+            SERVICE_ERR_WIN="$(cygpath -w "$RUN_DIR/service-launcher.stderr.log")"
             SERVICE_LOG_PATH_WIN="$(cygpath -w "$RUN_DIR/service.log")"
             SERVICE_LOG_ROOT_WIN="$(cygpath -w "$RUN_DIR")"
             SERVICE_PID_FILE="$RUN_DIR/windows-service.pid"
@@ -1120,7 +1120,7 @@ jobs:
                 env DOBBYVPN_CONTROL_SOCKET="$control_socket" DOBBYVPN_CONTROL_PEER_UID="$peer_uid" DOBBY_LOG_PATH="$log_path" DOBBY_LOG_ROOT="$(dirname "$log_path")" "$binary" > "$stdout_path" 2> "$stderr_path" < /dev/null &
               fi
               printf "%s\\n" "$!"
-            ' dobbyvpn-service "$SERVICE" "$SERVICE_SOCKET" "$(id -u)" "${SERVICE_LIBRARY_PATH:-}" "$RUN_DIR/service.log" "$RUN_DIR/service.log.stdout" "$RUN_DIR/service.log.stderr")"
+            ' dobbyvpn-service "$SERVICE" "$SERVICE_SOCKET" "$(id -u)" "${SERVICE_LIBRARY_PATH:-}" "$RUN_DIR/service.log" "$RUN_DIR/service-launcher.stdout.log" "$RUN_DIR/service-launcher.stderr.log")"
             [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
           fi
           [[ "$service_pid" =~ ^[1-9][0-9]*$ ]]
@@ -1135,6 +1135,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          run_with_functional_capture() {
+            local command_status=0 forward_status=0 cat_status=0
+            "$@" > "$RUN_DIR/functional.stdout.log" 2> "$RUN_DIR/functional.stderr.log" || command_status=$?
+            cat "$RUN_DIR/functional.stdout.log" || {
+              cat_status=$?
+              printf 'Functional stdout forwarding failed: status=%s\n' "$cat_status" >&2
+              forward_status=$cat_status
+            }
+            cat "$RUN_DIR/functional.stderr.log" >&2 || {
+              cat_status=$?
+              printf 'Functional stderr forwarding failed: status=%s\n' "$cat_status" >&2
+              if [ "$forward_status" -eq 0 ]; then forward_status=$cat_status; fi
+            }
+            if [ "$command_status" -ne 0 ]; then return "$command_status"; fi
+            return "$forward_status"
+          }
           lane_timeout=$((RUN_DEADLINE_EPOCH - $(date +%s) - 300))
           if [ "$lane_timeout" -le 0 ]; then
             printf 'functional lane has no provider-bound execution budget\n' >&2
@@ -1147,7 +1163,7 @@ jobs:
             elif [ -n "$DIAGNOSTIC_SCENARIO" ]; then
               scenario_args=(--scenario "$DIAGNOSTIC_SCENARIO")
             fi
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted \
+            run_with_functional_capture env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.hosted \
               --platform android --suite mini --adb "$ADB" --profile "$GITHUB_WORKSPACE/fixtures/profile.toml" --source-sha "$DOBBYVPN_COMMIT_SHA" \
               --app-apk "$ANDROID_SIGNED_APP" --test-companion-apk "$ANDROID_SIGNED_COMPANION" \
               --platform-version "$PLATFORM_VERSION" --lane-timeout-seconds "$lane_timeout" --output "$RESULT_PATH" \
@@ -1174,7 +1190,7 @@ jobs:
             if [ "$PLATFORM" = linux ]; then
               export DOBBYVPN_CONTROL_SOCKET="$SERVICE_SOCKET"
             fi
-            env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.desktop_platform "${release_args[@]}"
+            run_with_functional_capture env PYTHONPATH="$GITHUB_WORKSPACE/torturer" python3 -m torturer_runner.desktop_platform "${release_args[@]}"
           fi
 
       - name: Stop Android live ADB diagnostics
@@ -1278,14 +1294,14 @@ jobs:
             fi
           fi
           forward_status=0
-          if [ -f "$RUN_DIR/service.log.stdout" ]; then
-            cat "$RUN_DIR/service.log.stdout" || {
+          if [ -f "$RUN_DIR/service-launcher.stdout.log" ]; then
+            cat "$RUN_DIR/service-launcher.stdout.log" || {
               forward_status=$?
               printf 'Windows qualification service stdout forwarding failed: status=%s\n' "$forward_status" >&2
             }
           fi
-          if [ -f "$RUN_DIR/service.log.stderr" ]; then
-            cat "$RUN_DIR/service.log.stderr" >&2 || {
+          if [ -f "$RUN_DIR/service-launcher.stderr.log" ]; then
+            cat "$RUN_DIR/service-launcher.stderr.log" >&2 || {
               cat_status=$?
               printf 'Windows qualification service stderr forwarding failed: status=%s\n' "$cat_status" >&2
               if [ "$forward_status" -eq 0 ]; then forward_status=$cat_status; fi

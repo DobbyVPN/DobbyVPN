@@ -39,6 +39,7 @@ jobs:
         run: |
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_RUN_ATTEMPT" -ge 1
+          python3 -c 'import time; print(f"DOBBYVPN_COMMAND_DEADLINE_MONOTONIC={time.monotonic() + 2700}")' >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
