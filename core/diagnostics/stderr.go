@@ -204,13 +204,42 @@ func (capture *rawCapture) writeHeader(file *os.File) error {
 func (capture *rawCapture) monitor() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	failures := 0
+	skip := 0
 	for range ticker.C {
-		if err := capture.rotate(); err != nil {
-			// Direct stderr only: never recurse through the structured sink.
-			_, _ = fmt.Fprintf(Stderr, "stderr rotation failed; rotation stopped: %v\n", err)
-			return
+		if skip > 0 {
+			skip--
+			continue
 		}
+		err := capture.rotate()
+		if err == nil {
+			if failures > 0 {
+				_, _ = fmt.Fprintf(Stderr, "stderr rotation recovered after %d failed attempts\n", failures)
+			}
+			failures = 0
+			continue
+		}
+		// A transient failure (for example "too many open files") must not
+		// stop rotation for the rest of the process lifetime. Retry with a
+		// capped back-off and report only the first failure of a streak and
+		// every power-of-two attempt after it, so the log is not flooded.
+		failures++
+		if failures&(failures-1) == 0 {
+			// Direct stderr only: never recurse through the structured sink.
+			_, _ = fmt.Fprintf(Stderr, "stderr rotation failed (attempt %d), will retry: %v\n", failures, err)
+		}
+		skip = rotationRetryDelayTicks(failures)
 	}
+}
+
+// rotationRetryDelayTicks returns how many 100 ms monitor ticks to skip after
+// the given number of consecutive failures: 1 s, 2 s, 4 s, ... capped at 30 s.
+func rotationRetryDelayTicks(failures int) int {
+	const maxTicks = 300
+	if failures >= 6 {
+		return maxTicks
+	}
+	return 10 << (failures - 1)
 }
 
 func (capture *rawCapture) rotate() error {
