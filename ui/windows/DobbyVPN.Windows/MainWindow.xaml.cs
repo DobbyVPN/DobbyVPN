@@ -819,6 +819,7 @@ public sealed partial class MainWindow : Window
         SourceChanged(SubscriptionInputKind.Retry);
     }
 
+    /// <summary>Copies the complete untruncated error detail that the dialog displays.</summary>
     private void CopyError_Click(object sender, RoutedEventArgs e)
     {
         var package = new DataPackage();
