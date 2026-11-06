@@ -163,7 +163,11 @@ func run() {
 	case serveErr = <-serveDone:
 	}
 	if err := shutdownDesktop(listener.Close, serveErr, desktopProcessBinding()); err != nil {
-		panic(fmt.Sprintf("desktop shutdown failed: %v", err))
+		// Report through the log and exit non-zero instead of panicking: a
+		// stack trace would bury the cleanup error and add no information.
+		log.Errorf(desktopLogCategory, "desktop shutdown failed: %v", err)
+		fmt.Fprintf(os.Stderr, "desktop shutdown failed: %v\n", err)
+		os.Exit(1)
 	}
 }
 
