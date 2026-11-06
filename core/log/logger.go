@@ -266,6 +266,9 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 	if !logger.Enabled(ctx, level) {
 		return
 	}
+	// Redact only what is actually written, so disabled levels cost nothing.
+	// Every sink (file, stderr mirror, fallbacks) receives only redacted data.
+	message, arguments = redactString(message), redactArguments(arguments)
 	attrs := make([]slog.Attr, 0, 8+len(arguments))
 	attrs = append(attrs,
 		slog.String("schema", logSchema),
