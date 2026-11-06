@@ -8,14 +8,33 @@ internal static class ErrorDisplayText
     internal const int Limit = 32768;
     internal const string TruncationNotice = "\n\n[Error details truncated. Copy for the full original.]";
 
+    /// <summary>Cuts the display text at a whole text element before the scalar limit and appends the truncation notice.</summary>
     internal static string ForDisplay(string original)
     {
-        var count = 0;
+        var scalars = 0;
         var length = 0;
-        foreach (var rune in original.EnumerateRunes())
+        var elements = StringInfo.GetTextElementEnumerator(original);
+        while (elements.MoveNext())
         {
-            if (count++ == Limit) return original[..length] + TruncationNotice;
-            length += rune.Utf16SequenceLength;
+            var element = elements.GetTextElement();
+            var elementScalars = element.EnumerateRunes().Count();
+            if (scalars + elementScalars > Limit)
+            {
+                if (scalars > 0) return original[..length] + TruncationNotice;
+                // One text element alone exceeds the scalar limit; a rune-boundary
+                // cut of that element keeps the display bounded.
+                var kept = 0;
+                var cut = 0;
+                foreach (var rune in element.EnumerateRunes())
+                {
+                    if (kept == Limit) break;
+                    kept++;
+                    cut += rune.Utf16SequenceLength;
+                }
+                return element[..cut] + TruncationNotice;
+            }
+            scalars += elementScalars;
+            length += element.Length;
         }
         return original;
     }
