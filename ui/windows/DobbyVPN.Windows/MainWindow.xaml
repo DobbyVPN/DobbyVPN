@@ -167,22 +167,23 @@
       </ScrollViewer>
     </Grid>
 
-    <Grid x:Name="ErrorOverlay" Background="{StaticResource Scrim}" Visibility="Collapsed" Tapped="ErrorOverlay_Tapped">
+    <Grid x:Name="ErrorOverlay" Background="{StaticResource Scrim}" Visibility="Collapsed" Tapped="ErrorOverlay_Tapped"
+          Loaded="ErrorOverlay_Loaded" SizeChanged="ErrorOverlay_SizeChanged">
       <UserControl x:Name="ErrorCard" MaxWidth="420" Margin="18" VerticalAlignment="Center" IsTabStop="False"
                    TabFocusNavigation="Cycle" Tapped="ErrorCard_Tapped" AutomationProperties.AutomationId="error.dialog" AutomationProperties.IsDialog="True">
       <Border Padding="12,12,12,9" CornerRadius="7.5" BorderThickness="1.5" BorderBrush="{StaticResource Ink}" Background="{StaticResource Surface}">
-        <StackPanel>
+        <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="0">
           <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7.5">
             <local:HoleySockIcon Width="19.5" Height="24.4" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw" />
             <TextBlock x:Name="ErrorTitle" Grid.Column="1" FontSize="15.3" FontWeight="SemiBold" TextWrapping="Wrap"
                        VerticalAlignment="Center" Foreground="{StaticResource Ink}" />
           </Grid>
-          <TextBlock x:Name="ErrorHint" Margin="0,6,0,0" FontSize="11.9" TextWrapping="Wrap" Foreground="{StaticResource Muted}"
+          <TextBlock x:Name="ErrorHint" Grid.Row="1" Margin="0,6,0,0" FontSize="11.9" TextWrapping="Wrap" Foreground="{StaticResource Muted}"
                      Text="Check the link and whether another VPN is blocking it." />
-          <Border Margin="0,7.5,0,0" Padding="7.5,6" CornerRadius="4.5" BorderThickness="1" BorderBrush="{StaticResource Rule}">
+          <Border Grid.Row="2" Margin="0,7.5,0,0" Padding="7.5,6" CornerRadius="4.5" BorderThickness="1" BorderBrush="{StaticResource Rule}">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
               <ScrollViewer x:Name="ErrorDetailViewport" MaxHeight="240" VerticalScrollBarVisibility="Auto"
-                            HorizontalScrollBarVisibility="Disabled" VerticalAlignment="Center"
+                            HorizontalScrollBarVisibility="Disabled" VerticalAlignment="Stretch"
                             AutomationProperties.AutomationId="error.detail.viewport">
                 <RichTextBlock x:Name="ErrorDetail" FontFamily="{StaticResource Mono}" FontSize="9.8" TextWrapping="Wrap"
                                IsTextSelectionEnabled="True" Foreground="{StaticResource Ink}"
@@ -194,7 +195,7 @@
               </Button>
             </Grid>
           </Border>
-          <Grid Margin="0,10.5,0,0" ColumnDefinitions="*,*" ColumnSpacing="6">
+          <Grid Grid.Row="3" Margin="0,10.5,0,0" ColumnDefinitions="*,*" ColumnSpacing="6">
             <Button x:Name="CloseErrorButton" Content="Close" Style="{StaticResource OutlinedButton}" MinHeight="33"
                     Click="CloseError_Click" KeyboardAcceleratorPlacementMode="Hidden">
               <Button.KeyboardAccelerators><KeyboardAccelerator Key="Escape" /></Button.KeyboardAccelerators>
@@ -202,7 +203,7 @@
             <Button x:Name="RetryErrorButton" Grid.Column="1" Content="Retry" Style="{StaticResource FilledButton}" MinHeight="33"
                     Click="RetryError_Click" AutomationProperties.AutomationId="subscription.retry" />
           </Grid>
-        </StackPanel>
+        </Grid>
       </Border>
       </UserControl>
     </Grid>

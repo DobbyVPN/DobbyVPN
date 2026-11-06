@@ -806,6 +806,12 @@ public sealed partial class MainWindow : Window
     private void CloseError_Click(object sender, RoutedEventArgs e) => CloseError();
     private void ErrorOverlay_Tapped(object sender, TappedRoutedEventArgs e) => CloseError();
     private void ErrorCard_Tapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+    private void ErrorOverlay_Loaded(object sender, RoutedEventArgs e) => ConstrainErrorCardHeight();
+    private void ErrorOverlay_SizeChanged(object sender, SizeChangedEventArgs e) => ConstrainErrorCardHeight();
+
+    /// <summary>Keeps the error card inside the overlay, preserving the 18 DIP margin above and below.</summary>
+    private void ConstrainErrorCardHeight() =>
+        ErrorCard.MaxHeight = Math.Max(0, ErrorOverlay.ActualHeight - 36);
 
     private void RetryError_Click(object sender, RoutedEventArgs e)
     {
