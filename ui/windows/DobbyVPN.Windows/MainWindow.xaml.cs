@@ -727,6 +727,7 @@ public sealed partial class MainWindow : Window
 
     private bool ErrorShown => ErrorOverlay.Visibility == Visibility.Visible;
 
+    /// <summary>Renders the current error, bounding detail text while keeping the original for Copy.</summary>
     private void RenderError()
     {
         var currentErrors = Errors;
@@ -749,10 +750,11 @@ public sealed partial class MainWindow : Window
         {
             var paragraphs = ErrorDisplayText.Paragraphs(displayDetail);
             ErrorDetail.Blocks.Clear();
-            foreach (var text in paragraphs)
+            foreach (var line in paragraphs)
             {
                 var paragraph = new Paragraph { Margin = new Thickness(0) };
-                paragraph.Inlines.Add(new Run { Text = text });
+                foreach (var text in ErrorDisplayText.Runs(line))
+                    paragraph.Inlines.Add(new Run { Text = text });
                 ErrorDetail.Blocks.Add(paragraph);
             }
             _renderedErrorDetail = visible ? displayDetail : null;
