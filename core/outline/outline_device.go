@@ -176,6 +176,15 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		log.Warnf(Category, "[SOCKS5 DIAL WARN] network=%s addr=%s parsedHost=%s parsedPort=%d", network, addr, host, port)
 	}
 
+	// The Shadowsocks server behind Outline profiles has no IPv6 egress, so a
+	// real IPv6 destination always fails; dialing it anyway just keeps the
+	// caller (e.g. a browser's Happy Eyeballs retries) waiting on a connection
+	// that can never succeed (issue #341). Reject it immediately instead.
+	if isRealIPv6Literal(host) {
+		log.Debugf(Category, "[SOCKS5 DIAL] rejecting IPv6 destination dst=%s network=%s", addr, network)
+		return nil, fmt.Errorf("IPv6 destination not supported on this profile: %s", addr)
+	}
+
 	switch network {
 
 	case networkTCP:
@@ -343,4 +352,11 @@ func (d *OutlineDevice) GetProxyAddr() string {
 		return ""
 	}
 	return d.proxyAddr
+}
+
+// isRealIPv6Literal reports whether host is a genuine IPv6 literal, as
+// opposed to an IPv4 address or an IPv4-mapped IPv6 address (::ffff:a.b.c.d).
+func isRealIPv6Literal(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
 }
