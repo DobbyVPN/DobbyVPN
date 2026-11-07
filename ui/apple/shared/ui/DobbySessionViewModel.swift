@@ -545,19 +545,7 @@ public final class DobbySessionViewModel: ObservableObject {
         let boundary = client.uiDiagnosticPath.appendingPathExtension("view")
         let cache = logViewCache
         logWorker.async { [weak self, cache] in
-            // Unchanged files produce the same entries, so skip reading and
-            // parsing them. A result with an error is never reused.
-            let signature = logViewSignature(paths: paths, boundary: boundary)
-            let result: (entries: [DobbyLogEntry], error: String)
-            if let cached = cache.result, cache.signature == signature {
-                result = cached
-            } else {
-                let fresh = structuredPreview(paths: paths, boundary: boundary)
-                let shown = (entries: fresh.entries.filter(isShownOnScreen), error: fresh.error)
-                cache.signature = fresh.error.isEmpty ? signature : nil
-                cache.result = fresh.error.isEmpty ? shown : nil
-                result = shown
-            }
+            let result = cache.preview(paths: paths, boundary: boundary)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.logsInFlight = false

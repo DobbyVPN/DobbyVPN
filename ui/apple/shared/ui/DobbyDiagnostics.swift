@@ -43,6 +43,18 @@ func isShownOnScreen(_ entry: DobbyLogEntry) -> Bool { entry.level != "DEBUG" &&
 final class LogViewCache: @unchecked Sendable {
     var signature: String?
     var result: (entries: [DobbyLogEntry], error: String)?
+
+    /// The entries to show. Unchanged files produce the same entries, so they are
+    /// not read and parsed again. A result that carried an error is never reused.
+    func preview(paths: [URL], boundary: URL) -> (entries: [DobbyLogEntry], error: String) {
+        let current = logViewSignature(paths: paths, boundary: boundary)
+        if let cached = result, signature == current { return cached }
+        let fresh = structuredPreview(paths: paths, boundary: boundary)
+        let shown = (entries: fresh.entries.filter(isShownOnScreen), error: fresh.error)
+        signature = fresh.error.isEmpty ? current : nil
+        result = fresh.error.isEmpty ? shown : nil
+        return shown
+    }
 }
 
 func structuredPreview(paths: [URL], boundary: URL) -> (entries: [DobbyLogEntry], error: String) {
