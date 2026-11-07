@@ -109,15 +109,15 @@ func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dns
 	od.proxyAddr = url.UserPassword(username, password).String() + "@" + listener.Addr().String()
 
 	_ = od.Submit(func() {
-		log.Debugf(Category, "SOCKS5 started on %s", od.proxyAddr)
+		log.Debugf(Category, "SOCKS5 started on %s", listener.Addr())
 		if err := server.Serve(ownedListener{Listener: listener, owner: od}); err != nil {
 			if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
-				log.Debugf(Category, "SOCKS5 stopped on %s: closed", od.proxyAddr)
+				log.Debugf(Category, "SOCKS5 stopped on %s: closed", listener.Addr())
 			} else {
-				log.Errorf(Category, "SOCKS5 stopped unexpectedly on %s: %v", od.proxyAddr, err)
+				log.Errorf(Category, "SOCKS5 stopped unexpectedly on %s: %v", listener.Addr(), err)
 			}
 		} else {
-			log.Debugf(Category, "SOCKS5 stopped on %s: nil error", od.proxyAddr)
+			log.Debugf(Category, "SOCKS5 stopped on %s: nil error", listener.Addr())
 		}
 	})
 
