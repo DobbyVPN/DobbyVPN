@@ -366,6 +366,23 @@ public enum DiagnosticFiles {
         try JSONEncoder().encode(offsets).write(to: boundary, options: .atomic)
     }
 
+    /// A cheap fingerprint of everything `entries(paths:boundary:)` reads: for every
+    /// input and for the viewing boundary, its existence, device, inode, size and
+    /// modification time. The viewer uses it to skip re-reading and re-parsing logs
+    /// that have not changed since the previous refresh.
+    public static func viewSignature(paths: [URL], boundary: URL) -> String {
+        var parts: [String] = []
+        for url in paths + [boundary] {
+            var info = stat()
+            if stat(url.path, &info) == 0 {
+                parts.append("\(url.path):\(info.st_dev):\(info.st_ino):\(info.st_size):\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)")
+            } else {
+                parts.append("\(url.path):absent")
+            }
+        }
+        return parts.joined(separator: "|")
+    }
+
     public static func entries(paths: [URL], boundary: URL) -> (entries: [Entry], error: String) {
         var issues: [String] = []
         var offsets: [String: UInt64] = [:]
@@ -440,11 +457,7 @@ public enum DiagnosticFiles {
             return Entry(id: id, timestamp: "", level: "RAW", source: stream, message: raw, raw: raw, date: nil)
         }
         let timestamp = value["timestamp"] as? String ?? ""
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fractional = formatter.date(from: timestamp)
-        formatter.formatOptions = [.withInternetDateTime]
-        let date = fractional ?? formatter.date(from: timestamp)
+        let date = LogTimestampParser.shared.date(from: timestamp)
         let capture = value["event"] as? String == "stderr.capture"
         return Entry(id: id, timestamp: timestamp, level: capture ? "INFO" : (value["level"] as? String ?? "INFO").uppercased(),
                      source: stream + ((value["source"] as? String).map { " · " + $0 } ?? ""),
@@ -516,5 +529,30 @@ public enum DiagnosticFiles {
                 offset += count
             }
         }
+    }
+}
+
+/// Parses log timestamps with two shared formatters. Creating an
+/// `ISO8601DateFormatter` per record dominated the cost of refreshing the log
+/// view, so they are built once and used under a lock.
+final class LogTimestampParser: @unchecked Sendable {
+    static let shared = LogTimestampParser()
+
+    private let lock = NSLock()
+    private let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private let plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    func date(from timestamp: String) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        return fractional.date(from: timestamp) ?? plain.date(from: timestamp)
     }
 }

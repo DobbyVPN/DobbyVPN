@@ -38,8 +38,18 @@ typealias DobbyLogEntry = DiagnosticFiles.Entry
 
 func isShownOnScreen(_ entry: DobbyLogEntry) -> Bool { entry.level != "DEBUG" && entry.level != "TRACE" }
 
+/// The last parsed log view. It is read and written only on the diagnostics
+/// worker queue, which serialises every access.
+final class LogViewCache: @unchecked Sendable {
+    var signature: String?
+    var result: (entries: [DobbyLogEntry], error: String)?
+}
+
 func structuredPreview(paths: [URL], boundary: URL) -> (entries: [DobbyLogEntry], error: String) {
     DiagnosticFiles.entries(paths: paths, boundary: boundary)
+}
+func logViewSignature(paths: [URL], boundary: URL) -> String {
+    DiagnosticFiles.viewSignature(paths: paths, boundary: boundary)
 }
 func clearDiagnosticView(paths: [URL], boundary: URL) throws { try DiagnosticFiles.clearView(paths: paths, boundary: boundary) }
 
