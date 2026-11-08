@@ -110,7 +110,7 @@ func (c *trackedConn) Close() error {
 		if c.owner != nil {
 			c.owner.release(c, c.closeErr)
 		}
-		log.Errorf(Category, "[Router] TCP close failed route=%s dest=%s lifetime=%s err=%v", c.route, c.dest, time.Since(c.started), c.closeErr)
+		log.Errorf(Category, "[Router] TCP close failed route=%s dest=%s lifetime=%s %s err=%v", c.route, c.dest, time.Since(c.started), c.traffic.summary(), c.closeErr)
 		return c.closeErr
 	}
 	c.closed, c.closeErr = true, nil
