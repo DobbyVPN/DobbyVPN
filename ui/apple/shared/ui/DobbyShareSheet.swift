@@ -228,7 +228,8 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         guard textStorage.length > 0 else { return }
         layoutManager.ensureLayout(for: textContainer)
         let point = CGPoint(
-            x: textContainerInset.left + 1,
+            // NSLayoutManager expects coordinates inside the text container.
+            x: 1,
             y: contentOffset.y - textContainerInset.top + 1
         )
         let topGlyph = layoutManager.glyphIndex(for: point, in: textContainer)
