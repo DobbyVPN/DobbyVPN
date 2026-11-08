@@ -11,7 +11,7 @@ import (
 // that never carried data.
 type trafficCounter struct {
 	up, down   atomic.Int64
-	firstByte  atomic.Int64 // unix nanoseconds of the first downstream byte, 0 if none
+	firstByte  atomic.Pointer[time.Duration] // elapsed to first downstream byte, nil if none
 	nowForTest func() time.Time
 }
 
@@ -22,12 +22,15 @@ func (t *trafficCounter) now() time.Time {
 	return time.Now()
 }
 
-func (t *trafficCounter) recordRead(n int) {
+func (t *trafficCounter) recordRead(n int, started time.Time) {
 	if n <= 0 {
 		return
 	}
 	t.down.Add(int64(n))
-	t.firstByte.CompareAndSwap(0, t.now().UnixNano())
+	if t.firstByte.Load() == nil {
+		elapsed := t.now().Sub(started)
+		t.firstByte.CompareAndSwap(nil, &elapsed)
+	}
 }
 
 func (t *trafficCounter) recordWrite(n int) {
@@ -37,11 +40,11 @@ func (t *trafficCounter) recordWrite(n int) {
 }
 
 // summary describes the traffic as fixed key=value fields. ttfb is measured
-// from started and reads "none" when no data ever arrived.
-func (t *trafficCounter) summary(started time.Time) string {
+// from connection start and reads "none" when no data ever arrived.
+func (t *trafficCounter) summary() string {
 	ttfb := "none"
-	if first := t.firstByte.Load(); first != 0 {
-		ttfb = time.Unix(0, first).Sub(started).Round(time.Millisecond).String()
+	if first := t.firstByte.Load(); first != nil {
+		ttfb = first.Round(time.Millisecond).String()
 	}
 	return fmt.Sprintf("bytesUp=%d bytesDown=%d ttfb=%s", t.up.Load(), t.down.Load(), ttfb)
 }

@@ -23,8 +23,6 @@ var routineEndings = []string{
 	"io: read/write on closed pipe",
 	"io: read on closed pipe",
 	"io: write on closed pipe",
-	"broken pipe",
-	"aborted by the software in your host machine",
 	"context canceled",
 }
 
@@ -35,7 +33,7 @@ func classifyXrayMessage(severity xrayLog.Severity, content string) xrayLog.Seve
 	body := strings.ToLower(content)
 	// An unexplained peer reset can indicate a broken tunnel, even when Xray
 	// emits the connection failure at info level. Keep it visible by default.
-	if severity == xrayLog.Severity_Info && strings.Contains(body, "failed to process outbound traffic") && (strings.Contains(body, "connection reset by peer") || strings.Contains(body, "forcibly closed by the remote host")) {
+	if severity == xrayLog.Severity_Info && strings.Contains(body, "failed to process outbound traffic") && (strings.Contains(body, "connection reset by peer") || strings.Contains(body, "forcibly closed by the remote host") || strings.Contains(body, "rst_stream")) {
 		return xrayLog.Severity_Warning
 	}
 	// Real lines look like "[123456] app/dispatcher: sniffed domain: host" or
@@ -60,7 +58,7 @@ func classifyXrayMessage(severity xrayLog.Severity, content string) xrayLog.Seve
 	// Xray words ended connections as "failed to process outbound traffic > ...
 	// connection ends > ..." at info, and some other endings at warning or error.
 	endsConnection := strings.Contains(body, "connection ends")
-	if endsConnection && IsRoutineConnectionEnd(content) {
+	if severity == xrayLog.Severity_Info && endsConnection && IsRoutineConnectionEnd(content) {
 		return xrayLog.Severity_Debug
 	}
 	return severity
