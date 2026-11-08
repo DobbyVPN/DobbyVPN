@@ -815,12 +815,13 @@ func (m *Manager) NetworkEvent(_ context.Context, sessionID, reason string) erro
 		reason = reason[:64]
 	}
 	s.mu.Lock()
-	prober, state, generation := s.prober, s.state, s.generation
-	s.mu.Unlock()
-	log.Info("SESSION", "network event", map[string]any{"reason": reason, "state": string(state), "generation": generation, "probe": prober != nil && state == StateConnected})
-	if prober != nil && state == StateConnected {
-		prober.ProbeNow(reason)
+	state, generation := s.state, s.generation
+	probe := s.prober != nil && s.probeGeneration == generation && state == StateConnected && !s.stopRequested
+	if probe {
+		s.prober.ProbeNow(reason)
 	}
+	s.mu.Unlock()
+	log.Info("SESSION", "network event", map[string]any{"reason": reason, "state": string(state), "generation": generation, "probe": probe})
 	return nil
 }
 
@@ -965,7 +966,9 @@ func prepareCandidate(ctx context.Context, s *session, index int, generation uin
 func (m *Manager) waitForAttemptEnd(ctx context.Context, s *session, generation uint64, lease RuntimeLease) {
 	if prober, ok := lease.(ProbingLease); ok {
 		s.mu.Lock()
-		s.prober, s.probeGeneration = prober, generation
+		if s.generation == generation && s.state == StateConnected && !s.stopRequested {
+			s.prober, s.probeGeneration = prober, generation
+		}
 		s.mu.Unlock()
 		defer func() {
 			s.mu.Lock()

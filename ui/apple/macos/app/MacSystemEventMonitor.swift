@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import DobbyDiagnosticFiles
 import Network
 
 /// Reports system sleep, wake and network-path changes to the Go service so it
@@ -11,7 +12,7 @@ final class MacSystemEventMonitor {
     private let queue = DispatchQueue(label: "vpn.dobby.system-events")
     private let pathMonitor = NWPathMonitor()
     private var observers: [NSObjectProtocol] = []
-    private var lastPathSignature: String?
+    private var pathEvents = MacPathEvents()
     private var pendingPathEvent: DispatchWorkItem?
 
     init(client: MacDesktopSessionClient) {
@@ -31,13 +32,11 @@ final class MacSystemEventMonitor {
     }
 
     private func pathChanged(_ path: NWPath) {
-        let interfaces = path.availableInterfaces.map(\.name).sorted().joined(separator: ",")
-        let signature = "\(path.status)-\(interfaces)"
-        defer { lastPathSignature = signature }
-        // The first callback only reports the initial state.
-        guard let previous = lastPathSignature, previous != signature else { return }
+        // NWPath can change gateways or DNS while interface names and status stay
+        // the same. Each subsequent satisfied update can warrant a probe.
+        let shouldDispatch = pathEvents.update(satisfied: path.status == .satisfied)
         pendingPathEvent?.cancel()
-        guard path.status == .satisfied else { return }
+        guard shouldDispatch else { return }
         // Interfaces often flap several times in a row; coalesce them.
         let work = DispatchWorkItem { [weak self] in self?.send("network_path_changed") }
         pendingPathEvent = work
@@ -46,12 +45,40 @@ final class MacSystemEventMonitor {
 
     private func send(_ reason: String) {
         queue.async { [client] in
-            _ = client.call("NetworkEvent", parameters: ["reason": reason])
+            let response = client.call("NetworkEvent", parameters: ["reason": reason])
+            guard let data = response.data(using: .utf8),
+                  let envelope = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  envelope["ok"] as? Bool == true else {
+                do {
+                    try DiagnosticFiles.append(
+                        "Network event dispatch failed", event: "network.event-dispatch-failed",
+                        level: "ERROR", source: "native-ui", to: client.uiDiagnosticPath,
+                        fields: ["reason": reason, "response": response], legacyDesktop: true
+                    )
+                } catch {
+                    FileHandle.standardError.write(Data("Network event diagnostic write failed: \(error)\n".utf8))
+                }
+                return
+            }
         }
     }
 
     deinit {
         pathMonitor.cancel()
         observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+    }
+}
+
+// The monitor invokes this for every NWPath update, even when interface names
+// are unchanged. An unsatisfied update also cancels a pending dispatch.
+struct MacPathEvents {
+    private var initialized = false
+
+    mutating func update(satisfied: Bool) -> Bool {
+        guard initialized else {
+            initialized = true
+            return false
+        }
+        return satisfied
     }
 }
