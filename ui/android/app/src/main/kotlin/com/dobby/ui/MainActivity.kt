@@ -654,9 +654,12 @@ internal class SessionController(
     restoredSourceEditorState: Bundle? = null,
     private val retainedLogViewModel: RetainedLogViewModel,
     restoredDismissedErrors: Set<String> = emptySet(),
-    private val backendAvailable: Boolean = true,
-    private val backendUnavailableMessage: String = "",
+    backendAvailable: Boolean = true,
+    backendUnavailableMessage: String = "",
 ) {
+    @Volatile private var backendAvailable = backendAvailable
+    @Volatile private var backendUnavailableMessage = backendUnavailableMessage
+
     var state by mutableStateOf(ScreenState(
         source = restoredSourceEditorState?.getString(SOURCE_TEXT).orEmpty(),
         sourceDirty = restoredSourceEditorState?.getBoolean(SOURCE_DIRTY) == true,
@@ -1399,12 +1402,23 @@ internal class SessionController(
                 }
                 sourceLoads.sessionBecameReady()
             }
+        } catch (failure: LinkageError) {
+            handleNativeLinkageFailure(failure)
         } catch (failure: Exception) {
             latest = SessionData()
             val message = commandError(failure)
             NativeVpnBridge.recordDiagnostic(activity, "ui.snapshot_failed", message, failure)
             main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
         }
+    }
+
+    internal fun handleNativeLinkageFailure(failure: LinkageError) {
+        val message = failure.message?.takeIf(String::isNotBlank) ?: "Go backend is unavailable"
+        backendUnavailableMessage = message
+        backendAvailable = false
+        latest = SessionData()
+        NativeVpnBridge.recordNativeFailure(activity, "go.snapshot_linkage_failed", failure)
+        main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
     }
 
     private fun consumeSnapshotCommand(encoded: String, fallback: String) {
