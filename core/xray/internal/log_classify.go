@@ -33,7 +33,9 @@ func classifyXrayMessage(severity xrayLog.Severity, content string) xrayLog.Seve
 	body := strings.ToLower(content)
 	// An unexplained peer reset can indicate a broken tunnel, even when Xray
 	// emits the connection failure at info level. Keep it visible by default.
-	if severity == xrayLog.Severity_Info && strings.Contains(body, "failed to process outbound traffic") && (strings.Contains(body, "connection reset by peer") || strings.Contains(body, "forcibly closed by the remote host") || strings.Contains(body, "rst_stream") || strings.Contains(body, "too_many_pings") || strings.Contains(body, "enhance_your_calm")) {
+	if severity == xrayLog.Severity_Info &&
+		(strings.Contains(body, "failed to process outbound traffic") || strings.Contains(body, "connection ends")) &&
+		hasConnectionFault(body) {
 		return xrayLog.Severity_Warning
 	}
 	// Real lines look like "[123456] app/dispatcher: sniffed domain: host" or
@@ -67,9 +69,22 @@ func classifyXrayMessage(severity xrayLog.Severity, content string) xrayLog.Seve
 // modulePrefix matches the "app/proxyman/outbound: " style module labels.
 var modulePrefix = regexp.MustCompile(`^(?:[a-z][a-z0-9_]*(?:/[a-z0-9_]+)*:\s+)+`)
 
+func hasConnectionFault(text string) bool {
+	lower := strings.ToLower(text)
+	for _, fault := range []string{"connection reset by peer", "forcibly closed by the remote host", "rst_stream", "too_many_pings", "enhance_your_calm"} {
+		if strings.Contains(lower, fault) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsRoutineConnectionEnd reports whether text describes the ordinary end of a
 // connection rather than a fault in the tunnel.
 func IsRoutineConnectionEnd(text string) bool {
+	if hasConnectionFault(text) {
+		return false
+	}
 	lower := strings.ToLower(text)
 	for _, ending := range routineEndings {
 		if strings.Contains(lower, ending) {
