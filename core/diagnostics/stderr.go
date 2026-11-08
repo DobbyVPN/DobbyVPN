@@ -258,10 +258,13 @@ func (capture *rawCapture) rotate() error {
 			return nil
 		}
 		if !capture.pending {
-			if rotateErr := rotateFiles(capture.path); rotateErr != nil {
+			renamed, rotateErr := rotateFiles(capture.path)
+			if renamed {
+				capture.pending = true
+			}
+			if rotateErr != nil {
 				return rotateErr
 			}
-			capture.pending = true
 		}
 		open := capture.openReplacement
 		if open == nil {

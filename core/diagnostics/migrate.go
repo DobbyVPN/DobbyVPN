@@ -101,7 +101,7 @@ func streamMigrationLabeled(input io.Reader, path string, limit int64, size *int
 				return closeErr
 			}
 			output = nil
-			if rotateErr := rotateFiles(path); rotateErr != nil {
+			if _, rotateErr := rotateFiles(path); rotateErr != nil {
 				return rotateErr
 			}
 			output, err = openAppend(path)

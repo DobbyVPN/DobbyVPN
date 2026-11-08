@@ -155,7 +155,7 @@ func (w *Writer) WriteRecord(encode func(firstInGeneration bool) ([]byte, error)
 			if closeErr := file.Close(); closeErr != nil {
 				return closeErr
 			}
-			if rotateErr := rotateFiles(w.path); rotateErr != nil {
+			if _, rotateErr := rotateFiles(w.path); rotateErr != nil {
 				return rotateErr
 			}
 			file, err = openAppend(w.path)
@@ -180,10 +180,10 @@ func (w *Writer) WriteRecord(encode func(firstInGeneration bool) ([]byte, error)
 	return count, resultErr
 }
 
-func rotateFiles(path string) error {
+func rotateFiles(path string) (bool, error) {
 	// Rename replaces the previous generation only if the move succeeds.
 	// Removing it first would lose retained bytes when the move fails.
-	return os.Rename(path, path+PreviousSuffix)
+	return renameGeneration(path, path+PreviousSuffix)
 }
 
 func (w *Writer) Sync() error {

@@ -6,9 +6,51 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+// FILE_RENAME_INFO uses native HANDLE alignment and a variable UTF-16 filename.
+type fileRenameInfo struct {
+	flags          uint32
+	rootDirectory  windows.Handle
+	fileNameLength uint32
+	fileName       [1]uint16
+}
+
+func renameGeneration(oldPath, newPath string) (bool, error) {
+	file, err := openShared(oldPath, windows.DELETE|windows.FILE_READ_ATTRIBUTES, windows.OPEN_EXISTING)
+	if err != nil {
+		return false, &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: err}
+	}
+	absolute, err := filepath.Abs(newPath)
+	if err != nil {
+		return false, errors.Join(&os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: err}, file.Close())
+	}
+	name, err := windows.UTF16FromString(absolute)
+	if err != nil {
+		return false, errors.Join(&os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: err}, file.Close())
+	}
+	name = name[:len(name)-1]
+	offset := unsafe.Offsetof(fileRenameInfo{}.fileName)
+	size := offset + uintptr(len(name))*2
+	if size < unsafe.Sizeof(fileRenameInfo{}) {
+		size = unsafe.Sizeof(fileRenameInfo{})
+	}
+	words := make([]uintptr, (size+unsafe.Sizeof(uintptr(0))-1)/unsafe.Sizeof(uintptr(0)))
+	info := (*fileRenameInfo)(unsafe.Pointer(&words[0]))
+	info.flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+	info.fileNameLength = uint32(len(name) * 2)
+	copy(unsafe.Slice((*uint16)(unsafe.Add(unsafe.Pointer(info), offset)), len(name)), name)
+	callErr := windows.SetFileInformationByHandle(windows.Handle(file.Fd()), windows.FileRenameInfoEx, (*byte)(unsafe.Pointer(info)), uint32(size))
+	var renameErr error
+	if callErr != nil {
+		renameErr = &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: callErr}
+	}
+	return callErr == nil, errors.Join(renameErr, file.Close())
+}
 
 func lockFile(file *os.File) error {
 	return windows.LockFileEx(windows.Handle(file.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &windows.Overlapped{})

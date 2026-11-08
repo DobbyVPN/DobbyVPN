@@ -35,6 +35,11 @@ func openFailedStartup(path string) (*os.File, error) {
 func openLock(path string) (*os.File, error)  { return openLocalFile(path, unix.O_CREAT|unix.O_RDWR) }
 func OpenInput(path string) (*os.File, error) { return os.Open(path) }
 
+func renameGeneration(oldPath, newPath string) (bool, error) {
+	err := os.Rename(oldPath, newPath)
+	return err == nil, err
+}
+
 func readLockFile(file *os.File) error { return unix.Flock(int(file.Fd()), unix.LOCK_SH) }
 func preservePermissions(file *os.File, info os.FileInfo) error {
 	if err := file.Chmod(info.Mode().Perm()); err != nil {
