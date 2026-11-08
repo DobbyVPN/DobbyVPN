@@ -168,18 +168,18 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         let viewport = CGRect(
             x: contentOffset.x - textContainerInset.left,
             y: contentOffset.y - textContainerInset.top,
-            width: bounds.width - textContainerInset.left - textContainerInset.right,
-            height: bounds.height - textContainerInset.top - textContainerInset.bottom
+            width: bounds.width,
+            height: bounds.height
         )
         guard viewport.width > 0, viewport.height > 0 else { return "" }
         let glyphs = layoutManager.glyphRange(forBoundingRect: viewport, in: textContainer)
         let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
         guard characters.location < textStorage.length, characters.length > 0 else { return "" }
         let content = textStorage.string as NSString
-        // A page is bounded even with an unusually dense font. Expand the edges
-        // to complete Unicode graphemes rather than splitting UTF-16 sequences.
-        let bounded = NSRange(location: characters.location, length: min(characters.length, 8_192))
-        return content.substring(with: content.rangeOfComposedCharacterSequences(for: bounded))
+        // The viewport bounds the text, including partially visible edge lines.
+        // Keep complete Unicode graphemes at both edges so scrolling never
+        // exposes half a character or makes visible text inaccessible.
+        return content.substring(with: content.rangeOfComposedCharacterSequences(for: characters))
     }
 
     override var accessibilityValue: String? {
