@@ -181,9 +181,8 @@ func (w *Writer) WriteRecord(encode func(firstInGeneration bool) ([]byte, error)
 }
 
 func rotateFiles(path string) error {
-	if err := removeIfPresent(path + PreviousSuffix); err != nil {
-		return err
-	}
+	// Rename replaces the previous generation only if the move succeeds.
+	// Removing it first would lose retained bytes when the move fails.
 	return os.Rename(path, path+PreviousSuffix)
 }
 
