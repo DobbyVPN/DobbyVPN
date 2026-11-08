@@ -3,7 +3,7 @@ import Foundation
 import DobbyDiagnosticFiles
 import Network
 
-/// Reports system sleep, wake and network-path changes to the Go service so it
+/// Reports system wake and network-path changes to the Go service so it
 /// can run a connected-health check after a short debounce instead of waiting
 /// for the next 10 s timer. The service decides whether to reconnect and applies its own
 /// automatic-recovery limit; this class only forwards events.
@@ -14,22 +14,23 @@ final class MacSystemEventMonitor {
     private var observers: [NSObjectProtocol] = []
     private var pathEvents = MacPathEvents()
     private var pendingEvent: DispatchWorkItem?
-    private var pendingWake = false
+    private var debounce = MacEventDebounce()
 
     init(client: MacDesktopSessionClient) {
         self.client = client
     }
 
     func start() {
+        startWorkspaceNotifications()
+        pathMonitor.pathUpdateHandler = { [weak self] path in self?.pathChanged(path) }
+        pathMonitor.start(queue: queue)
+    }
+
+    func startWorkspaceNotifications() {
         let center = NSWorkspace.shared.notificationCenter
-        observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.send("sleep")
-        })
         observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
             self?.schedule("wake")
         })
-        pathMonitor.pathUpdateHandler = { [weak self] path in self?.pathChanged(path) }
-        pathMonitor.start(queue: queue)
     }
 
     private func pathChanged(_ path: NWPath) {
@@ -38,7 +39,7 @@ final class MacSystemEventMonitor {
         let shouldDispatch = pathEvents.update(satisfied: path.status == .satisfied)
         if shouldDispatch {
             scheduleOnQueue("network_path_changed")
-        } else if !pendingWake {
+        } else if debounce.cancelPath() {
             pendingEvent?.cancel()
             pendingEvent = nil
         }
@@ -51,12 +52,10 @@ final class MacSystemEventMonitor {
     // Wake wins over path changes in the same burst so the reported reason is
     // stable even when the network monitor reports the wake's path changes.
     private func scheduleOnQueue(_ reason: String) {
-        pendingWake = pendingWake || reason == "wake"
+        let generation = debounce.schedule(reason)
         pendingEvent?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
-            let reason = self.pendingWake ? "wake" : "network_path_changed"
-            self.pendingWake = false
+            guard let self = self, let reason = self.debounce.take(generation) else { return }
             self.pendingEvent = nil
             self.send(reason)
         }
@@ -101,5 +100,35 @@ struct MacPathEvents {
             return false
         }
         return satisfied
+    }
+}
+
+// Fences superseded or cancelled callbacks even if a dispatch work item has
+// already become runnable. All access remains on the monitor's serial queue.
+struct MacEventDebounce {
+    private var generation: UInt64 = 0
+    private var pendingWake = false
+    private var pending = false
+
+    mutating func schedule(_ reason: String) -> UInt64 {
+        generation &+= 1
+        pending = true
+        pendingWake = pendingWake || reason == "wake"
+        return generation
+    }
+
+    mutating func cancelPath() -> Bool {
+        guard !pendingWake else { return false }
+        generation &+= 1
+        pending = false
+        return true
+    }
+
+    mutating func take(_ candidate: UInt64) -> String? {
+        guard pending, generation == candidate else { return nil }
+        pending = false
+        let reason = pendingWake ? "wake" : "network_path_changed"
+        pendingWake = false
+        return reason
     }
 }
