@@ -224,8 +224,16 @@ class MainActivity : ComponentActivity() {
                 navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
             )
             current = this
-            startupDiagnostics.observe("MainActivity.onCreate.nativeGoSessionAttach") {
-                NativeGoSession.attach(this)
+            val backendFailure = try {
+                startupDiagnostics.observe("MainActivity.onCreate.nativeGoSessionAttach") {
+                    NativeGoSession.attach(this)
+                }
+                null
+            } catch (failure: Throwable) {
+                failure
+            }
+            if (backendFailure != null) {
+                NativeVpnBridge.recordNativeFailure(this, "go.attach_failed", backendFailure)
             }
             retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
             retainedLogViewModel.exportContext = applicationContext
@@ -251,6 +259,8 @@ class MainActivity : ComponentActivity() {
                     savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
                     retainedLogViewModel,
                     savedInstanceState?.getStringArrayList(DISMISSED_ERRORS).orEmpty().toSet(),
+                    backendAvailable = backendFailure == null,
+                    backendUnavailableMessage = backendFailure?.message.orEmpty(),
                 )
                 controller.setExportingLogs(retainedLogViewModel.exportPreparing || retainedLogViewModel.exportFile != null)
                 if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) {
@@ -644,7 +654,12 @@ internal class SessionController(
     restoredSourceEditorState: Bundle? = null,
     private val retainedLogViewModel: RetainedLogViewModel,
     restoredDismissedErrors: Set<String> = emptySet(),
+    backendAvailable: Boolean = true,
+    backendUnavailableMessage: String = "",
 ) {
+    @Volatile private var backendAvailable = backendAvailable
+    @Volatile private var backendUnavailableMessage = backendUnavailableMessage
+
     var state by mutableStateOf(ScreenState(
         source = restoredSourceEditorState?.getString(SOURCE_TEXT).orEmpty(),
         sourceDirty = restoredSourceEditorState?.getBoolean(SOURCE_DIRTY) == true,
@@ -702,15 +717,26 @@ internal class SessionController(
     init {
         LogUploader.cleanupStartup(activity.applicationContext)
         clipboard.addPrimaryClipChangedListener(clipboardListener)
-        worker.scheduleWithFixedDelay({
-            refreshSnapshot()
-            if (visible) refreshClipboard()
-        }, 0, 500, TimeUnit.MILLISECONDS)
+        if (backendAvailable) {
+            worker.scheduleWithFixedDelay({
+                refreshSnapshot()
+                if (visible) refreshClipboard()
+            }, 0, 500, TimeUnit.MILLISECONDS)
+        } else {
+            main.post {
+                state = state.copy(error = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            }
+        }
         NativeVpnBridge.recordDiagnostic(activity, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
     }
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
+        if (!backendAvailable) {
+            state = state.copy(source = value, sourceDirty = true, loading = false,
+                loadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         restoredPendingSource = null
         if (trigger != LoadTrigger.RESTORE && trigger != LoadTrigger.TYPED) dismissedErrors = emptySet()
         val source = value.trim()
@@ -738,6 +764,10 @@ internal class SessionController(
     }
 
     private fun startSourceLoad(request: SubscriptionRequest) {
+        if (!backendAvailable) {
+            state = state.copy(loading = false, loadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         NativeVpnBridge.recordDiagnostic(activity, "subscription.load_started",
             "Loading subscription revision=${request.revision} source=${request.source}")
         state = state.copy(loading = true)
@@ -941,6 +971,10 @@ internal class SessionController(
                 "permission_target_present=${permissionTarget != null} " +
                 "source_revision=${sourceLoads.revision}",
         )
+        if (!backendAvailable) {
+            report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         if (!allowed) return
         if (isStopTarget(index)) { stop(); return }
         dismissedErrors = emptySet()
@@ -965,6 +999,10 @@ internal class SessionController(
     }
 
     fun retry() {
+        if (!backendAvailable) {
+            report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         if (!retryActionEnabled) return
         val current = latest
         if (!current.protectedFailure || current.sessionId != state.session.sessionId) {
@@ -989,6 +1027,10 @@ internal class SessionController(
     }
 
     fun stop() {
+        if (!backendAvailable) {
+            report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         permissionTarget = null
         val current = latest
         if (state.busy || (current.primaryAction != "STOP" && !current.vpnActive)) return
@@ -1004,6 +1046,7 @@ internal class SessionController(
     }
 
     fun permissionResult(granted: Boolean) {
+        if (!backendAvailable) return
         if (permissionTarget == null) return
         if (!granted) { continuePermission(false); return }
         state = state.copy(busy = true, error = "")
@@ -1219,6 +1262,10 @@ internal class SessionController(
     }
 
     fun uploadLogs() {
+        if (!backendAvailable) {
+            state = state.copy(uploadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         if (state.uploadingLogs || !latest.logsUploadAvailable) return
         val selected = latest
         val attempt = LogUploader(activity.applicationContext, phase = { phase ->
@@ -1264,6 +1311,10 @@ internal class SessionController(
     }
 
     private fun refreshSnapshot(clearBusy: Boolean = false) {
+        if (!backendAvailable) {
+            if (clearBusy) main.post { state = state.copy(busy = false) }
+            return
+        }
         try {
             val sessionId = latest.sessionId
             var reattached = false
@@ -1351,12 +1402,23 @@ internal class SessionController(
                 }
                 sourceLoads.sessionBecameReady()
             }
+        } catch (failure: LinkageError) {
+            handleNativeLinkageFailure(failure)
         } catch (failure: Exception) {
             latest = SessionData()
             val message = commandError(failure)
             NativeVpnBridge.recordDiagnostic(activity, "ui.snapshot_failed", message, failure)
             main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
         }
+    }
+
+    internal fun handleNativeLinkageFailure(failure: LinkageError) {
+        val message = failure.message?.takeIf(String::isNotBlank) ?: "Go backend is unavailable"
+        backendUnavailableMessage = message
+        backendAvailable = false
+        latest = SessionData()
+        NativeVpnBridge.recordNativeFailure(activity, "go.snapshot_linkage_failed", failure)
+        main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
     }
 
     private fun consumeSnapshotCommand(encoded: String, fallback: String) {
