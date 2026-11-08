@@ -90,7 +90,7 @@ func ensureXrayLogConfig(userConfig map[string]interface{}) {
 	level, _ := logConfig["loglevel"].(string)
 	normalizedLevel := strings.ToLower(level)
 	switch normalizedLevel {
-	case defaultXrayLogLevelName, xrayLogLevelInfo, xrayLogLevelWarning, xrayLogLevelError:
+	case xrayLogLevelDebug, xrayLogLevelInfo, xrayLogLevelWarning, xrayLogLevelError:
 		if level != normalizedLevel {
 			logConfig["loglevel"] = normalizedLevel
 		}
