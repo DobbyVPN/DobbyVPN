@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -57,12 +58,12 @@ type xrayLogBridge struct {
 func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
 	switch msg := msg.(type) {
 	case *xrayLog.AccessMessage:
-		appLog.Infof("Xray-Core", "%s", msg.String())
+		appLog.Debugf("Xray-Core", "%s", msg.String())
 	case *xrayLog.DNSLog:
 		appLog.Debugf("Xray-Core", "%s", msg.String())
 	case *xrayLog.GeneralMessage:
 		if int32(msg.Severity) <= l.logLevel.Load() {
-			switch msg.Severity {
+			switch classifyXrayMessage(msg.Severity, fmt.Sprint(msg.Content)) {
 			case xrayLog.Severity_Debug:
 				appLog.Debugf("Xray-Core", "%s", msg.Content)
 			case xrayLog.Severity_Info:
@@ -71,8 +72,6 @@ func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
 				appLog.Warnf("Xray-Core", "%s", msg.Content)
 			case xrayLog.Severity_Error:
 				appLog.Errorf("Xray-Core", "%s", msg.Content)
-			case xrayLog.Severity_Unknown:
-				appLog.Infof("Xray-Core", "%s", msg.Content)
 			default:
 				appLog.Infof("Xray-Core", "%s", msg.Content)
 			}
