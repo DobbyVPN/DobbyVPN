@@ -367,17 +367,23 @@ public enum DiagnosticFiles {
     }
 
     /// A cheap fingerprint of everything `entries(paths:boundary:)` reads: for every
-    /// input and for the viewing boundary, its existence, device, inode, size and
-    /// modification time. The viewer uses it to skip re-reading and re-parsing logs
-    /// that have not changed since the previous refresh.
+    /// current and previous input and for the viewing boundary, fingerprint file
+    /// identity, content and access metadata without reading file contents. Access
+    /// time is excluded so reading unchanged logs does not invalidate the cache.
     public static func viewSignature(paths: [URL], boundary: URL) -> String {
         var parts: [String] = []
-        for url in paths + [boundary] {
+        for url in paths.flatMap({ [previous($0), $0] }) + [boundary] {
             var info = stat()
-            if stat(url.path, &info) == 0 {
-                parts.append("\(url.path):\(info.st_dev):\(info.st_ino):\(info.st_size):\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)")
+            // Inputs are opened with O_NOFOLLOW; the viewing boundary is read
+            // through Foundation and therefore follows a symlink if present.
+            let status = url == boundary ? stat(url.path, &info) : lstat(url.path, &info)
+            if status == 0 {
+                parts.append("\(url.path):\(info.st_dev):\(info.st_ino):\(info.st_size):" +
+                    "\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec):" +
+                    "\(info.st_ctimespec.tv_sec).\(info.st_ctimespec.tv_nsec):" +
+                    "\(info.st_mode):\(info.st_uid):\(info.st_gid)")
             } else {
-                parts.append("\(url.path):absent")
+                parts.append("\(url.path):absent:errno=\(errno)")
             }
         }
         return parts.joined(separator: "|")
