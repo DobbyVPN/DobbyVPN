@@ -105,10 +105,11 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
 #endif
 
 #if os(iOS)
-private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
+final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     var onSendLogs: () -> Void = {}
     var onShowMenu: () -> Void = {}
     var onClear: () -> Void = {}
+    var onAccessibilityScroll: () -> Void = {}
     var preservesReadingPosition = false
     private(set) var isRestoringReadingPosition = false
     private(set) var readingPositionRestoreCount = 0
@@ -154,44 +155,55 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
             : NSLocalizedString("New entries are held while you read earlier logs. Scroll to the bottom to resume.", comment: "")
     }
 
-    // The rendered log can hold thousands of lines. Exposing the whole text makes
-    // every accessibility query walk paragraph bounds for all of it, which stalls
-    // automation and can trip the scene-update watchdog. Report a bounded tail
-    // instead; the visual text and touch selection stay unchanged.
-    static let accessibilitySummaryLineLimit = 24
-    static let accessibilitySummaryCharacterLimit = 2_048
-
+    // Expose only the rendered viewport. A single accessible element avoids
+    // UIKit enumerating thousands of offscreen paragraphs, while standard
+    // accessibility scrolling keeps earlier records reachable.
     func installAccessibilitySummary() {
-        // One element for the whole log: the platform no longer enumerates the
-        // text view's paragraphs for hit-testing and attribute lookups.
         isAccessibilityElement = true
         accessibilityLabel = NSLocalizedString("Connection logs", comment: "")
     }
 
-    var accessibilitySummaryText: String {
+    var accessibilityViewportText: String {
+        guard textStorage.length > 0 else { return "" }
+        let viewport = CGRect(
+            x: contentOffset.x - textContainerInset.left,
+            y: contentOffset.y - textContainerInset.top,
+            width: bounds.width - textContainerInset.left - textContainerInset.right,
+            height: bounds.height - textContainerInset.top - textContainerInset.bottom
+        )
+        guard viewport.width > 0, viewport.height > 0 else { return "" }
+        let glyphs = layoutManager.glyphRange(forBoundingRect: viewport, in: textContainer)
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        guard characters.location < textStorage.length, characters.length > 0 else { return "" }
         let content = textStorage.string as NSString
-        guard content.length > 0 else {
-            return NSLocalizedString("No log entries yet.", comment: "")
-        }
-        var start = max(0, content.length - Self.accessibilitySummaryCharacterLimit)
-        if start > 0 {
-            // A fixed UTF-16 offset can land inside a surrogate pair; including
-            // the pair costs at most one extra unit and never starts the summary
-            // with half a character.
-            let firstUnit = content.character(at: start)
-            if firstUnit >= 0xDC00, firstUnit <= 0xDFFF {
-                start -= 1
-            }
-        }
-        let tail = content.substring(with: NSRange(location: start, length: content.length - start))
-        let lines = tail.split(separator: "\n", omittingEmptySubsequences: false)
-        let newest = lines.suffix(Self.accessibilitySummaryLineLimit).joined(separator: "\n")
-        return NSLocalizedString("Newest log entries:", comment: "") + "\n" + newest
+        // A page is bounded even with an unusually dense font. Expand the edges
+        // to complete Unicode graphemes rather than splitting UTF-16 sequences.
+        let bounded = NSRange(location: characters.location, length: min(characters.length, 8_192))
+        return content.substring(with: content.rangeOfComposedCharacterSequences(for: bounded))
     }
 
     override var accessibilityValue: String? {
-        get { accessibilitySummaryText }
+        get { accessibilityViewportText }
         set { super.accessibilityValue = newValue }
+    }
+
+    override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        let delta: CGFloat
+        switch direction {
+        case .up: delta = -1
+        case .down: delta = 1
+        default: return false
+        }
+        let minimumY = -adjustedContentInset.top
+        let maximumY = max(minimumY, contentSize.height - bounds.height + adjustedContentInset.bottom)
+        // Overlap pages so wrapped records crossing the edge remain readable.
+        let page = max(1, bounds.height - adjustedContentInset.top - adjustedContentInset.bottom) * 0.8
+        let nextY = min(max(contentOffset.y + delta * page, minimumY), maximumY)
+        guard abs(nextY - contentOffset.y) > 0.5 else { return false }
+        setContentOffset(CGPoint(x: contentOffset.x, y: nextY), animated: false)
+        onAccessibilityScroll()
+        UIAccessibility.post(notification: .pageScrolled, argument: accessibilityViewportText)
+        return true
     }
 
     func restoreScrollExtent(to height: CGFloat) {
@@ -278,6 +290,10 @@ struct DobbyLogView: UIViewRepresentable {
             logView.onSendLogs = onSendLogs
             logView.onShowMenu = onShowMenu
             logView.onClear = onClear
+            logView.onAccessibilityScroll = { [weak coordinator, weak logView] in
+                guard let logView else { return }
+                coordinator?.updateFollowingState(for: logView)
+            }
         }
         coordinator.latestEntries = entries
         let cleared = clear != coordinator.lastClear
@@ -348,7 +364,7 @@ struct DobbyLogView: UIViewRepresentable {
             updateFollowingState(for: scrollView)
         }
 
-        private func updateFollowingState(for scrollView: UIScrollView) {
+        fileprivate func updateFollowingState(for scrollView: UIScrollView) {
             guard let logView = scrollView as? DobbyLogTextView,
                   !logView.isRestoringReadingPosition else { return }
             let contentHeight = effectiveContentHeight(for: logView)
