@@ -4,8 +4,8 @@ import DobbyDiagnosticFiles
 import Network
 
 /// Reports system sleep, wake and network-path changes to the Go service so it
-/// can run an immediate connected-health check instead of waiting for the next
-/// 10 s timer. The service decides whether to reconnect and applies its own
+/// can run a connected-health check after a short debounce instead of waiting
+/// for the next 10 s timer. The service decides whether to reconnect and applies its own
 /// automatic-recovery limit; this class only forwards events.
 final class MacSystemEventMonitor {
     private let client: MacDesktopSessionClient
@@ -13,7 +13,8 @@ final class MacSystemEventMonitor {
     private let pathMonitor = NWPathMonitor()
     private var observers: [NSObjectProtocol] = []
     private var pathEvents = MacPathEvents()
-    private var pendingPathEvent: DispatchWorkItem?
+    private var pendingEvent: DispatchWorkItem?
+    private var pendingWake = false
 
     init(client: MacDesktopSessionClient) {
         self.client = client
@@ -25,7 +26,7 @@ final class MacSystemEventMonitor {
             self?.send("sleep")
         })
         observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
-            self?.send("wake")
+            self?.schedule("wake")
         })
         pathMonitor.pathUpdateHandler = { [weak self] path in self?.pathChanged(path) }
         pathMonitor.start(queue: queue)
@@ -35,11 +36,31 @@ final class MacSystemEventMonitor {
         // NWPath can change gateways or DNS while interface names and status stay
         // the same. Each subsequent satisfied update can warrant a probe.
         let shouldDispatch = pathEvents.update(satisfied: path.status == .satisfied)
-        pendingPathEvent?.cancel()
-        guard shouldDispatch else { return }
-        // Interfaces often flap several times in a row; coalesce them.
-        let work = DispatchWorkItem { [weak self] in self?.send("network_path_changed") }
-        pendingPathEvent = work
+        if shouldDispatch {
+            scheduleOnQueue("network_path_changed")
+        } else if !pendingWake {
+            pendingEvent?.cancel()
+            pendingEvent = nil
+        }
+    }
+
+    private func schedule(_ reason: String) {
+        queue.async { [weak self] in self?.scheduleOnQueue(reason) }
+    }
+
+    // Wake wins over path changes in the same burst so the reported reason is
+    // stable even when the network monitor reports the wake's path changes.
+    private func scheduleOnQueue(_ reason: String) {
+        pendingWake = pendingWake || reason == "wake"
+        pendingEvent?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            let reason = self.pendingWake ? "wake" : "network_path_changed"
+            self.pendingWake = false
+            self.pendingEvent = nil
+            self.send(reason)
+        }
+        pendingEvent = work
         queue.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
