@@ -16,16 +16,16 @@ var stderrMu sync.Mutex
 var stderrCapture *rawCapture
 
 type rawCapture struct {
-	mu         sync.Mutex
-	path       string
-	file       *os.File
-	limit      int64
-	run        string
-	generation uint64
-	stdout     bool
-	pending    bool // current generation was renamed; finish replacement before rotating again
-	openReplacement func(string) (*os.File, error)
-	prepareReplacement func(*os.File, os.FileInfo) error
+	mu                  sync.Mutex
+	path                string
+	file                *os.File
+	limit               int64
+	run                 string
+	generation          uint64
+	stdout              bool
+	pending             bool // current generation was renamed; finish replacement before rotating again
+	openReplacement     func(string) (*os.File, error)
+	prepareReplacement  func(*os.File, os.FileInfo) error
 	redirectReplacement func(*os.File) error
 }
 
@@ -264,13 +264,17 @@ func (capture *rawCapture) rotate() error {
 			capture.pending = true
 		}
 		open := capture.openReplacement
-		if open == nil { open = openAppend }
+		if open == nil {
+			open = openAppend
+		}
 		next, err := open(capture.path)
 		if err != nil {
 			return err
 		}
 		prepare := capture.prepareReplacement
-		if prepare == nil { prepare = preservePermissions }
+		if prepare == nil {
+			prepare = preservePermissions
+		}
 		if err := prepare(next, info); err != nil {
 			return errors.Join(err, next.Close())
 		}
@@ -278,7 +282,9 @@ func (capture *rawCapture) rotate() error {
 			return errors.Join(err, next.Close())
 		}
 		redirect := capture.redirectReplacement
-		if redirect == nil { redirect = capture.redirect }
+		if redirect == nil {
+			redirect = capture.redirect
+		}
 		if err := redirect(next); err != nil {
 			return errors.Join(err, next.Close())
 		}

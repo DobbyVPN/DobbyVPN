@@ -166,12 +166,8 @@ func run() {
 	// failure path below exits without running deferred calls.
 	shutdownErr := shutdownDesktop(listener.Close, serveErr, desktopProcessBinding())
 	signal.Stop(signals)
-	if err := shutdownErr; err != nil {
-		// Report through the log and exit non-zero instead of panicking: a
-		// stack trace would bury the cleanup error and add no information.
-		log.Errorf(desktopLogCategory, "desktop shutdown failed: %v", err)
-		fmt.Fprintf(os.Stderr, "desktop shutdown failed: %v\n", err)
-		os.Exit(1)
+	if shutdownErr != nil {
+		exitWithShutdownError(shutdownErr)
 	}
 }
 
@@ -182,4 +178,12 @@ func (c *Executor) Execute(mode string) {
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
 	}
+}
+
+// Keep the ordinary failure path callable by subprocess regressions: os.Exit
+// must preserve the cleanup error and nonzero status without a panic trace.
+func exitWithShutdownError(err error) {
+	log.Errorf(desktopLogCategory, "desktop shutdown failed: %v", err)
+	fmt.Fprintf(os.Stderr, "desktop shutdown failed: %v\n", err)
+	os.Exit(1)
 }
