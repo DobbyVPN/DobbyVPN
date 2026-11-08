@@ -95,6 +95,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private var logsRefreshPending = false
     private var logsClearInFlight = false
     private var logsRevision = 0
+    private let logViewCache = LogViewCache()
     private var lastFailure = ""
     private var errorOrigin: DobbySessionErrorOrigin?
     private var lastSourceErrorIdentity: DobbySourceErrorIdentity?
@@ -542,14 +543,17 @@ public final class DobbySessionViewModel: ObservableObject {
         let revision = logsRevision
         let paths = client.diagnosticPaths
         let boundary = client.uiDiagnosticPath.appendingPathExtension("view")
-        logWorker.async { [weak self] in
-            let result = structuredPreview(paths: paths, boundary: boundary)
+        let cache = logViewCache
+        logWorker.async { [weak self, cache] in
+            let result = cache.preview(paths: paths, boundary: boundary)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.logsInFlight = false
                 if revision == self.logsRevision && !self.logsClearInFlight {
-                    self.logEntries = result.entries.filter(isShownOnScreen)
-                    self.logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
+                    // Publish only real changes so an idle log view is not redrawn.
+                    if self.logEntries != result.entries { self.logEntries = result.entries }
+                    let logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
+                    if self.logsError != logsError { self.logsError = logsError }
                 } else {
                     self.logsRefreshPending = true
                 }

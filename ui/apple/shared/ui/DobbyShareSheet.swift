@@ -554,7 +554,14 @@ struct DobbyLogView: NSViewRepresentable {
         }
         guard coordinator.desiredFollowing else { return }
         coordinator.entries = entries
-        let attributed = logText(entries)
+        let attributed: NSAttributedString
+        if let cached = coordinator.renderedText, coordinator.renderedEntries == entries {
+            attributed = cached
+        } else {
+            attributed = logText(entries)
+            coordinator.renderedEntries = entries
+            coordinator.renderedText = attributed
+        }
         let text = attributed.string
         coordinator.updating = true
         let selection = view.selectedRange()
@@ -578,6 +585,10 @@ struct DobbyLogView: NSViewRepresentable {
         private var wheelScrolling = false
         var interacting: Bool { userScrolling || wheelScrolling }
         var entries: [DobbyLogEntry] = []
+        // The attributed text built for `renderedEntries`, reused while the
+        // entries are unchanged so an idle log view does not rebuild it.
+        var renderedEntries: [DobbyLogEntry]?
+        var renderedText: NSAttributedString?
         var alignmentQueued = false
         var readingAnchor: MacLogReadingAnchor?
         var viewportSize: CGSize?
