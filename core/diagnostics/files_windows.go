@@ -47,7 +47,8 @@ func renameGeneration(oldPath, newPath string) (bool, error) {
 	callErr := windows.SetFileInformationByHandle(windows.Handle(file.Fd()), windows.FileRenameInfoEx, (*byte)(unsafe.Pointer(info)), uint32(size))
 	var renameErr error
 	if callErr != nil {
-		renameErr = &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: callErr}
+		renameErr = &os.LinkError{Op: "rename", Old: oldPath, New: newPath,
+			Err: fmt.Errorf("SetFileInformationByHandle FileRenameInfoEx flags=REPLACE_IF_EXISTS|POSIX_SEMANTICS: %w", callErr)}
 	}
 	return callErr == nil, errors.Join(renameErr, file.Close())
 }
