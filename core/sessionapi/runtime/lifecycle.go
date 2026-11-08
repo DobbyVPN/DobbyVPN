@@ -567,16 +567,6 @@ func (l *lease) setOnDone(fn func(error))            { l.onDone = fn }
 // lease has stopped, so the manager watcher cannot outlive its runtime lease.
 func (l *lease) HealthFailures() <-chan error { return l.healthFailed }
 
-// Wake and network-path events make the next health check run immediately
-// instead of waiting for the interval. While a triggered check is still
-// failing, the monitor retries quickly and uses a lower failure threshold so a
-// connection that died during sleep is recovered in seconds. Recovery still
-// goes through the manager's automatic-recovery limit.
-const (
-	eventProbeFailureThreshold = 2
-	eventProbeRetryInterval    = 2 * time.Second
-)
-
 // ProbeNow implements sessionapi.ProbingLease. It never blocks; a request that
 // is already queued absorbs later ones.
 func (l *lease) ProbeNow(reason string) {
@@ -599,15 +589,14 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 		defer close(l.healthDone)
 		defer close(l.healthFailed)
 		var failures []error
-		suspect := false
 		for {
-			if err := check(ctx, ref, proxyAddr); err != nil {
+			err := check(ctx, ref, proxyAddr)
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
 				failures = append(failures, err)
-				limit := threshold
-				if suspect && limit > eventProbeFailureThreshold {
-					limit = eventProbeFailureThreshold
-				}
-				if len(failures) >= limit {
+				if len(failures) >= threshold {
 					cause := errors.Join(failures...)
 					select {
 					case l.healthFailed <- cause:
@@ -617,7 +606,6 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				}
 			} else {
 				failures = nil
-				suspect = false
 			}
 			if interval <= 0 {
 				select {
@@ -627,11 +615,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				}
 				continue
 			}
-			wait := interval
-			if suspect && wait > eventProbeRetryInterval {
-				wait = eventProbeRetryInterval
-			}
-			timer := time.NewTimer(wait)
+			timer := time.NewTimer(interval)
 			select {
 			case <-ctx.Done():
 				if !timer.Stop() {
@@ -642,7 +626,6 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				if !timer.Stop() {
 					<-timer.C
 				}
-				suspect = true
 				log.Infof(category, "health check triggered by %s generation=%d", reason, ref.Generation)
 			case <-timer.C:
 			}
