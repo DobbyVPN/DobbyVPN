@@ -105,10 +105,11 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
 #endif
 
 #if os(iOS)
-private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
+final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     var onSendLogs: () -> Void = {}
     var onShowMenu: () -> Void = {}
     var onClear: () -> Void = {}
+    var onAccessibilityScroll: () -> Void = {}
     var preservesReadingPosition = false
     private(set) var isRestoringReadingPosition = false
     private(set) var readingPositionRestoreCount = 0
@@ -152,6 +153,57 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         accessibilityHint = isFollowing
             ? NSLocalizedString("Showing newest entries. Scroll up to pause automatic updates.", comment: "")
             : NSLocalizedString("New entries are held while you read earlier logs. Scroll to the bottom to resume.", comment: "")
+    }
+
+    // Expose only the rendered viewport. A single accessible element avoids
+    // UIKit enumerating thousands of offscreen paragraphs, while standard
+    // accessibility scrolling keeps earlier records reachable.
+    func installAccessibilitySummary() {
+        isAccessibilityElement = true
+        accessibilityLabel = NSLocalizedString("Connection logs", comment: "")
+    }
+
+    var accessibilityViewportText: String {
+        guard textStorage.length > 0 else { return "" }
+        let viewport = CGRect(
+            x: contentOffset.x - textContainerInset.left,
+            y: contentOffset.y - textContainerInset.top,
+            width: bounds.width,
+            height: bounds.height
+        )
+        guard viewport.width > 0, viewport.height > 0 else { return "" }
+        let glyphs = layoutManager.glyphRange(forBoundingRect: viewport, in: textContainer)
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        guard characters.location < textStorage.length, characters.length > 0 else { return "" }
+        let content = textStorage.string as NSString
+        // The viewport bounds the text, including partially visible edge lines.
+        // Keep complete Unicode graphemes at both edges so scrolling never
+        // exposes half a character or makes visible text inaccessible.
+        return content.substring(with: content.rangeOfComposedCharacterSequences(for: characters))
+    }
+
+    override var accessibilityValue: String? {
+        get { accessibilityViewportText }
+        set { super.accessibilityValue = newValue }
+    }
+
+    override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        let delta: CGFloat
+        switch direction {
+        case .up: delta = -1
+        case .down: delta = 1
+        default: return false
+        }
+        let minimumY = -adjustedContentInset.top
+        let maximumY = max(minimumY, contentSize.height - bounds.height + adjustedContentInset.bottom)
+        // Overlap pages so wrapped records crossing the edge remain readable.
+        let page = max(1, bounds.height - adjustedContentInset.top - adjustedContentInset.bottom) * 0.8
+        let nextY = min(max(contentOffset.y + delta * page, minimumY), maximumY)
+        guard abs(nextY - contentOffset.y) > 0.5 else { return false }
+        setContentOffset(CGPoint(x: contentOffset.x, y: nextY), animated: false)
+        onAccessibilityScroll()
+        UIAccessibility.post(notification: .pageScrolled, argument: accessibilityViewportText)
+        return true
     }
 
     func restoreScrollExtent(to height: CGFloat) {
@@ -225,6 +277,7 @@ struct DobbyLogView: UIViewRepresentable {
         view.textContainer.lineFragmentPadding = 0
         view.adjustsFontForContentSizeCategory = true
         view.installLogsMenu()
+        view.installAccessibilitySummary()
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
         view.updateFollowingAccessibilityHint(isFollowing: true)
@@ -237,6 +290,10 @@ struct DobbyLogView: UIViewRepresentable {
             logView.onSendLogs = onSendLogs
             logView.onShowMenu = onShowMenu
             logView.onClear = onClear
+            logView.onAccessibilityScroll = { [weak coordinator, weak logView] in
+                guard let logView else { return }
+                coordinator?.updateFollowingState(for: logView)
+            }
         }
         coordinator.latestEntries = entries
         let cleared = clear != coordinator.lastClear
@@ -307,7 +364,7 @@ struct DobbyLogView: UIViewRepresentable {
             updateFollowingState(for: scrollView)
         }
 
-        private func updateFollowingState(for scrollView: UIScrollView) {
+        fileprivate func updateFollowingState(for scrollView: UIScrollView) {
             guard let logView = scrollView as? DobbyLogTextView,
                   !logView.isRestoringReadingPosition else { return }
             let contentHeight = effectiveContentHeight(for: logView)
@@ -513,7 +570,14 @@ struct DobbyLogView: NSViewRepresentable {
         }
         guard coordinator.desiredFollowing else { return }
         coordinator.entries = entries
-        let attributed = logText(entries)
+        let attributed: NSAttributedString
+        if let cached = coordinator.renderedText, coordinator.renderedEntries == entries {
+            attributed = cached
+        } else {
+            attributed = logText(entries)
+            coordinator.renderedEntries = entries
+            coordinator.renderedText = attributed
+        }
         let text = attributed.string
         coordinator.updating = true
         let selection = view.selectedRange()
@@ -537,6 +601,10 @@ struct DobbyLogView: NSViewRepresentable {
         private var wheelScrolling = false
         var interacting: Bool { userScrolling || wheelScrolling }
         var entries: [DobbyLogEntry] = []
+        // The attributed text built for `renderedEntries`, reused while the
+        // entries are unchanged so an idle log view does not rebuild it.
+        var renderedEntries: [DobbyLogEntry]?
+        var renderedText: NSAttributedString?
         var alignmentQueued = false
         var readingAnchor: MacLogReadingAnchor?
         var viewportSize: CGSize?
