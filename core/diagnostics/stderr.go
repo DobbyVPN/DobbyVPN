@@ -16,13 +16,17 @@ var stderrMu sync.Mutex
 var stderrCapture *rawCapture
 
 type rawCapture struct {
-	mu         sync.Mutex
-	path       string
-	file       *os.File
-	limit      int64
-	run        string
-	generation uint64
-	stdout     bool
+	mu                  sync.Mutex
+	path                string
+	file                *os.File
+	limit               int64
+	run                 string
+	generation          uint64
+	stdout              bool
+	pending             bool // current generation was renamed; finish replacement before rotating again
+	openReplacement     func(string) (*os.File, error)
+	prepareReplacement  func(*os.File, os.FileInfo) error
+	redirectReplacement func(*os.File) error
 }
 
 // Raw descriptors have no whole-record framing. Preserve their file identities;
@@ -250,27 +254,43 @@ func (capture *rawCapture) rotate() error {
 		if err != nil {
 			return err
 		}
-		if info.Size() < capture.limit {
+		if !capture.pending && info.Size() < capture.limit {
 			return nil
 		}
-		if rotateErr := rotateFiles(capture.path); rotateErr != nil {
-			return rotateErr
+		if !capture.pending {
+			if rotateErr := rotateFiles(capture.path); rotateErr != nil {
+				return rotateErr
+			}
+			capture.pending = true
 		}
-		next, err := openAppend(capture.path)
+		open := capture.openReplacement
+		if open == nil {
+			open = openAppend
+		}
+		next, err := open(capture.path)
 		if err != nil {
 			return err
 		}
-		if err := preservePermissions(next, info); err != nil {
+		prepare := capture.prepareReplacement
+		if prepare == nil {
+			prepare = preservePermissions
+		}
+		if err := prepare(next, info); err != nil {
 			return errors.Join(err, next.Close())
 		}
 		if err := capture.writeHeader(next); err != nil {
 			return errors.Join(err, next.Close())
 		}
-		if err := capture.redirect(next); err != nil {
+		redirect := capture.redirectReplacement
+		if redirect == nil {
+			redirect = capture.redirect
+		}
+		if err := redirect(next); err != nil {
 			return errors.Join(err, next.Close())
 		}
 		previous := capture.file
 		capture.file = next
+		capture.pending = false
 		return previous.Close()
 	})
 }

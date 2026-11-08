@@ -89,7 +89,7 @@ type trackedConn struct {
 
 func (c *trackedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
-	c.traffic.recordRead(n)
+	c.traffic.recordRead(n, c.started)
 	return n, err
 }
 
@@ -118,7 +118,7 @@ func (c *trackedConn) Close() error {
 	if c.owner != nil {
 		c.owner.release(c, nil)
 	}
-	log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s %s activeTCP=%d", c.route, c.dest, time.Since(c.started), c.traffic.summary(c.started), active)
+	log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s %s activeTCP=%d", c.route, c.dest, time.Since(c.started), c.traffic.summary(), active)
 	return nil
 }
 
