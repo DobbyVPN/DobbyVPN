@@ -917,7 +917,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 			err = failure(FailureRuntime, "runtime returned an empty lease")
 		}
 		if err == nil && ctx.Err() == nil {
-			if m.advance(s, generation, StateConnected, &profile.Summary) {
+			if m.advanceConnected(s, generation, &profile.Summary, lease) {
 				m.waitForAttemptEnd(ctx, s, generation, lease)
 			}
 			m.finish(s, generation, nil)
@@ -964,20 +964,13 @@ func prepareCandidate(ctx context.Context, s *session, index int, generation uin
 
 // waitForAttemptEnd keeps cleanup with the worker that acquired the lease.
 func (m *Manager) waitForAttemptEnd(ctx context.Context, s *session, generation uint64, lease RuntimeLease) {
-	if prober, ok := lease.(ProbingLease); ok {
+	defer func() {
 		s.mu.Lock()
-		if s.generation == generation && s.state == StateConnected && !s.stopRequested {
-			s.prober, s.probeGeneration = prober, generation
+		if s.probeGeneration == generation {
+			s.prober, s.probeGeneration = nil, 0
 		}
 		s.mu.Unlock()
-		defer func() {
-			s.mu.Lock()
-			if s.probeGeneration == generation {
-				s.prober, s.probeGeneration = nil, 0
-			}
-			s.mu.Unlock()
-		}()
-	}
+	}()
 	var failures <-chan error
 	if monitored, ok := lease.(HealthMonitoringLease); ok {
 		failures = monitored.HealthFailures()
@@ -1000,13 +993,27 @@ func (m *Manager) waitForAttemptEnd(ctx context.Context, s *session, generation 
 }
 
 func (m *Manager) advance(s *session, generation uint64, state State, profile *ProfileSummary) bool {
+	return m.advanceWithLease(s, generation, state, profile, nil)
+}
+
+func (m *Manager) advanceConnected(s *session, generation uint64, profile *ProfileSummary, lease RuntimeLease) bool {
+	return m.advanceWithLease(s, generation, StateConnected, profile, lease)
+}
+
+func (m *Manager) advanceWithLease(s *session, generation uint64, state State, profile *ProfileSummary, lease RuntimeLease) bool {
 	s.mu.Lock()
-	if s.generation != generation || s.state == StateStopping {
+	if s.generation != generation || s.state == StateStopping || s.stopRequested {
 		s.mu.Unlock()
 		return false
 	}
 	s.state, s.active = state, cloneSummaryPtr(profile)
 	if state == StateConnected {
+		// Register before publishing CONNECTED so an event observing that state
+		// can always reach this generation's health monitor.
+		s.prober, s.probeGeneration = nil, 0
+		if prober, ok := lease.(ProbingLease); ok {
+			s.prober, s.probeGeneration = prober, generation
+		}
 		s.startOriginGeneration = 0
 		s.lastConnectedAt = m.now()
 		s.hasConnectedAt = true
