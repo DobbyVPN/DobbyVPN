@@ -65,6 +65,11 @@ func GenerateXrayConfig(
 	userConfig["inbounds"] = []interface{}{socksInbound}
 
 	ensureXrayLogConfig(userConfig)
+	// Xray filters messages before invoking our handler. Capture info when the
+	// requested threshold is warning so the bridge can promote tunnel resets;
+	// the bridge still enforces the requested threshold after classification.
+	captureXrayLogMessages(userConfig)
+	applyGrpcKeepaliveDefaults(userConfig)
 
 	finalJSON, err := json.Marshal(userConfig)
 	if err != nil {
@@ -80,6 +85,13 @@ func GenerateXrayConfig(
 	return infraConfig.Build()
 }
 
+func captureXrayLogMessages(userConfig map[string]interface{}) {
+	logConfig := userConfig["log"].(map[string]interface{})
+	if logConfig["loglevel"] == xrayLogLevelWarning {
+		logConfig["loglevel"] = xrayLogLevelInfo
+	}
+}
+
 func ensureXrayLogConfig(userConfig map[string]interface{}) {
 	logConfig, ok := userConfig["log"].(map[string]interface{})
 	if !ok {
@@ -90,7 +102,7 @@ func ensureXrayLogConfig(userConfig map[string]interface{}) {
 	level, _ := logConfig["loglevel"].(string)
 	normalizedLevel := strings.ToLower(level)
 	switch normalizedLevel {
-	case defaultXrayLogLevelName, xrayLogLevelInfo, xrayLogLevelWarning, xrayLogLevelError:
+	case xrayLogLevelDebug, xrayLogLevelInfo, xrayLogLevelWarning, xrayLogLevelError:
 		if level != normalizedLevel {
 			logConfig["loglevel"] = normalizedLevel
 		}
@@ -103,4 +115,70 @@ func ensureXrayLogConfig(userConfig map[string]interface{}) {
 			log.Debugf(xrayCommon.Category, "xray log config applied: level=%s reason=unsupported previous=%q", defaultXrayLogLevelName, level)
 		}
 	}
+}
+
+// applyGrpcKeepaliveDefaults makes gRPC outbounds send HTTP/2 keepalive PINGs
+// even when a stream is idle, so a 60s idle timeout in front of the server
+// doesn't reset the connection (see issue #342). It never overrides a value
+// the user's own config already set.
+func applyGrpcKeepaliveDefaults(userConfig map[string]interface{}) {
+	outbounds, ok := userConfig["outbounds"].([]interface{})
+	if !ok {
+		return
+	}
+
+	updated := 0
+	for _, outbound := range outbounds {
+		outboundMap, ok := outbound.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		streamSettings, ok := outboundMap["streamSettings"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if streamSettings["network"] != "grpc" {
+			continue
+		}
+		grpcSettings, ok := streamSettings["grpcSettings"].(map[string]interface{})
+		if !ok {
+			if _, present := streamSettings["grpcSettings"]; present && streamSettings["grpcSettings"] != nil {
+				continue
+			}
+			grpcSettings = make(map[string]interface{})
+			streamSettings["grpcSettings"] = grpcSettings
+		}
+
+		changed := false
+		if setIntIfMissing(grpcSettings, "idle_timeout", defaultGrpcIdleTimeoutSeconds) {
+			changed = true
+		}
+		if setIntIfMissing(grpcSettings, "health_check_timeout", defaultGrpcHealthCheckTimeoutSeconds) {
+			changed = true
+		}
+		if setBoolIfMissing(grpcSettings, "permit_without_stream", defaultGrpcPermitWithoutStream) {
+			changed = true
+		}
+		if changed {
+			updated++
+		}
+	}
+
+	log.Debugf(xrayCommon.Category, "grpc keepalive defaults applied: outbounds=%d updated=%d", len(outbounds), updated)
+}
+
+func setIntIfMissing(settings map[string]interface{}, key string, value int) bool {
+	if _, ok := settings[key]; ok {
+		return false
+	}
+	settings[key] = value
+	return true
+}
+
+func setBoolIfMissing(settings map[string]interface{}, key string, value bool) bool {
+	if _, ok := settings[key]; ok {
+		return false
+	}
+	settings[key] = value
+	return true
 }

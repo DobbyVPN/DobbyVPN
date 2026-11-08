@@ -16,13 +16,17 @@ var stderrMu sync.Mutex
 var stderrCapture *rawCapture
 
 type rawCapture struct {
-	mu         sync.Mutex
-	path       string
-	file       *os.File
-	limit      int64
-	run        string
-	generation uint64
-	stdout     bool
+	mu                  sync.Mutex
+	path                string
+	file                *os.File
+	limit               int64
+	run                 string
+	generation          uint64
+	stdout              bool
+	pending             bool // current generation was renamed; finish replacement before rotating again
+	openReplacement     func(string) (*os.File, error)
+	prepareReplacement  func(*os.File, os.FileInfo) error
+	redirectReplacement func(*os.File) error
 }
 
 // Raw descriptors have no whole-record framing. Preserve their file identities;
@@ -204,13 +208,42 @@ func (capture *rawCapture) writeHeader(file *os.File) error {
 func (capture *rawCapture) monitor() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	failures := 0
+	skip := 0
 	for range ticker.C {
-		if err := capture.rotate(); err != nil {
-			// Direct stderr only: never recurse through the structured sink.
-			_, _ = fmt.Fprintf(Stderr, "stderr rotation failed; rotation stopped: %v\n", err)
-			return
+		if skip > 0 {
+			skip--
+			continue
 		}
+		err := capture.rotate()
+		if err == nil {
+			if failures > 0 {
+				_, _ = fmt.Fprintf(Stderr, "stderr rotation recovered after %d failed attempts\n", failures)
+			}
+			failures = 0
+			continue
+		}
+		// A transient failure (for example "too many open files") must not
+		// stop rotation for the rest of the process lifetime. Retry with a
+		// capped back-off and report only the first failure of a streak and
+		// every power-of-two attempt after it, so the log is not flooded.
+		failures++
+		if failures&(failures-1) == 0 {
+			// Direct stderr only: never recurse through the structured sink.
+			_, _ = fmt.Fprintf(Stderr, "stderr rotation failed (attempt %d), will retry: %v\n", failures, err)
+		}
+		skip = rotationRetryDelayTicks(failures)
 	}
+}
+
+// rotationRetryDelayTicks returns how many 100 ms monitor ticks to skip after
+// the given number of consecutive failures: 1 s, 2 s, 4 s, ... capped at 30 s.
+func rotationRetryDelayTicks(failures int) int {
+	const maxTicks = 300
+	if failures >= 6 {
+		return maxTicks
+	}
+	return 10 << (failures - 1)
 }
 
 func (capture *rawCapture) rotate() error {
@@ -221,27 +254,43 @@ func (capture *rawCapture) rotate() error {
 		if err != nil {
 			return err
 		}
-		if info.Size() < capture.limit {
+		if !capture.pending && info.Size() < capture.limit {
 			return nil
 		}
-		if rotateErr := rotateFiles(capture.path); rotateErr != nil {
-			return rotateErr
+		if !capture.pending {
+			if rotateErr := rotateFiles(capture.path); rotateErr != nil {
+				return rotateErr
+			}
+			capture.pending = true
 		}
-		next, err := openAppend(capture.path)
+		open := capture.openReplacement
+		if open == nil {
+			open = openAppend
+		}
+		next, err := open(capture.path)
 		if err != nil {
 			return err
 		}
-		if err := preservePermissions(next, info); err != nil {
+		prepare := capture.prepareReplacement
+		if prepare == nil {
+			prepare = preservePermissions
+		}
+		if err := prepare(next, info); err != nil {
 			return errors.Join(err, next.Close())
 		}
 		if err := capture.writeHeader(next); err != nil {
 			return errors.Join(err, next.Close())
 		}
-		if err := capture.redirect(next); err != nil {
+		redirect := capture.redirectReplacement
+		if redirect == nil {
+			redirect = capture.redirect
+		}
+		if err := redirect(next); err != nil {
 			return errors.Join(err, next.Close())
 		}
 		previous := capture.file
 		capture.file = next
+		capture.pending = false
 		return previous.Close()
 	})
 }

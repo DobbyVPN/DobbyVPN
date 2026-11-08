@@ -156,14 +156,18 @@ func run() {
 	log.Debugf(desktopLogCategory, "desktop JSON control socket ready")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(signals)
 	var serveErr error
 	select {
 	case <-signals:
 	case serveErr = <-serveDone:
 	}
-	if err := shutdownDesktop(listener.Close, serveErr, desktopProcessBinding()); err != nil {
-		panic(fmt.Sprintf("desktop shutdown failed: %v", err))
+	// Keep the signal handler installed while cleanup runs, so a second signal
+	// cannot kill the process mid-cleanup. It is released explicitly because the
+	// failure path below exits without running deferred calls.
+	shutdownErr := shutdownDesktop(listener.Close, serveErr, desktopProcessBinding())
+	signal.Stop(signals)
+	if shutdownErr != nil {
+		exitWithShutdownError(shutdownErr)
 	}
 }
 
@@ -174,4 +178,12 @@ func (c *Executor) Execute(mode string) {
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
 	}
+}
+
+// Keep the ordinary failure path callable by subprocess regressions: os.Exit
+// must preserve the cleanup error and nonzero status without a panic trace.
+func exitWithShutdownError(err error) {
+	log.Errorf(desktopLogCategory, "desktop shutdown failed: %v", err)
+	fmt.Fprintf(os.Stderr, "desktop shutdown failed: %v\n", err)
+	os.Exit(1)
 }

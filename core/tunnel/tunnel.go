@@ -84,6 +84,19 @@ type trackedConn struct {
 	closed   bool
 	owner    *flowOwner
 	closeErr error
+	traffic  trafficCounter
+}
+
+func (c *trackedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	c.traffic.recordRead(n, c.started)
+	return n, err
+}
+
+func (c *trackedConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	c.traffic.recordWrite(n)
+	return n, err
 }
 
 func (c *trackedConn) Close() error {
@@ -105,7 +118,7 @@ func (c *trackedConn) Close() error {
 	if c.owner != nil {
 		c.owner.release(c, nil)
 	}
-	log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s activeTCP=%d", c.route, c.dest, time.Since(c.started), active)
+	log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s %s activeTCP=%d", c.route, c.dest, time.Since(c.started), c.traffic.summary(), active)
 	return nil
 }
 
