@@ -21,6 +21,7 @@ class DobbyVpnService : VpnService() {
     }
 
     @Volatile private var shuttingDown = false
+    @Volatile private var attached = false
     private var goStopConfirmed = false
     @Volatile private var restorationRunning = false
     private var operationFailure: Throwable? = null
@@ -46,6 +47,7 @@ class DobbyVpnService : VpnService() {
         try {
             NativeGoSession.attach(this)
             NativeVpnBridge.attach(this)
+            attached = true
         } catch (failure: Throwable) {
             shuttingDown = true
             recordFailure("vpn.service.attach_failed", failure)
@@ -57,7 +59,7 @@ class DobbyVpnService : VpnService() {
     }
 
     @Synchronized
-    internal fun isReadyForTunnel(): Boolean = !shuttingDown
+    internal fun isReadyForTunnel(): Boolean = attached && !shuttingDown
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
@@ -329,7 +331,12 @@ class DobbyVpnService : VpnService() {
         // Go's release callback until the one owner confirms cleanup.
         NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.shutdown", "$owner mode=stop_and_wait")
         Thread({
-            val failure = NativeGoSession.stopAndWait()
+            val failure = try {
+                NativeGoSession.stopAndWait()
+            } catch (error: Throwable) {
+                recordFailure("vpn.service.shutdown_failed", error)
+                return@Thread
+            }
             if (failure.isEmpty()) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 NativeVpnBridge.detach(this)

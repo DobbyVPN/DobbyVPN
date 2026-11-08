@@ -8,7 +8,7 @@ import android.content.Context;
  */
 public final class NativeGoSession {
     private static volatile boolean loaded;
-    private static volatile boolean loggerReady;
+    private static final NativeStartup startup = new NativeStartup();
     private static volatile Throwable loadFailure;
 
     static {
@@ -26,11 +26,11 @@ public final class NativeGoSession {
     private NativeGoSession() {}
 
     public static boolean isAvailable() {
-        return loaded;
+        return loaded && startup.isAttached();
     }
 
     static boolean isLoggerReady() {
-        return loaded && loggerReady;
+        return loaded && startup.isLoggerReady();
     }
 
     public static Throwable loadFailure() {
@@ -42,7 +42,7 @@ public final class NativeGoSession {
      * All UI and instrumentation entry points use this method before issuing
      * session commands.
      */
-    public static void attach(Context context) {
+    public static synchronized void attach(Context context) {
         if (!loaded) {
             Throwable failure = loadFailure;
             if (failure == null) {
@@ -51,27 +51,29 @@ public final class NativeGoSession {
             NativeVpnBridge.recordNativeFailure(context, "go.library_load_failed", failure);
             throw new IllegalStateException("Go backend native library is unavailable", failure);
         }
-        String logPath = NativeVpnBridge.goDiagnosticPath(context);
-        String failure = initializeLogger(logPath);
-        if (failure == null || !failure.isEmpty()) {
-            IllegalStateException error = new IllegalStateException(
-                "Go backend diagnostics could not be initialized"
-                    + (failure == null ? "" : ": " + failure)
-            );
-            NativeVpnBridge.recordNativeFailure(context, "go.logger_init_failed", error);
-            throw error;
-        }
-        loggerReady = true;
-        String sourcePath = NativeVpnBridge.sourceURLPath(context);
-        String attachFailure = attachNative(context.getApplicationContext(), sourcePath);
-        if (attachFailure == null || !attachFailure.isEmpty()) {
-            IllegalStateException error = new IllegalStateException(
-                "Go backend saved configuration storage could not be attached"
-                    + (attachFailure == null ? "" : ": " + attachFailure)
-            );
-            NativeVpnBridge.recordNativeFailure(context, "go.saved_source_attach_failed", error);
-            throw error;
-        }
+        startup.attach(() -> {
+            String logPath = NativeVpnBridge.goDiagnosticPath(context);
+            String failure = initializeLogger(logPath);
+            if (failure == null || !failure.isEmpty()) {
+                IllegalStateException error = new IllegalStateException(
+                    "Go backend diagnostics could not be initialized"
+                        + (failure == null ? "" : ": " + failure)
+                );
+                NativeVpnBridge.recordNativeFailure(context, "go.logger_init_failed", error);
+                throw error;
+            }
+        }, () -> {
+            String sourcePath = NativeVpnBridge.sourceURLPath(context);
+            String attachFailure = attachNative(context.getApplicationContext(), sourcePath);
+            if (attachFailure == null || !attachFailure.isEmpty()) {
+                IllegalStateException error = new IllegalStateException(
+                    "Go backend saved configuration storage could not be attached"
+                        + (attachFailure == null ? "" : ": " + attachFailure)
+                );
+                NativeVpnBridge.recordNativeFailure(context, "go.saved_source_attach_failed", error);
+                throw error;
+            }
+        });
     }
 
     private static native String initializeLogger(String path);

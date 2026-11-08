@@ -729,6 +729,11 @@ internal class SessionController(
     }
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
+        if (!backendAvailable) {
+            state = state.copy(source = value, sourceDirty = true, loading = false,
+                loadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         restoredPendingSource = null
         if (trigger != LoadTrigger.RESTORE && trigger != LoadTrigger.TYPED) dismissedErrors = emptySet()
         val source = value.trim()
@@ -1254,6 +1259,10 @@ internal class SessionController(
     }
 
     fun uploadLogs() {
+        if (!backendAvailable) {
+            state = state.copy(uploadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         if (state.uploadingLogs || !latest.logsUploadAvailable) return
         val selected = latest
         val attempt = LogUploader(activity.applicationContext, phase = { phase ->
