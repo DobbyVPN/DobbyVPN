@@ -597,23 +597,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 			}
 			err := check(ctx, ref, proxyAddr)
 			if eventReason != "" {
-				fields := map[string]any{
-					"reason": eventReason, "session_id": ref.SessionID,
-					"generation": ref.Generation, "duration_ms": time.Since(started).Milliseconds(),
-					"result": "succeeded",
-				}
-				if err != nil {
-					fields["error"] = err.Error()
-				}
-				if ctx.Err() != nil {
-					fields["result"] = "canceled"
-					log.Info(category, "event health check completed", fields)
-				} else if err != nil {
-					fields["result"] = "failed"
-					log.Warn(category, "event health check completed", fields)
-				} else {
-					log.Info(category, "event health check completed", fields)
-				}
+				logEventHealthCheckResult(ctx, ref, eventReason, started, err)
 				eventReason = ""
 			}
 			if ctx.Err() != nil {
@@ -657,6 +641,25 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 			}
 		}
 	}()
+}
+
+func logEventHealthCheckResult(ctx context.Context, ref sessionapi.SessionRef, reason string, started time.Time, err error) {
+	fields := map[string]any{
+		"reason": reason, "session_id": ref.SessionID,
+		"generation": ref.Generation, "duration_ms": time.Since(started).Milliseconds(),
+		"result": "succeeded",
+	}
+	if err != nil {
+		fields["error"] = err.Error()
+	}
+	if ctx.Err() != nil {
+		fields["result"] = "canceled"
+	} else if err != nil {
+		fields["result"] = "failed"
+		log.Warn(category, "event health check completed", fields)
+		return
+	}
+	log.Info(category, "event health check completed", fields)
 }
 
 func (l *lease) Stop(ctx context.Context) error {
