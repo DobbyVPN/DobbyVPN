@@ -43,6 +43,7 @@ type managerAPI interface {
 	Stop(context.Context, string, uint64) (sessionapi.StopResult, error)
 	Snapshot(context.Context, string) (sessionapi.SnapshotResult, error)
 	PrepareLogUpload(context.Context, string, string) (sessionapi.LogUploadPreparation, error)
+	NetworkEvent(context.Context, string, string) error
 }
 
 // Binding is a thin synchronous JSON boundary over one process manager.
@@ -266,6 +267,7 @@ func (b *Binding) CallJSONWithConfiguration(
 		Index            int32   `json:"index"`
 		ReplaceCurrent   bool    `json:"replace_current"`
 		Digest           string  `json:"digest"`
+		Reason           string  `json:"reason"`
 	}
 	if len(params) != 0 {
 		decoder := json.NewDecoder(bytes.NewReader(params))
@@ -304,6 +306,11 @@ func (b *Binding) CallJSONWithConfiguration(
 		return b.startContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, nil, value.ReplaceCurrent, value.Digest)
 	case "Stop":
 		return b.StopContext(ctx, value.SessionID, value.Generation)
+	case "NetworkEvent":
+		if err := b.manager.NetworkEvent(ctx, value.SessionID, value.Reason); err != nil {
+			return failed(err)
+		}
+		return success(struct{}{})
 	default:
 		return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "unknown command"})
 	}

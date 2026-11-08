@@ -232,6 +232,12 @@ type HealthMonitoringLease interface {
 	HealthFailures() <-chan error
 }
 
+// ProbingLease is implemented by health-monitoring leases that can run a
+// connected-health check immediately, for example after system wake.
+type ProbingLease interface {
+	ProbeNow(reason string)
+}
+
 // PlatformAdapter owns platform permission and callback registration for one
 // network generation. PrepareTunnel is called once per VPN activation.
 // ProtectSocket is exposed here so implementations can make failure fatal for
@@ -314,6 +320,9 @@ type session struct {
 	hasConnectedAt             bool
 	lastTransitionAt           time.Time
 	sequence                   uint64
+
+	probeGeneration uint64
+	prober          ProbingLease
 }
 
 // NewManager never starts a real core.  Its default runtime fails with the
@@ -793,6 +802,29 @@ func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cau
 	s.recoveryOriginGeneration = 0
 }
 
+// NetworkEvent reports a system wake or network-path change. When a connected
+// generation is monitored it triggers an immediate health check; otherwise the
+// event is only logged. It never changes state itself, so reconnects stay under
+// the automatic-recovery limit.
+func (m *Manager) NetworkEvent(_ context.Context, sessionID, reason string) error {
+	s, err := m.get(sessionID)
+	if err != nil {
+		return err
+	}
+	if len(reason) > 64 {
+		reason = reason[:64]
+	}
+	s.mu.Lock()
+	state, generation := s.state, s.generation
+	probe := s.prober != nil && s.probeGeneration == generation && state == StateConnected && !s.stopRequested
+	if probe {
+		s.prober.ProbeNow(reason)
+	}
+	s.mu.Unlock()
+	log.Info("SESSION", "network event", map[string]any{"reason": reason, "state": string(state), "generation": generation, "probe": probe})
+	return nil
+}
+
 func (m *Manager) Snapshot(_ context.Context, sessionID string) (result SnapshotResult, err error) {
 	s, err := m.get(sessionID)
 	if err != nil {
@@ -885,7 +917,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 			err = failure(FailureRuntime, "runtime returned an empty lease")
 		}
 		if err == nil && ctx.Err() == nil {
-			if m.advance(s, generation, StateConnected, &profile.Summary) {
+			if m.advanceConnected(s, generation, &profile.Summary, lease) {
 				m.waitForAttemptEnd(ctx, s, generation, lease)
 			}
 			m.finish(s, generation, nil)
@@ -932,6 +964,13 @@ func prepareCandidate(ctx context.Context, s *session, index int, generation uin
 
 // waitForAttemptEnd keeps cleanup with the worker that acquired the lease.
 func (m *Manager) waitForAttemptEnd(ctx context.Context, s *session, generation uint64, lease RuntimeLease) {
+	defer func() {
+		s.mu.Lock()
+		if s.probeGeneration == generation {
+			s.prober, s.probeGeneration = nil, 0
+		}
+		s.mu.Unlock()
+	}()
 	var failures <-chan error
 	if monitored, ok := lease.(HealthMonitoringLease); ok {
 		failures = monitored.HealthFailures()
@@ -954,13 +993,27 @@ func (m *Manager) waitForAttemptEnd(ctx context.Context, s *session, generation 
 }
 
 func (m *Manager) advance(s *session, generation uint64, state State, profile *ProfileSummary) bool {
+	return m.advanceWithLease(s, generation, state, profile, nil)
+}
+
+func (m *Manager) advanceConnected(s *session, generation uint64, profile *ProfileSummary, lease RuntimeLease) bool {
+	return m.advanceWithLease(s, generation, StateConnected, profile, lease)
+}
+
+func (m *Manager) advanceWithLease(s *session, generation uint64, state State, profile *ProfileSummary, lease RuntimeLease) bool {
 	s.mu.Lock()
-	if s.generation != generation || s.state == StateStopping {
+	if s.generation != generation || s.state == StateStopping || s.stopRequested {
 		s.mu.Unlock()
 		return false
 	}
 	s.state, s.active = state, cloneSummaryPtr(profile)
 	if state == StateConnected {
+		// Register before publishing CONNECTED so an event observing that state
+		// can always reach this generation's health monitor.
+		s.prober, s.probeGeneration = nil, 0
+		if prober, ok := lease.(ProbingLease); ok {
+			s.prober, s.probeGeneration = prober, generation
+		}
 		s.startOriginGeneration = 0
 		s.lastConnectedAt = m.now()
 		s.hasConnectedAt = true
