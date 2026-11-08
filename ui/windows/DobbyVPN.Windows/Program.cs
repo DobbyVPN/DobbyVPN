@@ -38,6 +38,7 @@ internal static class Program
         LogInstanceRegistration(instance);
         if (!instance.IsCurrent)
         {
+            LogInstanceVersions(instance.ProcessId);
             LogActivation("activation.redirect-start", "Redirecting activation to the running app", activation, args);
             try
             {
@@ -98,6 +99,52 @@ internal static class Program
             targetProcessId = instance.ProcessId,
             targetProcess,
         });
+    }
+
+    // Permanent DEBUG evidence for a surviving frontend: the version strings
+    // identify whether the running target is the launch being redirected.
+    private static void LogInstanceVersions(uint targetProcessId)
+    {
+        string? targetPath = null;
+        string? targetError = null;
+        try
+        {
+            using var process = Process.GetProcessById(checked((int)targetProcessId));
+            targetPath = process.MainModule?.FileName;
+        }
+        catch (Exception error) { targetError = error.ToString(); }
+
+        NativeDiagnostics.Current.RecordDebug("activation.instance-versions",
+            "Logging app and target process versions before redirecting activation", new
+            {
+                currentProcessId = Environment.ProcessId,
+                currentPath = Environment.ProcessPath,
+                ownVersion = OwnVersion(),
+                ownFileVersion = FileVersionInfoFor(Environment.ProcessPath),
+                targetProcessId,
+                targetPath,
+                targetFileVersion = FileVersionInfoFor(targetPath),
+                targetError,
+            });
+    }
+
+    private static string? OwnVersion() =>
+        System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3);
+
+    private static object? FileVersionInfoFor(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        try
+        {
+            var info = FileVersionInfo.GetVersionInfo(path);
+            return new
+            {
+                fileVersion = info.FileVersion,
+                productVersion = info.ProductVersion,
+                originalFilename = info.OriginalFilename,
+            };
+        }
+        catch (Exception error) { return new { error = error.ToString() }; }
     }
 
     internal static void Attach(MainWindow window)
