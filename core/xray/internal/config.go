@@ -126,9 +126,16 @@ func applyGrpcKeepaliveDefaults(userConfig map[string]interface{}) {
 		if !ok {
 			continue
 		}
+		if streamSettings["network"] != "grpc" {
+			continue
+		}
 		grpcSettings, ok := streamSettings["grpcSettings"].(map[string]interface{})
 		if !ok {
-			continue
+			if _, present := streamSettings["grpcSettings"]; present && streamSettings["grpcSettings"] != nil {
+				continue
+			}
+			grpcSettings = make(map[string]interface{})
+			streamSettings["grpcSettings"] = grpcSettings
 		}
 
 		changed := false

@@ -62,8 +62,9 @@ func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
 	case *xrayLog.DNSLog:
 		appLog.Debugf("Xray-Core", "%s", msg.String())
 	case *xrayLog.GeneralMessage:
-		if int32(msg.Severity) <= l.logLevel.Load() {
-			switch classifyXrayMessage(msg.Severity, fmt.Sprint(msg.Content)) {
+		severity := classifyXrayMessage(msg.Severity, fmt.Sprint(msg.Content))
+		if int32(severity) <= l.logLevel.Load() {
+			switch severity {
 			case xrayLog.Severity_Debug:
 				appLog.Debugf("Xray-Core", "%s", msg.Content)
 			case xrayLog.Severity_Info:
