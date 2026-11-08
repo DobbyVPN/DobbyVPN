@@ -117,6 +117,19 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     private var anchorCharacterIndex: Int?
     private var anchorViewportY: CGFloat?
 
+    init() {
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: .zero)
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        super.init(frame: .zero, textContainer: container)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
     func installLogsMenu() {
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(showLogsMenu(_:)))
         doubleTap.numberOfTapsRequired = 2
@@ -263,13 +276,7 @@ struct DobbyLogView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UITextView {
-        let view: DobbyLogTextView
-        if #available(iOS 16.0, *) {
-            // Reading-position anchoring below uses NSLayoutManager; select TextKit 1 before layout.
-            view = DobbyLogTextView(usingTextLayoutManager: false)
-        } else {
-            view = DobbyLogTextView()
-        }
+        let view = DobbyLogTextView()
         view.isEditable = false
         view.isSelectable = true
         view.backgroundColor = DobbyPalette.surface
