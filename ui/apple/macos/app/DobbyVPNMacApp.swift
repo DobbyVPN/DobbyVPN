@@ -6,9 +6,13 @@ import SwiftUI
 struct DobbyVPNMacApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @StateObject private var model: DobbySessionViewModel
+    private let systemEvents: MacSystemEventMonitor
 
     init() {
-        _model = StateObject(wrappedValue: DobbySessionViewModel(client: MacDesktopSessionClient()))
+        let client = MacDesktopSessionClient()
+        _model = StateObject(wrappedValue: DobbySessionViewModel(client: client))
+        systemEvents = MacSystemEventMonitor(client: client)
+        systemEvents.start()
     }
 
     var body: some Scene {
