@@ -73,6 +73,8 @@ func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
 				appLog.Warnf("Xray-Core", "%s", msg.Content)
 			case xrayLog.Severity_Error:
 				appLog.Errorf("Xray-Core", "%s", msg.Content)
+			case xrayLog.Severity_Unknown:
+				appLog.Infof("Xray-Core", "%s", msg.Content)
 			default:
 				appLog.Infof("Xray-Core", "%s", msg.Content)
 			}
