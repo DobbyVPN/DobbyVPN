@@ -65,6 +65,10 @@ func GenerateXrayConfig(
 	userConfig["inbounds"] = []interface{}{socksInbound}
 
 	ensureXrayLogConfig(userConfig)
+	// Xray filters messages before invoking our handler. Capture info when the
+	// requested threshold is warning so the bridge can promote tunnel resets;
+	// the bridge still enforces the requested threshold after classification.
+	captureXrayLogMessages(userConfig)
 	applyGrpcKeepaliveDefaults(userConfig)
 
 	finalJSON, err := json.Marshal(userConfig)
@@ -79,6 +83,13 @@ func GenerateXrayConfig(
 	}
 
 	return infraConfig.Build()
+}
+
+func captureXrayLogMessages(userConfig map[string]interface{}) {
+	logConfig := userConfig["log"].(map[string]interface{})
+	if logConfig["loglevel"] == xrayLogLevelWarning {
+		logConfig["loglevel"] = xrayLogLevelInfo
+	}
 }
 
 func ensureXrayLogConfig(userConfig map[string]interface{}) {
