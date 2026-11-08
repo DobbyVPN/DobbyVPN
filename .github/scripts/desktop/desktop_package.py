@@ -35,6 +35,7 @@ NATIVE_UI_REQUIREMENTS = SCRIPT_DIR.parent / "requirements-native-ui.txt"
 WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS = 180
 WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS = 30
 WINDOWS_TEMP_PATH_BUFFER_CAPACITY = 32768
+WIX_VERSION = "6.0.0"
 
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 from bounded_process import (
@@ -696,11 +697,17 @@ def _build_windows_msi(
     wix_tools.mkdir()
     _run(
         "install WiX tool",
-        ["dotnet", "tool", "install", "wix", "--version", "6.0.0", "--tool-path", str(wix_tools)],
+        ["dotnet", "tool", "install", "wix", "--version", WIX_VERSION, "--tool-path", str(wix_tools)],
         cwd=installer,
         env=env,
     )
     env["PATH"] = str(wix_tools) + os.pathsep + env.get("PATH", "")
+    _run(
+        "install WiX Util extension",
+        [str(wix_tools / "wix.exe"), "extension", "add", f"WixToolset.Util.wixext/{WIX_VERSION}"],
+        cwd=installer,
+        env=env,
+    )
     completed = _run(
         "Windows MSI build", ["cmd.exe", "/c", "build.bat"],
         cwd=installer, env=env, capture=True, check=False,
