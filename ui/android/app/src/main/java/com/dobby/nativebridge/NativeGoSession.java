@@ -7,14 +7,35 @@ import android.content.Context;
  * tests to call the process-owned Go session manager.
  */
 public final class NativeGoSession {
+    private static volatile boolean loaded;
+    private static volatile boolean loggerReady;
+    private static volatile Throwable loadFailure;
+
     static {
         // Load the process-owned Go backend before exposing session commands.
-        System.loadLibrary("dobby_vpn");
+        // Keep load failures catchable so the basic UI and ordinary
+        // diagnostics can still start when the native library is unavailable.
+        try {
+            System.loadLibrary("dobby_vpn");
+            loaded = true;
+        } catch (Throwable failure) {
+            loadFailure = failure;
+        }
     }
 
     private NativeGoSession() {}
-    private static volatile boolean loggerReady;
-    static boolean isLoggerReady() { return loggerReady; }
+
+    public static boolean isAvailable() {
+        return loaded;
+    }
+
+    static boolean isLoggerReady() {
+        return loaded && loggerReady;
+    }
+
+    public static Throwable loadFailure() {
+        return loadFailure;
+    }
 
     /**
      * Initializes complete Go diagnostics before attaching platform callbacks.
@@ -22,6 +43,14 @@ public final class NativeGoSession {
      * session commands.
      */
     public static void attach(Context context) {
+        if (!loaded) {
+            Throwable failure = loadFailure;
+            if (failure == null) {
+                failure = new UnsatisfiedLinkError("dobby_vpn could not be loaded");
+            }
+            NativeVpnBridge.recordNativeFailure(context, "go.library_load_failed", failure);
+            throw new IllegalStateException("Go backend native library is unavailable", failure);
+        }
         String logPath = NativeVpnBridge.goDiagnosticPath(context);
         String failure = initializeLogger(logPath);
         if (failure == null || !failure.isEmpty()) {
@@ -72,5 +101,6 @@ public final class NativeGoSession {
     static native String restore(boolean onlyPreviouslyEnabled);
 
     public static native String snapshot(String sessionId);
+
     public static native String prepareLogUpload(String sessionId, String digest);
 }
