@@ -243,7 +243,17 @@ object NativeVpnBridge {
 
     @JvmStatic
     fun recordNativeFailure(context: Context, event: String, failure: Throwable) {
-        recordDiagnostic(context, event, "Android native bridge operation failed", failure)
+        try {
+            recordDiagnostic(context, event, "Android native bridge operation failed", failure)
+        } catch (diagnosticFailure: Throwable) {
+            if (diagnosticFailure !== failure) failure.addSuppressed(diagnosticFailure)
+            try {
+                Log.e("DobbyVPN", "Native failure could not be stored: $event", failure)
+            } catch (loggingFailure: Throwable) {
+                if (loggingFailure !== failure) failure.addSuppressed(loggingFailure)
+                System.err.println("Native failure could not be stored: $event\n${failure.stackTraceToString()}")
+            }
+        }
     }
 
     /** Prepare one private archive; the Activity owns its chooser and lifetime. */
