@@ -589,8 +589,33 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 		defer close(l.healthDone)
 		defer close(l.healthFailed)
 		var failures []error
+		var eventReason string
 		for {
+			var started time.Time
+			if eventReason != "" {
+				started = time.Now()
+			}
 			err := check(ctx, ref, proxyAddr)
+			if eventReason != "" {
+				fields := map[string]any{
+					"reason": eventReason, "session_id": ref.SessionID,
+					"generation": ref.Generation, "duration_ms": time.Since(started).Milliseconds(),
+					"result": "succeeded",
+				}
+				if err != nil {
+					fields["error"] = err.Error()
+				}
+				if ctx.Err() != nil {
+					fields["result"] = "canceled"
+					log.Info(category, "event health check completed", fields)
+				} else if err != nil {
+					fields["result"] = "failed"
+					log.Warn(category, "event health check completed", fields)
+				} else {
+					log.Info(category, "event health check completed", fields)
+				}
+				eventReason = ""
+			}
 			if ctx.Err() != nil {
 				return
 			}
@@ -626,6 +651,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				if !timer.Stop() {
 					<-timer.C
 				}
+				eventReason = reason
 				log.Infof(category, "health check triggered by %s generation=%d", reason, ref.Generation)
 			case <-timer.C:
 			}
