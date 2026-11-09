@@ -44,6 +44,7 @@ type OutlineDevice struct {
 	websocket     bool
 	hasTCPPath    bool
 	hasUDPPath    bool
+	ipv6          ipv6Capability
 }
 
 func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {
@@ -176,13 +177,12 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 		log.Warnf(Category, "[SOCKS5 DIAL WARN] network=%s addr=%s parsedHost=%s parsedPort=%d", network, addr, host, port)
 	}
 
-	// The Shadowsocks server behind Outline profiles has no IPv6 egress, so a
-	// real IPv6 destination always fails; dialing it anyway just keeps the
-	// caller (e.g. a browser's Happy Eyeballs retries) waiting on a connection
-	// that can never succeed (issue #341). Reject it immediately instead.
-	if isRealIPv6Literal(host) {
-		log.Debugf(Category, "[SOCKS5 DIAL] rejecting IPv6 destination dst=%s network=%s", addr, network)
-		return nil, fmt.Errorf("IPv6 destination not supported on this profile: %s", addr)
+	// Applications prefer IPv6 and keep retrying an address that never works
+	// (issue #341). Whether it can work depends on the server's IPv6 egress, so
+	// the profile is probed once; IPv6 stays fully available when it passes.
+	if isRealIPv6Literal(host) && ctx.Value(ipv6ProbeKey{}) == nil && !d.ipv6.usable(ctx, d.probeIPv6) {
+		log.Debugf(Category, "[SOCKS5 DIAL] profile has no IPv6 egress, rejecting dst=%s network=%s", addr, network)
+		return nil, fmt.Errorf("IPv6 is not reachable through this profile: %s", addr)
 	}
 
 	switch network {
