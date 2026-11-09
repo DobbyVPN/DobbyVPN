@@ -37,6 +37,20 @@ internal sealed class SubscriptionLoadState
 
     internal long Edit(string source, bool valid, SubscriptionInputKind kind, TimeSpan now)
     {
+        // A duplicate edit for the same source (e.g. a spurious TextChanged) must not
+        // supersede an in-flight or queued load: that hides the current load's outcome
+        // and can dispatch a second request (#331). Explicit Retry/Paste/Import/Restore
+        // keep the existing behavior.
+        if (valid && kind == SubscriptionInputKind.Typed)
+        {
+            if (string.Equals(_inFlight?.Source, source, StringComparison.Ordinal) ||
+                string.Equals(_pending?.Source, source, StringComparison.Ordinal) ||
+                string.Equals(_scheduled?.Source, source, StringComparison.Ordinal))
+            {
+                return _revision;
+            }
+        }
+
         _revision++;
         SourceDirty = true;
         _scheduled = null;
