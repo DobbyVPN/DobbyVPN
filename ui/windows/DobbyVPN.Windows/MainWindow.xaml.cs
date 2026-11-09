@@ -1325,8 +1325,18 @@ public sealed partial class MainWindow : Window
         }), true);
         LogsScroll.AddHandler(UIElement.DoubleTappedEvent, new DoubleTappedEventHandler((_, args) =>
         {
-            args.Handled = true;
-            LogsMenu.ShowAt(LogsScroll, new FlyoutShowOptions { Position = args.GetPosition(LogsScroll) });
+            var scrollbarSource = FindLogVerticalScrollBar(args.OriginalSource) is not null;
+            if (!scrollbarSource)
+            {
+                args.Handled = true;
+                LogsMenu.ShowAt(LogsScroll, new FlyoutShowOptions { Position = args.GetPosition(LogsScroll) });
+            }
+            _diagnostics.RecordDebug("logs.double-tap-dispatch", "Dispatched a log viewport double tap", new
+            {
+                source_type = args.OriginalSource?.GetType().FullName,
+                scrollbar_source = scrollbarSource,
+                action = scrollbarSource ? "ignored-scrollbar" : "opened",
+            });
         }), true);
         LogsScroll.SizeChanged += (_, _) =>
         {
