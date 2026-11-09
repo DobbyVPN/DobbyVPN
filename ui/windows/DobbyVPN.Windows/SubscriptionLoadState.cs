@@ -19,13 +19,15 @@ internal sealed class SubscriptionLoadState
 {
     internal const int DebounceMilliseconds = 400;
 
-    internal sealed record Request(long Revision, string Source);
+    internal sealed record Request(long Revision, string Source, SubscriptionInputKind Kind);
 
     private long _revision;
     private Request? _scheduled;
     private TimeSpan? _scheduledAt;
     private Request? _pending;
     private Request? _inFlight;
+    private string? _lastFinishedSource;
+    private TimeSpan _lastFinishedAt;
 
     internal long Revision => _revision;
     internal bool SourceDirty { get; private set; }
@@ -37,18 +39,16 @@ internal sealed class SubscriptionLoadState
 
     internal long Edit(string source, bool valid, SubscriptionInputKind kind, TimeSpan now)
     {
-        // A duplicate edit for the same source (e.g. a spurious TextChanged) must not
+        // A duplicate typed edit for the same source (e.g. a spurious TextChanged) must not
         // supersede an in-flight or queued load: that hides the current load's outcome
         // and can dispatch a second request (#331). Explicit Retry/Paste/Import/Restore
         // keep the existing behavior.
-        if (valid && kind == SubscriptionInputKind.Typed)
+        if (valid && kind == SubscriptionInputKind.Typed &&
+            (string.Equals(_inFlight?.Source, source, StringComparison.Ordinal) ||
+             string.Equals(_pending?.Source, source, StringComparison.Ordinal) ||
+             string.Equals(_scheduled?.Source, source, StringComparison.Ordinal)))
         {
-            if (string.Equals(_inFlight?.Source, source, StringComparison.Ordinal) ||
-                string.Equals(_pending?.Source, source, StringComparison.Ordinal) ||
-                string.Equals(_scheduled?.Source, source, StringComparison.Ordinal))
-            {
-                return _revision;
-            }
+            return _revision;
         }
 
         _revision++;
@@ -59,7 +59,7 @@ internal sealed class SubscriptionLoadState
 
         if (!valid) return _revision;
 
-        var request = new Request(_revision, source);
+        var request = new Request(_revision, source, kind);
         if (kind == SubscriptionInputKind.Typed)
         {
             _scheduled = request;
@@ -79,6 +79,15 @@ internal sealed class SubscriptionLoadState
         if (_inFlight is not null) return null;
         PromoteElapsed(now);
         if (_pending is not { } request) return null;
+        // Guard against a duplicate typed dispatch for a source that just finished
+        // (#331). Explicit retries/paste/import always proceed.
+        if (request.Kind == SubscriptionInputKind.Typed &&
+            string.Equals(_lastFinishedSource, request.Source, StringComparison.Ordinal) &&
+            (now - _lastFinishedAt) < TimeSpan.FromSeconds(3))
+        {
+            _pending = null;
+            return null;
+        }
         _pending = null;
         _inFlight = request;
         return request;
@@ -101,9 +110,19 @@ internal sealed class SubscriptionLoadState
         if (_inFlight != request)
             throw new InvalidOperationException("Completed subscription load did not match the in-flight request");
 
+        _lastFinishedSource = request.Source;
+        _lastFinishedAt = now;
         _inFlight = null;
         PromoteElapsed(now);
         if (_pending is not { } next) return null;
+        // Do not auto-dispatch a duplicate typed request for the source that just
+        // finished (#331). Explicit non-typed requests still proceed.
+        if (next.Kind == SubscriptionInputKind.Typed &&
+            string.Equals(next.Source, request.Source, StringComparison.Ordinal))
+        {
+            _pending = null;
+            return null;
+        }
         _pending = null;
         _inFlight = next;
         return next;
