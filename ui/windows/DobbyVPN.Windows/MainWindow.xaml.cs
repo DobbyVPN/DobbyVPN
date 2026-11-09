@@ -2187,11 +2187,16 @@ public sealed partial class MainWindow : Window
             {
                 process_id = Environment.ProcessId,
                 selected = file is not null,
+                destination = file?.Path,
             });
             if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
             if (file is not null)
             {
                 await _diagnostics.SaveAsync(file.Path, ExportHeader);
+                _diagnostics.RecordInfo("logs.export.saved", "Saved the log export", new
+                {
+                    destination = file.Path,
+                });
             }
         }
         catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _exportError = "Logs could not be saved. Try another location."; RenderError(); }
