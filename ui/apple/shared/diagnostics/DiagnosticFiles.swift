@@ -2,6 +2,41 @@ import Darwin
 import Foundation
 import zlib
 
+/// The attempt a Swift-side stage record belongs to: 32 lowercase hex
+/// characters, minted per user command and never persisted.
+public enum DiagnosticsAttempt {
+    private static let lock = NSLock()
+    private static var value = fresh()
+
+    public static var current: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    /// Starts a new attempt and returns its identity.
+    @discardableResult
+    public static func reset() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        value = fresh()
+        return value
+    }
+
+    /// Installs an identity supplied by the caller (the provider receives it
+    /// with the command so app and provider records correlate).
+    public static func adopt(_ supplied: String) {
+        guard supplied.count == 32, supplied.allSatisfy({ $0.isHexDigit }) else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        value = supplied.lowercased()
+    }
+
+    private static func fresh() -> String {
+        UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    }
+}
+
 public enum DiagnosticFiles {
     public static let threshold: UInt64 = 150_000_000
     private static let processLock = NSLock()
@@ -16,7 +51,8 @@ public enum DiagnosticFiles {
 
     public static func append(
         _ message: String, event: String, level: String, source: String, to path: URL,
-        fields: [String: Any] = [:], rotating: Bool = true, legacyDesktop: Bool = false, legacyExcludedPaths: [String] = [], legacyHome: URL? = nil
+        fields: [String: Any] = [:], rotating: Bool = true, legacyDesktop: Bool = false, legacyExcludedPaths: [String] = [], legacyHome: URL? = nil,
+        flattenFields: Bool = false
     ) throws {
         processLock.lock()
         defer { processLock.unlock() }
@@ -47,7 +83,10 @@ public enum DiagnosticFiles {
                           "configuration": configuration, "platform": ProcessInfo.processInfo.operatingSystemVersionString],
             ]
             var recordWithFields = record
-            if !fields.isEmpty { recordWithFields["fields"] = fields }
+            if !fields.isEmpty {
+                if flattenFields { recordWithFields.merge(fields) { _, new in new } }
+                else { recordWithFields["fields"] = fields }
+            }
             var data = try JSONSerialization.data(withJSONObject: recordWithFields)
             data.append(0x0A)
             if rotating {
@@ -306,6 +345,37 @@ public enum DiagnosticFiles {
         try finishCommittedMigration(commit, destination: path, stage: stage, marker: marker, expectedSources: sources)
     }
 #endif
+
+    /// One lifecycle stage record, mirroring the Go timeline shape so one
+    /// reader can order records from both processes.
+    public static func stage(
+        operation: String, stage: String, role: String, phase: String,
+        result: String? = nil, elapsedMs: Int? = nil, attemptID: String? = nil,
+        to path: URL
+    ) {
+        var fields: [String: Any] = [
+            "operation": operation,
+            "stage": stage,
+            "role": role,
+            "phase": phase,
+            "attempt_id": attemptID ?? DiagnosticsAttempt.current,
+        ]
+        if let result, !result.isEmpty { fields["result"] = result }
+        if let elapsedMs { fields["elapsed_ms"] = elapsedMs }
+        // The export reader orders stage records by their top-level fields, the
+        // same shape the Go timeline writes, so flatten rather than nesting
+        // under "fields" as ordinary native records do.
+        try? append("stage \(operation) \(stage)", event: "lifecycle.stage", level: "DEBUG",
+                   source: role, to: path, fields: fields, rotating: false, flattenFields: true)
+    }
+
+    /// Monotonic seconds; the same clock the app's transport budget uses.
+    public static func monotonicNow() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    /// Elapsed milliseconds from a monotonic start.
+    public static func elapsedMs(since start: TimeInterval) -> Int {
+        Int(((ProcessInfo.processInfo.systemUptime - start) * 1000).rounded())
+    }
 
     /// Timeline and retained hang captures beside one log. Missing files are
     /// skipped so an archive never claims an artifact that was not written.

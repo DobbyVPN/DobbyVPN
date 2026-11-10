@@ -1,3 +1,4 @@
+import CryptoKit
 import DobbyDiagnosticFiles
 import DobbyNativeUI
 import Foundation
@@ -34,6 +35,12 @@ final class MacDesktopSessionClient: DobbySessionClient {
 
     var sourceCommit: String {
         Bundle.main.infoDictionary?["DobbySourceCommit"] as? String ?? "N/A"
+    }
+
+    /// One-way digest of a configuration input for diagnostics.
+    static func digest(_ value: String) -> String {
+        let hash = SHA256.hash(data: Data(value.utf8))
+        return hash.map { String(format: "%02x", $0) }.joined()
     }
 
     func call(_ method: String, parameters: [String: Any]) -> String {
@@ -84,7 +91,10 @@ final class MacDesktopSessionClient: DobbySessionClient {
                 source: "native-ui",
                 to: uiDiagnosticPath,
                 fields: [
-                    "parameters": ["source": source],
+                    // A subscription URL is a credential-bearing configuration
+                    // input, so the diagnostic keeps only its digest and length.
+                    "source_digest": Self.digest(source),
+                    "source_length": source.count,
                     "succeeded": responseReceived && responseIsSuccessful,
                     "response_read_monotonic_uptime": ProcessInfo.processInfo.systemUptime,
                 ], legacyDesktop: true, legacyExcludedPaths: [backendLogPath]

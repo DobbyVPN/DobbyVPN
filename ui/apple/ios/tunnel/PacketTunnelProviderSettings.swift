@@ -58,6 +58,7 @@ extension PacketTunnelProvider {
 
     func releaseTunnel(sessionID: String?, generation: Int64, timeoutMillis: Int64) -> String {
         settingsQueue.sync {
+            let started = DiagnosticFiles.monotonicNow()
             let error = settingsOwner.release(session: sessionID ?? "", generation: generation, timeout: Double(timeoutMillis) / 1000) { completed in
                 self.setTunnelNetworkSettings(nil, completionHandler: completed)
             }
@@ -65,6 +66,10 @@ extension PacketTunnelProvider {
                 networkSession = nil
                 networkGeneration = -1
             }
+            DiagnosticFiles.stage(
+                operation: "os-teardown", stage: "tun-settings-release", role: "ios-tunnel",
+                phase: "end", result: error == nil ? "ok" : "error",
+                elapsedMs: DiagnosticFiles.elapsedMs(since: started), attemptID: attempt, to: logs.path)
             return tunnelResult(error: error, pending: error != nil)
         }
     }
@@ -244,19 +249,48 @@ extension PacketTunnelProvider {
 
     func teardownForStop(reason: String, completionHandler: @escaping () -> Void) async {
         logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
+        let teardownStart = DiagnosticFiles.monotonicNow()
+        // The app's Stop command set the attempt; a stop the OS started keeps
+        // the identity of the attempt whose resources are being released.
+        let attempt = DiagnosticsAttempt.current
+        DiagnosticFiles.stage(operation: "os-teardown", stage: "teardown", role: "ios-tunnel",
+                              phase: "begin", attemptID: attempt, to: logs.path)
+        var goStopStart = DiagnosticFiles.monotonicNow()
+        var goStopResult = ""
+        var releaseStart = DiagnosticFiles.monotonicNow()
+        var pathStart = DiagnosticFiles.monotonicNow()
         IOSProviderStopBoundary.perform(
-            stopGoSessionAndWait: { DobbyvpnStopSessionAndWait() },
-            releasePlatformCallbacks: { callbackBridge = nil },
+            stopGoSessionAndWait: {
+                goStopStart = DiagnosticFiles.monotonicNow()
+                let reply = DobbyvpnStopSessionAndWait()
+                goStopResult = reply.isEmpty ? "ok" : "failed"
+                DiagnosticFiles.stage(operation: "os-teardown", stage: "go-stop", role: "ios-tunnel",
+                                      phase: "end", result: goStopResult,
+                                      elapsedMs: DiagnosticFiles.elapsedMs(since: goStopStart), attemptID: attempt, to: logs.path)
+                return reply
+            },
+            releasePlatformCallbacks: {
+                releaseStart = DiagnosticFiles.monotonicNow()
+                callbackBridge = nil
+                DiagnosticFiles.stage(operation: "os-teardown", stage: "runtime-release", role: "ios-tunnel",
+                                      phase: "end", elapsedMs: DiagnosticFiles.elapsedMs(since: releaseStart), attemptID: attempt, to: logs.path)
+            },
             stopPathMonitoring: {
+                pathStart = DiagnosticFiles.monotonicNow()
                 pathMonitor?.cancel()
                 pathMonitor = nil
                 lastPathSignature = nil
+                DiagnosticFiles.stage(operation: "os-teardown", stage: "path-monitor-release", role: "ios-tunnel",
+                                      phase: "end", elapsedMs: DiagnosticFiles.elapsedMs(since: pathStart), attemptID: attempt, to: logs.path)
             },
             completeOSStop: { failure in
                 if !failure.isEmpty {
                     logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] Go shutdown retains resources: \(failure)")
                 }
                 logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason)) cleanup_complete=\(failure.isEmpty)")
+                DiagnosticFiles.stage(operation: "os-teardown", stage: "teardown", role: "ios-tunnel",
+                                      phase: "end", result: failure.isEmpty ? "ok" : "failed",
+                                      elapsedMs: DiagnosticFiles.elapsedMs(since: teardownStart), attemptID: attempt, to: logs.path)
                 logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel cleanup wait ended; calling OS completionHandler")
                 completionHandler()
                 logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
