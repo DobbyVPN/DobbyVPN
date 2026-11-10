@@ -113,7 +113,7 @@ public struct DobbyRootView: View {
                             .disabled(model.onDemandBusy || model.busy)
                     }
                     connections
-                        .frame(height: trayHeight(geometry.size.height))
+                        .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))
                         .padding(.top, pt(8))
                 }
                 .padding(.horizontal, pt(12))
@@ -121,7 +121,7 @@ public struct DobbyRootView: View {
                 .padding(.bottom, pt(12))
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("Connection controls")
-                logs
+            logs.frame(maxHeight: .infinity)
             }
 #if os(macOS)
             // On macOS the window can be stretched arbitrarily wide; let the content follow it
@@ -418,6 +418,7 @@ public struct DobbyRootView: View {
 #if os(iOS)
             DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs, onShowMenu: { showingLogMenu.toggle() }, onClear: model.clearLogs)
                 .accessibilityIdentifier("Connection logs")
+                .frame(minHeight: pt(60), maxHeight: .infinity)
 #else
             DobbyLogView(
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
