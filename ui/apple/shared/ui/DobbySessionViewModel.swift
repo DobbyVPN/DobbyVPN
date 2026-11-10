@@ -883,9 +883,18 @@ private struct ConfigurationReceipt: Decodable { let sequence: Int64 }
 
 #if os(macOS)
 extension DobbySessionViewModel {
+    func recordMacLogCapture(_ anchor: MacLogReadingAnchor) {
+        recordDiagnostic(
+            "character_index=\(anchor.characterIndex) record_ordinal=\(anchor.recordOrdinal) " +
+            "anchor_viewport_y=\(anchor.viewportY)",
+            event: "logs.frozen-position-captured", level: "DEBUG"
+        )
+    }
+
     func recordMacLogRestore(_ observation: MacLogRestoreObservation) {
         recordDiagnostic(
-            "character_index=\(observation.anchor.characterIndex) anchor_viewport_y=\(observation.anchor.viewportY) " +
+            "character_index=\(observation.anchor.characterIndex) record_ordinal=\(observation.anchor.recordOrdinal) " +
+            "anchor_viewport_y=\(observation.anchor.viewportY) " +
             "previous_origin=\(observation.previousOrigin) restored_origin=\(observation.restoredOrigin) " +
             "viewport_size=\(observation.viewportSize) content_size=\(observation.contentSize)",
             event: "logs.frozen-position-restored", level: "DEBUG"
