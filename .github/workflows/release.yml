@@ -3,6 +3,10 @@ name: Delivery
 on:
   workflow_dispatch:
     inputs:
+      ios_release_notes:
+        description: iOS-specific release notes for App Store Connect (maximum 4000 characters).
+        required: true
+        type: string
       publish_run_id:
         description: Successful Release workflow run whose verified release assets should be submitted to Apple App Review and F-Droid.
         required: true
@@ -40,7 +44,7 @@ jobs:
       build_manifest_sha256: ${{ steps.selection.outputs.build_manifest_sha256 }}
       test_result_sha256: ${{ steps.selection.outputs.test_result_sha256 }}
       release_notes_sha256: ${{ steps.selection.outputs.release_notes_sha256 }}
-      release_notes_b64: ${{ steps.selection.outputs.release_notes_b64 }}
+      ios_release_notes_b64: ${{ steps.ios_notes.outputs.ios_release_notes_b64 }}
     steps:
       - name: Require the production branch
         run: test "$GITHUB_REF" = refs/heads/main
@@ -48,6 +52,15 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Validate iOS release notes
+        id: ios_notes
+        env:
+          IOS_RELEASE_NOTES: ${{ inputs.ios_release_notes }}
+        run: |
+          ruby -rbase64 -r./publishing/fastlane/ios_release_notes -e '
+            notes = IosReleaseNotes.validate!(ENV.fetch("IOS_RELEASE_NOTES"))
+            File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |f| f.puts "ios_release_notes_b64=#{Base64.strict_encode64(notes)}" }
+          '
       - name: Resolve and verify selected Release run
         id: selection
         env:
@@ -60,7 +73,7 @@ jobs:
             --download-dir "$RUNNER_TEMP/selected-publish" \
             --output "$RUNNER_TEMP/publish.json"
           python3 - "$RUNNER_TEMP/publish.json" "$GITHUB_OUTPUT" <<'PYTHON'
-          import base64, json, sys
+          import json, sys
           selected = json.load(open(sys.argv[1], encoding="utf-8"))
           values = {
               "source_sha": selected["source_sha"],
@@ -77,7 +90,6 @@ jobs:
               "build_manifest_sha256": selected["build_manifest_sha256"],
               "test_result_sha256": selected["test_result_sha256"],
               "release_notes_sha256": selected["release_notes_sha256"],
-              "release_notes_b64": base64.b64encode(selected["release_notes"].encode("utf-8")).decode("ascii"),
           }
           with open(sys.argv[2], "a", encoding="utf-8") as output:
               for key, value in values.items():
@@ -109,7 +121,7 @@ jobs:
           VERSION_NAME: ${{ needs.resolve_publish.outputs.version_name }}
           APPLE_BUILD_NUMBER: ${{ needs.resolve_publish.outputs.apple_build_number }}
           SOURCE_SHA: ${{ needs.resolve_publish.outputs.source_sha }}
-          RELEASE_NOTES_B64: ${{ needs.resolve_publish.outputs.release_notes_b64 }}
+          RELEASE_NOTES_B64: ${{ needs.resolve_publish.outputs.ios_release_notes_b64 }}
         run: |
           set -euo pipefail
           IFS='.' read -r version_major version_minor version_maintenance <<< "$VERSION_NAME"

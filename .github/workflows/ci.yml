@@ -257,6 +257,7 @@ jobs:
         if: ${{ needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'release' }}
         run: |
           set -euo pipefail
+          ruby -I publishing/fastlane/test -e 'Dir["publishing/fastlane/test/*_test.rb"].sort.each { |file| require_relative file }'
           python3 -m compileall -q .github/scripts/release
           PYTHONPATH=.github/scripts:.github/scripts/release python3 - <<'PY'
           import artifact_attempts
