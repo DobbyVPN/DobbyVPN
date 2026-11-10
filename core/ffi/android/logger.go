@@ -34,6 +34,7 @@ func initializeLogger(path string) string {
 	if err := log.SetAppenderPath(path); err != nil {
 		return err.Error()
 	}
+	diagnostics.SetRole(diagnostics.RoleAndroid)
 	loggerReady = true
 	log.Infof("android_exports", "Go app logger initialized")
 	return ""

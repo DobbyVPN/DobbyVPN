@@ -57,12 +57,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	plan := routing.NewPlan(config.TunDeviceName)
 	var engine *tunnel.Engine
 	var tun network.IPDevice
-	app.setCleanup(func(cleanup context.Context) error {
+	app.setCleanup(namedRelease{"engine-stop", func(cleanup context.Context) error {
 		if engine != nil {
 			return engine.Stop(cleanup)
 		}
 		return nil
-	}, plan.Close, func(context.Context) error {
+	}}, namedRelease{"plan-close", plan.Close}, namedRelease{"tun-close", func(context.Context) error {
 		if tun != nil {
 			if closeErr := tun.Close(); closeErr != nil {
 				return closeErr
@@ -70,7 +70,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		}
 		protected_dialer.SetLinuxSocketMark(0)
 		return nil
-	})
+	}})
 	guard, err := plan.AcquireLinuxOutputGuard(ctx, config.TunDeviceName, config.RoutingTableID)
 	if err != nil {
 		return fail(err)

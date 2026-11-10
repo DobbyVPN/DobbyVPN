@@ -40,6 +40,13 @@ func InitLoggerError(path string) (result string) {
 	if err := log.SetAppenderPath(path); err != nil {
 		return fmt.Sprintf("initialize structured diagnostics: %v", err)
 	}
+	// The app and the tunnel extension share one App Group directory but write
+	// different owned files; the role names which process produced a stage.
+	if filepath.Base(path) == "go_tunnel_logs.jsonl" {
+		diagnostics.SetRole(diagnostics.RoleIOSTunnel)
+	} else {
+		diagnostics.SetRole(diagnostics.RoleIOSApp)
+	}
 	loggerReady = true
 	return ""
 }

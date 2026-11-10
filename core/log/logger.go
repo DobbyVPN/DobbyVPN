@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 
 	"core/buildinfo"
@@ -130,6 +131,9 @@ func setPath(path string, sharedStderr bool) error {
 	lg.file = file
 	lg.sharedStderr = sharedStderr
 	lg.logger = slog.New(newJSONLineHandler(policyWriter{writer: file}))
+	// The lifecycle timeline lives beside the retained log so both sinks of one
+	// stage record share a directory and an export root.
+	diagnostics.SetTimelineDir(filepath.Dir(file.Path()))
 
 	lg.dumpBuffer()
 	return nil
@@ -350,4 +354,48 @@ func newJSONLineHandler(writer io.Writer) slog.Handler {
 			return attribute
 		},
 	})
+}
+
+// StageBegin emits one lifecycle stage begin record
+// StageBegin emits one lifecycle stage begin record to the structured log and
+// mirrors it into the diagnostics timeline. The returned end writer closes the
+// stage with its result and monotonic elapsed milliseconds.
+func StageBegin(operation, stage, attemptID string) (end func(result string)) {
+	if attemptID == "" {
+		attemptID = diagnostics.CurrentAttemptID()
+	}
+	role := diagnostics.Role()
+	endTimeline := diagnostics.BeginStage(attemptID, operation, stage, role)
+	started := time.Now()
+	writeStageRecord(slog.LevelDebug, operation, stage, attemptID, role, "begin", "", nil)
+	return func(result string) {
+		endTimeline(result)
+		elapsed := time.Since(started).Milliseconds()
+		writeStageRecord(slog.LevelDebug, operation, stage, attemptID, role, "end", result, &elapsed)
+	}
+}
+
+// StageMark records one lifecycle stage event that has no begin/end pair.
+func StageMark(operation, stage, attemptID, result string) {
+	if attemptID == "" {
+		attemptID = diagnostics.CurrentAttemptID()
+	}
+	role := diagnostics.Role()
+	diagnostics.Mark(attemptID, operation, stage, role, result)
+	writeStageRecord(slog.LevelInfo, operation, stage, attemptID, role, "mark", result, nil)
+}
+
+func writeStageRecord(level slog.Level, operation, stage, attemptID, role, phase, result string, elapsed *int64) {
+	arguments := map[string]any{
+		"attempt_id": attemptID, "operation": operation, "stage": stage,
+		"role": role, "phase": phase,
+	}
+	if result != "" {
+		arguments["result"] = result
+	}
+	if elapsed != nil {
+		arguments["elapsed_ms"] = *elapsed
+	}
+	writeEvent(level, diagnostics.TimelineEvent, diagnostics.TimelineCategory,
+		fmt.Sprintf("stage %s %s", operation, stage), arguments)
 }

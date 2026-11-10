@@ -6,6 +6,7 @@ package sessionapi
 
 import (
 	"context"
+	"core/diagnostics"
 	"core/log"
 	"core/protocol"
 	"crypto/rand"
@@ -675,6 +676,7 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 	if !acceptsStop(s, generation) {
 		return StopResult{}, failure(FailureStaleGeneration, "generation is not active for this session")
 	}
+	log.StageMark("cancel", "stop-requested", "", "")
 	// A persistence failure is reported, but cannot prevent the requested
 	// release of app-owned protection. OS teardown does not call this path.
 	persistErr := m.stopActivationLocked(ctx)
@@ -880,6 +882,10 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 
 // runStart owns acquisition and cleanup, including canceled late callbacks.
 func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
+	attempt := diagnostics.NewAttemptID()
+	diagnostics.SetAttemptID(attempt)
+	ended := log.StageBegin("connect", "connect", attempt)
+	defer func() { ended(connectOutcome(s, generation)) }()
 	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
 	if err := m.prepareNetwork(ctx, s); err != nil {
 		m.finish(s, generation, err)
@@ -1115,21 +1121,55 @@ func (m *Manager) finishProtectedFailureLocked(s *session, cause error) {
 }
 
 func (m *Manager) retireFinishedResources(s *session, work *ledger, cause error) (releaseNetwork bool, cleanupErr error) {
+	disconnectEnd := log.StageBegin("disconnect", "disconnect", "")
+	defer func() { disconnectEnd(stageResult(cleanupErr)) }()
 	if work != nil && CodeOf(cause) != FailureCleanup {
+		end := log.StageBegin("cleanup", "attempt-ledger", "")
 		cleanupErr = work.release(m.cleanupContext(s))
+		end(stageResult(cleanupErr))
 	}
 	s.mu.Lock()
 	releaseNetwork = s.stopRequested || s.closing || !s.vpnActive
 	network := s.networkLedger
 	s.mu.Unlock()
 	if cleanupErr == nil && CodeOf(cause) != FailureCleanup && releaseNetwork && network != nil {
+		end := log.StageBegin("cleanup", "network-ledger", "")
 		cleanupErr = network.release(m.cleanupContext(s))
+		end(stageResult(cleanupErr))
 	}
 	return releaseNetwork, cleanupErr
 }
 
+// connectOutcome states how one start attempt ended, for its timeline record.
+func connectOutcome(s *session, generation uint64) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.generation != generation {
+		return "superseded"
+	}
+	if s.lastFailure != "" {
+		return "failed:" + string(s.lastFailure)
+	}
+	if s.stopRequested || s.closing || s.state == StateStopping {
+		return "canceled"
+	}
+	if s.state == StateConnected {
+		return "ok"
+	}
+	return string(s.state)
+}
+
+// stageResult names one finished stage outcome.
+func stageResult(err error) string {
+	if err != nil {
+		return "failed"
+	}
+	return "ok"
+}
+
 func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptContext context.Context, generation uint64) {
 	s.generation++
+	diagnostics.SetAttemptID(diagnostics.NewAttemptID())
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cleanupBudget = &cleanupBudget{}
 	s.cancel, s.ledger = cancel, &ledger{}

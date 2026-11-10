@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"core/diagnostics"
 	"core/dnscache"
 	"core/log"
 	"core/probe"
@@ -95,6 +96,9 @@ type Options struct {
 	ConnectedHealth         ConnectedHealthFunc
 	HealthInterval          time.Duration
 	HealthFailureThreshold  int
+	// AttemptID correlates timeline stages with the session attempt that owns
+	// them. The manager sets it before each attempt; empty means uncorrelated.
+	AttemptID func() string
 }
 
 // New returns a session Runtime. Its operation mutex deliberately serializes all
@@ -113,6 +117,9 @@ func New(options Options) sessionapi.Runtime {
 	}
 	if r.options.ConnectedHealth == nil {
 		r.options.ConnectedHealth = defaultConnectedHealth
+	}
+	if r.options.AttemptID == nil {
+		r.options.AttemptID = diagnostics.CurrentAttemptID
 	}
 	if r.options.InitialReadiness == nil {
 		r.options.InitialReadiness = r.options.ConnectedHealth
@@ -220,7 +227,9 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 		return disconnectErr
 	})
 	acquisitionDone := context.AfterFunc(ctx, cancel)
+	ended := log.StageBegin("connect", "network-acquire", r.options.AttemptID())
 	err = connectContext(networkCtx, n.core)
+	ended(stageOutcome(err))
 	acquisitionDone()
 	if err != nil {
 		return n, err
@@ -294,7 +303,8 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 			return r.options.InitialReadiness(checkCtx, checkRef, proxyAddr)
 		}
 	}
-	if err := waitForInitialReadiness(
+	readinessEnd := log.StageBegin("connect", "readiness-wait", r.options.AttemptID())
+	readinessErr := waitForInitialReadiness(
 		ctx,
 		ref,
 		lease.proxyAddr,
@@ -302,7 +312,9 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		r.options.ReadinessAttempts,
 		r.options.ReadinessAttemptTimeout,
 		r.options.ReadinessRetryInterval,
-	); err != nil {
+	)
+	readinessEnd(stageOutcome(readinessErr))
+	if err := readinessErr; err != nil {
 		logReadinessFailure(ctx, ref.Generation, err)
 		cleanupErr := lease.Stop(sessionapi.CleanupContext(ctx))
 		if cleanupErr == nil {
@@ -523,6 +535,7 @@ func connectContext(ctx context.Context, client sessionCore) error {
 	case <-ctx.Done():
 		var cancelErr error
 		if canceler, ok := client.(connectCanceler); ok {
+			log.StageMark("cancel", "cancel-requested", "", "")
 			// Native startup owns the lifecycle mutex while it is inside a
 			// non-context-aware platform call.  Its cancellation request is
 			// deliberately lock-free; cleanup remains serialized by Connect and
@@ -735,4 +748,12 @@ func connectedHealthTimeout(ctx context.Context) (time.Duration, error) {
 
 func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyAddr string) error {
 	return measureConnectedHealth(ctx, proxyAddr)
+}
+
+// stageOutcome names one finished connect stage.
+func stageOutcome(err error) string {
+	if err != nil {
+		return "failed"
+	}
+	return "ok"
 }

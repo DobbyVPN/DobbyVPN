@@ -74,7 +74,11 @@ func initApplicationLogger() error {
 	if err != nil {
 		return err
 	}
-	return applicationlog.SetPath(path)
+	if err := applicationlog.SetPath(path); err != nil {
+		return err
+	}
+	diagnostics.SetRole(diagnostics.RoleCLI)
+	return nil
 }
 
 func prepareCLIHistory() error {

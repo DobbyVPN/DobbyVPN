@@ -28,10 +28,17 @@ import (
 	"sync"
 )
 
+// namedRelease keeps the stage name of one cleanup entry so the timeline can
+// report which release blocked without guessing from a function pointer.
+type namedRelease struct {
+	name string
+	fn   func(context.Context) error
+}
+
 type App struct {
 	NetworkRef     sessionapi.SessionRef
 	cleanupMu      sync.Mutex
-	cleanup        []func(context.Context) error
+	cleanup        []namedRelease
 	cleanupErr     error
 	cleanupContext context.Context
 
@@ -54,7 +61,7 @@ type RoutingConfig struct {
 
 // The run goroutine registers one ordered cleanup transaction before acquiring
 // resources. After it returns, Disconnect may retry only its remaining entries.
-func (app *App) setCleanup(releases ...func(context.Context) error) {
+func (app *App) setCleanup(releases ...namedRelease) {
 	app.cleanupMu.Lock()
 	defer app.cleanupMu.Unlock()
 	app.cleanup = releases
@@ -70,7 +77,11 @@ func (app *App) Close(ctx context.Context) (resultErr error) {
 		}
 	}()
 	for len(app.cleanup) > 0 {
-		if err := app.cleanup[0](ctx); err != nil {
+		release := app.cleanup[0]
+		ended := log.StageBegin("cleanup", release.name, "")
+		err := release.fn(ctx)
+		ended(internalStageResult(err))
+		if err != nil {
 			app.cleanupErr = err
 			return &sessionapi.CleanupFailure{Err: err}
 		}
@@ -108,4 +119,12 @@ func (app *App) finishCleanup(ctx context.Context, runErr error) error {
 		log.Infof(Category, "native cleanup_complete=true")
 	}
 	return runErr
+}
+
+// internalStageResult names one finished cleanup release.
+func internalStageResult(err error) string {
+	if err != nil {
+		return "failed"
+	}
+	return "ok"
 }

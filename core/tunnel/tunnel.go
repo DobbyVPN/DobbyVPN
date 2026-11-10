@@ -18,6 +18,7 @@ import (
 	stackTunnel "github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
 
+	"core/diagnostics"
 	"core/dnscache"
 	"core/log"
 	"core/tunnel/platform_engine"
@@ -496,15 +497,23 @@ func (e *Engine) Stop(ctx context.Context) error {
 	timer := time.AfterFunc(3*time.Second, func() {
 		var stacks bytes.Buffer
 		err := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
-		log.Warnf(Category, "[Engine] stop slow generation=%d interface=%s phase=%s elapsed=%s contextError=%v stackError=%v\n%s", generation, iface, phase.Load(), time.Since(started), ctx.Err(), err, stacks.String())
+		// The retained log keeps the existing message and its stacks; the
+		// bounded file below is what an export can always carry, because it is
+		// capped, named and prunable while this one log record is not.
+		name, truncated, dumpErr := diagnostics.CaptureGoroutineDump(diagnostics.TimelineDir())
+		log.Warnf(Category, "[Engine] stop slow generation=%d interface=%s phase=%s elapsed=%s contextError=%v stackError=%v dump_file=%s dump_truncated=%t dump_error=%v\n%s",
+			generation, iface, phase.Load(), time.Since(started), ctx.Err(), err, name, truncated, dumpErr, stacks.String())
+		log.StageMark("cleanup", "capture", "", captureResult(name, dumpErr))
 	})
 	defer timer.Stop()
 	runPhase := func(name string, fn func()) {
 		phase.Store(name)
+		ended := log.StageBegin("cleanup", name, "")
 		phaseStarted := time.Now()
 		log.Debugf(Category, "[Engine] stop phase=%s started generation=%d interface=%s", name, generation, iface)
 		fn()
 		log.Debugf(Category, "[Engine] stop phase=%s finished generation=%d interface=%s elapsed=%s", name, generation, iface, time.Since(phaseStarted))
+		ended("ok")
 	}
 	log.Debugf(Category, "[Engine] stopping owned tun2socks engine")
 	if e.router != nil {
@@ -565,4 +574,15 @@ func updatePeakInt64(peak *atomic.Int64, current int64) {
 			return
 		}
 	}
+}
+
+// captureResult states one bounded-capture outcome in a timeline record.
+func captureResult(name string, err error) string {
+	if err != nil {
+		return "failed"
+	}
+	if name == "" {
+		return "unavailable"
+	}
+	return "written"
 }

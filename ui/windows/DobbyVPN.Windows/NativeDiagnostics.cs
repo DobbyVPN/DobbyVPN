@@ -120,6 +120,19 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         }
     }
 
+    // Timeline and up to four dumps beside the backend log; missing files are
+    // skipped so an archive never claims an artifact that was not written.
+    private IEnumerable<string> DiagnosticExtras()
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(backendPath))!;
+        var timeline = Path.Combine(directory, "timeline.jsonl");
+        if (File.Exists(timeline)) yield return timeline;
+        string[] names;
+        try { names = Directory.GetFiles(directory, "hang-dump-*.txt"); }
+        catch (DirectoryNotFoundException) { yield break; }
+        foreach (var name in names.Order(StringComparer.Ordinal).TakeLast(4)) yield return name;
+    }
+
     internal sealed record Entry(string Id, string Timestamp, string Level, string Source, string Message, string Raw, DateTimeOffset? Time);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -259,9 +272,23 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         Exception? original = null;
         try
         {
+            // The lifecycle timeline and retained hang captures travel with the
+            // logs so a failed transition is readable from the archive alone.
+            foreach (var extra in DiagnosticExtras())
+            {
+                try
+                {
+                    var input = OpenLog(extra);
+                    try { inputs.Add((extra, input, input.Length)); }
+                    catch { input.Dispose(); throw; }
+                }
+                catch (FileNotFoundException) { }
+                catch (DirectoryNotFoundException) { }
+                catch (Exception error) { issues.Add($"{extra}: {error}"); }
+            }
             // Capture all handles and lengths before compression begins. Locks
             // are released immediately, so producers can rotate during copying.
-            foreach (var path in _paths)
+            foreach (var path in new[] { backendPath, uiPath })
             {
                 try
                 {

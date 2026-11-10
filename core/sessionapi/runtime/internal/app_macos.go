@@ -58,12 +58,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	plan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
 	var ownedEngine *tunnel.Engine
-	app.setCleanup(plan.Close, func(ctx context.Context) error {
+	app.setCleanup(namedRelease{"plan-close", plan.Close}, namedRelease{"engine-stop", func(ctx context.Context) error {
 		if ownedEngine != nil {
 			return ownedEngine.Stop(ctx)
 		}
 		return nil
-	}, func(context.Context) error { protected_dialer.ResetDefaultRoute(); return nil })
+	}}, namedRelease{"route-reset", func(context.Context) error { protected_dialer.ResetDefaultRoute(); return nil }})
 
 	physicalRoutes, err := plan.AcquireMacOSPhysicalRoutes()
 	if err != nil {

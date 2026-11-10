@@ -307,6 +307,21 @@ public enum DiagnosticFiles {
     }
 #endif
 
+    /// Timeline and retained hang captures beside one log. Missing files are
+    /// skipped so an archive never claims an artifact that was not written.
+    public static func diagnosticExtras(directory: URL, dumpLimit: Int = 4) -> [URL] {
+        var extras: [URL] = []
+        let timeline = directory.appendingPathComponent("timeline.jsonl")
+        if FileManager.default.fileExists(atPath: timeline.path) { extras.append(timeline) }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        let dumps = names
+            .filter { $0.hasPrefix("hang-dump-") && $0.hasSuffix(".txt") }
+            .sorted()
+            .suffix(max(0, dumpLimit))
+            .map { directory.appendingPathComponent($0) }
+        return extras + dumps
+    }
+
     private struct Input { let path: URL; let file: FileHandle; let length: UInt64 }
 
     private static func capture(_ paths: [URL], issues: inout [String]) -> [Input] {
