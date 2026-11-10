@@ -497,7 +497,6 @@ struct DobbyLogView: NSViewRepresentable {
     var onUploadLogs: (() -> Void)? = nil
     let onClear: () -> Void
     var onReadingPositionRestored: (MacLogRestoreObservation) -> Void = { _ in }
-    var onReadingPositionCaptured: (MacLogReadingAnchor) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -639,9 +638,7 @@ struct DobbyLogView: NSViewRepresentable {
                 viewportBottom: scroll.contentView.bounds.maxY,
                 contentHeight: scroll.documentView?.bounds.height ?? 0
             )
-            let anchor = atBottom ? nil : captureMacLogReadingAnchor(scroll)
-            if let anchor { parent.onReadingPositionCaptured(anchor) }
-            observeUserScroll(atBottom: atBottom, anchor: anchor)
+            observeUserScroll(atBottom: atBottom, anchor: atBottom ? nil : captureMacLogReadingAnchor(scroll))
         }
 
         func observeUserScroll(atBottom: Bool, anchor: MacLogReadingAnchor?) {
@@ -727,9 +724,6 @@ struct DobbyLogView: NSViewRepresentable {
 struct MacLogReadingAnchor {
     let characterIndex: Int
     let viewportY: CGFloat
-    // Logical record identity, distinct from the raw character offset: the
-    // ordinal of the record whose start is anchored (0-based, paragraph order).
-    let recordOrdinal: Int
 }
 
 func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? {
@@ -737,25 +731,11 @@ func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? 
           let layout = view.layoutManager, let container = view.textContainer, storage.length > 0 else { return nil }
     layout.ensureLayout(for: container)
     guard layout.numberOfGlyphs > 0 else { return nil }
-    let text = storage.string as NSString
     let point = NSPoint(x: 1, y: max(0, scroll.contentView.bounds.minY - view.textContainerOrigin.y + 1))
     let glyph = min(layout.glyphIndex(for: point, in: container), layout.numberOfGlyphs - 1)
-    var character = min(layout.characterIndexForGlyph(at: glyph), storage.length - 1)
-    // Anchor the first record shown in full, from its start: records above may
-    // wrap differently after a resize. A mid-record or clipped top record is
-    // not a stable anchor, so advance to the start of the next record.
-    let record = text.paragraphRange(for: NSRange(location: character, length: 0))
-    let topLine = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-    let cutByTopEdge = topLine.minY + view.textContainerOrigin.y < scroll.contentView.bounds.minY
-    if (record.location < character || cutByTopEdge) && NSMaxRange(record) < storage.length {
-        character = NSMaxRange(record)
-    }
-    let anchorGlyph = layout.glyphIndexForCharacter(at: min(character, storage.length - 1))
-    let line = layout.lineFragmentRect(forGlyphAt: anchorGlyph, effectiveRange: nil)
-    let recordOrdinal = text.substring(to: min(character, text.length)).filter { $0 == "\n" }.count
-    return MacLogReadingAnchor(characterIndex: character,
-                               viewportY: line.minY + view.textContainerOrigin.y - scroll.contentView.bounds.minY,
-                               recordOrdinal: recordOrdinal)
+    let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+    return MacLogReadingAnchor(characterIndex: layout.characterIndexForGlyph(at: glyph),
+                               viewportY: line.minY + view.textContainerOrigin.y - scroll.contentView.bounds.minY)
 }
 
 struct MacLogRestoreObservation {

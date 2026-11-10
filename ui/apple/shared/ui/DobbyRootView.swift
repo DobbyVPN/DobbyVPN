@@ -423,8 +423,7 @@ public struct DobbyRootView: View {
             DobbyLogView(
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
                 interactive: !showingError, onSendLogs: sendLogs, onUploadLogs: model.snapshot.logsUploadAvailable ? { model.startLogsUpload() } : nil, onClear: { followingLogs = true; model.clearLogs() },
-                onReadingPositionRestored: model.recordMacLogRestore,
-                onReadingPositionCaptured: model.recordMacLogCapture
+                onReadingPositionRestored: model.recordMacLogRestore
             )
             .accessibilityIdentifier("Connection logs")
 #endif
