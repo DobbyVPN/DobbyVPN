@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -93,27 +92,43 @@ func socks5DialContext(proxyAddr string, timeout time.Duration) (func(context.Co
 }
 
 func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) (int64, error) {
+	if len(httpProbeURLs) == 0 {
+		return 0, errors.New("tunnel probe has no endpoints")
+	}
 	log.Debugf("PROBE", "Tunnel probe begin endpoints=%d timeout=%s", len(httpProbeURLs), timeout)
 
-	results := make([]probeEndpointResult, len(httpProbeURLs))
-	var wg sync.WaitGroup
+	// The readiness rule is a quorum, not a full sweep. Cancelling the derived
+	// context aborts any endpoint still pending once the decision is made, so a
+	// straggling third endpoint cannot hold the connect open.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type completedProbe struct {
+		index  int
+		result probeEndpointResult
+	}
+	completed := make(chan completedProbe, len(httpProbeURLs))
 	for i, url := range httpProbeURLs {
-		wg.Add(1)
 		go func(i int, url string) {
-			defer wg.Done()
-			results[i] = probeEndpoint(ctx, url, timeout, dialContext)
+			completed <- completedProbe{index: i, result: probeEndpoint(ctx, url, timeout, dialContext)}
 		}(i, url)
 	}
-	wg.Wait()
+
+	requiredSuccesses := httpProbeMinSuccesses
+	if requiredSuccesses > len(httpProbeURLs) {
+		requiredSuccesses = len(httpProbeURLs)
+	}
 
 	var sum int64
 	successes := 0
 	var endpointErrors []error
-	for index, result := range results {
+	for finished := range len(httpProbeURLs) {
+		received := <-completed
+		result := received.result
 		if result.err != nil {
 			endpointErr := fmt.Errorf(
 				"endpoint %d failed at %s (status=%d, error_class=%s): %w",
-				index,
+				received.index,
 				result.failureStage,
 				result.status,
 				result.errorClass,
@@ -121,56 +136,60 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 			)
 			endpointErrors = append(endpointErrors, endpointErr)
 			writeLog := log.Warnf
-			if errors.Is(ctx.Err(), context.Canceled) {
+			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(result.err, context.Canceled) {
 				writeLog = log.Debugf
 			}
 			writeLog(
 				"PROBE",
 				"Tunnel probe target failed targetOrdinal=%d stage=%s status=%d errorClass=%s error=%v",
-				index,
+				received.index,
 				result.failureStage,
 				result.status,
 				result.errorClass,
 				result.err,
 			)
-			continue
+		} else {
+			successes++
+			sum += result.latencyMs
+			log.Debugf(
+				"PROBE",
+				"Tunnel probe endpoint ok endpoint=%d latencyMs=%d status=%d",
+				received.index,
+				result.latencyMs,
+				result.status,
+			)
 		}
-		successes++
-		sum += result.latencyMs
-		log.Debugf(
-			"PROBE",
-			"Tunnel probe endpoint ok endpoint=%d latencyMs=%d status=%d",
-			index,
-			result.latencyMs,
-			result.status,
-		)
-	}
-	requiredSuccesses := httpProbeMinSuccesses
-	if requiredSuccesses > len(httpProbeURLs) {
-		requiredSuccesses = len(httpProbeURLs)
-	}
-	log.Debugf("PROBE", "Tunnel probe latency samples successful=%d/%d required=%d", successes, len(httpProbeURLs), requiredSuccesses)
-	if successes < requiredSuccesses {
-		writeLog := log.Warnf
-		if errors.Is(ctx.Err(), context.Canceled) {
-			writeLog = log.Debugf
+		if successes >= requiredSuccesses {
+			avg := sum / int64(successes)
+			log.Debugf("PROBE", "Tunnel probe latency samples successful=%d/%d required=%d", successes, len(httpProbeURLs), requiredSuccesses)
+			if finished+1 == len(httpProbeURLs) {
+				if successes != len(httpProbeURLs) {
+					log.Warnf("PROBE", "Tunnel probe continuing with partial latency quorum passed=%d total=%d", successes, len(httpProbeURLs))
+				}
+			} else {
+				log.Debugf("PROBE", "Tunnel probe quorum reached before all endpoints completed successful=%d measured=%d total=%d", successes, finished+1, len(httpProbeURLs))
+			}
+			log.Debugf("PROBE", "Tunnel probe finished averageLatencyMs=%d", avg)
+			return avg, nil
 		}
-		writeLog("PROBE", "Tunnel probe failed: not enough latency endpoints succeeded passed=%d required=%d total=%d", successes, requiredSuccesses, len(httpProbeURLs))
-		return 0, fmt.Errorf(
-			"tunnel probe reached %d/%d successful endpoints; %d required: %w",
-			successes,
-			len(httpProbeURLs),
-			requiredSuccesses,
-			errors.Join(endpointErrors...),
-		)
-	}
-	if successes != len(httpProbeURLs) {
-		log.Warnf("PROBE", "Tunnel probe continuing with partial latency quorum passed=%d total=%d", successes, len(httpProbeURLs))
+		if successes+len(httpProbeURLs)-(finished+1) < requiredSuccesses {
+			break
+		}
 	}
 
-	avg := sum / int64(successes)
-	log.Debugf("PROBE", "Tunnel probe finished averageLatencyMs=%d", avg)
-	return avg, nil
+	log.Debugf("PROBE", "Tunnel probe latency samples successful=%d/%d required=%d", successes, len(httpProbeURLs), requiredSuccesses)
+	writeLog := log.Warnf
+	if errors.Is(ctx.Err(), context.Canceled) {
+		writeLog = log.Debugf
+	}
+	writeLog("PROBE", "Tunnel probe failed: not enough latency endpoints succeeded passed=%d required=%d total=%d", successes, requiredSuccesses, len(httpProbeURLs))
+	return 0, fmt.Errorf(
+		"tunnel probe reached %d/%d successful endpoints; %d required: %w",
+		successes,
+		len(httpProbeURLs),
+		requiredSuccesses,
+		errors.Join(endpointErrors...),
+	)
 }
 
 func probeEndpoint(parent context.Context, endpointURL string, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) probeEndpointResult {
