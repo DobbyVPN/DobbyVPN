@@ -766,9 +766,9 @@ func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? 
     let cutByTopEdge = topLine.minY + view.textContainerOrigin.y < scroll.contentView.bounds.minY
     if (record.location < character || cutByTopEdge) && NSMaxRange(record) < storage.length {
         character = NSMaxRange(record)
-    } else {
-        character = record.location
     }
+    // If the last record is clipped, keep the visible character: there is no
+    // later record to anchor, and its start may be far above the viewport.
     let anchorGlyph = layout.glyphIndexForCharacter(at: min(character, storage.length - 1))
     let line = layout.lineFragmentRect(forGlyphAt: anchorGlyph, effectiveRange: nil)
     let recordOrdinal = (storage.attribute(logRecordOrdinalKey, at: character, effectiveRange: nil) as? Int)
