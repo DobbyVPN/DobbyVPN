@@ -618,6 +618,7 @@ struct DobbyLogView: NSViewRepresentable {
         var readingAnchor: MacLogReadingAnchor?
         var viewportSize: CGSize?
         var gestureGeneration = 0
+        private var captureDiagnosticGate = MacLogCaptureDiagnosticGate()
         private var pendingFollowing: Bool?
         private var followChangeQueued = false
         var desiredFollowing: Bool { pendingFollowing ?? parent.following }
@@ -640,7 +641,9 @@ struct DobbyLogView: NSViewRepresentable {
                 contentHeight: scroll.documentView?.bounds.height ?? 0
             )
             let anchor = atBottom ? nil : captureMacLogReadingAnchor(scroll)
-            if let anchor { parent.onReadingPositionCaptured(anchor) }
+            if let anchor, captureDiagnosticGate.shouldEmit(at: ProcessInfo.processInfo.systemUptime) {
+                parent.onReadingPositionCaptured(anchor)
+            }
             observeUserScroll(atBottom: atBottom, anchor: anchor)
         }
 
@@ -728,8 +731,18 @@ struct MacLogReadingAnchor {
     let characterIndex: Int
     let viewportY: CGFloat
     // Logical record identity, distinct from the raw character offset: the
-    // ordinal of the record whose start is anchored (0-based, paragraph order).
+    // ordinal of the record whose start is anchored (0-based).
     let recordOrdinal: Int
+}
+
+struct MacLogCaptureDiagnosticGate {
+    private var lastEmission: TimeInterval?
+
+    mutating func shouldEmit(at uptime: TimeInterval) -> Bool {
+        if let lastEmission, uptime - lastEmission < 1 { return false }
+        lastEmission = uptime
+        return true
+    }
 }
 
 func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? {
@@ -744,15 +757,21 @@ func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? 
     // Anchor the first record shown in full, from its start: records above may
     // wrap differently after a resize. A mid-record or clipped top record is
     // not a stable anchor, so advance to the start of the next record.
-    let record = text.paragraphRange(for: NSRange(location: character, length: 0))
+    var record = NSRange()
+    let ordinal = storage.attribute(logRecordOrdinalKey, at: character, longestEffectiveRange: &record,
+                                    in: NSRange(location: 0, length: storage.length)) as? Int
+    if ordinal == nil { record = text.paragraphRange(for: NSRange(location: character, length: 0)) }
     let topLine = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
     let cutByTopEdge = topLine.minY + view.textContainerOrigin.y < scroll.contentView.bounds.minY
     if (record.location < character || cutByTopEdge) && NSMaxRange(record) < storage.length {
         character = NSMaxRange(record)
+    } else {
+        character = record.location
     }
     let anchorGlyph = layout.glyphIndexForCharacter(at: min(character, storage.length - 1))
     let line = layout.lineFragmentRect(forGlyphAt: anchorGlyph, effectiveRange: nil)
-    let recordOrdinal = text.substring(to: min(character, text.length)).filter { $0 == "\n" }.count
+    let recordOrdinal = (storage.attribute(logRecordOrdinalKey, at: character, effectiveRange: nil) as? Int)
+        ?? text.substring(to: character).filter { $0 == "\n" }.count
     return MacLogReadingAnchor(characterIndex: character,
                                viewportY: line.minY + view.textContainerOrigin.y - scroll.contentView.bounds.minY,
                                recordOrdinal: recordOrdinal)
@@ -860,12 +879,15 @@ private let logTimeFormat: DateFormatter = {
     return format
 }()
 
+let logRecordOrdinalKey = NSAttributedString.Key("DobbyLogRecordOrdinal")
+
 func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     let output = NSMutableAttributedString(string: "")
     let paragraph = NSMutableParagraphStyle()
     // Extra space goes below each line so a line's text starts at the top of its fragment.
     paragraph.lineSpacing = 3
-    for entry in entries {
+    for (ordinal, entry) in entries.enumerated() {
+        let start = output.length
         let time = entry.date.map(logTimeFormat.string) ?? entry.timestamp
         if !time.isEmpty {
             output.append(NSAttributedString(string: time + "  ", attributes: [
@@ -882,6 +904,8 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
         output.append(NSAttributedString(string: entry.message + "\n", attributes: [
             .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
         ]))
+        output.addAttribute(logRecordOrdinalKey, value: ordinal,
+                            range: NSRange(location: start, length: output.length - start))
     }
     return output
 }

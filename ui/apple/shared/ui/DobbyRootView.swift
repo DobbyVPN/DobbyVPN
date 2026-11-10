@@ -121,7 +121,7 @@ public struct DobbyRootView: View {
                 .padding(.bottom, pt(12))
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("Connection controls")
-            logs.frame(maxHeight: .infinity)
+                logs.frame(maxHeight: .infinity)
             }
 #if os(macOS)
             // On macOS the window can be stretched arbitrarily wide; let the content follow it
