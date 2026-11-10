@@ -55,6 +55,9 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
+    #if os(macOS)
+    private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
+    #endif
     @Published var clearRevision = 0
     @Published public private(set) var logsError = ""
     @Published public private(set) var exportingLogs = false
@@ -882,8 +885,13 @@ extension DobbySessionViewModel {
 private struct ConfigurationReceipt: Decodable { let sequence: Int64 }
 
 #if os(macOS)
+private let macLogCaptureDiagnosticInterval: TimeInterval = 1
+
 extension DobbySessionViewModel {
     func recordMacLogCapture(_ anchor: MacLogReadingAnchor) {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let last = lastMacLogCaptureDiagnosticUptime, now - last < macLogCaptureDiagnosticInterval { return }
+        lastMacLogCaptureDiagnosticUptime = now
         recordDiagnostic(
             "character_index=\(anchor.characterIndex) record_ordinal=\(anchor.recordOrdinal) " +
             "anchor_viewport_y=\(anchor.viewportY)",
