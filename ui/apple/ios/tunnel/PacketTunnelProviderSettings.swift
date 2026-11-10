@@ -69,7 +69,8 @@ extension PacketTunnelProvider {
             DiagnosticFiles.stage(
                 operation: "os-teardown", stage: "tun-settings-release", role: "ios-tunnel",
                 phase: "end", result: error == nil ? "ok" : "error",
-                elapsedMs: DiagnosticFiles.elapsedMs(since: started), attemptID: attempt, to: logs.path)
+                elapsedMs: DiagnosticFiles.elapsedMs(since: started),
+                attemptID: DiagnosticsAttempt.current, to: logs.path)
             return tunnelResult(error: error, pending: error != nil)
         }
     }
@@ -256,16 +257,14 @@ extension PacketTunnelProvider {
         DiagnosticFiles.stage(operation: "os-teardown", stage: "teardown", role: "ios-tunnel",
                               phase: "begin", attemptID: attempt, to: logs.path)
         var goStopStart = DiagnosticFiles.monotonicNow()
-        var goStopResult = ""
         var releaseStart = DiagnosticFiles.monotonicNow()
         var pathStart = DiagnosticFiles.monotonicNow()
         IOSProviderStopBoundary.perform(
             stopGoSessionAndWait: {
                 goStopStart = DiagnosticFiles.monotonicNow()
                 let reply = DobbyvpnStopSessionAndWait()
-                goStopResult = reply.isEmpty ? "ok" : "failed"
                 DiagnosticFiles.stage(operation: "os-teardown", stage: "go-stop", role: "ios-tunnel",
-                                      phase: "end", result: goStopResult,
+                                      phase: "end", result: reply.isEmpty ? "ok" : "failed",
                                       elapsedMs: DiagnosticFiles.elapsedMs(since: goStopStart), attemptID: attempt, to: logs.path)
                 return reply
             },
