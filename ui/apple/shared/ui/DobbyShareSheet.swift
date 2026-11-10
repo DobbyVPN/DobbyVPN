@@ -619,6 +619,7 @@ struct DobbyLogView: NSViewRepresentable {
         var viewportSize: CGSize?
         var gestureGeneration = 0
         private var captureDiagnosticGate = MacLogCaptureDiagnosticGate()
+        var captureDiagnosticUptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
         private var pendingFollowing: Bool?
         private var followChangeQueued = false
         var desiredFollowing: Bool { pendingFollowing ?? parent.following }
@@ -641,7 +642,7 @@ struct DobbyLogView: NSViewRepresentable {
                 contentHeight: scroll.documentView?.bounds.height ?? 0
             )
             let anchor = atBottom ? nil : captureMacLogReadingAnchor(scroll)
-            if let anchor, captureDiagnosticGate.shouldEmit(at: ProcessInfo.processInfo.systemUptime) {
+            if let anchor, captureDiagnosticGate.shouldEmit(at: captureDiagnosticUptime()) {
                 parent.onReadingPositionCaptured(anchor)
             }
             observeUserScroll(atBottom: atBottom, anchor: anchor)
