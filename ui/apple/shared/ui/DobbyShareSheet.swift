@@ -237,13 +237,15 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
                     dx: textContainerInset.left - contentOffset.x,
                     dy: textContainerInset.top - contentOffset.y
                 )
-            // The run holds one record including its trailing newline.
+            // The observed record is its message; the time prefix stays part of
+            // the rendered text but is not what identifies the record.
             let line = textStorage.attributedSubstring(from: run).string
                 .trimmingCharacters(in: .newlines)
             guard !line.isEmpty else { continue }
+            let message = logRecordMessage(of: line)
             let element = UIAccessibilityElement(accessibilityContainer: container)
             element.accessibilityIdentifier = "log.record"
-            element.accessibilityLabel = line
+            element.accessibilityLabel = message
             element.accessibilityValue = id
             element.accessibilityTraits = .staticText
             // `laidOut` is already measured from the visible top-left corner and
@@ -967,6 +969,13 @@ private let logTimeFormat: DateFormatter = {
 
 /// Stable identity of one rendered log record: `DiagnosticFiles.Entry.id`.
 let logRecordEntryIDKey = NSAttributedString.Key("DobbyLogEntryID")
+
+/// A rendered record without its leading `HH:mm:ss  ` timestamp.
+func logRecordMessage(of line: String) -> String {
+    let prefix = #"^\d{2}:\d{2}:\d{2}  "#
+    guard let range = line.range(of: prefix, options: .regularExpression) else { return line }
+    return String(line[range.upperBound...])
+}
 
 func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     let output = NSMutableAttributedString(string: "")
