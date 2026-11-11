@@ -242,24 +242,36 @@ extension PacketTunnelProvider {
         }
     }
 
-    func teardownForStop(reason: String, completionHandler: @escaping () -> Void) async {
-        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin (\(reason))")
+    func teardownForStop(reason: String, operationID: String = "ios-stop-\(UUID().uuidString)", completionHandler: @escaping () -> Void) async {
+        let started = ProcessInfo.processInfo.systemUptime
+        logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] begin operation_id=\(operationID) reason=\(reason)")
         IOSProviderStopBoundary.perform(
-            stopGoSessionAndWait: { DobbyvpnStopSessionAndWait() },
-            releasePlatformCallbacks: { callbackBridge = nil },
+            stopGoSessionAndWait: {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] Go stop begin operation_id=\(operationID)")
+                let failure = DobbyvpnStopSessionAndWait()
+                logs.writeLog(level: failure.isEmpty ? "INFO" : "ERROR", log: "[tunnel:\(tunnelId)] [teardown] Go stop end operation_id=\(operationID) elapsed=\(ProcessInfo.processInfo.systemUptime - started) error=\(failure)")
+                return failure
+            },
+            releasePlatformCallbacks: {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] callback release begin operation_id=\(operationID)")
+                callbackBridge = nil
+                logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] callback release end operation_id=\(operationID)")
+            },
             stopPathMonitoring: {
+                logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] path stop begin operation_id=\(operationID)")
                 pathMonitor?.cancel()
                 pathMonitor = nil
                 lastPathSignature = nil
+                logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] path stop end operation_id=\(operationID)")
             },
             completeOSStop: { failure in
                 if !failure.isEmpty {
-                    logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] Go shutdown retains resources: \(failure)")
+                    logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] Go shutdown retains resources operation_id=\(operationID): \(failure)")
                 }
-                logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason)) cleanup_complete=\(failure.isEmpty)")
-                logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel cleanup wait ended; calling OS completionHandler")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end operation_id=\(operationID) reason=\(reason) cleanup_complete=\(failure.isEmpty) elapsed=\(ProcessInfo.processInfo.systemUptime - started)")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completion begin operation_id=\(operationID)")
                 completionHandler()
-                logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
+                logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completion end operation_id=\(operationID)")
             }
         )
     }

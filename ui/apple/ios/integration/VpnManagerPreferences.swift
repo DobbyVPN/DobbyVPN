@@ -39,7 +39,11 @@ extension VpnManagerImpl {
                 completion(nil, error)
                 return
             }
-            if let existing = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) {
+            let matching = Self.matchingManagers(managers ?? [])
+            let selected: NETunnelProviderManager?
+            do { selected = try Self.selectManager(matching) }
+            catch { completion(nil, error); return }
+            if let existing = selected {
                 self.applyProtocolDefaults(manager: existing)
                 // Persist control-mode routing defaults before any start. An
                 // in-memory fix is not sufficient because NetworkExtension
@@ -52,52 +56,48 @@ extension VpnManagerImpl {
         }
     }
 
-    /// NetworkExtension's save completion acknowledges persistence, but the
-    /// manager object passed to it is not the authoritative object used by a
-    /// subsequent start. Reload the saved preference and bind all state to
-    /// that object before returning from the readiness fence.
+    /// Save completion acknowledges persistence. Reload that same native
+    /// preference object before binding it for a subsequent start.
     private func saveAndReload(
         _ manager: NETunnelProviderManager,
+        bind: Bool = true,
         completion: @escaping (NETunnelProviderManager?, Error?) -> Void
     ) {
-        manager.saveToPreferences { [weak self] saveError in
-            guard let self else { completion(nil, saveError); return }
-            guard let saveError else {
-                self.reloadSavedManager(completion: completion)
-                return
+        VPNPreferenceOperations.saveAndReload(
+            manager,
+            save: { manager, done in manager.saveToPreferences(completionHandler: done) },
+            reload: { manager, done in manager.loadFromPreferences(completionHandler: done) },
+            bind: bind ? { manager in
+                self.condition.lock()
+                self.vpnManager = manager
+                self.providerStatus = manager.connection.status
+                self.condition.broadcast()
+                self.condition.unlock()
+            } : nil,
+            completion: { saved, phase, error in
+                if let error {
+                    let operation = phase == .save ? "save" : "reload"
+                    self.logs.writeLog(level: "ERROR", log: "[provider] preference \(operation) failed:\n\(diagnosticErrorDescription(error))")
+                }
+                completion(saved, error)
             }
-            self.logs.writeLog(level: "ERROR", log: "[provider] preference save failed:\n\(diagnosticErrorDescription(saveError))")
-            completion(nil, saveError)
+        )
+    }
+
+    private static func matchingManagers(_ managers: [NETunnelProviderManager]) -> [NETunnelProviderManager] {
+        VPNPreferenceOperations.matching(managers, provider: dobbyBundleIdentifier) {
+            ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
         }
     }
 
-    private func reloadSavedManager(
-        completion: @escaping (NETunnelProviderManager?, Error?) -> Void
-    ) {
-        NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, loadError in
-            guard let self else { completion(nil, loadError); return }
-            if let loadError {
-                self.logs.writeLog(level: "ERROR", log: "[provider] preference reload failed:\n\(diagnosticErrorDescription(loadError))")
-                completion(nil, loadError)
-                return
+    private static func selectManager(_ matching: [NETunnelProviderManager]) throws -> NETunnelProviderManager? {
+        let index = try VPNManagerIdentity.select(matchingActiveStates: matching.map {
+            switch $0.connection.status {
+            case .connecting, .connected, .reasserting, .disconnecting: return true
+            default: return false
             }
-            guard let reloaded = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) else {
-                let missing = NSError(
-                    domain: "PacketTunnelProvider.preferences",
-                    code: -8,
-                    userInfo: [NSLocalizedDescriptionKey: "saved DobbyVPN NetworkExtension manager was not returned by reload"]
-                )
-                self.logs.writeLog(level: "ERROR", log: "[provider] preference reload did not return the saved DobbyVPN manager")
-                completion(nil, missing)
-                return
-            }
-            self.condition.lock()
-            self.vpnManager = reloaded
-            self.providerStatus = reloaded.connection.status
-            self.condition.broadcast()
-            self.condition.unlock()
-            completion(reloaded, nil)
-        }
+        })
+        return index.map { matching[$0] }
     }
 
     private func makeManager() -> NETunnelProviderManager {
@@ -160,7 +160,7 @@ extension VpnManagerImpl {
                 NETunnelProviderManager.loadAllFromPreferences { managers, error in
                     defer { finished() }
                     if let error { continuation.resume(throwing: error); return }
-                    continuation.resume(returning: managers?.first(where: { $0.localizedDescription == Self.dobbyName })?.isOnDemandEnabled ?? false)
+                    continuation.resume(returning: Self.matchingManagers(managers ?? []).contains(where: { $0.isOnDemandEnabled }))
                 }
             }
         }
@@ -193,37 +193,63 @@ extension VpnManagerImpl {
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self else { completion(error); return }
             if let error { completion(error); return }
-            guard let manager = managers?.first(where: { $0.localizedDescription == Self.dobbyName }) else {
-                if !enabled { completion(nil); return }
-                completion(NSError(domain: "DobbyVPN.OnDemand", code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Connect once to create the VPN configuration."]))
+            let matching = Self.matchingManagers(managers ?? [])
+            if !enabled {
+                self.disableOnDemand(matching, completion: completion)
                 return
             }
-            if enabled {
-                let connect = NEOnDemandRuleConnect()
-                connect.interfaceTypeMatch = .any
-                manager.onDemandRules = [connect]
-            }
-            manager.isOnDemandEnabled = enabled
-            manager.saveToPreferences { [weak self] error in
-                guard let self else { completion(error); return }
-                if let error {
-                    self.logs.writeLog(level: "ERROR", log: "[provider] On Demand preference save failed:\n\(diagnosticErrorDescription(error))")
-                    completion(error)
+            let manager: NETunnelProviderManager
+            do {
+                guard let selected = try Self.selectManager(matching) else {
+                    completion(NSError(domain: "DobbyVPN.OnDemand", code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "Connect once to create the VPN configuration."]))
                     return
                 }
-                self.reloadSavedManager { saved, error in
-                    if let error { completion(error); return }
-                    guard saved?.isOnDemandEnabled == enabled else {
-                        completion(NSError(domain: "DobbyVPN.OnDemand", code: 3,
-                            userInfo: [NSLocalizedDescriptionKey: "Saved On Demand preference did not match the requested value."]))
-                        return
-                    }
-                    self.logs.writeLog(log: "[provider] On Demand enabled=\(enabled)")
-                    completion(nil)
-                }
-            }
+                manager = selected
+            } catch { completion(error); return }
+            let connect = NEOnDemandRuleConnect()
+            connect.interfaceTypeMatch = .any
+            manager.onDemandRules = [connect]
+            manager.isOnDemandEnabled = true
+            self.saveOnDemand(manager, enabled: true, completion: completion)
         }
+    }
+
+    private func saveOnDemand(_ manager: NETunnelProviderManager, enabled: Bool,
+                              completion: @escaping (Error?) -> Void) {
+        saveAndReload(manager, bind: enabled) { saved, error in
+            if let error { completion(error); return }
+            guard saved?.isOnDemandEnabled == enabled else {
+                completion(NSError(domain: "DobbyVPN.OnDemand", code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Saved On Demand preference did not match the requested value."]))
+                return
+            }
+            self.logs.writeLog(log: "[provider] On Demand enabled=\(enabled)")
+            completion(nil)
+        }
+    }
+
+    // Try every matching configuration, retaining every original failure. A
+    // failed preference must never prevent disabling the remaining managers.
+    private func disableOnDemand(_ managers: [NETunnelProviderManager],
+                                 completion: @escaping (Error?) -> Void) {
+        VPNPreferenceOperations.performSequentially(managers, perform: { index, manager, done in
+            manager.isOnDemandEnabled = false
+            self.saveOnDemand(manager, enabled: false) { error in
+                if let error {
+                    self.logs.writeLog(level: "ERROR", log: "[provider] On Demand disable failed manager=\(index):\n\(diagnosticErrorDescription(error))")
+                }
+                done(error)
+            }
+        }, completion: { failures in
+            if failures.isEmpty { completion(nil) }
+            else {
+                completion(NSError(domain: "DobbyVPN.OnDemand", code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Could not disable On Demand on every matching VPN configuration.",
+                               "underlyingErrors": failures,
+                               NSUnderlyingErrorKey: failures[0]]))
+            }
+        })
     }
 
     // Start the preference update alongside Go Stop. A failed or slow OS

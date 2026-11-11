@@ -111,6 +111,7 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
 }
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
+    private let commandDiagnosticSampler = IOSCommandLogSampler()
     private let launchId = UUID().uuidString
     let tunnelId = UUID().uuidString
 
@@ -320,10 +321,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        logs.writeLog(log: "[tunnel] stopTunnel teardown=begin")
+        let operationID = "ios-stop-\(UUID().uuidString)"
+        logs.writeLog(log: "[tunnel] stopTunnel teardown=begin operation_id=\(operationID) reason=\(reason)")
         Task {
             await teardownForStop(
-                reason: "stopTunnel(\(reason))",
+                reason: "stopTunnel(\(reason))", operationID: operationID,
                 completionHandler: completionHandler
             )
         }
@@ -348,78 +350,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
+        let command = try? IOSProviderCommand.decode(messageData)
+        let identity = command?.diagnosticIdentity ?? "request_id=unavailable method=unavailable"
+        let trace = commandDiagnosticSampler.shouldTrace(method: command?.method ?? "")
+        if trace { logs.writeLog(log: "[tunnel:\(tunnelId)] provider command queued \(identity)") }
         commandQueue.async { [weak self] in
             guard let self else { completionHandler?(nil); return }
-            completionHandler?(self.dispatchProviderCommand(messageData))
+            completionHandler?(self.dispatchProviderCommand(messageData, trace: trace))
         }
     }
 
-    private func dispatchProviderCommand(_ messageData: Data) -> Data {
-        let command: IOSProviderCommand
-        do {
-            command = try IOSProviderCommand.decode(messageData)
-        } catch {
-            logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] provider command decode failed: \(String(reflecting: error))")
-            return VpnManagerImpl.transportFailure("INTERNAL", message: String(reflecting: error))
-        }
-
-        let includesSource = command.method == "Configure" || command.method == "StartWithSource"
-        var rawConfiguration: Data?
-        if includesSource {
-            let key = SharedKeychainSecretStore.sessionConfigurationMailboxKey
-            guard let bytes = secrets.data(for: key) else {
-                logs.writeLog(
-                    log: "[tunnel:\(tunnelId)] configuration mailbox is unavailable request_id=\(command.requestID)"
-                )
-                let failure = VpnManagerImpl.transportFailure(
-                    "PLATFORM_FAILED",
-                    message: "configuration mailbox is unavailable for this request"
-                )
-                return providerResponse(requestID: command.requestID, kind: .transport, goResponse: failure)
-            }
-            let mailbox: IOSConfigurationMailbox
-            do {
-                mailbox = try IOSConfigurationMailbox.decode(bytes)
-            } catch {
-                logs.writeLog(level: "ERROR",
-                    log: "[tunnel:\(tunnelId)] configuration mailbox decode failed " +
-                        "request_id=\(command.requestID):\n\(diagnosticErrorDescription(error))"
-                )
-                let failure = VpnManagerImpl.transportFailure(
-                    "PLATFORM_FAILED",
-                    message: "configuration mailbox is malformed"
-                )
-                return providerResponse(requestID: command.requestID, kind: .transport, goResponse: failure)
-            }
-            guard mailbox.requestID == command.requestID else {
-                logs.writeLog(
-                    log: "[tunnel:\(tunnelId)] configuration mailbox request mismatch " +
-                        "command_id=\(command.requestID) mailbox_id=\(mailbox.requestID)"
-                )
-                let failure = VpnManagerImpl.transportFailure(
-                    "PLATFORM_FAILED",
-                    message: "configuration mailbox is unavailable for this request"
-                )
-                return providerResponse(requestID: command.requestID, kind: .transport, goResponse: failure)
-            }
-            rawConfiguration = mailbox.configuration
-        }
-
-        let response = GomobileProviderSessionClient.call(
-            method: command.method == "StartWithSource" ? "Start" : command.method,
-            params: command.params,
-            rawConfiguration: rawConfiguration
+    private func dispatchProviderCommand(_ messageData: Data, trace: Bool) -> Data {
+        IOSProviderCommandHandler.dispatch(
+            messageData, trace: trace, tunnelID: tunnelId,
+            loadMailbox: { self.secrets.data(for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) },
+            callGo: { method, params, configuration in
+                GomobileProviderSessionClient.call(method: method, params: params, rawConfiguration: configuration)
+            },
+            failure: { VpnManagerImpl.transportFailure($0, message: $1) },
+            log: { level, message in _ = self.logs.writeLog(level: level, log: message) }
         )
-        return providerResponse(requestID: command.requestID, kind: .go, goResponse: response)
-    }
-
-    private func providerResponse(requestID: String, kind: IOSProviderResponseKind, goResponse: Data) -> Data {
-        do {
-            let envelope = try IOSProviderResponse(requestID: requestID, kind: kind, payload: goResponse)
-            return try envelope.encoded()
-        } catch {
-            logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] provider response encoding failed: \(String(reflecting: error))")
-            return VpnManagerImpl.transportFailure("PLATFORM_FAILED", message: String(reflecting: error))
-        }
     }
 }

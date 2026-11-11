@@ -19,6 +19,7 @@ public final class VpnManagerImpl: NSObject {
     let preferenceQueue = DispatchQueue(label: "vpn.dobby.preferences")
     var preferenceOperations: [(@escaping () -> Void) -> Void] = []
     private var snapshotReadinessFailureCooldown = IOSReadinessFailureCooldown()
+    private let diagnosticSampler = IOSCommandLogSampler()
     private var observer: NSObjectProtocol?
 
     override public init() {
@@ -57,10 +58,18 @@ public final class VpnManagerImpl: NSObject {
             logs.writeLog(level: "ERROR", log: "[provider-message] rejected empty command")
             return Self.transportFailure("INTERNAL", message: "provider command is empty")
         }
-        let commandMethod = (try? IOSProviderCommand.decode(messageData))?.method
+        let command = try? IOSProviderCommand.decode(messageData)
+        let commandMethod = command?.method
+        let identity = command?.diagnosticIdentity ?? "request_id=unavailable method=unavailable"
+        let started = monotonicNow()
+        let trace = diagnosticSampler.shouldTrace(method: commandMethod ?? "")
+        var stage = "begin"
+        if trace { logs.writeLog(log: "[provider-message] begin \(identity)") }
+        defer { if trace { logs.writeLog(log: "[provider-message] end \(identity) stage=\(stage) elapsed=\(monotonicNow() - started)") } }
         let useSnapshotReadinessCooldown = commandMethod == "Snapshot" && !Thread.isMainThread
         if useSnapshotReadinessCooldown,
            let readinessFailure = cachedSnapshotReadinessFailure() {
+            logs.writeLog(level: "ERROR", log: "[provider-message] cached readiness failure \(identity) stage=cached-readiness elapsed=\(monotonicNow() - started): \(readinessFailure)")
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
@@ -68,8 +77,12 @@ public final class VpnManagerImpl: NSObject {
             )
         }
         let deadline = monotonicNow() + IOSProviderTiming.appMessageTimeout
+        if commandMethod == "Stop" { logs.writeLog(log: "[provider-message] On Demand disable begin \(identity)") }
         let onDemandCompletion: (() -> String?)? = commandMethod == "Stop" ? beginDisableOnDemandForStop(until: deadline) : nil
-        if let readinessFailure = ensureProviderReady(until: deadline) {
+        stage = "readiness"
+        if trace { logs.writeLog(log: "[provider-message] readiness begin \(identity)") }
+        if let readinessFailure = ensureProviderReady(until: deadline, identity: identity, trace: trace, stage: &stage) {
+            logs.writeLog(level: "ERROR", log: "[provider-message] readiness failed \(identity) stage=\(stage) elapsed=\(monotonicNow() - started): \(readinessFailure)")
             if commandMethod != nil && !Thread.isMainThread {
                 condition.lock()
                 snapshotReadinessFailureCooldown.recordFailure(readinessFailure, at: monotonicNow())
@@ -81,7 +94,9 @@ public final class VpnManagerImpl: NSObject {
                 message: readinessFailure
             )
         }
+        if trace { logs.writeLog(log: "[provider-message] readiness end \(identity) elapsed=\(monotonicNow() - started)") }
         guard let timeout = remaining(until: deadline) else {
+            logs.writeLog(level: "ERROR", log: "[provider-message] deadline expired \(identity) stage=\(stage) elapsed=\(monotonicNow() - started)")
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
@@ -90,19 +105,27 @@ public final class VpnManagerImpl: NSObject {
         }
         do {
             return try performProviderMessage(commandData: messageData, send: {
+                stage = "send"
+                if trace { logs.writeLog(log: "[provider-message] send begin \(identity)") }
                 let response = try sendOnce(messageData, timeout: timeout)
-                if let onDemandFailure = onDemandCompletion?() {
-                    // Preserve the actual Go stop result even when the OS restart
-                    // preference failed. The app must expose that failure.
-                    logs.writeLog(level: "ERROR", log: "[provider] Go Stop response after On Demand failure: \(String(decoding: response, as: UTF8.self))")
-                    return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED", message: onDemandFailure)
+                if trace { logs.writeLog(log: "[provider-message] send end \(identity) elapsed=\(monotonicNow() - started)") }
+                if let onDemandCompletion {
+                    logs.writeLog(log: "[provider-message] On Demand wait begin \(identity)")
+                    let onDemandFailure = onDemandCompletion()
+                    logs.writeLog(level: onDemandFailure == nil ? "INFO" : "ERROR", log: "[provider-message] On Demand wait end \(identity) elapsed=\(monotonicNow() - started) error=\(onDemandFailure ?? "none")")
+                    if let onDemandFailure {
+                        // Preserve the actual Go stop result even when the OS restart
+                        // preference failed. The app must expose that failure.
+                        logs.writeLog(level: "ERROR", log: "[provider] Go Stop response after On Demand failure \(identity): \(String(decoding: response, as: UTF8.self))")
+                        return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED", message: onDemandFailure)
+                    }
                 }
                 return response
             }, onFailure: { error in
-                logs.writeLog(level: "ERROR", log: "[provider] sendProviderMessage failed:\n\(diagnosticErrorDescription(error))")
+                logs.writeLog(level: "ERROR", log: "[provider] sendProviderMessage failed \(identity) stage=\(stage) elapsed=\(monotonicNow() - started):\n\(diagnosticErrorDescription(error))")
             })
         } catch {
-            logs.writeLog(level: "ERROR", log: "[provider] transport failure response encoding failed:\n\(diagnosticErrorDescription(error))")
+            logs.writeLog(level: "ERROR", log: "[provider] transport failure response encoding failed \(identity) stage=\(stage) elapsed=\(monotonicNow() - started):\n\(diagnosticErrorDescription(error))")
             return Self.transportFailure("INTERNAL", message: "provider request failed")
         }
     }
@@ -195,7 +218,7 @@ public final class VpnManagerImpl: NSObject {
         return failure
     }
 
-    private func ensureProviderReady(until deadline: TimeInterval) -> String? {
+    private func ensureProviderReady(until deadline: TimeInterval, identity: String, trace: Bool, stage: inout String) -> String? {
         if Thread.isMainThread {
             // Provider readiness waits must never freeze the UI thread. Refuse
             // a main-thread call if a caller violates that boundary.
@@ -216,9 +239,11 @@ public final class VpnManagerImpl: NSObject {
             }
         }
         condition.unlock()
+        stage = "preferences"
         let loaded = DispatchSemaphore(value: 0)
         var loadedManager: NETunnelProviderManager?
         var loadError: Error?
+        if trace { logs.writeLog(log: "[provider-message] preferences begin \(identity)") }
         getOrCreateManager { value, error in
             loadedManager = value
             loadError = error
@@ -229,6 +254,7 @@ public final class VpnManagerImpl: NSObject {
             logs.writeLog(level: "ERROR", log: "[provider] timed out loading NetworkExtension preferences")
             return "timed out loading NetworkExtension preferences"
         }
+        if trace || loadError != nil { logs.writeLog(level: loadError == nil ? "INFO" : "ERROR", log: "[provider-message] preferences end \(identity) error=\(loadError.map(diagnosticErrorDescription) ?? "none")") }
         condition.lock()
         // getOrCreateManager returns the post-save reloaded object. Never
         // prefer an older in-memory manager after a provider-process restart.
@@ -260,6 +286,7 @@ public final class VpnManagerImpl: NSObject {
                 return nil
             }
             if observedStatus == .disconnecting {
+                stage = "disconnect-wait"
                 guard let settled = waitForDisconnectToSettle(until: deadline) else {
                     logs.writeLog(level: "ERROR", log: "[provider] disconnect did not settle before the readiness deadline")
                     return "disconnect did not settle before the readiness deadline"
@@ -268,16 +295,19 @@ public final class VpnManagerImpl: NSObject {
                 continue
             }
             if observedStatus == .connecting || observedStatus == .reasserting {
+                stage = "provider-ready-wait"
                 if waitForReady(until: deadline) { return nil }
                 observedStatus = current.connection.status
                 continue
             }
             do {
+                stage = "provider-start"
                 try current.connection.startVPNTunnel(options: ["dobby_control_only": NSNumber(value: true)])
             } catch {
                 logs.writeLog(level: "ERROR", log: "[provider] control-mode start failed:\n\(diagnosticErrorDescription(error))")
                 return String(reflecting: error)
             }
+            stage = "provider-ready-wait"
             if waitForReady(until: deadline) { return nil }
             observedStatus = current.connection.status
         }

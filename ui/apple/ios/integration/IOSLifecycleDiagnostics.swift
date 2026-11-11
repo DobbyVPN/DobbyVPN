@@ -20,7 +20,7 @@ internal enum IOSProviderPayload {
 
 /// Preserve invalid diagnostic bytes without silently replacing them with
 /// U+FFFD before the native export path receives them.
-internal func reversibleDiagnosticText(_ data: Data) -> String {
+public func reversibleDiagnosticText(_ data: Data) -> String {
     if let text = String(data: data, encoding: .utf8) {
         return text
     }
@@ -78,4 +78,25 @@ private func providerFailureResponse(commandData: Data, error: Error) throws -> 
         "error": ["code": "PLATFORM_FAILED", "message": "provider request failed:\n\(diagnosticErrorDescription(error))"],
     ])
     return try IOSProviderResponse(requestID: command.requestID, kind: .transport, payload: payload).encoded()
+}
+
+/// Snapshot polling is frequent; keep one correlated trace per minute while
+/// errors are always emitted by the caller with their last entered stage.
+public final class IOSCommandLogSampler {
+    private let lock = NSLock()
+    private let now: () -> TimeInterval
+    private var lastSnapshot: TimeInterval?
+
+    public init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
+    }
+
+    public func shouldTrace(method: String) -> Bool {
+        guard method == "Snapshot" else { return true }
+        lock.lock(); defer { lock.unlock() }
+        let current = now()
+        if let lastSnapshot, current - lastSnapshot < 60 { return false }
+        lastSnapshot = current
+        return true
+    }
 }
