@@ -400,6 +400,20 @@ jobs:
           mkdir "$provenance"
           python3 .github/scripts/release/download_artifact.py \
             "$TEST_RUN_ID" dobbyvpn-android-provenance "$provenance"
+          symbols="$RUNNER_TEMP/selected-symbol-bundles"
+          mkdir -p "$symbols"
+          for bundle in \
+            dobbyvpn-symbols-linux-amd64.tar.gz \
+            dobbyvpn-symbols-windows-amd64.tar.gz \
+            dobbyvpn-symbols-macos-aarch64.tar.gz \
+            dobbyvpn-symbols-macos-amd64.tar.gz \
+            dobbyvpn-symbols-android.tar.gz \
+            dobbyvpn-symbols-ios.tar.gz; do
+            destination="$symbols/${bundle%.tar.gz}"
+            mkdir "$destination"
+            python3 .github/scripts/release/download_artifact.py \
+              "$BUILD_RUN_ID" "$bundle" "$destination"
+          done
       - name: Assemble selected Release artifacts without collisions
         run: |
           python3 - "$RUNNER_TEMP/selected-release-artifacts" release <<'PYTHON'
@@ -525,6 +539,48 @@ jobs:
             --version "$RELEASE_VERSION" --update-file release/version.txt
           printf '%s' "$RELEASE_NOTES" > "$RUNNER_TEMP/release-notes.md"
           notes_sha256="$(sha256sum "$RUNNER_TEMP/release-notes.md" | cut -d' ' -f1)"
+          python3 - "$RUNNER_TEMP/selected-symbol-bundles" "release/DobbyVPN-v$RELEASE_VERSION-build-identity.json" \
+            "$RELEASE_VERSION" "$RELEASE_SOURCE_SHA" "$BUILD_RUN_ID" "$BUILD_RUN_NUMBER" \
+            "$ANDROID_VERSION_CODE" "$APPLE_BUILD_NUMBER" <<'PYTHON'
+          import json, sys, tarfile
+          from pathlib import Path
+
+          bundles, output, version, source_sha, run_id, run_number, android_code, apple_number = sys.argv[1:]
+          platforms = []
+          for bundle_dir in sorted(Path(bundles).iterdir()):
+              archives = sorted(bundle_dir.rglob("*.tar.gz"))
+              if len(archives) != 1:
+                  raise SystemExit(f"symbol bundle is missing or ambiguous: {bundle_dir.name}")
+              with tarfile.open(archives[0]) as archive:
+                  member = next(
+                      (item for item in archive.getmembers() if item.name.endswith("/build-identity.json")),
+                      None,
+                  )
+                  if member is None:
+                      raise SystemExit(f"symbol bundle carries no build identity: {bundle_dir.name}")
+                  payload = archive.extractfile(member)
+                  if payload is None:
+                      raise SystemExit(f"symbol bundle identity is unreadable: {bundle_dir.name}")
+                  platforms.append(json.loads(payload.read()))
+          if not platforms:
+              raise SystemExit("no symbol bundles were selected")
+          document = {
+              "schema": 1,
+              "kind": "dobbyvpn-release-build-identity",
+              "tag": f"v{version}",
+              "version": version,
+              "source_sha": source_sha,
+              "build_run_id": int(run_id),
+              "build_run_number": int(run_number),
+              "android_version_code": int(android_code),
+              "apple_build_number": int(apple_number),
+              "platforms": platforms,
+          }
+          Path(output).write_text(
+              json.dumps(document, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PYTHON
           python3 .github/scripts/release/release_provenance.py create-published \
             --directory release --tag "v$RELEASE_VERSION" --version "$RELEASE_VERSION" \
             --source-sha "$RELEASE_SOURCE_SHA" \
@@ -541,7 +597,8 @@ jobs:
             --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
             --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
             --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
-            --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
+            --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-build-identity.json"
       - name: Stage public assets and exact Release notes
         run: |
           set -euo pipefail
@@ -664,7 +721,8 @@ jobs:
             --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
             --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
             --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
-            --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
+            --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk" \
+            --asset "DobbyVPN-v$RELEASE_VERSION-build-identity.json"
           cp -a "$RUNNER_TEMP/prepared-release/release" release
       - name: Create tag and GitHub Release
         env:
@@ -746,7 +804,8 @@ jobs:
               --asset dobbyVPN-macos-amd64.pkg --asset dobbyVPN-windows-amd64.msi \
               --asset dobbyVPN-linux-debug.deb --asset dobbyVPN-windows-amd64-debug.msi \
               --asset dobbyVPN-macos-aarch64-debug.pkg --asset dobbyVPN-macos-amd64-debug.pkg \
-              --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk"
+              --asset DobbyVPN.xcarchive-debug.tar.gz --asset "DobbyVPN-v$RELEASE_VERSION-debug.apk" \
+              --asset "DobbyVPN-v$RELEASE_VERSION-build-identity.json"
           else
             echo "GitHub Release $tag is absent from the complete paginated list; checking the local tag."
             if git show-ref --verify --quiet "refs/tags/$tag"; then

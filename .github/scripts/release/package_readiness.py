@@ -14,17 +14,29 @@ from version_metadata import parse_version
 
 # GitHub reports reusable job names with their caller prefix.
 PACKAGES = {
-    "linux": {"dobbyVPN-linux.deb": "build_linux / linux / amd64 package"},
-    "windows": {"dobbyVPN-windows-amd64.msi": "build_windows / windows / amd64 package"},
+    "linux": {
+        "dobbyVPN-linux.deb": "build_linux / linux / amd64 package",
+        "dobbyvpn-symbols-linux-amd64.tar.gz": "build_linux / linux / amd64 package",
+    },
+    "windows": {
+        "dobbyVPN-windows-amd64.msi": "build_windows / windows / amd64 package",
+        "dobbyvpn-symbols-windows-amd64.tar.gz": "build_windows / windows / amd64 package",
+    },
     "macos": {
         "dobbyVPN-macos-aarch64.pkg": "build_macos_arm / macos / arm64 package",
         "dobbyVPN-macos-amd64.pkg": "build_macos_intel / macos / amd64 package",
+        "dobbyvpn-symbols-macos-aarch64.tar.gz": "build_macos_arm / macos / arm64 package",
+        "dobbyvpn-symbols-macos-amd64.tar.gz": "build_macos_intel / macos / amd64 package",
     },
     "android": {
         "dobbyvpn-android-unsign.apk": "android_build / android_build",
         "dobbyvpn-android-build-metadata": "android_build / android_build",
+        "dobbyvpn-symbols-android.tar.gz": "android_build / android_build",
     },
-    "ios": {"DobbyVPNRuntime.xcframework": "ios_libraries_build / build_ios_lib"},
+    "ios": {
+        "DobbyVPNRuntime.xcframework": "ios_libraries_build / build_ios_lib",
+        "dobbyvpn-symbols-ios.tar.gz": "ios_build / ios_build",
+    },
 }
 
 

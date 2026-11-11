@@ -43,6 +43,12 @@ def required_artifacts(version: str) -> tuple[str, ...]:
         "dobbyVPN-macos-aarch64-debug.pkg",
         "dobbyVPN-macos-amd64.pkg",
         "dobbyVPN-macos-amd64-debug.pkg",
+        "dobbyvpn-symbols-linux-amd64.tar.gz",
+        "dobbyvpn-symbols-windows-amd64.tar.gz",
+        "dobbyvpn-symbols-macos-aarch64.tar.gz",
+        "dobbyvpn-symbols-macos-amd64.tar.gz",
+        "dobbyvpn-symbols-android.tar.gz",
+        "dobbyvpn-symbols-ios.tar.gz",
     )))
 
 

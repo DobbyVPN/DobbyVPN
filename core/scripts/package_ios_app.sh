@@ -172,11 +172,11 @@ elif [[ "$target" == iosarchive ]]; then
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     archive
-  if [[ "$configuration" == Debug ]]; then
-    test -d "$archive/dSYMs"
-    find "$archive/dSYMs" -type f -print
-    test -n "$(find "$archive/dSYMs" -type f -path '*/DWARF/*' -print)"
-  fi
+  # Every shipped configuration must carry the dSYMs a symbol reader needs;
+  # a Release archive without them cannot name the crash it reports.
+  test -d "$archive/dSYMs"
+  find "$archive/dSYMs" -type f -print
+  test -n "$(find "$archive/dSYMs" -type f -path '*/DWARF/*' -print)"
   python3 "$script_root/.github/scripts/ios/ios_archive.py" pack \
     --archive-dir "$archive" --output "$output" \
     --source-sha "$source_commit" --version "$version" \

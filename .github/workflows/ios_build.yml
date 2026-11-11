@@ -81,3 +81,12 @@ jobs:
           path: ui/apple/build/release/DobbyVPN.xcarchive${{ env.DEBUG_SUFFIX }}.tar.gz
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload iOS symbol bundle
+        if: ${{ !inputs.debug }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-symbols-ios.tar.gz${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
+          path: ui/apple/build/release/dobbyvpn-symbols-ios.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}

@@ -14,6 +14,7 @@ import subprocess
 import struct
 import sys
 import tarfile
+import tempfile
 import zipfile
 
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -112,6 +113,80 @@ def _validate_archive(
         version=version,
         build_number=build_number,
     )
+
+
+PRODUCT_BUNDLES = (
+    ("app", "Products/Applications"),
+    ("tunnel-extension", "Products/Applications/*.app/PlugIns/*.appex"),
+    ("embedded-framework", "Products/Applications/*.app/Frameworks/*.framework"),
+)
+
+
+def _product_binaries(archive: Path) -> dict[str, Path]:
+    """Return the shipped product executables the symbol set must cover."""
+    products = archive / "Products" / "Applications"
+    apps = sorted(products.glob("*.app"))
+    if len(apps) != 1:
+        raise ArchiveError("Xcode archive must contain exactly one iOS app")
+    app = apps[0]
+    app_info = _read_plist(app / "Info.plist", "iOS app Info.plist")
+    binaries = {"app": app / str(app_info.get("CFBundleExecutable", ""))}
+    extensions = sorted(app.glob("PlugIns/*.appex"))
+    if len(extensions) != 1:
+        raise ArchiveError("iOS app must carry exactly one NSExtension")
+    extension = extensions[0]
+    extension_info = _read_plist(extension / "Info.plist", "iOS extension Info.plist")
+    binaries["tunnel-extension"] = extension / str(extension_info.get("CFBundleExecutable", ""))
+    frameworks = sorted(app.glob("Frameworks/*.framework"))
+    if len(frameworks) != 1:
+        raise ArchiveError("iOS app must carry exactly one embedded framework")
+    framework = frameworks[0]
+    framework_info = _read_plist(framework / "Info.plist", "iOS framework Info.plist")
+    binaries["embedded-framework"] = framework / str(framework_info.get("CFBundleExecutable", ""))
+    for role, binary in binaries.items():
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ArchiveError(f"iOS {role} executable is missing or not executable")
+    return binaries
+
+
+def _dwarfdump_uuid(path: Path) -> str:
+    """Read a Mach-O or dSYM UUID; a symbol must carry the shipped one."""
+    result = subprocess.run(
+        ["dwarfdump", "--uuid", str(path)], stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, check=False,
+    )
+    if result.returncode != 0:
+        raise ArchiveError(f"could not read the UUID of {path.name}")
+    match = re.search(r"UUID:\s*([0-9A-Fa-f-]{36})", result.stdout or "")
+    if match is None:
+        raise ArchiveError(f"{path.name} carries no UUID")
+    return match.group(1).upper()
+
+
+def _verify_dsym_set(archive: Path) -> dict[str, Path]:
+    """Require one matching dSYM per product executable."""
+    binaries = _product_binaries(archive)
+    dsym_root = archive / "dSYMs"
+    if not dsym_root.is_dir():
+        raise ArchiveError("Xcode archive carries no dSYMs directory")
+    resolved: dict[str, Path] = {}
+    for role, binary in binaries.items():
+        # Xcode names a dSYM after the bundle (Dobby-Vpn.app.dSYM), not after
+        # the executable inside it.
+        bundle = binary.parent
+        candidates = [
+            dsym_root / f"{bundle.name}.dSYM",
+            dsym_root / f"{binary.name}.dSYM",
+        ]
+        expected = next((item for item in candidates if item.is_dir()), None)
+        if expected is None:
+            raise ArchiveError(
+                f"iOS {role} dSYM is missing: expected {candidates[0].name}"
+            )
+        if _dwarfdump_uuid(binary) != _dwarfdump_uuid(expected):
+            raise ArchiveError(f"iOS {role} dSYM does not match its executable")
+        resolved[role] = expected
+    return resolved
 
 
 def _expand_entitlement_value(value: object, team_id: str) -> object:
@@ -288,6 +363,7 @@ def pack_archive(
         version=version,
         build_number=build_number,
     )
+    dsyms = _verify_dsym_set(archive)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.tmp")
     try:
@@ -299,6 +375,92 @@ def pack_archive(
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+    # Beside the archive tarball, named exactly as the Build artifact expects.
+    _write_symbol_bundle(
+        archive,
+        dsyms,
+        output.with_name("dobbyvpn-symbols-ios.tar.gz"),
+        source_sha=source_sha,
+        version=version,
+        build_number=build_number,
+        package=output,
+    )
+
+
+def _write_symbol_bundle(
+    archive: Path,
+    dsyms: dict[str, Path],
+    output: Path,
+    *,
+    source_sha: str,
+    version: str,
+    build_number: str,
+    package: Path,
+) -> Path:
+    """Write the iOS symbol bundle with the same shape as the other platforms."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "release"))
+    import symbol_manifest
+
+    root = Path(tempfile.mkdtemp(prefix="dobbyvpn-symbols-ios-"))
+    try:
+        binaries = _product_binaries(archive)
+        records = []
+        for role, binary in binaries.items():
+            staged_binary = root / "binaries" / binary.name
+            staged_binary.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(binary, staged_binary)
+            staged_dsym = root / "dsyms" / dsyms[role].name
+            staged_dsym.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(dsyms[role], staged_dsym)
+            match = symbol_manifest._bind(staged_binary, [staged_dsym])
+            capture = symbol_manifest._buildinfo_capture(root, staged_binary)
+            symbols = [staged_dsym] + ([capture] if capture else [])
+            records.append(symbol_manifest._binary_record(
+                root, role=role, file=staged_binary, symbol_files=symbols, match=match,
+            ))
+        runtime = archive.parent / "DobbyVPNRuntime.xcframework"
+        if not runtime.is_dir():
+            runtime = archive.parent.parent.parent / "ui" / "apple" / "DobbyVPNRuntime.xcframework"
+        runtime_binary = None
+        if runtime.is_dir():
+            runtime_binary = runtime / "ios-arm64" / "DobbyVPNRuntime.framework" / "DobbyVPNRuntime"
+        document = symbol_manifest.build_identity(
+            repository="DobbyVPN/DobbyVPN",
+            workflow_path=".github/workflows/ios_build.yml",
+            run_id=0, run_number=0, run_attempt=0,
+            source_sha=source_sha,
+            source_tree=subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"], cwd=Path(__file__).resolve().parents[3],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False,
+            ).stdout.strip(),
+            version=version, android_version_code=int(build_number),
+            apple_build_number=int(build_number), platform="ios", architecture="arm64",
+            toolchain={
+                "xcodebuild": subprocess.run(
+                    ["xcodebuild", "-version"], stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, check=False,
+                ).stdout.splitlines()[0],
+                "ios_minimum": "15.6",
+            },
+            build_flags={"swift": "dwarf-with-dsym", "configuration": "Release"},
+            diagnostics={
+                "enabled": True, "feature_flags": None,
+                "files": symbol_manifest.diagnostics_files(Path(__file__).resolve().parents[3]),
+                "constants": dict(symbol_manifest.DIAGNOSTIC_CONSTANTS),
+            },
+            diagnostic_variant=None,
+            package={
+                "name": package.name,
+                "sha256": symbol_manifest.sha256_of(package),
+                "size": package.stat().st_size,
+            },
+            binaries=records, third_party=[],
+        )
+        symbol_manifest.write_identity(root, document)
+        symbol_manifest.verify_identity(root)
+        return symbol_manifest._tar_bundle(root, output, "dobbyvpn-symbols-ios")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def unpack_archive(input_tar: Path, output_dir: Path) -> Path:
