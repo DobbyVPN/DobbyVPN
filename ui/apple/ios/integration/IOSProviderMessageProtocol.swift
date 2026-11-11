@@ -1,4 +1,3 @@
-import DobbyDiagnosticFiles
 import Foundation
 
 private func isJSONBoolean(_ number: NSNumber) -> Bool {
@@ -98,7 +97,7 @@ public struct IOSProviderCommand: Equatable {
         method: String,
         requestID: String,
         params: Data,
-        attemptID: String = DiagnosticsAttempt.current
+        attemptID: String = IOSProviderCommand.currentAttempt
     ) throws {
         guard !method.isEmpty, !requestID.isEmpty else {
             throw IOSProviderMessageError.malformed
@@ -113,6 +112,12 @@ public struct IOSProviderCommand: Equatable {
         self.requestID = requestID
         self.params = params
         self.attemptID = attemptID.lowercased()
+    }
+
+    /// The operation identity of the sending process, read without importing
+    /// the diagnostic module so this transport type stays self-contained.
+    public static var currentAttempt: String {
+        DiagnosticsAttemptBridge.current
     }
 
     /// One attempt identity: 32 lowercase hex characters.

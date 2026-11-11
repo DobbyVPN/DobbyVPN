@@ -15,7 +15,7 @@ public final class IOSSessionShell: NSObject {
     /// Sends the frontend's method and parameters through the provider as JSON.
     /// Source bytes stay in a request-scoped Keychain mailbox because the
     /// NetworkExtension message is a control transport, not a secret channel.
-    public func call(method: String, parameters: [String: Any], attemptID: String = DiagnosticsAttempt.current) -> String {
+    public func call(method: String, parameters: [String: Any], attemptID: String) -> String {
         let hasStartSource = method == "Start" && parameters["source"] is String
         let usesMailbox = method == "Configure" || hasStartSource
         let providerMethod = hasStartSource ? "StartWithSource" : method
