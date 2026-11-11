@@ -2,6 +2,7 @@ package sessionapi
 
 import (
 	"context"
+	"core/log"
 	"sync"
 	"time"
 )
@@ -98,6 +99,7 @@ func (m *Manager) StopAndWait(ctx context.Context) error {
 			if complete {
 				return nil
 			}
+			log.StageMark("cancel", "budget-exceeded", "", "failed")
 			return failureWithCause(FailureCleanup, "shutdown still owns resources", budget.Err())
 		}
 	}

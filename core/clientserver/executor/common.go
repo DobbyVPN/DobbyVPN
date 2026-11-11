@@ -50,5 +50,9 @@ func initExplicitLocalLog() (resultErr error) {
 	if captureErr != nil {
 		return fmt.Errorf("capture backend output: %w", captureErr)
 	}
-	return log.SetAppenderPath(path)
+	if err := log.SetAppenderPath(path); err != nil {
+		return err
+	}
+	diagnostics.SetRole(diagnostics.RoleBackend)
+	return nil
 }

@@ -206,7 +206,9 @@ func (c *nativeRuntime) disconnectLocked(ctx context.Context) error {
 	}
 	c.state = stateStopping
 
+	ended := log.StageBegin("disconnect", "native", "")
 	err := c.cleanupResourcesLocked(sessionapi.CleanupContext(ctx))
+	ended(internalRuntimeStageResult(err))
 	c.cleanupErr = err
 	if err != nil {
 		c.state = stateFailed

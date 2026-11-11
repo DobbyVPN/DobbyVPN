@@ -261,13 +261,19 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         {
             // Capture all handles and lengths before compression begins. Locks
             // are released immediately, so producers can rotate during copying.
-            foreach (var path in _paths)
+            // The backend's raw stderr is retained beside its structured log and
+            // shares that destination's rotation lock, so a backend that wrote
+            // straight to stderr is readable from the export alone.
+            foreach (var path in new[] { backendPath, uiPath })
             {
+                var names = path == backendPath
+                    ? new[] {path + ".stderr.previous", path + ".stderr", path + ".previous", path}
+                    : new[] {path + ".previous", path};
                 try
                 {
                     NativeLogFiles.WithLock(path, false, () =>
                     {
-                        foreach (var name in new[] {path + ".previous", path})
+                        foreach (var name in names)
                         {
                             try
                             {

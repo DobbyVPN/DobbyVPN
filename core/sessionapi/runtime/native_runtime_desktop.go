@@ -184,7 +184,10 @@ func (c *nativeRuntime) Disconnect(ctx context.Context) error {
 	if cancel != nil {
 		cancel()
 	}
-	if err := c.waitForShutdown(ctx, done, "disconnect"); err != nil {
+	ended := log.StageBegin("disconnect", "native", "")
+	waitErr := c.waitForShutdown(ctx, done, "disconnect")
+	ended(internalRuntimeStageResult(waitErr))
+	if err := waitErr; err != nil {
 		return err
 	}
 	if c.app != nil {

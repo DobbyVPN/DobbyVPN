@@ -1,13 +1,11 @@
 package tunnel
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
-	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +16,7 @@ import (
 	stackTunnel "github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
 
+	"core/diagnostics"
 	"core/dnscache"
 	"core/log"
 	"core/tunnel/platform_engine"
@@ -494,17 +493,25 @@ func (e *Engine) Stop(ctx context.Context) error {
 	var phase atomic.Value
 	phase.Store("starting")
 	timer := time.AfterFunc(3*time.Second, func() {
-		var stacks bytes.Buffer
-		err := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
-		log.Warnf(Category, "[Engine] stop slow generation=%d interface=%s phase=%s elapsed=%s contextError=%v stackError=%v\n%s", generation, iface, phase.Load(), time.Since(started), ctx.Err(), err, stacks.String())
+		// Announce the entered phase before the expensive capture, so a reader
+		// learns the stop is stuck even when capturing takes a while.
+		log.Warnf(Category, "[Engine] stop slow generation=%d interface=%s phase=%s elapsed=%s contextError=%v",
+			generation, iface, phase.Load(), time.Since(started), ctx.Err())
+		// Exactly one collection: the bounded capture below is what an export
+		// carries, and a second profile walk would only slow a stuck stop down.
+		stacks, truncated, captureErr := diagnostics.CaptureGoroutines()
+		log.HangCapture(truncated, captureErr, stacks)
+		log.StageMark("cleanup", "capture", "", diagnostics.CaptureResult(truncated, captureErr))
 	})
 	defer timer.Stop()
 	runPhase := func(name string, fn func()) {
 		phase.Store(name)
+		ended := log.StageBegin("cleanup", name, "")
 		phaseStarted := time.Now()
 		log.Debugf(Category, "[Engine] stop phase=%s started generation=%d interface=%s", name, generation, iface)
 		fn()
 		log.Debugf(Category, "[Engine] stop phase=%s finished generation=%d interface=%s elapsed=%s", name, generation, iface, time.Since(phaseStarted))
+		ended("ok")
 	}
 	log.Debugf(Category, "[Engine] stopping owned tun2socks engine")
 	if e.router != nil {

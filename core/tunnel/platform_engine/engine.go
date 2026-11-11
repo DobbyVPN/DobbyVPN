@@ -83,11 +83,21 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 	return true, err
 }
 
+// testStackWaitHook is inert in every product build. A build-local
+// qualification binary installs a hold here to prove the hang capture against a
+// genuinely blocked stack-wait stage.
+var testStackWaitHook func()
+
 func stopPhase(name string, fn func()) {
+	ended := log.StageBegin("cleanup", name, "")
 	started := time.Now()
 	log.Debugf(Category, "[Engine][Platform] phase=%s started", name)
+	if name == "stack-wait" && testStackWaitHook != nil {
+		testStackWaitHook()
+	}
 	fn()
 	log.Debugf(Category, "[Engine][Platform] phase=%s finished elapsed=%s", name, time.Since(started))
+	ended("ok")
 }
 
 type phaseRun struct {
@@ -124,6 +134,7 @@ func stopPhaseCtx(ctx context.Context, name string, fn func()) error {
 	case <-ctx.Done():
 		err := ctx.Err()
 		log.Warnf(Category, "[Engine][Platform] phase=%s timed_out=true elapsed=%s err=%v", name, time.Since(run.started), err)
+		log.StageMark("cleanup", name, "", "timeout")
 		return fmt.Errorf("platform stop phase %s exceeded cleanup deadline: %w", name, err)
 	}
 }

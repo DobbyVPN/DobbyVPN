@@ -30,12 +30,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	var ownedEngine *tunnel.Engine
-	app.setCleanup(plan.Close, func(ctx context.Context) error {
+	app.setCleanup(namedRelease{"plan-close", plan.Close}, namedRelease{"engine-stop", func(ctx context.Context) error {
 		if ownedEngine != nil {
 			return ownedEngine.Stop(ctx)
 		}
 		return nil
-	}, func(context.Context) error { protected_dialer.ResetDefaultRoute(); return nil })
+	}}, namedRelease{"route-reset", func(context.Context) error { protected_dialer.ResetDefaultRoute(); return nil }})
 
 	// Capture before tunnel DNS is installed. Each later lookup captures the same
 	// native physical interface source, never the VPN-overridden global resolver.

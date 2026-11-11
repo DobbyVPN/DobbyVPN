@@ -22,6 +22,13 @@ import (
 const logSchema = "dobby.log/v1"
 const logSource = "go"
 
+// A hang capture is one bounded goroutine snapshot written as an ordinary log
+// record, so the retained file budget is unchanged by it.
+const (
+	HangCaptureEvent    = "hang.capture"
+	HangCaptureCategory = "HANG"
+)
+
 type logrusToSlogHook struct{}
 
 func (*logrusToSlogHook) Levels() []logrus.Level { return logrus.AllLevels }
@@ -350,4 +357,60 @@ func newJSONLineHandler(writer io.Writer) slog.Handler {
 			return attribute
 		},
 	})
+}
+
+// StageBegin emits one lifecycle stage begin record
+// StageBegin emits one lifecycle stage begin record to the structured log and
+// mirrors it into the diagnostics timeline. The returned end writer closes the
+// stage with its result and monotonic elapsed milliseconds.
+func StageBegin(operation, stage, attemptID string) (end func(result string)) {
+	if attemptID == "" {
+		attemptID = diagnostics.CurrentAttemptID()
+	}
+	role := diagnostics.Role()
+	started := time.Now()
+	writeStageRecord(slog.LevelDebug, operation, stage, attemptID, role, "begin", "", nil)
+	return func(result string) {
+		elapsed := time.Since(started).Milliseconds()
+		writeStageRecord(slog.LevelDebug, operation, stage, attemptID, role, "end", result, &elapsed)
+	}
+}
+
+// StageMark records one lifecycle stage event that has no begin/end pair.
+func StageMark(operation, stage, attemptID, result string) {
+	if attemptID == "" {
+		attemptID = diagnostics.CurrentAttemptID()
+	}
+	role := diagnostics.Role()
+	writeStageRecord(slog.LevelInfo, operation, stage, attemptID, role, "mark", result, nil)
+}
+
+// HangCapture writes one bounded goroutine capture as an ordinary log record.
+// A failed capture keeps its text so an export can tell it from an absent one.
+func HangCapture(truncated bool, captureErr error, stacks []byte) {
+	arguments := map[string]any{
+		"dump_truncated": truncated,
+		"stack":          string(stacks),
+	}
+	if captureErr != nil {
+		arguments["capture_error"] = captureErr.Error()
+	} else {
+		arguments["capture_error"] = ""
+	}
+	writeEvent(slog.LevelWarn, HangCaptureEvent, HangCaptureCategory, "hang capture", arguments)
+}
+
+func writeStageRecord(level slog.Level, operation, stage, attemptID, role, phase, result string, elapsed *int64) {
+	arguments := map[string]any{
+		"attempt_id": attemptID, "operation": operation, "stage": stage,
+		"role": role, "phase": phase,
+	}
+	if result != "" {
+		arguments["result"] = result
+	}
+	if elapsed != nil {
+		arguments["elapsed_ms"] = *elapsed
+	}
+	writeEvent(level, diagnostics.TimelineEvent, diagnostics.TimelineCategory,
+		fmt.Sprintf("stage %s %s", operation, stage), arguments)
 }

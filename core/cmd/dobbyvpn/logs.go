@@ -56,8 +56,11 @@ func diagnosticPaths() ([]string, error) {
 			backend = "/var/log/dobbyvpn/backend.jsonl"
 		}
 	}
-	paths := make([]string, 0, 2)
+	paths := make([]string, 0, 3)
 	paths = append(paths, backend)
+	// Raw backend stderr is retained beside the structured log where the
+	// capturing producer has not folded it into the log itself.
+	paths = append(paths, backend+".stderr")
 	cli, err := cliLogPath()
 	if err != nil {
 		return nil, err
@@ -117,8 +120,13 @@ func runLogs(args []string) int {
 }
 
 func diagnosticHeader() string {
-	metadata, _ := json.Marshal(buildinfo.Fields())
-	return fmt.Sprintf("DobbyVPN diagnostics\nBuild: %s\nCaptured: %s\n", metadata, time.Now().UTC().Format(time.RFC3339Nano))
+	fields := buildinfo.Fields()
+	metadata, _ := json.Marshal(fields)
+	return fmt.Sprintf(
+		"DobbyVPN diagnostics\nBuild: %s\nToolchain: %v\nPlatform: %v/%v\nConfiguration: %v\nCaptured: %s\n",
+		metadata, fields["go_version"], fields["platform"], fields["architecture"], fields["configuration"],
+		time.Now().UTC().Format(time.RFC3339Nano),
+	)
 }
 
 func exportDiagnostics(destination string, paths []string) error {

@@ -20,8 +20,8 @@ final class MacDesktopSessionClient: DobbySessionClient {
     }
 
     var diagnosticPaths: [URL] {
-        [URL(fileURLWithPath: backendLogPath),
-         uiDiagnosticPath]
+        DiagnosticFiles.diagnosticExtras(directory: URL(fileURLWithPath: backendLogPath).deletingLastPathComponent())
+            + [URL(fileURLWithPath: backendLogPath), uiDiagnosticPath]
     }
 
     var uiDiagnosticPath: URL {
