@@ -883,6 +883,15 @@ private struct ConfigurationReceipt: Decodable { let sequence: Int64 }
 
 #if os(macOS)
 extension DobbySessionViewModel {
+    func recordMacLogAccessibility(_ observation: MacLogAccessibilityObservation) {
+        recordDiagnostic(
+            "parent_role=\(observation.parentRole) visible_count=\(observation.visibleCount) " +
+            "first_id=\(observation.firstID) first_role=\(observation.firstRole) " +
+            "first_frame=\(NSStringFromRect(observation.firstFrame))",
+            event: "logs.accessibility-children", level: "DEBUG"
+        )
+    }
+
     func recordMacLogCapture(_ anchor: MacLogReadingAnchor) {
         recordDiagnostic(
             "character_index=\(anchor.characterIndex) record_ordinal=\(anchor.recordOrdinal) " +

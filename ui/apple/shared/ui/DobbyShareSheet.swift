@@ -446,22 +446,64 @@ struct MacLogVisibleFragment {
     let isWholeRecord: Bool
 }
 
+struct MacLogAccessibilityObservation {
+    let parentRole: String
+    let visibleCount: Int
+    let firstID: String
+    let firstRole: String
+    let firstFrame: CGRect
+}
+
+// AppKit requires a role-specific protocol for virtual accessibility elements.
+// The parent is held weakly by NSAccessibilityElement, avoiding a retain cycle.
+final class MacLogRecordAccessibilityElement: NSAccessibilityElement, NSAccessibilityStaticText {
+    private var recordText = ""
+
+    override func accessibilityValue() -> String? { recordText }
+
+    func update(text: String, frame: CGRect, screenFrame: CGRect) {
+        recordText = text
+        setAccessibilityFrame(screenFrame)
+        setAccessibilityFrameInParentSpace(frame)
+    }
+}
+
 final class DobbyLogTextView: NSTextView {
     var onSendLogs: () -> Void = {}
     var onUploadLogs: (() -> Void)?
     var onClear: () -> Void = {}
+    var onAccessibilityObservation: ((MacLogAccessibilityObservation) -> Void)?
+    private var recordElements: [String: MacLogRecordAccessibilityElement] = [:]
+    private var reportedAccessibilityObservation = false
 
     override func accessibilityChildren() -> [Any]? {
-        guard let window else { return [] }
-        let elements: [NSAccessibilityElement] = visibleRecordFragments().compactMap { fragment -> NSAccessibilityElement? in
+        guard let window else { recordElements.removeAll(); return [] }
+        let fragments = visibleRecordFragments()
+        var visible: [String: MacLogRecordAccessibilityElement] = [:]
+        let elements: [MacLogRecordAccessibilityElement] = fragments.compactMap { fragment in
             let screenFrame = window.convertToScreen(convert(fragment.frame, to: nil))
-            guard let child = NSAccessibilityElement.element(withRole: .staticText, frame: screenFrame,
-                                                              label: nil, parent: self) as? NSAccessibilityElement else { return nil }
-            child.setAccessibilityFrameInParentSpace(fragment.frame)
             let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)"
-            child.setAccessibilityIdentifier("logs.record." + fragment.recordID + suffix)
-            child.setAccessibilityValue(fragment.text)
+            let identifier = "logs.record." + fragment.recordID + suffix
+            let child: MacLogRecordAccessibilityElement
+            if let existing = recordElements[identifier] {
+                child = existing
+            } else {
+                guard let created = MacLogRecordAccessibilityElement.element(withRole: .staticText, frame: screenFrame,
+                                                                              label: nil, parent: self) as? MacLogRecordAccessibilityElement else { return nil }
+                child = created
+                child.setAccessibilityIdentifier(identifier)
+            }
+            child.update(text: fragment.text, frame: fragment.frame, screenFrame: screenFrame)
+            visible[identifier] = child
             return child
+        }
+        recordElements = visible
+        if !reportedAccessibilityObservation, let first = elements.first, let onAccessibilityObservation {
+            reportedAccessibilityObservation = true
+            onAccessibilityObservation(MacLogAccessibilityObservation(
+                parentRole: accessibilityRole()?.rawValue ?? "unavailable", visibleCount: elements.count,
+                firstID: first.accessibilityIdentifier() ?? "unavailable",
+                firstRole: first.accessibilityRole()?.rawValue ?? "unavailable", firstFrame: first.accessibilityFrame()))
         }
         return elements
     }
@@ -569,6 +611,7 @@ struct DobbyLogView: NSViewRepresentable {
     let onClear: () -> Void
     var onReadingPositionRestored: (MacLogRestoreObservation) -> Void = { _ in }
     var onReadingPositionCaptured: (MacLogReadingAnchor) -> Void = { _ in }
+    var onAccessibilityObservation: (MacLogAccessibilityObservation) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -636,6 +679,7 @@ struct DobbyLogView: NSViewRepresentable {
         let coordinator = context.coordinator
         view.onSendLogs = onSendLogs
         view.onUploadLogs = onUploadLogs
+        view.onAccessibilityObservation = onAccessibilityObservation
         view.onClear = { [weak coordinator] in
             coordinator?.resetForClear()
             onClear()
