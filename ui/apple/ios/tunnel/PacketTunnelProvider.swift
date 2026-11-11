@@ -363,6 +363,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return VpnManagerImpl.transportFailure("INTERNAL", message: String(reflecting: error))
         }
 
+        // The app minted this command's operation identity; adopting it makes
+        // the provider's teardown records of this operation correlate with the
+        // app's command records.
+        DiagnosticsAttempt.adopt(command.attemptID)
         let includesSource = command.method == "Configure" || command.method == "StartWithSource"
         var rawConfiguration: Data?
         if includesSource {

@@ -15,7 +15,7 @@ public final class IOSSessionShell: NSObject {
     /// Sends the frontend's method and parameters through the provider as JSON.
     /// Source bytes stay in a request-scoped Keychain mailbox because the
     /// NetworkExtension message is a control transport, not a secret channel.
-    public func call(method: String, parameters: [String: Any]) -> String {
+    public func call(method: String, parameters: [String: Any], attemptID: String) -> String {
         let hasStartSource = method == "Start" && parameters["source"] is String
         let usesMailbox = method == "Configure" || hasStartSource
         let providerMethod = hasStartSource ? "StartWithSource" : method
@@ -61,7 +61,7 @@ public final class IOSSessionShell: NSObject {
             return failure("INVALID_ARGUMENT", message: "command parameters are invalid")
         }
 
-        let result = executeResult(method: providerMethod, requestID: requestID, params: params)
+        let result = executeResult(method: providerMethod, requestID: requestID, params: params, attemptID: attemptID)
         if hasConfigurationMailbox,
            result.isGoResult,
            let response = result.response.data(using: .utf8),
@@ -76,10 +76,11 @@ public final class IOSSessionShell: NSObject {
     private func executeResult(
         method: String,
         requestID: String,
-        params: Data
+        params: Data,
+        attemptID: String
     ) -> (response: String, isGoResult: Bool) {
         do {
-            let command = try IOSProviderCommand(method: method, requestID: requestID, params: params)
+            let command = try IOSProviderCommand(method: method, requestID: requestID, params: params, attemptID: attemptID)
             let providerResponse = try IOSProviderResponse.decode(
                 manager.sendProviderMessage(command.encoded()),
                 expectedRequestID: requestID

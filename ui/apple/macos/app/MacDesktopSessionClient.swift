@@ -20,8 +20,9 @@ final class MacDesktopSessionClient: DobbySessionClient {
     }
 
     var diagnosticPaths: [URL] {
-        DiagnosticFiles.diagnosticExtras(directory: URL(fileURLWithPath: backendLogPath).deletingLastPathComponent())
-            + [URL(fileURLWithPath: backendLogPath), uiDiagnosticPath]
+        // The retained logs of this app: the backend's structured log and the
+        // UI log Swift rotates. No stream beyond the logging contract's budget.
+        [URL(fileURLWithPath: backendLogPath), uiDiagnosticPath]
     }
 
     var uiDiagnosticPath: URL {
@@ -84,6 +85,9 @@ final class MacDesktopSessionClient: DobbySessionClient {
                 source: "native-ui",
                 to: uiDiagnosticPath,
                 fields: [
+                    // The configuration source is part of the diagnostic
+                    // contract: a support reader compares the exact value the
+                    // backend was asked to configure.
                     "parameters": ["source": source],
                     "succeeded": responseReceived && responseIsSuccessful,
                     "response_read_monotonic_uptime": ProcessInfo.processInfo.systemUptime,

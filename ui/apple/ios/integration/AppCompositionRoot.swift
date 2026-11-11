@@ -30,7 +30,10 @@ public enum IOSAppCompositionRoot {
         return sharedLogPath(isTunnel ? "go_tunnel_logs.jsonl" : "go_app_logs.jsonl")
     }
 
-    /// Fixed files owned by the iOS app group and packet tunnel.
+    /// The two retained logs of the iOS app group: one for the containing app
+    /// and one for the packet tunnel. Stage records and hang captures are
+    /// ordinary records inside them, so the archive never adds a stream beyond
+    /// the logging contract's budget.
     public static func diagnosticPaths() -> [URL] {
         [sharedLogPath("go_app_logs.jsonl"), sharedLogPath("go_tunnel_logs.jsonl")]
     }
@@ -40,7 +43,16 @@ public enum IOSAppCompositionRoot {
         return DobbyLogStore(path: current)
     }()
 
-    public static let vpnManager = VpnManagerImpl()
+    /// The app owns the attempt identity; the transport bridge reports it so a
+    /// command envelope always carries the operation the app minted.
+    private static let identityInstallation: Void = {
+        DiagnosticsAttemptBridge.provider = { DiagnosticsAttempt.current }
+    }()
+
+    public static let vpnManager: VpnManagerImpl = {
+        _ = identityInstallation
+        return VpnManagerImpl()
+    }()
     public static let sessionShell = IOSSessionShell(manager: vpnManager)
 }
 

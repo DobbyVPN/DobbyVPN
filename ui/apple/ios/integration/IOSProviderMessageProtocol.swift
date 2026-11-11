@@ -83,18 +83,26 @@ public enum IOSMailboxLifecycle {
 /// desktop Go dispatcher; the remaining fields correlate the NetworkExtension
 /// transport exchange.
 public struct IOSProviderCommand: Equatable {
-    public static let version = 2
+    public static let version = 3
 
     public let method: String
     public let requestID: String
     public let params: Data
+    /// The operation identity the containing app minted for this command. It
+    /// rides the real app-to-provider boundary so app and provider stage
+    /// records of one user operation share one identity.
+    public let attemptID: String
 
     public init(
         method: String,
         requestID: String,
-        params: Data
+        params: Data,
+        attemptID: String = IOSProviderCommand.currentAttempt
     ) throws {
         guard !method.isEmpty, !requestID.isEmpty else {
+            throw IOSProviderMessageError.malformed
+        }
+        guard Self.isAttemptIdentity(attemptID) else {
             throw IOSProviderMessageError.malformed
         }
         guard (try? JSONSerialization.jsonObject(with: params, options: [.fragmentsAllowed])) != nil else {
@@ -103,12 +111,25 @@ public struct IOSProviderCommand: Equatable {
         self.method = method
         self.requestID = requestID
         self.params = params
+        self.attemptID = attemptID.lowercased()
+    }
+
+    /// The operation identity of the sending process, read without importing
+    /// the diagnostic module so this transport type stays self-contained.
+    public static var currentAttempt: String {
+        DiagnosticsAttemptBridge.current
+    }
+
+    /// One attempt identity: 32 lowercase hex characters.
+    static func isAttemptIdentity(_ value: String) -> Bool {
+        value.count == 32 && value.allSatisfy { $0.isHexDigit }
     }
 
     public func encoded() throws -> Data {
         let parameters = try JSONSerialization.jsonObject(with: params, options: [.fragmentsAllowed])
         return try JSONSerialization.data(
             withJSONObject: [
+                "attempt_id": attemptID,
                 "method": method,
                 "params": parameters,
                 "request_id": requestID,
@@ -124,6 +145,8 @@ public struct IOSProviderCommand: Equatable {
               version == Int64(Self.version),
               let method = object["method"] as? String,
               let requestID = object["request_id"] as? String,
+              let attemptID = object["attempt_id"] as? String,
+              isAttemptIdentity(attemptID),
               let parameters = object["params"] else {
             throw IOSProviderMessageError.malformed
         }
@@ -131,7 +154,7 @@ public struct IOSProviderCommand: Equatable {
             withJSONObject: parameters,
             options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]
         )
-        return try Self(method: method, requestID: requestID, params: params)
+        return try Self(method: method, requestID: requestID, params: params, attemptID: attemptID)
     }
 
     fileprivate static func int64(_ value: Any?) throws -> Int64? {
