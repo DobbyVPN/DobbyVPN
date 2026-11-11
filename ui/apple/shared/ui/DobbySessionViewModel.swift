@@ -57,6 +57,7 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published var logEntries: [DobbyLogEntry] = []
     #if os(macOS)
     private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
+    var macLogCaptureDiagnosticNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     #endif
     @Published var clearRevision = 0
     @Published public private(set) var logsError = ""
@@ -898,11 +899,11 @@ extension DobbySessionViewModel {
     }
 
     func recordMacLogCapture(_ anchor: MacLogReadingAnchor) {
-        let now = ProcessInfo.processInfo.systemUptime
+        let now = macLogCaptureDiagnosticNow()
         if let last = lastMacLogCaptureDiagnosticUptime, now - last < macLogCaptureDiagnosticInterval { return }
         lastMacLogCaptureDiagnosticUptime = now
         recordDiagnostic(
-            "character_index=\(anchor.characterIndex) record_ordinal=\(anchor.recordOrdinal) " +
+            "record_id=\(anchor.recordID) character_offset=\(anchor.characterOffset) " +
             "anchor_viewport_y=\(anchor.viewportY)",
             event: "logs.frozen-position-captured", level: "DEBUG"
         )
@@ -910,7 +911,7 @@ extension DobbySessionViewModel {
 
     func recordMacLogRestore(_ observation: MacLogRestoreObservation) {
         recordDiagnostic(
-            "character_index=\(observation.anchor.characterIndex) record_ordinal=\(observation.anchor.recordOrdinal) " +
+            "record_id=\(observation.anchor.recordID) character_offset=\(observation.anchor.characterOffset) " +
             "anchor_viewport_y=\(observation.anchor.viewportY) " +
             "previous_origin=\(observation.previousOrigin) restored_origin=\(observation.restoredOrigin) " +
             "viewport_size=\(observation.viewportSize) content_size=\(observation.contentSize)",

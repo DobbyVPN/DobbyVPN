@@ -114,7 +114,9 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     private(set) var isRestoringReadingPosition = false
     private(set) var readingPositionRestoreCount = 0
     private var lastLayoutSize: CGSize?
-    private var anchorCharacterIndex: Int?
+    private var anchorRecordID: String?
+    private var anchorRecordOffset: Int?
+    private var recordElements: [String: IOSLogRecordAccessibilityElement] = [:]
     private var anchorViewportY: CGFloat?
 
     init() {
@@ -168,12 +170,31 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
             : NSLocalizedString("New entries are held while you read earlier logs. Scroll to the bottom to resume.", comment: "")
     }
 
-    // Expose only the rendered viewport. A single accessible element avoids
-    // UIKit enumerating thousands of offscreen paragraphs, while standard
-    // accessibility scrolling keeps earlier records reachable.
     func installAccessibilitySummary() {
-        isAccessibilityElement = true
+        isAccessibilityElement = false
         accessibilityLabel = NSLocalizedString("Connection logs", comment: "")
+    }
+
+    override var accessibilityElements: [Any]? {
+        get {
+            var visible: [String: IOSLogRecordAccessibilityElement] = [:]
+            let elements = visibleIOSLogRecordFragments(in: self).map { fragment in
+                let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)"
+                let identifier = "logs.record." + fragment.recordID + suffix
+                let element = recordElements[identifier] ?? IOSLogRecordAccessibilityElement(accessibilityContainer: self)
+                element.logView = self
+                element.accessibilityIdentifier = identifier
+                element.accessibilityLabel = fragment.text
+                element.accessibilityTraits = .staticText
+                element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(fragment.frame, in: self)
+                element.accessibilityCustomActions = accessibilityCustomActions
+                visible[identifier] = element
+                return element
+            }
+            recordElements = visible
+            return elements
+        }
+        set { super.accessibilityElements = newValue }
     }
 
     var accessibilityViewportText: String {
@@ -227,29 +248,21 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     func captureReadingPosition() {
         guard textStorage.length > 0 else { return }
         layoutManager.ensureLayout(for: textContainer)
-        let point = CGPoint(
-            // NSLayoutManager expects coordinates inside the text container.
-            x: 1,
-            y: contentOffset.y - textContainerInset.top + 1
-        )
-        let topGlyph = layoutManager.glyphIndex(for: point, in: textContainer)
-        var character = min(layoutManager.characterIndexForGlyph(at: topGlyph), textStorage.length - 1)
-        // Anchor the first record shown in full, from its start: records above may wrap differently after a resize.
-        let record = (textStorage.string as NSString).paragraphRange(for: NSRange(location: character, length: 0))
-        let topLine = layoutManager.lineFragmentRect(forGlyphAt: topGlyph, effectiveRange: nil)
-        let cutByTopEdge = topLine.minY + textContainerInset.top < contentOffset.y
-        if (record.location < character || cutByTopEdge) && NSMaxRange(record) < textStorage.length {
-            character = NSMaxRange(record)
-        }
+        guard let fragment = visibleIOSLogRecordFragments(in: self).first(where: { $0.isWholeRecord })
+                ?? visibleIOSLogRecordFragments(in: self).first,
+              let record = logRecordRange(fragment.recordID, in: textStorage) else { return }
+        let character = record.location + fragment.offset
         let line = layoutManager.lineFragmentRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: character), effectiveRange: nil)
-        anchorCharacterIndex = character
+        anchorRecordID = fragment.recordID
+        anchorRecordOffset = fragment.offset
         anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
     }
 
     private func restoreReadingPosition() {
-        guard let character = anchorCharacterIndex,
-              let viewportY = anchorViewportY,
-              textStorage.length > 0 else { return }
+        guard let id = anchorRecordID, let offset = anchorRecordOffset,
+              let record = logRecordRange(id, in: textStorage), offset >= 0, offset < record.length,
+              let viewportY = anchorViewportY, textStorage.length > 0 else { return }
+        let character = (textStorage.string as NSString).rangeOfComposedCharacterSequence(at: record.location + offset).location
         layoutManager.ensureLayout(for: textContainer)
         let glyph = layoutManager.glyphIndexForCharacter(at: min(character, textStorage.length - 1))
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
@@ -693,45 +706,23 @@ struct DobbyLogView: NSViewRepresentable {
 }
 // A UTF-16 character identity survives wrapping above the frozen viewport.
 struct MacLogReadingAnchor {
-    let characterIndex: Int
+    let recordID: String
+    let characterOffset: Int
     let viewportY: CGFloat
-    // Logical entry identity, distinct from the raw character offset: the
-    // 0-based DobbyLogEntry index whose text covers the anchor, or -1 when the
-    // text carries no entry metadata.
-    let recordOrdinal: Int
 }
 
 func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? {
-    guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage,
-          let layout = view.layoutManager, let container = view.textContainer, storage.length > 0 else { return nil }
-    layout.ensureLayout(for: container)
-    guard layout.numberOfGlyphs > 0 else { return nil }
-    let text = storage.string as NSString
-    let point = NSPoint(x: 1, y: max(0, scroll.contentView.bounds.minY - view.textContainerOrigin.y + 1))
-    let glyph = min(layout.glyphIndex(for: point, in: container), layout.numberOfGlyphs - 1)
-    var character = min(layout.characterIndexForGlyph(at: glyph), storage.length - 1)
-    // Anchor the first record shown in full, from its start: records above may
-    // wrap differently after a resize. A mid-record or clipped top record is
-    // not a stable anchor, so advance to the start of the next record.
-    var record = NSRange()
-    let ordinal = storage.attribute(logRecordOrdinalKey, at: character, longestEffectiveRange: &record,
-                                    in: NSRange(location: 0, length: storage.length)) as? Int
-    if ordinal == nil {
-        record = text.paragraphRange(for: NSRange(location: character, length: 0))
-    }
-    let topLine = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-    let cutByTopEdge = topLine.minY + view.textContainerOrigin.y < scroll.contentView.bounds.minY
-    if (record.location < character || cutByTopEdge) && NSMaxRange(record) < storage.length {
-        character = NSMaxRange(record)
-    }
-    // No else: when the entry is the last one there is no later record to
-    // anchor, so keep the visible character; its start may be far above.
-    let anchorGlyph = layout.glyphIndexForCharacter(at: min(character, storage.length - 1))
-    let line = layout.lineFragmentRect(forGlyphAt: anchorGlyph, effectiveRange: nil)
-    let recordOrdinal = (storage.attribute(logRecordOrdinalKey, at: character, effectiveRange: nil) as? Int) ?? -1
-    return MacLogReadingAnchor(characterIndex: character,
-                               viewportY: line.minY + view.textContainerOrigin.y - scroll.contentView.bounds.minY,
-                               recordOrdinal: recordOrdinal)
+    guard let view = scroll.documentView as? NSTextView,
+          let storage = view.textStorage, let layout = view.layoutManager,
+          let container = view.textContainer else { return nil }
+    let fragments = visibleMacLogRecordFragments(in: view)
+    guard let fragment = fragments.first(where: { $0.isWholeRecord }) ?? fragments.first,
+          let range = logRecordRange(fragment.recordID, in: storage) else { return nil }
+    let character = range.location + fragment.offset
+    let glyph = layout.glyphIndexForCharacter(at: character)
+    let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+    return MacLogReadingAnchor(recordID: fragment.recordID, characterOffset: fragment.offset,
+        viewportY: line.minY + view.textContainerOrigin.y - scroll.contentView.bounds.minY)
 }
 
 struct MacLogRestoreObservation {
@@ -746,9 +737,11 @@ struct MacLogRestoreObservation {
 func restoreMacLogReadingAnchor(_ anchor: MacLogReadingAnchor, in scroll: NSScrollView) -> MacLogRestoreObservation? {
     guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage,
           let layout = view.layoutManager, let container = view.textContainer,
-          anchor.characterIndex >= 0, anchor.characterIndex < storage.length else { return nil }
+          let range = logRecordRange(anchor.recordID, in: storage),
+          anchor.characterOffset >= 0, anchor.characterOffset < range.length else { return nil }
     layout.ensureLayout(for: container)
-    let glyph = layout.glyphIndexForCharacter(at: anchor.characterIndex)
+    let character = (storage.string as NSString).rangeOfComposedCharacterSequence(at: range.location + anchor.characterOffset).location
+    let glyph = layout.glyphIndexForCharacter(at: character)
     guard glyph < layout.numberOfGlyphs else { return nil }
     let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
     let maxY = max(0, view.bounds.height - scroll.contentView.bounds.height)
@@ -838,14 +831,12 @@ private let logTimeFormat: DateFormatter = {
     return format
 }()
 
-let logRecordOrdinalKey = NSAttributedString.Key("DobbyLogRecordOrdinal")
-
 func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     let output = NSMutableAttributedString(string: "")
     let paragraph = NSMutableParagraphStyle()
     // Extra space goes below each line so a line's text starts at the top of its fragment.
     paragraph.lineSpacing = 3
-    for (ordinal, entry) in entries.enumerated() {
+    for entry in entries {
         let start = output.length
         let time = entry.date.map(logTimeFormat.string) ?? entry.timestamp
         if !time.isEmpty {
@@ -864,8 +855,6 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
             .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
         ]))
         output.addAttribute(logRecordIDKey, value: entry.id,
-                            range: NSRange(location: start, length: output.length - start))
-        output.addAttribute(logRecordOrdinalKey, value: ordinal,
                             range: NSRange(location: start, length: output.length - start))
     }
     return output

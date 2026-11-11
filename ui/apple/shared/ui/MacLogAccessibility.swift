@@ -82,51 +82,8 @@ final class DobbyLogTextView: NSTextView {
         return elements
     }
 
-    // Each observation comes from glyphs actually laid out inside this viewport.
-    // A spanning record is represented by visible fragments, never a clipped
-    // full-record rectangle masquerading as a fully visible record.
     func visibleRecordFragments() -> [MacLogVisibleFragment] {
-        guard let storage = textStorage, storage.length > 0, let layout = layoutManager,
-              let container = textContainer, enclosingScrollView != nil else { return [] }
-        layout.ensureLayout(for: container)
-        let origin = textContainerOrigin
-        let viewport = visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
-        let visibleGlyphs = layout.glyphRange(forBoundingRect: viewport, in: container)
-        guard visibleGlyphs.length > 0 else { return [] }
-        let visibleCharacters = layout.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
-        let text = storage.string as NSString
-        var fragments: [MacLogVisibleFragment] = []
-        storage.enumerateAttribute(logRecordIDKey, in: visibleCharacters, options: []) { value, range, _ in
-            guard let id = value as? String else { return }
-            var fullRange = NSRange()
-            _ = storage.attribute(logRecordIDKey, at: range.location, longestEffectiveRange: &fullRange,
-                                  in: NSRange(location: 0, length: storage.length))
-            let contentRange = NSRange(location: fullRange.location, length: max(0, fullRange.length - 1))
-            let glyphs = layout.glyphRange(forCharacterRange: contentRange, actualCharacterRange: nil)
-            guard glyphs.length > 0 else { return }
-            let fullBounds = layout.boundingRect(forGlyphRange: glyphs, in: container)
-            if !fullBounds.isEmpty && viewport.contains(fullBounds) {
-                fragments.append(MacLogVisibleFragment(recordID: id, offset: 0, length: contentRange.length,
-                    text: text.substring(with: contentRange),
-                    frame: fullBounds.offsetBy(dx: origin.x, dy: origin.y), isWholeRecord: true))
-                return
-            }
-            let shownGlyphs = NSIntersectionRange(glyphs, visibleGlyphs)
-            layout.enumerateLineFragments(forGlyphRange: shownGlyphs) { _, _, _, lineGlyphs, _ in
-                let shownLine = NSIntersectionRange(shownGlyphs, lineGlyphs)
-                guard shownLine.length > 0 else { return }
-                let characters = layout.characterRange(forGlyphRange: shownLine, actualGlyphRange: nil)
-                let composed = NSIntersectionRange(contentRange, text.rangeOfComposedCharacterSequences(for: characters))
-                guard composed.length > 0 else { return }
-                let composedGlyphs = layout.glyphRange(forCharacterRange: composed, actualCharacterRange: nil)
-                let bounds = layout.boundingRect(forGlyphRange: composedGlyphs, in: container).intersection(viewport)
-                guard !bounds.isEmpty else { return }
-                fragments.append(MacLogVisibleFragment(recordID: id, offset: composed.location - contentRange.location,
-                    length: composed.length, text: text.substring(with: composed),
-                    frame: bounds.offsetBy(dx: origin.x, dy: origin.y), isWholeRecord: false))
-            }
-        }
-        return fragments
+        visibleMacLogRecordFragments(in: self)
     }
 
     private var logsMenu: NSMenu {
@@ -147,6 +104,57 @@ final class DobbyLogTextView: NSTextView {
         }
     }
 }
+
+func visibleMacLogRecordFragments(in view: NSTextView) -> [MacLogVisibleFragment] {
+    guard let storage = view.textStorage, storage.length > 0, let layout = view.layoutManager,
+          let container = view.textContainer, view.enclosingScrollView != nil else { return [] }
+    layout.ensureLayout(for: container)
+    let origin = view.textContainerOrigin
+    let viewport = view.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+    let visibleGlyphs = layout.glyphRange(forBoundingRect: viewport, in: container)
+    guard visibleGlyphs.length > 0 else { return [] }
+    let visibleCharacters = layout.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+    let text = storage.string as NSString
+    var fragments: [MacLogVisibleFragment] = []
+    storage.enumerateAttribute(logRecordIDKey, in: visibleCharacters, options: []) { value, range, _ in
+        guard let id = value as? String else { return }
+        var fullRange = NSRange()
+        _ = storage.attribute(logRecordIDKey, at: range.location, longestEffectiveRange: &fullRange,
+                              in: NSRange(location: 0, length: storage.length))
+        let contentRange = NSRange(location: fullRange.location, length: max(0, fullRange.length - 1))
+        let glyphs = layout.glyphRange(forCharacterRange: contentRange, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return }
+        let fullBounds = layout.boundingRect(forGlyphRange: glyphs, in: container)
+        // Ink bounds omit blank and whitespace-only lines. A whole-record
+        // element is valid only when every actual laid-out line fits.
+        var lineBounds = CGRect.null
+        layout.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+            lineBounds = lineBounds.union(rect)
+        }
+        if !fullBounds.isEmpty && !lineBounds.isNull && viewport.contains(fullBounds) && viewport.contains(lineBounds) {
+            fragments.append(MacLogVisibleFragment(recordID: id, offset: 0, length: contentRange.length,
+                text: text.substring(with: contentRange),
+                frame: fullBounds.offsetBy(dx: origin.x, dy: origin.y), isWholeRecord: true))
+            return
+        }
+        let shownGlyphs = NSIntersectionRange(glyphs, visibleGlyphs)
+        layout.enumerateLineFragments(forGlyphRange: shownGlyphs) { _, _, _, lineGlyphs, _ in
+            let shownLine = NSIntersectionRange(shownGlyphs, lineGlyphs)
+            guard shownLine.length > 0 else { return }
+            let characters = layout.characterRange(forGlyphRange: shownLine, actualGlyphRange: nil)
+            let composed = NSIntersectionRange(contentRange, text.rangeOfComposedCharacterSequences(for: characters))
+            guard composed.length > 0 else { return }
+            let composedGlyphs = layout.glyphRange(forCharacterRange: composed, actualCharacterRange: nil)
+            let bounds = layout.boundingRect(forGlyphRange: composedGlyphs, in: container).intersection(viewport)
+            guard !bounds.isEmpty else { return }
+            fragments.append(MacLogVisibleFragment(recordID: id, offset: composed.location - contentRange.location,
+                length: composed.length, text: text.substring(with: composed),
+                frame: bounds.offsetBy(dx: origin.x, dy: origin.y), isWholeRecord: false))
+        }
+    }
+    return fragments
+}
+
 
 private final class LogsMenuItem: NSMenuItem {
     private let handler: () -> Void
