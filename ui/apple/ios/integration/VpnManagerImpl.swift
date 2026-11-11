@@ -16,8 +16,21 @@ public final class VpnManagerImpl: NSObject {
     let condition = NSCondition()
     var vpnManager: NETunnelProviderManager?
     var providerStatus: NEVPNStatus = .invalid
-    let preferenceQueue = DispatchQueue(label: "vpn.dobby.preferences")
-    var preferenceOperations: [(@escaping () -> Void) -> Void] = []
+    lazy var preferences = VPNPreferenceCoordinator(
+        providerIdentifier: Self.dobbyBundleIdentifier, name: Self.dobbyName,
+        serverAddress: Self.defaultServerAddress,
+        bind: { [weak self] manager in
+            guard let self else { return }
+            self.condition.lock()
+            self.vpnManager = manager
+            self.providerStatus = manager.connection.status
+            self.condition.broadcast()
+            self.condition.unlock()
+        },
+        hasActivation: { SharedKeychainSecretStore.shared.string(for: SharedKeychainSecretStore.activationKey) != nil },
+        log: { [weak self] level, message in self?.logs.writeLog(level: level, log: message) },
+        describeError: diagnosticErrorDescription
+    )
     private var snapshotReadinessFailureCooldown = IOSReadinessFailureCooldown()
     private let diagnosticSampler = IOSCommandLogSampler()
     private var observer: NSObjectProtocol?
@@ -77,8 +90,18 @@ public final class VpnManagerImpl: NSObject {
             )
         }
         let deadline = monotonicNow() + IOSProviderTiming.appMessageTimeout
-        if commandMethod == "Stop" { logs.writeLog(log: "[provider-message] On Demand disable begin \(identity)") }
-        let onDemandCompletion: (() -> String?)? = commandMethod == "Stop" ? beginDisableOnDemandForStop(until: deadline) : nil
+        var stopPreferenceStarted = false
+        defer {
+            // Even an unavailable provider must not leave an explicit Stop's
+            // restart preference untouched. This work never gates Go cleanup.
+            if commandMethod == "Stop" && !stopPreferenceStarted {
+                preferences.changeOnDemand(false) { [weak self] error in
+                    if let error {
+                        self?.logs.writeLog(level: "ERROR", log: "[provider] unsent Stop could not disable On Demand:\n\(diagnosticErrorDescription(error))")
+                    }
+                }
+            }
+        }
         stage = "readiness"
         if trace { logs.writeLog(log: "[provider-message] readiness begin \(identity)") }
         if let readinessFailure = ensureProviderReady(until: deadline, identity: identity, trace: trace, stage: &stage) {
@@ -107,18 +130,21 @@ public final class VpnManagerImpl: NSObject {
             return try performProviderMessage(commandData: messageData, send: {
                 stage = "send"
                 if trace { logs.writeLog(log: "[provider-message] send begin \(identity)") }
-                let response = try sendOnce(messageData, timeout: timeout)
-                if trace { logs.writeLog(log: "[provider-message] send end \(identity) elapsed=\(monotonicNow() - started)") }
-                if let onDemandCompletion {
-                    logs.writeLog(log: "[provider-message] On Demand wait begin \(identity)")
-                    let onDemandFailure = onDemandCompletion()
-                    logs.writeLog(level: onDemandFailure == nil ? "INFO" : "ERROR", log: "[provider-message] On Demand wait end \(identity) elapsed=\(monotonicNow() - started) error=\(onDemandFailure ?? "none")")
-                    if let onDemandFailure {
-                        // Preserve the actual Go stop result even when the OS restart
-                        // preference failed. The app must expose that failure.
-                        logs.writeLog(level: "ERROR", log: "[provider] Go Stop response after On Demand failure \(identity): \(String(decoding: response, as: UTF8.self))")
-                        return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED", message: onDemandFailure)
+                let response: Data
+                let onDemandFailure: String?
+                if commandMethod == "Stop" {
+                    stopPreferenceStarted = true
+                    (response, onDemandFailure) = try preferences.performStop(until: deadline) {
+                        try sendOnce(messageData, timeout: timeout)
                     }
+                } else {
+                    response = try sendOnce(messageData, timeout: timeout)
+                    onDemandFailure = nil
+                }
+                if trace { logs.writeLog(log: "[provider-message] send end \(identity) elapsed=\(monotonicNow() - started)") }
+                if let onDemandFailure {
+                    logs.writeLog(level: "ERROR", log: "[provider] Go Stop response after On Demand failure \(identity): \(String(decoding: response, as: UTF8.self))")
+                    return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED", message: onDemandFailure)
                 }
                 return response
             }, onFailure: { error in
