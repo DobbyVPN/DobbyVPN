@@ -2,15 +2,17 @@ import DobbyDiagnosticFiles
 import DobbyNativeUI
 import Foundation
 
-final class MacDesktopSessionClient: DobbySessionClient {
+// The only mutable field is protected by samplingLock; the injected clock is
+// Sendable so callers can share this client across UI and recovery operations.
+final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
     private let socketPath: String
     private let backendLogPath: String
     private let uiLogPath: String
-    private let clock: () -> TimeInterval
+    private let clock: @Sendable () -> TimeInterval
     private let samplingLock = NSLock()
     private var lastSnapshot: TimeInterval?
 
-    init(environment: [String: String] = ProcessInfo.processInfo.environment, clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    init(environment: [String: String] = ProcessInfo.processInfo.environment, clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.clock = clock
         backendLogPath = environment["DOBBY_LOG_PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? "/Library/Logs/DobbyVPN/backend.jsonl"
         uiLogPath = environment["DOBBY_UI_LOG_PATH"].flatMap { $0.isEmpty ? nil : $0 }
@@ -94,7 +96,7 @@ final class MacDesktopSessionClient: DobbySessionClient {
                 throw NSError(domain: "DobbyDesktopControl", code: 1, userInfo: [NSLocalizedDescriptionKey: "Desktop control response envelope is invalid"])
             }
             if !ok {
-                record("control.command.failure", "ERROR", "Desktop control command failed", error: String(reflecting: object["error"] ?? "unavailable"))
+                record("control.command.failure", "ERROR", "Desktop control command failed", error: response)
             } else if sampled {
                 record("control.command.complete", "INFO", "Completed desktop control command")
             }

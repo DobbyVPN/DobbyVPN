@@ -8,6 +8,7 @@ struct MacLogVisibleFragment {
     let text: String
     let frame: CGRect
     let isWholeRecord: Bool
+    let isFullyVisible: Bool
 }
 
 struct MacLogAccessibilityObservation {
@@ -59,7 +60,8 @@ final class DobbyLogTextView: NSTextView {
         var visible: [String: MacLogRecordAccessibilityElement] = [:]
         let elements: [MacLogRecordAccessibilityElement] = fragments.compactMap { fragment in
             let screenFrame = window.convertToScreen(convert(fragment.frame, to: nil))
-            let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)"
+            let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)" +
+                (fragment.isFullyVisible ? "" : ".partial")
             let identifier = "logs.record." + fragment.recordID + suffix
             let child: MacLogRecordAccessibilityElement
             if let existing = recordElements[identifier] {
@@ -134,10 +136,13 @@ func visibleMacLogRecordFragments(in view: NSTextView) -> [MacLogVisibleFragment
         layout.enumerateLineFragments(forGlyphRange: recordGlyphs) { rect, _, _, _, _ in
             lineBounds = lineBounds.union(rect)
         }
-        if !fullBounds.isEmpty && !lineBounds.isNull && viewport.contains(fullBounds) && viewport.contains(lineBounds) {
+        // Line allocation rectangles span the container width; only their vertical
+        // extent describes blank lines. Horizontal visibility comes from ink bounds.
+        if !fullBounds.isEmpty && !lineBounds.isNull && viewport.contains(fullBounds)
+            && viewport.minY <= lineBounds.minY && viewport.maxY >= lineBounds.maxY {
             fragments.append(MacLogVisibleFragment(recordID: id, offset: 0, length: contentRange.length,
                 text: text.substring(with: contentRange),
-                frame: fullBounds.offsetBy(dx: origin.x, dy: origin.y), isWholeRecord: true))
+                frame: fullBounds.offsetBy(dx: origin.x, dy: origin.y), isWholeRecord: true, isFullyVisible: true))
             return
         }
         let shownGlyphs = NSIntersectionRange(glyphs, visibleGlyphs)
@@ -148,11 +153,12 @@ func visibleMacLogRecordFragments(in view: NSTextView) -> [MacLogVisibleFragment
             let composed = NSIntersectionRange(contentRange, text.rangeOfComposedCharacterSequences(for: characters))
             guard composed.length > 0 else { return }
             let composedGlyphs = layout.glyphRange(forCharacterRange: composed, actualCharacterRange: nil)
-            let bounds = layout.boundingRect(forGlyphRange: composedGlyphs, in: container).intersection(viewport)
-            guard !bounds.isEmpty else { return }
+            let bounds = layout.boundingRect(forGlyphRange: composedGlyphs, in: container)
+            guard !bounds.isEmpty && bounds.intersects(viewport) else { return }
             fragments.append(MacLogVisibleFragment(recordID: id, offset: composed.location - contentRange.location,
                 length: composed.length, text: text.substring(with: composed),
-                frame: bounds.offsetBy(dx: origin.x, dy: origin.y), isWholeRecord: false))
+                frame: bounds.offsetBy(dx: origin.x, dy: origin.y), isWholeRecord: false,
+                isFullyVisible: viewport.contains(bounds)))
         }
     }
     return fragments

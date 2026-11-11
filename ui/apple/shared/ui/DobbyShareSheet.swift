@@ -179,7 +179,8 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         get {
             var visible: [String: IOSLogRecordAccessibilityElement] = [:]
             let elements = visibleIOSLogRecordFragments(in: self).map { fragment in
-                let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)"
+                let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)" +
+                    (fragment.isFullyVisible ? "" : ".partial")
                 let identifier = "logs.record." + fragment.recordID + suffix
                 let element = recordElements[identifier] ?? IOSLogRecordAccessibilityElement(accessibilityContainer: self)
                 element.logView = self
@@ -248,8 +249,9 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     func captureReadingPosition() {
         guard textStorage.length > 0 else { return }
         layoutManager.ensureLayout(for: textContainer)
-        guard let fragment = visibleIOSLogRecordFragments(in: self).first(where: { $0.isWholeRecord })
-                ?? visibleIOSLogRecordFragments(in: self).first,
+        let fragments = visibleIOSLogRecordFragments(in: self)
+        guard let fragment = fragments.first(where: { $0.isWholeRecord })
+                ?? fragments.first(where: { $0.isFullyVisible }) ?? fragments.first,
               let record = logRecordRange(fragment.recordID, in: textStorage) else { return }
         let character = record.location + fragment.offset
         let line = layoutManager.lineFragmentRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: character), effectiveRange: nil)
@@ -713,10 +715,10 @@ struct MacLogReadingAnchor {
 
 func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? {
     guard let view = scroll.documentView as? NSTextView,
-          let storage = view.textStorage, let layout = view.layoutManager,
-          let container = view.textContainer else { return nil }
+          let storage = view.textStorage, let layout = view.layoutManager else { return nil }
     let fragments = visibleMacLogRecordFragments(in: view)
-    guard let fragment = fragments.first(where: { $0.isWholeRecord }) ?? fragments.first,
+    guard let fragment = fragments.first(where: { $0.isWholeRecord })
+            ?? fragments.first(where: { $0.isFullyVisible }) ?? fragments.first,
           let range = logRecordRange(fragment.recordID, in: storage) else { return nil }
     let character = range.location + fragment.offset
     let glyph = layout.glyphIndexForCharacter(at: character)

@@ -63,10 +63,8 @@ extension VpnManagerImpl {
         bind: Bool = true,
         completion: @escaping (NETunnelProviderManager?, Error?) -> Void
     ) {
-        VPNPreferenceOperations.saveAndReload(
+        NativeVPNManagerPreferences.saveAndReload(
             manager,
-            save: { manager, done in manager.saveToPreferences(completionHandler: done) },
-            reload: { manager, done in manager.loadFromPreferences(completionHandler: done) },
             bind: bind ? { manager in
                 self.condition.lock()
                 self.vpnManager = manager
@@ -85,19 +83,11 @@ extension VpnManagerImpl {
     }
 
     private static func matchingManagers(_ managers: [NETunnelProviderManager]) -> [NETunnelProviderManager] {
-        VPNPreferenceOperations.matching(managers, provider: dobbyBundleIdentifier) {
-            ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
-        }
+        NativeVPNManagerPreferences.matching(managers, provider: dobbyBundleIdentifier)
     }
 
     private static func selectManager(_ matching: [NETunnelProviderManager]) throws -> NETunnelProviderManager? {
-        let index = try VPNManagerIdentity.select(matchingActiveStates: matching.map {
-            switch $0.connection.status {
-            case .connecting, .connected, .reasserting, .disconnecting: return true
-            default: return false
-            }
-        })
-        return index.map { matching[$0] }
+        try NativeVPNManagerPreferences.select(matching)
     }
 
     private func makeManager() -> NETunnelProviderManager {

@@ -8,6 +8,7 @@ struct IOSLogVisibleFragment {
     let text: String
     let frame: CGRect
     let isWholeRecord: Bool
+    let isFullyVisible: Bool
 }
 
 final class IOSLogRecordAccessibilityElement: UIAccessibilityElement {
@@ -50,10 +51,13 @@ func visibleIOSLogRecordFragments(in view: DobbyLogTextView) -> [IOSLogVisibleFr
         layout.enumerateLineFragments(forGlyphRange: recordGlyphs) { rect, _, _, _, _ in
             lineBounds = lineBounds.union(rect)
         }
-        if !fullBounds.isEmpty && !lineBounds.isNull && viewport.contains(fullBounds) && viewport.contains(lineBounds) {
+        // Line allocation rectangles span the container width; only their vertical
+        // extent describes blank lines. Horizontal visibility comes from ink bounds.
+        if !fullBounds.isEmpty && !lineBounds.isNull && viewport.contains(fullBounds)
+            && viewport.minY <= lineBounds.minY && viewport.maxY >= lineBounds.maxY {
             fragments.append(IOSLogVisibleFragment(recordID: id, offset: 0, length: content.length,
                 text: text.substring(with: content), frame: fullBounds.offsetBy(dx: inset.left, dy: inset.top),
-                isWholeRecord: true))
+                isWholeRecord: true, isFullyVisible: true))
             return
         }
         let shown = NSIntersectionRange(glyphs, visibleGlyphs)
@@ -64,11 +68,12 @@ func visibleIOSLogRecordFragments(in view: DobbyLogTextView) -> [IOSLogVisibleFr
             let composed = NSIntersectionRange(content, text.rangeOfComposedCharacterSequences(for: characters))
             guard composed.length > 0 else { return }
             let composedGlyphs = layout.glyphRange(forCharacterRange: composed, actualCharacterRange: nil)
-            let bounds = layout.boundingRect(forGlyphRange: composedGlyphs, in: container).intersection(viewport)
-            guard !bounds.isEmpty else { return }
+            let bounds = layout.boundingRect(forGlyphRange: composedGlyphs, in: container)
+            guard !bounds.isEmpty && bounds.intersects(viewport) else { return }
             fragments.append(IOSLogVisibleFragment(recordID: id, offset: composed.location - content.location,
                 length: composed.length, text: text.substring(with: composed),
-                frame: bounds.offsetBy(dx: inset.left, dy: inset.top), isWholeRecord: false))
+                frame: bounds.offsetBy(dx: inset.left, dy: inset.top), isWholeRecord: false,
+                isFullyVisible: viewport.contains(bounds)))
         }
     }
     return fragments

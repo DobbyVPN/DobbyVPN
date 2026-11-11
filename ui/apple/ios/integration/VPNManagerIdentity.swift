@@ -56,3 +56,43 @@ enum VPNPreferenceOperations {
         next(0, [])
     }
 }
+
+#if canImport(NetworkExtension)
+import NetworkExtension
+
+/// The production identity and preference operations over native manager objects.
+enum NativeVPNManagerPreferences {
+    typealias PreferenceOperation = (NETunnelProviderManager, @escaping (Error?) -> Void) -> Void
+
+    static func matching(_ managers: [NETunnelProviderManager], provider: String) -> [NETunnelProviderManager] {
+        VPNPreferenceOperations.matching(managers, provider: provider) {
+            ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
+        }
+    }
+
+    static func isActive(_ status: NEVPNStatus) -> Bool {
+        switch status {
+        case .connecting, .connected, .reasserting, .disconnecting: return true
+        default: return false
+        }
+    }
+
+    static func select(
+        _ matching: [NETunnelProviderManager],
+        status: (NETunnelProviderManager) -> NEVPNStatus = { $0.connection.status }
+    ) throws -> NETunnelProviderManager? {
+        let index = try VPNManagerIdentity.select(matchingActiveStates: matching.map { isActive(status($0)) })
+        return index.map { matching[$0] }
+    }
+
+    static func saveAndReload(
+        _ manager: NETunnelProviderManager,
+        save: @escaping PreferenceOperation = { manager, done in manager.saveToPreferences(completionHandler: done) },
+        reload: @escaping PreferenceOperation = { manager, done in manager.loadFromPreferences(completionHandler: done) },
+        bind: ((NETunnelProviderManager) -> Void)?,
+        completion: @escaping (NETunnelProviderManager?, VPNPreferenceOperations.Phase?, Error?) -> Void
+    ) {
+        VPNPreferenceOperations.saveAndReload(manager, save: save, reload: reload, bind: bind, completion: completion)
+    }
+}
+#endif
