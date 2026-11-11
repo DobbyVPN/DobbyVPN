@@ -6,13 +6,15 @@ import (
 	"time"
 )
 
-// trafficCounter counts the bytes a TCP connection moved in each direction and
+// trafficCounter counts the bytes a connection moved in each direction and
 // when the first byte came back, so a slow connection can be told from one
 // that never carried data.
 type trafficCounter struct {
 	up, down   atomic.Int64
 	firstByte  atomic.Pointer[time.Duration] // elapsed to first downstream byte, nil if none
 	nowForTest func() time.Time
+	readError  atomic.Bool
+	writeError atomic.Bool
 }
 
 func (t *trafficCounter) now() time.Time {
@@ -22,15 +24,18 @@ func (t *trafficCounter) now() time.Time {
 	return time.Now()
 }
 
-func (t *trafficCounter) recordRead(n int, started time.Time) {
+func (t *trafficCounter) recordRead(n int, started time.Time) (time.Duration, bool) {
 	if n <= 0 {
-		return
+		return 0, false
 	}
 	t.down.Add(int64(n))
 	if t.firstByte.Load() == nil {
 		elapsed := t.now().Sub(started)
-		t.firstByte.CompareAndSwap(nil, &elapsed)
+		if t.firstByte.CompareAndSwap(nil, &elapsed) {
+			return elapsed, true
+		}
 	}
+	return 0, false
 }
 
 func (t *trafficCounter) recordWrite(n int) {

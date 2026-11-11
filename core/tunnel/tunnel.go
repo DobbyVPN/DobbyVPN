@@ -76,28 +76,75 @@ type DobbyProxy struct {
 	udpIdleTimeout atomic.Uint64
 }
 
+type flowIdentity struct {
+	generation uint64
+	attempt    uint64
+	protocol   string
+	family     string
+	route      string
+	dest       string
+}
+
+func (id flowIdentity) String() string {
+	return fmt.Sprintf("generation=%d protocol=%s attempt=%d family=%s route=%s dest=%s", id.generation, id.protocol, id.attempt, id.family, id.route, id.dest)
+}
+
+func logicalFamily(metadata *M.Metadata) string {
+	ip := metadata.DstIP.Unmap()
+	if ip.Is4() {
+		return "ipv4"
+	}
+	if ip.Is6() {
+		return "ipv6"
+	}
+	return "unknown"
+}
+
+func (t *trafficCounter) observeRead(n int, err error, started time.Time, identity flowIdentity) {
+	if elapsed, first := t.recordRead(n, started); first {
+		log.Debugf(Category, "[Router] first downstream response %s bytes=%d elapsed=%s", identity, n, elapsed)
+	}
+	if err != nil && t.readError.CompareAndSwap(false, true) {
+		log.Debugf(Category, "[Router] read terminal error %s err=%v", identity, err)
+	}
+}
+
+func (t *trafficCounter) observeWrite(n int, err error, identity flowIdentity) {
+	t.recordWrite(n)
+	if err != nil && t.writeError.CompareAndSwap(false, true) {
+		log.Debugf(Category, "[Router] write terminal error %s err=%v", identity, err)
+	}
+}
+
 type trackedConn struct {
 	net.Conn
-	route    string
-	dest     string
-	started  time.Time
-	release  func() int64
-	mu       sync.Mutex
-	closed   bool
-	owner    *flowOwner
-	closeErr error
-	traffic  trafficCounter
+	route      string
+	dest       string
+	generation uint64
+	attempt    uint64
+	family     string
+	started    time.Time
+	release    func() int64
+	mu         sync.Mutex
+	closed     bool
+	owner      *flowOwner
+	closeErr   error
+	traffic    trafficCounter
+}
+
+func (c *trackedConn) identity() flowIdentity {
+	return flowIdentity{c.generation, c.attempt, "tcp", c.family, c.route, c.dest}
 }
 
 func (c *trackedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
-	c.traffic.recordRead(n, c.started)
+	c.traffic.observeRead(n, err, c.started, c.identity())
 	return n, err
 }
 
 func (c *trackedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
-	c.traffic.recordWrite(n)
+	c.traffic.observeWrite(n, err, c.identity())
 	return n, err
 }
 
@@ -107,12 +154,13 @@ func (c *trackedConn) Close() error {
 	if c.closed {
 		return nil
 	}
+	log.Debugf(Category, "[Router] TCP close begin %s", c.identity())
 	c.closeErr = c.Conn.Close()
 	if c.closeErr != nil && !errors.Is(c.closeErr, net.ErrClosed) {
 		if c.owner != nil {
 			c.owner.release(c, c.closeErr)
 		}
-		log.Errorf(Category, "[Router] TCP close failed route=%s dest=%s lifetime=%s %s err=%v", c.route, c.dest, time.Since(c.started), c.traffic.summary(), c.closeErr)
+		log.Errorf(Category, "[Router] TCP close failed %s lifetime=%s %s err=%v", c.identity(), time.Since(c.started), c.traffic.summary(), c.closeErr)
 		return c.closeErr
 	}
 	c.closed, c.closeErr = true, nil
@@ -120,7 +168,7 @@ func (c *trackedConn) Close() error {
 	if c.owner != nil {
 		c.owner.release(c, nil)
 	}
-	log.Debugf(Category, "[Router] TCP closed route=%s dest=%s lifetime=%s %s activeTCP=%d", c.route, c.dest, time.Since(c.started), c.traffic.summary(), active)
+	log.Debugf(Category, "[Router] TCP closed %s lifetime=%s %s activeTCP=%d", c.identity(), time.Since(c.started), c.traffic.summary(), active)
 	return nil
 }
 
@@ -140,13 +188,33 @@ func (c *trackedConn) CloseWrite() error {
 
 type trackedPacketConn struct {
 	net.PacketConn
-	route    string
-	dest     string
-	started  time.Time
-	release  func() int64
-	mu       sync.Mutex
-	closed   bool
-	closeErr error
+	route      string
+	dest       string
+	generation uint64
+	attempt    uint64
+	family     string
+	traffic    trafficCounter
+	started    time.Time
+	release    func() int64
+	mu         sync.Mutex
+	closed     bool
+	closeErr   error
+}
+
+func (c *trackedPacketConn) identity() flowIdentity {
+	return flowIdentity{c.generation, c.attempt, "udp", c.family, c.route, c.dest}
+}
+
+func (c *trackedPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, address, err := c.PacketConn.ReadFrom(b)
+	c.traffic.observeRead(n, err, c.started, c.identity())
+	return n, address, err
+}
+
+func (c *trackedPacketConn) WriteTo(b []byte, address net.Addr) (int, error) {
+	n, err := c.PacketConn.WriteTo(b, address)
+	c.traffic.observeWrite(n, err, c.identity())
+	return n, err
 }
 
 func (c *trackedPacketConn) Close() error {
@@ -155,14 +223,15 @@ func (c *trackedPacketConn) Close() error {
 	if c.closed {
 		return nil
 	}
+	log.Debugf(Category, "[Router] UDP close begin %s", c.identity())
 	c.closeErr = c.PacketConn.Close()
 	if c.closeErr != nil && !errors.Is(c.closeErr, net.ErrClosed) {
-		log.Errorf(Category, "[Router] UDP close failed route=%s dest=%s lifetime=%s err=%v", c.route, c.dest, time.Since(c.started), c.closeErr)
+		log.Errorf(Category, "[Router] UDP close failed %s lifetime=%s %s err=%v", c.identity(), time.Since(c.started), c.traffic.summary(), c.closeErr)
 		return c.closeErr
 	}
 	c.closed, c.closeErr = true, nil
 	active := c.release()
-	log.Debugf(Category, "[Router] UDP closed route=%s dest=%s lifetime=%s activeUDP=%d", c.route, c.dest, time.Since(c.started), active)
+	log.Debugf(Category, "[Router] UDP closed %s lifetime=%s %s activeUDP=%d", c.identity(), time.Since(c.started), c.traffic.summary(), active)
 	return nil
 }
 
@@ -172,6 +241,7 @@ type idlePacketConn struct {
 	timer         *time.Timer
 	route         string
 	dest          string
+	identity      flowIdentity
 	onIdleTimeout func() uint64
 	mu            sync.Mutex
 	lastTouch     time.Time
@@ -180,12 +250,13 @@ type idlePacketConn struct {
 	owner         *flowOwner
 }
 
-func newIdlePacketConn(conn net.PacketConn, timeout time.Duration, route, dest string, onIdleTimeout func() uint64, owner *flowOwner) *idlePacketConn {
+func newIdlePacketConn(conn net.PacketConn, timeout time.Duration, identity flowIdentity, onIdleTimeout func() uint64, owner *flowOwner) *idlePacketConn {
 	c := &idlePacketConn{
 		PacketConn:    conn,
 		timeout:       timeout,
-		route:         route,
-		dest:          dest,
+		route:         identity.route,
+		dest:          identity.dest,
+		identity:      identity,
 		onIdleTimeout: onIdleTimeout,
 		owner:         owner,
 	}
@@ -236,7 +307,7 @@ func (c *idlePacketConn) closeAfterIdleTimeout() {
 	if c.onIdleTimeout != nil {
 		count = c.onIdleTimeout()
 	}
-	log.Debugf(Category, "[Router] UDP idle timeout route=%s dest=%s timeout=%s count=%d", c.route, c.dest, c.timeout, count)
+	log.Debugf(Category, "[Router] UDP idle timeout %s timeout=%s count=%d", c.identity, c.timeout, count)
 	c.closeErr = c.PacketConn.Close()
 	if c.owner != nil {
 		c.owner.release(c, c.closeErr)
@@ -262,12 +333,13 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	if p.bypass.IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
-	log.Debugf(Category, "[Router] TCP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
+	log.Debugf(Category, "[Router] TCP dial begin %s stats={%s}", flowIdentity{p.generation, attempt, "tcp", logicalFamily(metadata), route, dest}, p.flowStats())
 	return p.dialTCPRoute(ctx, metadata, route, px, attempt, dest, start)
 }
 
 func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.Conn, error) {
 	if err := p.flows.beginDial(); err != nil {
+		log.Debugf(Category, "[Router] TCP dial error %s elapsed=%s err=%v", flowIdentity{p.generation, attempt, "tcp", logicalFamily(metadata), route, dest}, time.Since(start), err)
 		return nil, err
 	}
 	defer p.flows.endDial()
@@ -279,14 +351,14 @@ func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, rou
 	conn, err := px.DialContext(ctx, metadata)
 	if err != nil {
 		release()
-		log.Debugf(Category, "[Router] %s TCP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
+		log.Debugf(Category, "[Router] TCP dial error %s elapsed=%s stats={%s} err=%v", flowIdentity{p.generation, attempt, "tcp", logicalFamily(metadata), route, dest}, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	log.Debugf(Category, "[Router] %s TCP dial OK attempt=%d dest=%s elapsed=%s local=%s remote=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
-	tracked := &trackedConn{Conn: conn, release: release, route: route, dest: dest, started: time.Now(), owner: &p.flows}
+	log.Debugf(Category, "[Router] TCP dial OK %s elapsed=%s local=%s remote=%s stats={%s}", flowIdentity{p.generation, attempt, "tcp", logicalFamily(metadata), route, dest}, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
+	tracked := &trackedConn{Conn: conn, release: release, route: route, dest: dest, generation: p.generation, attempt: attempt, family: logicalFamily(metadata), started: time.Now(), owner: &p.flows}
 	if !p.flows.track(tracked) {
 		closeErr := tracked.Close()
-		log.Debugf(Category, "[Router] late TCP dial closed route=%s dest=%s elapsed=%s err=%v", route, dest, time.Since(start), closeErr)
+		log.Debugf(Category, "[Router] late TCP dial closed %s elapsed=%s err=%v", tracked.identity(), time.Since(start), closeErr)
 		return nil, errors.Join(net.ErrClosed, closeErr)
 	}
 	return tracked, nil
@@ -301,12 +373,13 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if p.bypass.IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
-	log.Debugf(Category, "[Router] UDP dial attempt=%d route=%s dstIP=%s dest=%s proto=%s stats={%s}", attempt, route, metadata.DstIP, dest, metadata.Network, p.flowStats())
+	log.Debugf(Category, "[Router] UDP dial begin %s stats={%s}", flowIdentity{p.generation, attempt, "udp", logicalFamily(metadata), route, dest}, p.flowStats())
 	return p.dialUDPRoute(metadata, route, px, attempt, dest, start)
 }
 
 func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.PacketConn, error) {
 	if err := p.flows.beginDial(); err != nil {
+		log.Debugf(Category, "[Router] UDP dial error %s elapsed=%s err=%v", flowIdentity{p.generation, attempt, "udp", logicalFamily(metadata), route, dest}, time.Since(start), err)
 		return nil, err
 	}
 	defer p.flows.endDial()
@@ -316,12 +389,12 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 	conn, err := px.DialUDP(metadata)
 	if err != nil {
 		release()
-		log.Debugf(Category, "[Router] %s UDP dial error attempt=%d dest=%s elapsed=%s stats={%s} err=%v", route, attempt, dest, time.Since(start), p.flowStats(), err)
+		log.Debugf(Category, "[Router] UDP dial error %s elapsed=%s stats={%s} err=%v", flowIdentity{p.generation, attempt, "udp", logicalFamily(metadata), route, dest}, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	log.Debugf(Category, "[Router] %s UDP dial OK attempt=%d dest=%s elapsed=%s local=%s stats={%s}", route, attempt, dest, time.Since(start), conn.LocalAddr(), p.flowStats())
-	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, started: time.Now()}
-	owned := newIdlePacketConn(tracked, udpAssociationIdleTimeout, route, dest, func() uint64 {
+	log.Debugf(Category, "[Router] UDP dial OK %s elapsed=%s local=%s stats={%s}", flowIdentity{p.generation, attempt, "udp", logicalFamily(metadata), route, dest}, time.Since(start), conn.LocalAddr(), p.flowStats())
+	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, generation: p.generation, attempt: attempt, family: logicalFamily(metadata), started: time.Now()}
+	owned := newIdlePacketConn(tracked, udpAssociationIdleTimeout, tracked.identity(), func() uint64 {
 		return p.udpIdleTimeout.Add(1)
 	}, &p.flows)
 	owned.mu.Lock()
@@ -329,7 +402,7 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 	owned.mu.Unlock()
 	if !accepted {
 		closeErr := owned.Close()
-		log.Debugf(Category, "[Router] late UDP dial closed route=%s dest=%s elapsed=%s err=%v", route, dest, time.Since(start), closeErr)
+		log.Debugf(Category, "[Router] late UDP dial closed %s elapsed=%s err=%v", tracked.identity(), time.Since(start), closeErr)
 		return nil, errors.Join(net.ErrClosed, closeErr)
 	}
 	return owned, nil
