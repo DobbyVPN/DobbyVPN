@@ -477,14 +477,8 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 	if acceptErr := validateConfigureBeforeAccept(ctx, s, request); acceptErr != nil {
 		return ConfigureResult{}, acceptErr
 	}
-	if m.sourceStore != nil {
-		if loaded.Kind == ConfigSourceURL {
-			if err := m.sourceStore.Save(ctx, []byte(loaded.SourceURL)); err != nil {
-				return ConfigureResult{}, failureWithCause(FailurePlatform, "accepted configuration URL could not be saved", err)
-			}
-		} else if err := m.sourceStore.Clear(ctx); err != nil {
-			return ConfigureResult{}, failureWithCause(FailurePlatform, "saved configuration URL could not be cleared", err)
-		}
+	if err := m.saveConfigurationSourceLocked(ctx, loaded); err != nil {
+		return ConfigureResult{}, err
 	}
 	if restoreEpoch == nil {
 		s.restoreEpoch++
@@ -493,11 +487,7 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 	s.profiles, s.digest, s.sourceKind, s.sourceURL, s.configured = parsed.profiles, parsed.digest, loaded.Kind, loaded.SourceURL, true
 	s.logsEndpoint = parsed.logsEndpoint
 	s.sourceError = ""
-	if s.cleanupDone && !s.cleanupFailed && !s.recovering && s.pending == nil {
-		s.active, s.lastFailure, s.lastFailureMessage, s.state = nil, "", "", StateConfigured
-		s.activeDigest, s.activeProfiles, s.activeTarget = "", nil, StartTarget{}
-		s.recoveryOriginGeneration, s.recoveryCount = 0, 0
-	}
+	resetConfiguredSessionLocked(s)
 	if s.activeDigest == "" {
 		retainPolicy(s.digest, s.profiles)
 	} else {
@@ -506,6 +496,30 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 	m.appendLocked(s)
 	result := ConfigureResult{Digest: s.digest, Sequence: s.sequence, Profiles: summaries(s.profiles), SourceKind: s.sourceKind}
 	return result, nil
+}
+
+// resetConfiguredSessionLocked updates idle inventory without disturbing an active network.
+func resetConfiguredSessionLocked(s *session) {
+	if s.cleanupDone && !s.cleanupFailed && !s.recovering && s.pending == nil {
+		s.active, s.lastFailure, s.lastFailureMessage, s.state = nil, "", "", StateConfigured
+		s.activeDigest, s.activeProfiles, s.activeTarget = "", nil, StartTarget{}
+		s.recoveryOriginGeneration, s.recoveryCount = 0, 0
+	}
+}
+
+// saveConfigurationSourceLocked persists the accepted source while the session is locked.
+func (m *Manager) saveConfigurationSourceLocked(ctx context.Context, loaded LoadedConfig) error {
+	if m.sourceStore == nil {
+		return nil
+	}
+	if loaded.Kind == ConfigSourceURL {
+		if err := m.sourceStore.Save(ctx, []byte(loaded.SourceURL)); err != nil {
+			return failureWithCause(FailurePlatform, "accepted configuration URL could not be saved", err)
+		}
+	} else if err := m.sourceStore.Clear(ctx); err != nil {
+		return failureWithCause(FailurePlatform, "saved configuration URL could not be cleared", err)
+	}
+	return nil
 }
 
 // Configuration belongs to the application, which may outlive its mobile VPN
@@ -726,7 +740,7 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 	if !acceptsStop(s, generation) {
 		return StopResult{}, failure(FailureStaleGeneration, "generation is not active for this session")
 	}
-	if (s.state == StateIdle || s.state == StateConfigured || s.state == StateFailed) && !retryableCleanup(s) && !(s.state == StateFailed && s.vpnActive && !s.cleanupFailed) && !(s.generation == generation && s.cleanupDone && !s.cleanupFailed && (s.state != StateConfigured || s.restorePrepared)) {
+	if stopGenerationInactive(s, generation) {
 		return StopResult{}, failure(FailureStaleGeneration, "generation is no longer active")
 	}
 	s.restoreEpoch++
@@ -783,6 +797,17 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 		// keeps this generation STOPPING until that worker can release its lease.
 	}
 	return result, nil
+}
+
+// stopGenerationInactive is evaluated while holding the session mutex.
+func stopGenerationInactive(s *session, generation uint64) bool {
+	if s.state != StateIdle && s.state != StateConfigured && s.state != StateFailed {
+		return false
+	}
+	if retryableCleanup(s) || (s.state == StateFailed && s.vpnActive && !s.cleanupFailed) {
+		return false
+	}
+	return s.generation != generation || !s.cleanupDone || s.cleanupFailed || (s.state == StateConfigured && !s.restorePrepared)
 }
 
 // ProtectSocket is the session API path for platform socket protection.

@@ -20,7 +20,7 @@ func SetLinuxSocketMark(mark int) {
 
 type linuxProtector struct{}
 
-func (l *linuxProtector) Protect(fdU uintptr, network string, _ string) error {
+func (l *linuxProtector) Protect(fdU uintptr, network, _ string) error {
 	mark := int(linuxSocketMark.Load())
 	if mark == 0 {
 		return ErrSocketProtectionUnavailable

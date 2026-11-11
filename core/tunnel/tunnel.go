@@ -56,7 +56,11 @@ type Engine struct {
 	captureStopStacks func() ([]byte, bool, error)
 }
 
-const udpAssociationIdleTimeout = 10 * time.Second
+const (
+	udpAssociationIdleTimeout = 10 * time.Second
+	flowProtocolTCP           = "tcp"
+	flowProtocolUDP           = "udp"
+)
 
 type DobbyProxy struct {
 	vpn        proxy.Proxy
@@ -133,7 +137,7 @@ type trackedConn struct {
 }
 
 func (c *trackedConn) identity() flowIdentity {
-	return flowIdentity{c.generation, c.attempt, "tcp", c.family, c.route, c.dest}
+	return flowIdentity{c.generation, c.attempt, flowProtocolTCP, c.family, c.route, c.dest}
 }
 
 func (c *trackedConn) Read(b []byte) (int, error) {
@@ -202,7 +206,7 @@ type trackedPacketConn struct {
 }
 
 func (c *trackedPacketConn) identity() flowIdentity {
-	return flowIdentity{c.generation, c.attempt, "udp", c.family, c.route, c.dest}
+	return flowIdentity{c.generation, c.attempt, flowProtocolUDP, c.family, c.route, c.dest}
 }
 
 func (c *trackedPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
@@ -333,13 +337,13 @@ func (p *DobbyProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net
 	if p.bypass.IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
-	log.Debugf(Category, "[Router] TCP dial begin %s stats={%s}", flowIdentity{p.generation, attempt, "tcp", logicalFamily(metadata), route, dest}, p.flowStats())
+	log.Debugf(Category, "[Router] TCP dial begin %s stats={%s}", flowIdentity{p.generation, attempt, flowProtocolTCP, logicalFamily(metadata), route, dest}, p.flowStats())
 	return p.dialTCPRoute(ctx, metadata, route, px, attempt, dest, start)
 }
 
 func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.Conn, error) {
 	if err := p.flows.beginDial(); err != nil {
-		log.Debugf(Category, "[Router] TCP dial error %s elapsed=%s err=%v", flowIdentity{p.generation, attempt, "tcp", logicalFamily(metadata), route, dest}, time.Since(start), err)
+		log.Debugf(Category, "[Router] TCP dial error %s elapsed=%s err=%v", flowIdentity{p.generation, attempt, flowProtocolTCP, logicalFamily(metadata), route, dest}, time.Since(start), err)
 		return nil, err
 	}
 	defer p.flows.endDial()
@@ -351,10 +355,10 @@ func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, rou
 	conn, err := px.DialContext(ctx, metadata)
 	if err != nil {
 		release()
-		log.Debugf(Category, "[Router] TCP dial error %s elapsed=%s stats={%s} err=%v", flowIdentity{p.generation, attempt, "tcp", logicalFamily(metadata), route, dest}, time.Since(start), p.flowStats(), err)
+		log.Debugf(Category, "[Router] TCP dial error %s elapsed=%s stats={%s} err=%v", flowIdentity{p.generation, attempt, flowProtocolTCP, logicalFamily(metadata), route, dest}, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	log.Debugf(Category, "[Router] TCP dial OK %s elapsed=%s local=%s remote=%s stats={%s}", flowIdentity{p.generation, attempt, "tcp", logicalFamily(metadata), route, dest}, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
+	log.Debugf(Category, "[Router] TCP dial OK %s elapsed=%s local=%s remote=%s stats={%s}", flowIdentity{p.generation, attempt, flowProtocolTCP, logicalFamily(metadata), route, dest}, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
 	tracked := &trackedConn{Conn: conn, release: release, route: route, dest: dest, generation: p.generation, attempt: attempt, family: logicalFamily(metadata), started: time.Now(), owner: &p.flows}
 	if !p.flows.track(tracked) {
 		closeErr := tracked.Close()
@@ -373,13 +377,13 @@ func (p *DobbyProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
 	if p.bypass.IsBypass(metadata) {
 		route, px = "DIRECT", p.direct
 	}
-	log.Debugf(Category, "[Router] UDP dial begin %s stats={%s}", flowIdentity{p.generation, attempt, "udp", logicalFamily(metadata), route, dest}, p.flowStats())
+	log.Debugf(Category, "[Router] UDP dial begin %s stats={%s}", flowIdentity{p.generation, attempt, flowProtocolUDP, logicalFamily(metadata), route, dest}, p.flowStats())
 	return p.dialUDPRoute(metadata, route, px, attempt, dest, start)
 }
 
 func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.Proxy, attempt uint64, dest string, start time.Time) (net.PacketConn, error) {
 	if err := p.flows.beginDial(); err != nil {
-		log.Debugf(Category, "[Router] UDP dial error %s elapsed=%s err=%v", flowIdentity{p.generation, attempt, "udp", logicalFamily(metadata), route, dest}, time.Since(start), err)
+		log.Debugf(Category, "[Router] UDP dial error %s elapsed=%s err=%v", flowIdentity{p.generation, attempt, flowProtocolUDP, logicalFamily(metadata), route, dest}, time.Since(start), err)
 		return nil, err
 	}
 	defer p.flows.endDial()
@@ -389,10 +393,10 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 	conn, err := px.DialUDP(metadata)
 	if err != nil {
 		release()
-		log.Debugf(Category, "[Router] UDP dial error %s elapsed=%s stats={%s} err=%v", flowIdentity{p.generation, attempt, "udp", logicalFamily(metadata), route, dest}, time.Since(start), p.flowStats(), err)
+		log.Debugf(Category, "[Router] UDP dial error %s elapsed=%s stats={%s} err=%v", flowIdentity{p.generation, attempt, flowProtocolUDP, logicalFamily(metadata), route, dest}, time.Since(start), p.flowStats(), err)
 		return nil, err
 	}
-	log.Debugf(Category, "[Router] UDP dial OK %s elapsed=%s local=%s stats={%s}", flowIdentity{p.generation, attempt, "udp", logicalFamily(metadata), route, dest}, time.Since(start), conn.LocalAddr(), p.flowStats())
+	log.Debugf(Category, "[Router] UDP dial OK %s elapsed=%s local=%s stats={%s}", flowIdentity{p.generation, attempt, flowProtocolUDP, logicalFamily(metadata), route, dest}, time.Since(start), conn.LocalAddr(), p.flowStats())
 	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, generation: p.generation, attempt: attempt, family: logicalFamily(metadata), started: time.Now()}
 	owned := newIdlePacketConn(tracked, udpAssociationIdleTimeout, tracked.identity(), func() uint64 {
 		return p.udpIdleTimeout.Add(1)
@@ -581,6 +585,9 @@ func (e *Engine) Stop(ctx context.Context) error {
 		capture = func() ([]byte, bool, error) {
 			buffer := make([]byte, 64*1024)
 			n := runtime.Stack(buffer, true)
+			if n == 0 {
+				return nil, false, errors.New("runtime stack capture returned no data")
+			}
 			return buffer[:n], n == len(buffer), nil
 		}
 	}

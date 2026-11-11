@@ -21,7 +21,9 @@ public enum IOSSessionExchange {
             do {
                 response = try IOSProviderPayload.decode(providerResponse.payload)
             } catch let error as IOSProviderPayloadError {
-                log("ERROR", "iOS session provider payload decoding failed request_id=\(requestID) method=\(method) stage=\(stage) elapsed=\(ProcessInfo.processInfo.systemUptime - started); reversible_payload=\(reversibleDiagnosticText(providerResponse.payload))\n\(diagnosticErrorDescription(error))")
+                log("ERROR", "iOS session provider payload decoding failed request_id=\(requestID) method=\(method) "
+                    + "stage=\(stage) elapsed=\(ProcessInfo.processInfo.systemUptime - started); "
+                    + "reversible_payload=\(reversibleDiagnosticText(providerResponse.payload))\n\(diagnosticErrorDescription(error))")
                 return (failure("INTERNAL", "iOS session provider response was not valid UTF-8"), false)
             }
             if providerResponse.kind != .go {

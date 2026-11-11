@@ -20,7 +20,11 @@ import (
 	"core/sessionapi/wire"
 )
 
-const maxRequestBytes = 8 << 20
+const (
+	maxRequestBytes     = 8 << 20
+	controlCategory     = "CONTROL"
+	invalidArgumentCode = "INVALID_ARGUMENT"
+)
 
 type Request struct {
 	Method            string          `json:"method"`
@@ -56,10 +60,10 @@ var legacySnapshotSamples = snapshotSampler{now: time.Now}
 var nativeSnapshotSamples = snapshotSampler{now: time.Now, interval: time.Second}
 
 func requestIdentity(id string) string {
-	if len(id) > 0 && len(id) <= 64 {
+	if id != "" && len(id) <= 64 {
 		valid := true
 		for _, character := range id {
-			if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character == '-' || character == '_') {
+			if (character < '0' || character > '9') && (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && character != '-' && character != '_' {
 				valid = false
 				break
 			}
@@ -98,9 +102,9 @@ func controlFailure(fields map[string]any, phase string, err error) {
 	fields["phase"] = phase
 	fields["error"] = err.Error()
 	if routineDisconnect(err) {
-		log.Debug("CONTROL", "desktop command failed", fields)
+		log.Debug(controlCategory, "desktop command failed", fields)
 	} else {
-		log.Warn("CONTROL", "desktop command failed", fields)
+		log.Warn(controlCategory, "desktop command failed", fields)
 	}
 }
 
@@ -131,35 +135,28 @@ func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 	requestBytes, err := readLineBounded(reader, maxRequestBytes)
 	if err != nil {
 		controlFailure(requestFields(requestIdentity(""), "", nil), "read", err)
-		return writeFailureWithCause(conn, "INVALID_ARGUMENT", "command request could not be read: "+err.Error(), err)
+		return writeFailureWithCause(conn, invalidArgumentCode, "command request could not be read: "+err.Error(), err)
 	}
 	var request Request
 	if decodeErr := json.Unmarshal(requestBytes, &request); decodeErr != nil {
 		controlFailure(requestFields(requestIdentity(""), "", nil), "decode", decodeErr)
-		return writeFailureWithCause(conn, "INVALID_ARGUMENT", "command request is invalid: "+decodeErr.Error(), decodeErr)
+		return writeFailureWithCause(conn, invalidArgumentCode, "command request is invalid: "+decodeErr.Error(), decodeErr)
 	}
 	if request.Method == "" || len(request.Params) == 0 || string(request.Params) == "null" {
 		fields := requestFields(requestIdentity(request.RequestID), request.Method, request.Params)
 		diagnosticFields = fields
 		controlFailure(fields, "validate", errors.New("command method and parameters are required"))
-		return writeFailure(conn, "INVALID_ARGUMENT", "command method and parameters are required")
+		return writeFailure(conn, invalidArgumentCode, "command method and parameters are required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	id := requestIdentity(request.RequestID)
 	fields := requestFields(id, request.Method, request.Params)
 	diagnosticFields = fields
-	sampled := request.Method != "Snapshot"
-	if request.Method == "Snapshot" {
-		if request.DiagnosticSampled != nil {
-			sampled = *request.DiagnosticSampled && nativeSnapshotSamples.take()
-		} else {
-			sampled = legacySnapshotSamples.take()
-		}
-	}
+	sampled := sampleRequest(request)
 	started := time.Now()
 	if sampled {
-		log.Info("CONTROL", "desktop command accepted", fields)
+		log.Info(controlCategory, "desktop command accepted", fields)
 	}
 	response := json.RawMessage(h.Binding.CallJSON(ctx, request.Method, request.Params))
 	var checked json.RawMessage
@@ -184,9 +181,19 @@ func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 	}
 	if sampled && outcome.OK && outcome.Error == nil {
 		fields["elapsed_ms"] = time.Since(started).Milliseconds()
-		log.Info("CONTROL", "desktop command completed", fields)
+		log.Info(controlCategory, "desktop command completed", fields)
 	}
 	return nil
+}
+
+func sampleRequest(request Request) bool {
+	if request.Method != "Snapshot" {
+		return true
+	}
+	if request.DiagnosticSampled != nil {
+		return *request.DiagnosticSampled && nativeSnapshotSamples.take()
+	}
+	return legacySnapshotSamples.take()
 }
 
 func writeFailureWithCause(conn net.Conn, code, message string, cause error) error {
