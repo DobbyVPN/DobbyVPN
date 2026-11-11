@@ -44,7 +44,10 @@ func visibleIOSLogRecordFragments(in view: DobbyLogTextView) -> [IOSLogVisibleFr
         // Ink bounds omit blank and whitespace-only lines. A whole-record
         // element is valid only when every actual laid-out line fits.
         var lineBounds = CGRect.null
-        layout.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+        // Include the formatting delimiter: it may lay out a trailing blank
+        // line after a message ending in a newline, although AX omits it.
+        let recordGlyphs = layout.glyphRange(forCharacterRange: record, actualCharacterRange: nil)
+        layout.enumerateLineFragments(forGlyphRange: recordGlyphs) { rect, _, _, _, _ in
             lineBounds = lineBounds.union(rect)
         }
         if !fullBounds.isEmpty && !lineBounds.isNull && viewport.contains(fullBounds) && viewport.contains(lineBounds) {
