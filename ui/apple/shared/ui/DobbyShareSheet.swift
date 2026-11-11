@@ -229,12 +229,14 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
                   !id.isEmpty else { continue }
             let recordGlyphs = layoutManager.glyphRange(forCharacterRange: run, actualCharacterRange: nil)
             guard recordGlyphs.length > 0 else { continue }
-            // Layout manager rects live in text-container space; add the text inset
-            // to reach this view's own coordinate space (a scroll view's own space
-            // is its content space), then convert for the container's space, which
-            // applies the current scroll offset.
+            // Layout-manager rects are in text-container space. Shift them by the
+            // text inset and the scroll offset to get the on-screen rect, which is
+            // also the container's space because the text view fills it.
             let laidOut = layoutManager.boundingRect(forGlyphRange: recordGlyphs, in: textContainer)
-                .offsetBy(dx: textContainerInset.left, dy: textContainerInset.top)
+                .offsetBy(
+                    dx: textContainerInset.left - contentOffset.x,
+                    dy: textContainerInset.top - contentOffset.y
+                )
             // The run holds one record including its trailing newline.
             let line = textStorage.attributedSubstring(from: run).string
                 .trimmingCharacters(in: .newlines)
