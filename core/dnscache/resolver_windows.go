@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"core/log"
+	"core/routing"
 
 	"golang.org/x/sys/windows"
 )
@@ -135,38 +136,69 @@ func (r *windowsResolver) lookup(ctx context.Context, host string) ([]net.IPAddr
 	for _, server := range r.servers {
 		servers = append(servers, net.JoinHostPort(server.String(), "53"))
 	}
+	var routes routeFence
 	dialer := &net.Dialer{Control: func(network, address string, raw syscall.RawConn) error {
+		destination, err := routing.UnderlayDestination(address)
+		if err != nil {
+			return err
+		}
+		selected, err := routing.WindowsUnderlayForDestination(destination, 0)
+		if err != nil {
+			return err
+		}
 		level := syscall.IPPROTO_IPV6
-		index := r.ipv6Index
+		index := selected.Index
 		switch network {
 		case "udp4", "tcp4":
 			level = syscall.IPPROTO_IP
-			index = r.ipv4Index
+			index = bits.ReverseBytes32(index)
 		case "udp6", "tcp6":
 		default:
-			return fmt.Errorf("unsupported physical DNS socket network %q", network)
+			return fmt.Errorf("unsupported DNS socket network %q", network)
 		}
-		if index == 0 {
-			return fmt.Errorf("physical DNS interface %d has no %s index", r.index, network)
-		}
-		selectedIndex := index
-		if level == syscall.IPPROTO_IP {
-			index = bits.ReverseBytes32(index)
-		}
+		selectedIndex := selected.Index
 		var bindErr error
 		if err := raw.Control(func(fd uintptr) {
+			bindErr = routing.ValidateWindowsUnderlay(selected)
+			if bindErr != nil {
+				return
+			}
 			bindErr = syscall.SetsockoptInt(syscall.Handle(fd), level, 31, int(index))
 			log.Debugf(Category, "Windows endpoint DNS socket interface=%d network=%s server=%s fd=%d err=%v", selectedIndex, network, address, fd, bindErr)
+			if bindErr == nil {
+				routes.record(address, windowsDNSRouteIdentity(selected), selected.LUID)
+			}
 		}); err != nil {
 			return err
 		}
 		return bindErr
 	}}
 	addresses, err := resolveCapturedDNSServers(ctx, host, servers, dialer, fmt.Sprintf("windows:%d", r.index))
+	routeErr := routes.verify(func(address string, preferred uint64) (string, error) {
+		destination, parseErr := routing.UnderlayDestination(address)
+		if parseErr != nil {
+			return "", parseErr
+		}
+		selected, selectErr := routing.WindowsUnderlayForDestination(destination, preferred)
+		if selectErr != nil {
+			return "", selectErr
+		}
+		if validErr := routing.ValidateWindowsUnderlay(selected); validErr != nil {
+			return "", validErr
+		}
+		return windowsDNSRouteIdentity(selected), nil
+	})
+	if routeErr != nil {
+		return nil, errors.Join(err, routeErr)
+	}
 	for i := range addresses {
 		if addresses[i].IP.To4() == nil && addresses[i].IP.IsLinkLocalUnicast() {
 			addresses[i].Zone = strconv.FormatUint(uint64(r.ipv6Index), 10)
 		}
 	}
 	return addresses, err
+}
+
+func windowsDNSRouteIdentity(route routing.UnderlayRoute) string {
+	return fmt.Sprintf("%d:%d:%s:%s:%s", route.LUID, route.Index, route.GUID, route.Prefix, route.NextHop)
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/netip"
 	"sync"
+
+	"core/log"
 )
 
 // DestinationPermissions is the platform filter owned by one VPN network.
@@ -75,6 +77,10 @@ func withSocketScope(ctx, owner context.Context) context.Context {
 }
 
 func (s *SocketScope) protectFD(ctx context.Context, fd uintptr, network, address string) error {
+	return s.protectDestinations(ctx, fd, network, []string{address})
+}
+
+func (s *SocketScope) protectDestinations(ctx context.Context, fd uintptr, network string, addresses []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -83,13 +89,20 @@ func (s *SocketScope) protectFD(ctx context.Context, fd uintptr, network, addres
 	if err := errors.Join(ctx.Err(), s.ctx.Err()); err != nil {
 		return err
 	}
-	if isLoopback(address) {
-		return nil
-	}
-	if s.permissions != nil {
-		if err := s.permissions.Authorize(ctx, s.generation, network, address); err != nil {
-			return err
+	var peers []string
+	for _, address := range addresses {
+		if isLoopback(address) {
+			continue
 		}
+		if s.permissions != nil {
+			if err := s.permissions.Authorize(ctx, s.generation, network, address); err != nil {
+				return err
+			}
+		}
+		peers = append(peers, address)
+	}
+	if len(peers) == 0 {
+		return nil
 	}
 	if s.protect != nil {
 		if fd > uintptr(^uint(0)>>1) {
@@ -97,7 +110,40 @@ func (s *SocketScope) protectFD(ctx context.Context, fd uintptr, network, addres
 		}
 		return s.protect(ctx, int(fd))
 	}
-	return protectPlatformFD(fd, network, address)
+	return protectPlatformDestinations(fd, network, peers)
+}
+
+func protectPlatformDestinations(fd uintptr, network string, addresses []string) error {
+	peers := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		if !isLoopback(address) {
+			peers = append(peers, address)
+		}
+	}
+	addresses = peers
+	if len(addresses) == 0 {
+		return nil
+	}
+	if protector == nil {
+		return ErrSocketProtectionUnavailable
+	}
+	if batch, ok := protector.(batchPlatformProtector); ok {
+		if err := batch.ProtectDestinations(fd, network, addresses); err != nil {
+			return fmt.Errorf("%w: network=%s destinations=%v: %w", ErrSocketProtectionUnavailable, network, addresses, err)
+		}
+		return nil
+	}
+	return protectPlatformFD(fd, network, addresses[0])
+}
+
+func protectContextDestinations(ctx context.Context, fd uintptr, network string, addresses []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if scope, ok := ctx.Value(scopeKey{}).(*SocketScope); ok {
+		return scope.protectDestinations(ctx, fd, network, addresses)
+	}
+	return protectPlatformDestinations(fd, network, addresses)
 }
 
 func ProtectRawConnContext(ctx context.Context, network, address string, connection interface{ Control(func(uintptr)) error }) error {
@@ -124,9 +170,14 @@ func ProtectSocketDestinations(ctx context.Context, fd int, addresses []string) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if fd < 0 {
+		log.Errorf(Category, "[Protect] external socket inspection failed fd=%d: invalid descriptor", fd)
+		return fmt.Errorf("%w: invalid socket descriptor %d", ErrSocketProtectionUnavailable, fd)
+	}
 	network, err := socketNetworkFromDescriptor(fd)
 	if err != nil {
-		return err
+		log.Errorf(Category, "[Protect] external socket inspection failed fd=%d err=%v", fd, err)
+		return fmt.Errorf("%w: inspect external socket fd=%d: %w", ErrSocketProtectionUnavailable, fd, err)
 	}
 	if len(addresses) == 0 {
 		return errors.New("native socket has no authorized destinations")
@@ -152,10 +203,9 @@ func ProtectSocketDestinations(ctx context.Context, fd int, addresses []string) 
 	if len(matching) == 0 {
 		return fmt.Errorf("native socket has no %s destination among %v", network, addresses)
 	}
-	for _, address := range matching {
-		if err := protectContextFD(ctx, uintptr(fd), network, address); err != nil {
-			return err
-		}
+	if err := protectContextDestinations(ctx, uintptr(fd), network, matching); err != nil {
+		log.Errorf(Category, "[Protect] external socket protection failed fd=%d network=%s destinations=%v err=%v", fd, network, matching, err)
+		return err
 	}
 	return nil
 }

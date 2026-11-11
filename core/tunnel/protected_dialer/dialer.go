@@ -32,10 +32,10 @@ type ProtectedDirectProxy struct {
 func isLoopback(address string) bool {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		return false
+		host = address
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
 }
 
 func normalizeTCP(address string) string {
@@ -75,7 +75,7 @@ func protectPlatformFD(fd uintptr, network, address string) error {
 	}
 
 	log.Debugf(Category, "[Protect] protect_begin network=%s fd=%d destination=%s protector=%T", network, fd, address, protector)
-	if err := protector.Protect(fd, network); err != nil {
+	if err := protector.Protect(fd, network, address); err != nil {
 		return fmt.Errorf("%w: network=%s destination=%s: %w", ErrSocketProtectionUnavailable, network, address, err)
 	}
 	log.Debugf(Category, "[Protect] protect_end network=%s fd=%d destination=%s protector=%T", network, fd, address, protector)
@@ -368,27 +368,4 @@ func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, er
 		ctx = context.Background()
 	}
 	return DialUDPWithProtect(ctx, p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
-}
-
-// ProtectSocketIntErr is for integrations whose callback can signal an error
-// to their transport. Such callers must propagate this error instead of
-// claiming the socket was protected.
-func ProtectSocketIntErr(fd int) error {
-	if fd < 0 {
-		err := fmt.Errorf("invalid socket descriptor %d", fd)
-		log.Errorf(Category, "[Protect] external socket inspection failed fd=%d err=%v", fd, err)
-		return fmt.Errorf("%w: %w", ErrSocketProtectionUnavailable, err)
-	}
-
-	network, err := socketNetworkFromDescriptor(fd)
-	if err != nil {
-		log.Errorf(Category, "[Protect] external socket inspection failed fd=%d err=%v", fd, err)
-		return fmt.Errorf("%w: inspect external socket fd=%d: %w", ErrSocketProtectionUnavailable, fd, err)
-	}
-	log.Debugf(Category, "[Protect] external socket identified fd=%d network=%s", fd, network)
-	if err := protectPlatformFD(uintptr(fd), network, "external-socket"); err != nil {
-		log.Errorf(Category, "[Protect] external socket protection failed fd=%d network=%s err=%v", fd, network, err)
-		return err
-	}
-	return nil
 }

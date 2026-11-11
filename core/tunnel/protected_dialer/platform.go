@@ -8,7 +8,11 @@ import "errors"
 var ErrSocketProtectionUnavailable = errors.New("socket protection unavailable")
 
 type platformProtector interface {
-	Protect(fd uintptr, network string) error
+	Protect(fd uintptr, network, address string) error
+}
+
+type batchPlatformProtector interface {
+	ProtectDestinations(fd uintptr, network string, addresses []string) error
 }
 
 var protector platformProtector

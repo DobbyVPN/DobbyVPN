@@ -72,12 +72,40 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 
+	var preferred4, preferred6 atomic.Uint64
+	if ipv4 != 0 {
+		if identity, e := routing.WindowsUnderlayIdentity(uint32(ipv4)); e == nil {
+			preferred4.Store(identity.LUID)
+		}
+	}
+	if ipv6 != 0 {
+		if identity, e := routing.WindowsUnderlayIdentity(uint32(ipv6)); e == nil {
+			preferred6.Store(identity.LUID)
+		}
+	}
 	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
-		v4, v6, err := routing.WindowsPhysicalInterfaces()
+		v4, v6, err := routing.WindowsPhysicalInterfacesPreferred(preferred4.Load(), preferred6.Load())
 		if err != nil {
 			protected_dialer.ResetDefaultRoute()
 			return "", nil, errors.Join(err, guard.UpdateBootstrap(queryCtx, "unavailable", nil))
 		}
+		var luid4, luid6 uint64
+		if v4 != 0 {
+			identity, e := routing.WindowsUnderlayIdentity(uint32(v4))
+			if e != nil {
+				return "", nil, e
+			}
+			luid4 = identity.LUID
+		}
+		if v6 != 0 {
+			identity, e := routing.WindowsUnderlayIdentity(uint32(v6))
+			if e != nil {
+				return "", nil, e
+			}
+			luid6 = identity.LUID
+		}
+		preferred4.Store(luid4)
+		preferred6.Store(luid6)
 		protected_dialer.SetPhysicalInterfaces(v4, v6)
 		index := v4
 		if index == 0 {
@@ -95,12 +123,27 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		// must not be used after Windows has switched the preferred uplink.
 		fenced := func(lookupCtx context.Context, host string) ([]net.IPAddr, error) {
 			addresses, err := resolve(lookupCtx, host)
-			after4, after6, inspectErr := routing.WindowsPhysicalInterfaces()
+			after4, after6, inspectErr := routing.WindowsPhysicalInterfacesPreferred(luid4, luid6)
 			if inspectErr != nil {
 				return nil, errors.Join(err, inspectErr)
 			}
 			if after4 != v4 || after6 != v6 {
 				return nil, errors.Join(err, errors.New("physical Windows network changed during DNS lookup"))
+			}
+			for _, pair := range []struct {
+				index int
+				luid  uint64
+			}{{after4, luid4}, {after6, luid6}} {
+				if pair.index == 0 {
+					continue
+				}
+				identity, identityErr := routing.WindowsUnderlayIdentity(uint32(pair.index))
+				if identityErr != nil {
+					return nil, errors.Join(err, identityErr)
+				}
+				if identity.LUID != pair.luid {
+					return nil, errors.Join(err, errors.New("physical Windows interface identity changed during DNS lookup"))
+				}
 			}
 			return addresses, err
 		}
