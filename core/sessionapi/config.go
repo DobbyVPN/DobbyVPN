@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"math"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 
@@ -256,37 +259,92 @@ func normalizeOutlineURL(block map[string]interface{}) (string, error) {
 		return "", failure(FailureMalformedConfig, "Outline profile requires a password")
 	}
 	server := stringValue(block, "Server")
-	port := intString(block["Port"])
-	websocket := boolValue(block, "WebSocket")
-	if server == "" {
-		return "", failure(FailureMalformedConfig, "Outline profile requires a server")
+	host, ok := outlineServerHost(server)
+	if !ok {
+		return "", failure(FailureMalformedConfig, "Outline server must be a hostname or IP address")
 	}
-	if port == "" && websocket {
+	websocket := false
+	if value, present := block["WebSocket"]; present {
+		var valid bool
+		websocket, valid = value.(bool)
+		if !valid {
+			return "", failure(FailureMalformedConfig, "Outline WebSocket must be a boolean")
+		}
+	}
+	port := ""
+	if value, present := block["Port"]; present {
+		var valid bool
+		port, valid = outlinePort(value)
+		if !valid {
+			return "", failure(FailureMalformedConfig, "Outline port must be an integer from 1 to 65535")
+		}
+	} else if websocket {
 		port = "443"
-	}
-	if port == "" {
+	} else {
 		return "", failure(FailureMalformedConfig, "Outline profile requires a port")
 	}
-	serverPort := server
-	serverPort += ":" + port
+	serverPort := net.JoinHostPort(host, port)
 	encoded := base64.StdEncoding.EncodeToString([]byte(method + ":" + password))
 	ssURL := "ss://" + encoded + "@" + serverPort
 	if prefix := rawStringValue(block, "DisguisePrefix"); prefix != "" {
-		separator := "?"
-		if strings.Contains(serverPort, "?") {
-			separator = "&"
-		}
-		ssURL += separator + "prefix=" + url.QueryEscape(prefix)
+		ssURL += "?prefix=" + url.QueryEscape(prefix)
 	}
 	if !websocket {
 		return ssURL, nil
 	}
-	base := strings.TrimRight(stringValue(block, "WebSocketPath"), "/")
-	params := make([]string, 0, 2)
-	if base != "" {
-		params = append(params, "tcp_path="+base+"/tcp", "udp_path="+base+"/udp")
+	path, ok := block["WebSocketPath"].(string)
+	if !ok || strings.TrimSpace(path) == "" {
+		return "", failure(FailureMalformedConfig, "Outline WebSocketPath must be a nonempty string")
 	}
-	return "tls:sni=" + outlineHost(serverPort) + "|ws:" + strings.Join(params, "&") + "|" + ssURL, nil
+	base := strings.TrimRight(path, "/")
+	if base != "" && !strings.HasPrefix(base, "/") {
+		base = "/" + base
+	}
+	params := url.Values{"tcp_path": {base + "/tcp"}, "udp_path": {base + "/udp"}}
+	return "tls:sni=" + host + "|ws:" + params.Encode() + "|" + ssURL, nil
+}
+
+func outlinePort(value interface{}) (string, bool) {
+	var number float64
+	switch v := value.(type) {
+	case int64:
+		number = float64(v)
+	case int:
+		number = float64(v)
+	case float64:
+		number = v
+	default:
+		return "", false
+	}
+	if math.IsNaN(number) || math.IsInf(number, 0) || number < 1 || number > 65535 || math.Trunc(number) != number {
+		return "", false
+	}
+	return strconv.Itoa(int(number)), true
+}
+
+func outlineServerHost(server string) (string, bool) {
+	if strings.HasPrefix(server, "[") && strings.HasSuffix(server, "]") {
+		host := server[1 : len(server)-1]
+		ip := net.ParseIP(host)
+		return host, ip != nil && strings.Contains(host, ":")
+	}
+	if net.ParseIP(server) != nil {
+		return server, true
+	}
+	if server == "" || len(server) > 253 {
+		return "", false
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(server, "."), ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return "", false
+		}
+		for _, r := range label {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
+				return "", false
+			}
+		}
+	}
+	return server, true
 }
 
 func stringValue(block map[string]interface{}, key string) string {
@@ -296,32 +354,4 @@ func stringValue(block map[string]interface{}, key string) string {
 func rawStringValue(block map[string]interface{}, key string) string {
 	value, _ := block[key].(string)
 	return value
-}
-func boolValue(block map[string]interface{}, key string) bool {
-	value, _ := block[key].(bool)
-	return value
-}
-func intString(value interface{}) string {
-	switch v := value.(type) {
-	case int64:
-		return strconv.FormatInt(v, 10)
-	case int:
-		return strconv.Itoa(v)
-	case float64:
-		return strconv.FormatInt(int64(v), 10)
-	default:
-		return ""
-	}
-}
-func outlineHost(serverPort string) string {
-	host := strings.Split(serverPort, "?")[0]
-	if strings.HasPrefix(host, "[") {
-		if end := strings.Index(host, "]"); end > 0 {
-			return host[1:end]
-		}
-	}
-	if strings.Count(host, ":") == 1 {
-		return strings.Split(host, ":")[0]
-	}
-	return host
 }
