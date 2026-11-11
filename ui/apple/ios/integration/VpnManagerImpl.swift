@@ -16,21 +16,29 @@ public final class VpnManagerImpl: NSObject {
     let condition = NSCondition()
     var vpnManager: NETunnelProviderManager?
     var providerStatus: NEVPNStatus = .invalid
-    lazy var preferences = VPNPreferenceCoordinator(
-        providerIdentifier: Self.dobbyBundleIdentifier, name: Self.dobbyName,
-        serverAddress: Self.defaultServerAddress,
-        bind: { [weak self] manager in
-            guard let self else { return }
-            self.condition.lock()
-            self.vpnManager = manager
-            self.providerStatus = manager.connection.status
-            self.condition.broadcast()
-            self.condition.unlock()
-        },
-        hasActivation: { SharedKeychainSecretStore.shared.string(for: SharedKeychainSecretStore.activationKey) != nil },
-        log: { [weak self] level, message in self?.logs.writeLog(level: level, log: message) },
-        describeError: diagnosticErrorDescription
-    )
+    private var preferenceCoordinator: VPNPreferenceCoordinator?
+    var preferences: VPNPreferenceCoordinator {
+        condition.lock()
+        defer { condition.unlock() }
+        if let preferenceCoordinator { return preferenceCoordinator }
+        let coordinator = VPNPreferenceCoordinator(
+            providerIdentifier: Self.dobbyBundleIdentifier, name: Self.dobbyName,
+            serverAddress: Self.defaultServerAddress,
+            bind: { [weak self] manager in
+                guard let self else { return }
+                self.condition.lock()
+                self.vpnManager = manager
+                self.providerStatus = manager.connection.status
+                self.condition.broadcast()
+                self.condition.unlock()
+            },
+            hasActivation: { SharedKeychainSecretStore.shared.string(for: SharedKeychainSecretStore.activationKey) != nil },
+            log: { [weak self] level, message in self?.logs.writeLog(level: level, log: message) },
+            describeError: diagnosticErrorDescription
+        )
+        preferenceCoordinator = coordinator
+        return coordinator
+    }
     private var snapshotReadinessFailureCooldown = IOSReadinessFailureCooldown()
     private let diagnosticSampler = IOSCommandLogSampler()
     private var observer: NSObjectProtocol?
