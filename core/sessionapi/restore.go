@@ -21,7 +21,8 @@ type savedActivation struct {
 	Enabled bool      `json:"enabled"`
 	Mode    StartMode `json:"mode"`
 	Index   int       `json:"index"`
-	Digest  string    `json:"digest"`
+	Digest  string    `json:"digest,omitempty"`
+	Source  string    `json:"source,omitempty"`
 }
 
 func (s FileSourceStore) LoadActivation(ctx context.Context) ([]byte, error) {
@@ -39,7 +40,13 @@ func decodeActivation(raw []byte) (savedActivation, error) {
 	if err := json.Unmarshal(raw, &saved); err != nil {
 		return saved, failureWithCause(FailureMalformedConfig, "saved activation is invalid", err)
 	}
-	if saved.Version != 1 || saved.Digest == "" || saved.Mode != AutoSelect && saved.Mode != ProfileIndex || saved.Mode == ProfileIndex && saved.Index < 0 {
+	if !saved.Enabled && (saved.Version == 1 || saved.Version == 2 && saved.Source == "") {
+		return saved, nil
+	}
+	if saved.Version == 1 {
+		return saved, failure(FailureConflict, "saved automatic startup has no source identity; connect again")
+	}
+	if saved.Version != 2 || saved.Source == "" || saved.Digest == "" || saved.Mode != AutoSelect && saved.Mode != ProfileIndex || saved.Mode == ProfileIndex && saved.Index < 0 {
 		return saved, failure(FailureMalformedConfig, "saved activation selection is invalid")
 	}
 	return saved, nil
@@ -47,12 +54,16 @@ func decodeActivation(raw []byte) (savedActivation, error) {
 
 // Called with session.mu held, in the same order as accepted Start/Stop
 // commands. Internal health recovery and OS teardown do not change user intent.
-func (m *Manager) saveActivationLocked(ctx context.Context, s *session, target StartTarget) error {
+func (m *Manager) saveActivationLocked(ctx context.Context, kind ConfigSourceKind, source, digest string, target StartTarget) error {
 	store, ok := m.sourceStore.(ActivationStore)
-	if !ok || s.sourceKind != ConfigSourceURL {
+	if !ok {
 		return nil
 	}
-	raw, err := json.Marshal(savedActivation{Version: 1, Enabled: true, Mode: target.Mode, Index: target.Index, Digest: s.digest})
+	saved := savedActivation{Version: 2}
+	if kind == ConfigSourceURL && source != "" {
+		saved = savedActivation{Version: 2, Enabled: true, Mode: target.Mode, Index: target.Index, Digest: digest, Source: source}
+	}
+	raw, err := json.Marshal(saved)
 	if err == nil {
 		err = store.SaveActivation(ctx, raw)
 	}
@@ -66,24 +77,18 @@ func (m *Manager) stopActivationLocked(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	raw, err := store.LoadActivation(ctx)
-	if err != nil {
-		return err
+	previous, loadErr := store.LoadActivation(ctx)
+	saved := savedActivation{Version: 2}
+	if decoded, err := decodeActivation(previous); err == nil && decoded.Version == 2 && decoded.Source != "" {
+		saved = decoded
+		saved.Enabled = false
 	}
-	if len(raw) == 0 {
-		return nil
-	}
-	saved, err := decodeActivation(raw)
-	if err != nil {
-		return err
-	}
-	saved.Enabled = false
-	raw, err = json.Marshal(saved)
+	raw, err := json.Marshal(saved)
 	if err == nil {
 		err = store.SaveActivation(ctx, raw)
 	}
-	if err != nil {
-		return failureWithCause(FailurePlatform, "automatic restart could not be disabled", err)
+	if combined := errors.Join(loadErr, err); combined != nil {
+		return failureWithCause(FailurePlatform, "automatic restart could not be disabled", combined)
 	}
 	return nil
 }
@@ -106,7 +111,7 @@ func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (Star
 		return StartResult{}, failure(FailureConflict, "previous VPN owner has not completed cleanup")
 	}
 	store, ok := m.sourceStore.(ActivationStore)
-	sessionID, sequence, source := s.id, s.sequence, s.sourceURL
+	sessionID, sequence, epoch := s.id, s.sequence, s.restoreEpoch
 	s.mu.Unlock()
 	if !ok {
 		return StartResult{}, failure(FailureNotConfigured, "automatic startup storage is unavailable")
@@ -119,13 +124,10 @@ func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (Star
 	if err != nil {
 		return StartResult{}, err
 	}
-	if onlyPreviouslyEnabled && !saved.Enabled {
+	if !saved.Enabled && (onlyPreviouslyEnabled || saved.Version == 1 || saved.Source == "") {
 		return StartResult{}, nil
 	}
-	if source == "" {
-		return StartResult{}, failure(FailureNotConfigured, "automatic startup requires a saved configuration URL")
-	}
-	configured, err := m.Configure(ctx, sessionID, sequence, []byte(source))
+	configured, err := m.configure(ctx, sessionID, sequence, []byte(saved.Source), &epoch)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -133,7 +135,7 @@ func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (Star
 		return StartResult{}, failure(FailureConflict, "saved profile inventory changed; select the profile again")
 	}
 	log.Info("sessionapi", "OS activation requested", map[string]any{"mode": saved.Mode, "profile_index": saved.Index, "inventory_digest": configured.Digest})
-	result, err := m.Start(ctx, sessionID, configured.Sequence, StartTarget{Mode: saved.Mode, Index: saved.Index, Digest: configured.Digest})
+	result, err := m.start(ctx, sessionID, configured.Sequence, StartTarget{Mode: saved.Mode, Index: saved.Index, Digest: configured.Digest}, &epoch)
 	if err != nil {
 		return result, err
 	}
