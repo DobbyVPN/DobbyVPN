@@ -187,11 +187,11 @@ final class VPNPreferenceCoordinator {
         proto.includeAllNetworks = false
         proto.excludeLocalNetworks = false
         proto.enforceRoutes = false
-        if #available(iOS 16.4, *) {
+        if #available(iOS 16.4, macOS 13.3, *) {
             proto.excludeCellularServices = false
             proto.excludeAPNs = false
         }
-        if #available(iOS 17.4, *) { proto.excludeDeviceCommunication = false }
+        if #available(iOS 17.4, macOS 14.4, *) { proto.excludeDeviceCommunication = false }
     }
 
     func changeOnDemand(_ enabled: Bool, completion: @escaping (Error?) -> Void) {
