@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync/atomic"
 
 	"core/buildinfo"
@@ -22,6 +21,13 @@ import (
 
 const logSchema = "dobby.log/v1"
 const logSource = "go"
+
+// A hang capture is one bounded goroutine snapshot written as an ordinary log
+// record, so the retained file budget is unchanged by it.
+const (
+	HangCaptureEvent    = "hang.capture"
+	HangCaptureCategory = "HANG"
+)
 
 type logrusToSlogHook struct{}
 
@@ -131,9 +137,6 @@ func setPath(path string, sharedStderr bool) error {
 	lg.file = file
 	lg.sharedStderr = sharedStderr
 	lg.logger = slog.New(newJSONLineHandler(policyWriter{writer: file}))
-	// The lifecycle timeline lives beside the retained log so both sinks of one
-	// stage record share a directory and an export root.
-	diagnostics.SetTimelineDir(filepath.Dir(file.Path()))
 
 	lg.dumpBuffer()
 	return nil
@@ -365,11 +368,9 @@ func StageBegin(operation, stage, attemptID string) (end func(result string)) {
 		attemptID = diagnostics.CurrentAttemptID()
 	}
 	role := diagnostics.Role()
-	endTimeline := diagnostics.BeginStage(attemptID, operation, stage, role)
 	started := time.Now()
 	writeStageRecord(slog.LevelDebug, operation, stage, attemptID, role, "begin", "", nil)
 	return func(result string) {
-		endTimeline(result)
 		elapsed := time.Since(started).Milliseconds()
 		writeStageRecord(slog.LevelDebug, operation, stage, attemptID, role, "end", result, &elapsed)
 	}
@@ -381,8 +382,22 @@ func StageMark(operation, stage, attemptID, result string) {
 		attemptID = diagnostics.CurrentAttemptID()
 	}
 	role := diagnostics.Role()
-	diagnostics.Mark(attemptID, operation, stage, role, result)
 	writeStageRecord(slog.LevelInfo, operation, stage, attemptID, role, "mark", result, nil)
+}
+
+// HangCapture writes one bounded goroutine capture as an ordinary log record.
+// A failed capture keeps its text so an export can tell it from an absent one.
+func HangCapture(truncated bool, captureErr error, stacks []byte) {
+	arguments := map[string]any{
+		"dump_truncated": truncated,
+		"stack":          string(stacks),
+	}
+	if captureErr != nil {
+		arguments["capture_error"] = captureErr.Error()
+	} else {
+		arguments["capture_error"] = ""
+	}
+	writeEvent(slog.LevelWarn, HangCaptureEvent, HangCaptureCategory, "hang capture", arguments)
 }
 
 func writeStageRecord(level slog.Level, operation, stage, attemptID, role, phase, result string, elapsed *int64) {

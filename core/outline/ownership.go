@@ -1,13 +1,11 @@
 package outline
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"runtime/debug"
-	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -236,12 +234,12 @@ func (d *OutlineDevice) Close() error {
 	phase.Store("close-lock")
 	// This trigger only records diagnostics; cleanup still owns every resource.
 	timer := time.AfterFunc(3*time.Second, func() {
-		var stacks bytes.Buffer
-		err := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
-		name, truncated, dumpErr := diagnostics.CaptureGoroutineDump(diagnostics.TimelineDir())
-		log.Warnf(Category, "Outline close slow phase=%s elapsed=%s activeWorkers=%d stackError=%v dump_file=%s dump_truncated=%t dump_error=%v\n%s",
-			phase.Load(), time.Since(started), d.activeWorkers.Load(), err, name, truncated, dumpErr, stacks.String())
-		log.StageMark("cleanup", "capture", "", outlineCaptureResult(name, dumpErr))
+		// Announce the entered phase before the expensive capture.
+		log.Warnf(Category, "Outline close slow phase=%s elapsed=%s activeWorkers=%d",
+			phase.Load(), time.Since(started), d.activeWorkers.Load())
+		stacks, truncated, captureErr := diagnostics.CaptureGoroutines()
+		log.HangCapture(truncated, captureErr, stacks)
+		log.StageMark("cleanup", "capture", "", diagnostics.CaptureResult(truncated, captureErr))
 	})
 	defer timer.Stop()
 	setPhase := func(name string) { phase.Store(name) }
@@ -304,15 +302,4 @@ func (d *OutlineDevice) Close() error {
 	setPhase("complete")
 	log.Infof(Category, "Outline close finished elapsed=%s activeWorkers=%d error=%v", time.Since(started), d.activeWorkers.Load(), result)
 	return result
-}
-
-// outlineCaptureResult states one bounded-capture outcome in a timeline record.
-func outlineCaptureResult(name string, err error) string {
-	if err != nil {
-		return "failed"
-	}
-	if name == "" {
-		return "unavailable"
-	}
-	return "written"
 }
