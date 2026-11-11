@@ -9,8 +9,11 @@ namespace DobbyVPN.Windows;
 
 internal static class Program
 {
-    private static readonly Queue<AppActivationArguments> Pending = new();
-    private static MainWindow? _window;
+    private static readonly ActivationLifetime<AppActivationArguments, MainWindow> Activations = new(
+        error => NativeDiagnostics.Current.Record(error.ToString(), "activation.delivery.failure"));
+    private static volatile DispatcherQueue? _dispatcher;
+    private static AppInstance? _instance;
+    private static App? _app;
 
     [STAThread]
     public static void Main(string[] args)
@@ -42,8 +45,8 @@ internal static class Program
             LogActivation("activation.redirect-start", "Redirecting activation to the running app", activation, args);
             try
             {
-                StaActivationRedirect.WaitForRedirect(async () => await instance.RedirectActivationToAsync(activation));
-                LogActivation("activation.redirect-complete", "Startup activation redirect completed", activation, args, true);
+                StaActivationRedirect.WaitForRedirect(async () => await instance.RedirectActivationToAsync(activation), instance.ProcessId);
+                LogActivation("activation.redirect-complete", "Startup activation redirect completed; recipient acceptance is not confirmed", activation, args, true);
             }
             catch (Exception error)
             {
@@ -53,21 +56,36 @@ internal static class Program
             }
             return;
         }
-        Pending.Enqueue(activation);
+        _instance = instance;
+        Enqueue(activation);
         instance.Activated += (_, next) =>
         {
-            LogActivation("activation.redirect-received", "Received activation in the running app", next);
-            lock (Pending)
-            {
-                Pending.Enqueue(next);
-                _window?.DispatcherQueue.TryEnqueue(Drain);
-            }
+            Enqueue(next, () => LogActivation("activation.redirect-received", "Queued redirected activation in the running app", next));
         };
         Application.Start(parameters =>
         {
-            SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread()));
-            _ = new App();
+            _dispatcher = DispatcherQueue.GetForCurrentThread();
+            SynchronizationContext.SetSynchronizationContext(new DispatcherQueueSynchronizationContext(_dispatcher));
+            _app = new App();
         });
+    }
+
+    private static void Enqueue(AppActivationArguments activation, Action? queued = null)
+    {
+        try
+        {
+            if (!Activations.Enqueue(activation, () =>
+                {
+                    var dispatcher = _dispatcher;
+                    return dispatcher is null || dispatcher.TryEnqueue(Drain);
+                }, queued))
+                NativeDiagnostics.Current.Record("Activation dispatcher rejected delivery or the application stopped accepting activations; pending delivery is retained when possible.", "activation.dispatch.failure");
+        }
+        catch (Exception error)
+        {
+            NativeDiagnostics.Current.Record(error.ToString(), "activation.dispatch.failure");
+            throw;
+        }
     }
 
     private static void LogInstanceRegistration(AppInstance instance)
@@ -147,39 +165,39 @@ internal static class Program
         catch (Exception error) { return new { error = error.ToString() }; }
     }
 
-    internal static void Attach(MainWindow window)
-    {
-        lock (Pending) { _window = window; }
-        Drain();
-    }
+    internal static void Attach(MainWindow window) => Activations.Attach(window, Accept);
 
-    private static void Drain()
+    internal static void FinalClose(MainWindow window, Action close) =>
+        Activations.FinalClose(window,
+            () => _app!.CreateActivationWindow(), Accept,
+            () => _instance!.UnregisterKey(), close);
+
+    private static void Drain() => Activations.Drain(Accept);
+
+    private static bool Accept(MainWindow window, AppActivationArguments activation)
     {
-        lock (Pending)
+        return window.TryAcceptActivation(() =>
         {
-            while (_window is not null && Pending.TryDequeue(out var activation))
+            if (activation.Kind == ExtendedActivationKind.Protocol && activation.Data is IProtocolActivatedEventArgs protocol)
             {
-                if (!_window.TryActivate()) continue;
-                if (activation.Kind == ExtendedActivationKind.Protocol && activation.Data is IProtocolActivatedEventArgs protocol)
-                {
-                    LogActivation("activation.drain-protocol", "Dispatching protocol activation", activation, route: "protocol");
-                    _window.ImportLink(protocol.Uri.AbsoluteUri);
-                }
-                else if (activation.Data is ILaunchActivatedEventArgs launch)
-                {
-                    var arguments = Arguments(launch.Arguments).ToArray();
-                    LogActivation("activation.drain-launch", "Processing launch activation arguments", activation,
-                        arguments, route: "launch-arguments");
-                    foreach (var value in arguments)
-                        if (value.StartsWith("dobbyvpn:", StringComparison.OrdinalIgnoreCase)) _window.ImportLink(value);
-                }
-                else
-                {
-                    LogActivation("activation.drain-unhandled", "Activation had no supported URI payload", activation,
-                        route: "unhandled");
-                }
+                LogActivation("activation.drain-protocol", "Dispatching protocol activation", activation, route: "protocol");
+                window.ImportLink(protocol.Uri.AbsoluteUri);
             }
-        }
+            else if (activation.Data is ILaunchActivatedEventArgs launch)
+            {
+                var arguments = Arguments(launch.Arguments).ToArray();
+                LogActivation("activation.drain-launch", "Processing launch activation arguments", activation,
+                    arguments, route: "launch-arguments");
+                foreach (var value in arguments)
+                    if (value.StartsWith("dobbyvpn:", StringComparison.OrdinalIgnoreCase)) window.ImportLink(value);
+            }
+            else
+            {
+                LogActivation("activation.drain-unhandled", "Activation had no supported URI payload", activation,
+                    route: "unhandled");
+            }
+            LogActivation("activation.recipient-accepted", "A live window accepted the activation", activation);
+        });
     }
 
     private static void LogActivation(

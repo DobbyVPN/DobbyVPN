@@ -147,7 +147,8 @@ public sealed partial class MainWindow : Window
             // If the dispatcher rejected the programmatic close request, a
             // later user/system close may safely complete the already-drained
             // shutdown instead of leaving the window permanently inert.
-            _allowFinalClose = true;
+            args.Cancel = true;
+            Program.FinalClose(this, () => { _allowFinalClose = true; Close(); });
             return;
         }
         args.Cancel = true;
@@ -193,8 +194,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                _allowFinalClose = true;
-                Close();
+                Program.FinalClose(this, () => { _allowFinalClose = true; Close(); });
                 completion.TrySetResult(true);
             }
             catch (Exception error) { completion.TrySetException(error); }
@@ -272,7 +272,7 @@ public sealed partial class MainWindow : Window
         return DispatcherQueue.TryEnqueue(priority, () => _lifetime.TryRunCallback(callback));
     }
 
-    internal bool TryActivate() => _lifetime.TryRunCallback(Activate);
+    internal bool TryAcceptActivation(Action accept) => _lifetime.TryRunCallback(() => { Activate(); accept(); });
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr window);

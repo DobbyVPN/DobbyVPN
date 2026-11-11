@@ -22,13 +22,19 @@ public partial class App : Application
         }
     }
 
+    internal MainWindow CreateActivationWindow()
+    {
+        _window = new MainWindow();
+        _window.Activate();
+        return _window;
+    }
+
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         try
         {
-            _window = new MainWindow();
-            _window.Activate();
-            Program.Attach(_window);
+            CreateActivationWindow();
+            Program.Attach(_window!);
         }
         catch (Exception error)
         {
