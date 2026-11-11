@@ -1,13 +1,11 @@
 package tunnel
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
-	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -495,15 +493,15 @@ func (e *Engine) Stop(ctx context.Context) error {
 	var phase atomic.Value
 	phase.Store("starting")
 	timer := time.AfterFunc(3*time.Second, func() {
-		var stacks bytes.Buffer
-		err := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
-		// The retained log keeps the existing message and its stacks; the
-		// bounded file below is what an export can always carry, because it is
-		// capped, named and prunable while this one log record is not.
-		name, truncated, dumpErr := diagnostics.CaptureGoroutineDump(diagnostics.TimelineDir())
-		log.Warnf(Category, "[Engine] stop slow generation=%d interface=%s phase=%s elapsed=%s contextError=%v stackError=%v dump_file=%s dump_truncated=%t dump_error=%v\n%s",
-			generation, iface, phase.Load(), time.Since(started), ctx.Err(), err, name, truncated, dumpErr, stacks.String())
-		log.StageMark("cleanup", "capture", "", captureResult(name, dumpErr))
+		// Announce the entered phase before the expensive capture, so a reader
+		// learns the stop is stuck even when capturing takes a while.
+		log.Warnf(Category, "[Engine] stop slow generation=%d interface=%s phase=%s elapsed=%s contextError=%v",
+			generation, iface, phase.Load(), time.Since(started), ctx.Err())
+		// Exactly one collection: the bounded capture below is what an export
+		// carries, and a second profile walk would only slow a stuck stop down.
+		stacks, truncated, captureErr := diagnostics.CaptureGoroutines()
+		log.HangCapture(truncated, captureErr, stacks)
+		log.StageMark("cleanup", "capture", "", diagnostics.CaptureResult(truncated, captureErr))
 	})
 	defer timer.Stop()
 	runPhase := func(name string, fn func()) {
@@ -574,15 +572,4 @@ func updatePeakInt64(peak *atomic.Int64, current int64) {
 			return
 		}
 	}
-}
-
-// captureResult states one bounded-capture outcome in a timeline record.
-func captureResult(name string, err error) string {
-	if err != nil {
-		return "failed"
-	}
-	if name == "" {
-		return "unavailable"
-	}
-	return "written"
 }

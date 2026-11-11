@@ -56,36 +56,17 @@ func diagnosticPaths() ([]string, error) {
 			backend = "/var/log/dobbyvpn/backend.jsonl"
 		}
 	}
-	paths := make([]string, 0, 12)
+	paths := make([]string, 0, 3)
 	paths = append(paths, backend)
+	// Raw backend stderr is retained beside the structured log where the
+	// capturing producer has not folded it into the log itself.
+	paths = append(paths, backend+".stderr")
 	cli, err := cliLogPath()
 	if err != nil {
 		return nil, err
 	}
 	paths = append(paths, cli)
-	// The lifecycle timeline and bounded hang dumps travel with the logs: a
-	// failed transition must be readable from the archive alone.
-	paths = append(paths, diagnosticExtras(backend)...)
-	paths = append(paths, diagnosticExtras(cli)...)
 	return paths, nil
-}
-
-// diagnosticExtras lists the timeline and retained dumps beside one log. Files
-// that were never written are skipped so the archive markers stay meaningful.
-func diagnosticExtras(logPath string) []string {
-	dir := filepath.Dir(logPath)
-	extras := make([]string, 0, 1+diagnostics.DumpMaxFiles)
-	timeline := filepath.Join(dir, diagnostics.TimelineFileName)
-	if info, err := os.Stat(timeline); err == nil && info.Mode().IsRegular() {
-		extras = append(extras, timeline)
-	}
-	dumps, err := diagnostics.DumpFiles(dir)
-	if err != nil {
-		// A directory that cannot be listed is reported by Capture for the logs
-		// themselves; the dump set is an addition, not a precondition.
-		return extras
-	}
-	return append(extras, dumps...)
 }
 
 func runLogs(args []string) int {
