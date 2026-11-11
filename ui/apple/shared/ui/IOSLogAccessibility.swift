@@ -19,15 +19,29 @@ final class IOSLogRecordAccessibilityElement: UIAccessibilityElement {
     }
 }
 
+// Effective viewport in the text view's bounds coordinates, including scroll offset.
+private func effectiveVisibleTextBounds(_ view: UITextView) -> CGRect? {
+    guard let window = view.window else { return nil }
+    var bounds = view.bounds.intersection(view.convert(window.bounds, from: window))
+    var ancestor = view.superview
+    while let current = ancestor {
+        if current.clipsToBounds {
+            bounds = bounds.intersection(view.convert(current.bounds, from: current))
+        }
+        ancestor = current.superview
+    }
+    return bounds.isNull || bounds.isEmpty ? nil : bounds
+}
+
 // Frames are in the text view's bounds coordinates; UIKit performs the screen conversion.
 func visibleIOSLogRecordFragments(in view: DobbyLogTextView) -> [IOSLogVisibleFragment] {
     let storage = view.textStorage
-    guard storage.length > 0, view.window != nil else { return [] }
+    guard storage.length > 0, let visibleBounds = effectiveVisibleTextBounds(view) else { return [] }
     let layout = view.layoutManager
     let container = view.textContainer
     layout.ensureLayout(for: container)
     let inset = view.textContainerInset
-    let viewport = view.bounds.offsetBy(dx: -inset.left, dy: -inset.top)
+    let viewport = visibleBounds.offsetBy(dx: -inset.left, dy: -inset.top)
     let visibleGlyphs = layout.glyphRange(forBoundingRect: viewport, in: container)
     guard visibleGlyphs.length > 0 else { return [] }
     let visibleCharacters = layout.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
@@ -148,16 +162,7 @@ final class DobbyErrorTextView: UITextView {
 
 func visibleIOSErrorDetailFragments(in view: DobbyErrorTextView) -> [IOSErrorDetailFragment] {
     let storage = view.textStorage
-    guard storage.length > 0, let window = view.window else { return [] }
-    var visibleBounds = view.bounds.intersection(view.convert(window.bounds, from: window))
-    var ancestor = view.superview
-    while let current = ancestor {
-        if current.clipsToBounds {
-            visibleBounds = visibleBounds.intersection(view.convert(current.bounds, from: current))
-        }
-        ancestor = current.superview
-    }
-    guard !visibleBounds.isNull, !visibleBounds.isEmpty else { return [] }
+    guard storage.length > 0, let visibleBounds = effectiveVisibleTextBounds(view) else { return [] }
     let layout = view.layoutManager
     let container = view.textContainer
     layout.ensureLayout(for: container)
