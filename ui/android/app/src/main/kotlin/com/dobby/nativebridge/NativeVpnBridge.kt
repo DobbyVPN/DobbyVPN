@@ -10,6 +10,9 @@ import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import com.dobby.ui.MainActivity
+import com.dobby.presentation.ConsentLaunchQueue
+import com.dobby.presentation.ServiceReadinessQueue
+import com.dobby.presentation.PreparationDelivery
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -38,6 +41,7 @@ object NativeVpnBridge {
     private val diagnosticLock = Any()
     private val diagnosticRun = java.util.UUID.randomUUID().toString()
     private val diagnosticSequence = java.util.concurrent.atomic.AtomicLong()
+    private val preparationSequence = java.util.concurrent.atomic.AtomicLong()
 
     @Volatile
     private var nativeDiagnosticWriteFailed = false
@@ -47,165 +51,188 @@ object NativeVpnBridge {
     private val serviceLock = Object()
 
     // This tracks consent launch state for the Android hosted test companion.
-    // Production Go code receives prepare's integer result.
     @Volatile
     private var consentLaunchState = CONSENT_LAUNCH_NOT_REQUESTED
 
     @JvmStatic
     fun consentLaunchStateForTest(): String = consentLaunchState
 
-    @JvmStatic
-    fun prepare(context: Context): Int {
-        consentLaunchState = CONSENT_LAUNCH_NOT_REQUESTED
-        recordServiceDiagnostic(context, "vpn.prepare", "Android VPN preparation requested")
-        val permission = VpnService.prepare(context)
-        if (permission != null) {
-            // JNI may call this bridge from a Go-attached thread. Android's
-            // consent activity must be launched on the main thread or newer
-            // releases can leave the request queued without showing a dialog.
-            val launchConsent = Runnable {
-                if (context is MainActivity) {
-                    // Keep the consent activity in the caller's task and let
-                    // the Activity Result API deliver its grant or denial.
-                    context.launchVpnConsent(permission)
-                } else if (context is Activity) {
-                    // Activity callers without the UI result handler still
-                    // keep the system dialog in their task; the next prepare
-                    // call re-checks VpnService.prepare().
-                    context.startActivity(permission)
-                } else {
-                    // Instrumentation and recovery callers may only have the
-                    // application context. The VPN consent is process-global,
-                    // so a normal task launch is sufficient; the next Connect
-                    // call re-checks VpnService.prepare before starting the
-                    // service.
-                    context.startActivity(permission.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-            }
-            val launched = launchConsentOnMainThread(context, launchConsent)
-            if (!launched) {
-                recordServiceDiagnostic(
-                    context,
-                    "vpn.prepare_failed",
-                    "Android VPN consent could not be scheduled",
-                    IllegalStateException("main thread rejected or failed to launch consent; state=$consentLaunchState"),
-                )
-                return -1
-            }
-            recordServiceDiagnostic(context, "vpn.permission", "Android VPN consent is required")
-            return 0
-        }
-        val ready = try {
-            awaitService(context)
-        } catch (error: Exception) {
-            recordServiceDiagnostic(context, "vpn.prepare_failed", "Android VPN service could not be started", error)
-            false
-        }
-        if (!ready) {
-            recordServiceDiagnostic(
-                context,
-                "vpn.prepare_failed",
-                "Android VPN service did not become ready",
-                IllegalStateException("service readiness wait expired or was interrupted"),
-            )
-        }
-        return if (ready) 1 else -1
+    sealed class PreparationResult {
+        object Ready : PreparationResult()
+        object PermissionRequired : PreparationResult()
+        object PermissionDenied : PreparationResult()
+        object Cancelled : PreparationResult()
+        data class Failed(val error: Throwable) : PreparationResult()
     }
 
-    /**
-     * Queue consent on Android's main thread without waiting for it.
-     *
-     * Go may call this bridge on an attached worker thread. Schedule the
-     * permission UI on Android's main thread without waiting for the Activity
-     * result; the foreground screen handles that result and retries start.
-     */
-    private fun launchConsentOnMainThread(context: Context, launch: Runnable): Boolean {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            consentLaunchState = CONSENT_LAUNCH_STARTED
-            return try {
-                launch.run()
-                consentLaunchState = CONSENT_LAUNCH_RETURNED
-                true
-            } catch (error: RuntimeException) {
-                consentLaunchState = CONSENT_LAUNCH_FAILED
-                Log.e("DobbyVPN", "Android VPN consent launch failed", error)
-                recordServiceDiagnostic(context, "vpn.consent_launch_failed", "Android VPN consent launch failed", error)
-                false
+    class Preparation internal constructor(
+        internal val context: Context,
+        internal val callback: (PreparationResult) -> Unit,
+        internal val identity: String,
+        internal val details: String,
+    ) {
+        internal val delivery = PreparationDelivery(PreparationResult.Cancelled as PreparationResult, callback)
+        internal val canceled: Boolean get() = delivery.canceled
+        fun cancel() {
+            tracePreparation(this, "cancel_requested")
+            delivery.markCanceled()
+            mainHandler.post {
+                serviceQueue.cancel(this)
+                consentQueue.cancel(this)
+                tracePreparation(this, "cancel_completed")
+                delivery.finishCancellation()
             }
         }
+    }
 
-        val handler = Handler(Looper.getMainLooper())
-        consentLaunchState = CONSENT_LAUNCH_QUEUED
-        val posted = handler.post {
-            consentLaunchState = CONSENT_LAUNCH_STARTED
-            try {
-                launch.run()
-                consentLaunchState = CONSENT_LAUNCH_RETURNED
-            } catch (error: RuntimeException) {
-                consentLaunchState = CONSENT_LAUNCH_FAILED
-                Log.e("DobbyVPN", "Android VPN consent launch failed", error)
-                recordServiceDiagnostic(context, "vpn.consent_launch_failed", "Android VPN consent launch failed", error)
+    // All preparation state and callbacks are confined to the main thread.
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val serviceQueue = ServiceReadinessQueue<Preparation, DobbyVpnService>(
+        ready = { service?.isReadyForTunnel() == true },
+        retiring = { service?.isRetiring() == true },
+        start = {
+            val context = checkNotNull(preparationContext)
+            val intent = Intent(context, DobbyVpnService::class.java).setAction(DobbyVpnService.ACTION_PREPARE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+            else context.startService(intent)
+        },
+        complete = { request, error ->
+            completePreparation(request, if (error == null) PreparationResult.Ready else PreparationResult.Failed(error))
+        },
+    )
+    private var preparationContext: Context? = null
+    private val consentQueue = ConsentLaunchQueue<Preparation>(
+        launchOrComplete = { request ->
+            if (request.canceled) false else {
+                tracePreparation(request, "permission_check_begin")
+                val permission = VpnService.prepare(request.context)
+                if (permission == null) {
+                    tracePreparation(request, "service_wait_begin")
+                    preparationContext = request.context.applicationContext
+                    serviceQueue.submit(request)
+                    false
+                } else {
+                    consentLaunchState = CONSENT_LAUNCH_STARTED
+                    val activity = request.context as? MainActivity
+                        ?: throw IllegalStateException("VPN consent requires the product Activity result handler")
+                    tracePreparation(request, "consent_launch_begin")
+                    activity.launchVpnConsent(permission)
+                    tracePreparation(request, "consent_launch_end")
+                    consentLaunchState = CONSENT_LAUNCH_RETURNED
+                    request.delivery.progress(PreparationResult.PermissionRequired)
+                    true
+                }
+            }
+        },
+        returned = { request, granted ->
+            tracePreparation(request, if (request.canceled) "consent_result_ignored granted=$granted" else "consent_result granted=$granted")
+            if (!request.canceled) {
+                if (granted) retryPreparation(request)
+                else completePreparation(request, PreparationResult.PermissionDenied)
+            }
+        },
+        discarded = { request, granted -> tracePreparation(request, "consent_result_ignored granted=$granted") },
+        failed = { request, error ->
+            tracePreparation(request, "failure", error)
+            consentLaunchState = CONSENT_LAUNCH_FAILED
+            recordServiceDiagnostic(request.context, "vpn.prepare_failed", "Android VPN preparation failed", error)
+            completePreparation(request, PreparationResult.Failed(error))
+        },
+    )
+
+    private fun retryPreparation(request: Preparation) { consentQueue.submit(request) }
+
+    @JvmStatic
+    fun prepare(context: Context, completed: (PreparationResult) -> Unit): Preparation =
+        prepareForSelection(context, "", completed)
+
+    fun prepareForSelection(context: Context, details: String, completed: (PreparationResult) -> Unit): Preparation {
+        val request = Preparation(context, completed, "$diagnosticRun-${preparationSequence.incrementAndGet()}", details)
+        tracePreparation(request, "submitted")
+        val posted = mainHandler.post {
+            if (!request.canceled) {
+                consentLaunchState = CONSENT_LAUNCH_NOT_REQUESTED
+                consentQueue.submit(request)
             }
         }
-        if (!posted) consentLaunchState = CONSENT_LAUNCH_FAILED
-        return posted
+        if (!posted) {
+            val error = IllegalStateException("main thread rejected VPN preparation")
+            tracePreparation(request, "failure", error)
+            request.delivery.finish(PreparationResult.Failed(error))
+        }
+        return request
+    }
+
+    @JvmStatic
+    fun consentResult(granted: Boolean) { consentQueue.result(granted) }
+
+    private fun completePreparation(request: Preparation, result: PreparationResult) {
+        tracePreparation(request, "completed result=${result.javaClass.simpleName} canceled=${request.canceled}", (result as? PreparationResult.Failed)?.error)
+        request.delivery.finish(result)
+    }
+
+    private fun tracePreparation(request: Preparation, phase: String, failure: Throwable? = null) {
+        val owner = service?.let { System.identityHashCode(it).toString() } ?: "none"
+        recordDiagnostic(request.context.applicationContext, "vpn.preparation", "operation_id=${request.identity} phase=$phase service=$owner ${request.details}", failure)
+    }
+
+    @Volatile private var lifecycleOwner: DobbyVpnService? = null
+
+    // Called by Android on the main thread, before initialization may fail.
+    internal fun serviceCreated(candidate: DobbyVpnService): Boolean {
+        synchronized(serviceLock) {
+            if (lifecycleOwner != null && lifecycleOwner !== candidate) return false
+            if (!serviceQueue.created(candidate)) return false
+            lifecycleOwner = candidate
+        }
+        return true
     }
 
     internal fun attach(candidate: DobbyVpnService) {
         synchronized(serviceLock) {
+            check(lifecycleOwner === candidate) { "Another VPN service owns the lifecycle" }
             check(service == null || service === candidate) { "Previous VPN service still owns cleanup" }
-            // A rejected replacement must never resume the previous owner's
-            // closing Go manager. Publish the candidate only after Resume succeeds.
             val failure = NativeGoSession.resume()
             check(failure.isEmpty()) { failure }
             service = candidate
-            serviceLock.notifyAll()
-        }
-    }
-    internal fun detach(candidate: DobbyVpnService) {
-        synchronized(serviceLock) {
-            if (service === candidate) service = null
-            serviceLock.notifyAll()
         }
     }
 
-    private fun awaitService(context: Context): Boolean {
-        synchronized(serviceLock) {
-            val deadline = System.nanoTime() + 2_000_000_000L
-            var startRequested = false
-            while (service?.isReadyForTunnel() != true) {
-                if (System.nanoTime() >= deadline) return false
-                // An old service may still be in onDestroy. Let it finish
-                // before asking Android to create a replacement; otherwise
-                // the start Intent can be delivered to the retiring instance.
-                if (service == null && !startRequested) {
-                    val intent = Intent(context, DobbyVpnService::class.java)
-                        .setAction(DobbyVpnService.ACTION_PREPARE)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(intent)
-                    } else {
-                        context.startService(intent)
-                    }
-                    startRequested = true
+    internal fun serviceReady(candidate: DobbyVpnService) {
+        if (lifecycleOwner !== candidate) return
+        mainHandler.post {
+            if (lifecycleOwner === candidate && service === candidate) serviceQueue.ready(candidate)
+        }
+    }
+
+    internal fun serviceFailed(candidate: DobbyVpnService, failure: Throwable) {
+        if (lifecycleOwner !== candidate) return
+        mainHandler.post {
+            if (lifecycleOwner !== candidate) return@post
+            serviceQueue.failed(candidate, failure)
+            if (service !== candidate) {
+                synchronized(serviceLock) {
+                    if (lifecycleOwner === candidate) lifecycleOwner = null
                 }
-                val remaining = deadline - System.nanoTime()
-                if (remaining <= 0) return false
-                val millis = remaining / 1_000_000L
-                val nanos = (remaining % 1_000_000L).toInt()
-                try {
-                    serviceLock.wait(millis, nanos)
-                } catch (failure: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    recordServiceDiagnostic(
-                        context,
-                        "vpn.prepare_failed",
-                        "Interrupted while waiting for the VPN service",
-                        failure,
-                    )
-                    return false
-                }
+                serviceQueue.detached(candidate)
             }
-            return true
+        }
+    }
+
+    internal fun detach(candidate: DobbyVpnService) {
+        val owned = synchronized(serviceLock) {
+            if (lifecycleOwner !== candidate) false else {
+                if (service === candidate) service = null
+                true
+            }
+        }
+        if (!owned) return
+        mainHandler.post {
+            if (lifecycleOwner !== candidate) return@post
+            synchronized(serviceLock) {
+                if (lifecycleOwner === candidate) lifecycleOwner = null
+            }
+            serviceQueue.detached(candidate)
         }
     }
 

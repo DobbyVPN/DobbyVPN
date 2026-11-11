@@ -1,3 +1,4 @@
 <resources>
     <item name="logs_viewport" type="id" />
+    <item name="logs_content" type="id" />
 </resources>
