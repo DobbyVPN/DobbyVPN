@@ -246,10 +246,11 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
             element.accessibilityLabel = line
             element.accessibilityValue = id
             element.accessibilityTraits = .staticText
-            // Publish the record's on-screen rect: accessibilityFrame is the
-            // screen-space contract every observer (including XCTest) reads.
-            element.accessibilityFrame = window.map { convert(laidOut, to: $0) }
-                ?? convert(laidOut, to: container)
+            // `laidOut` is already measured from the visible top-left corner and
+            // the text view fills the container, so it is exactly this container's
+            // space. UIKit resolves the container space to a screen rectangle, so
+            // XCTest and VoiceOver both read the record's real on-screen frame.
+            element.accessibilityFrameInContainerSpace = laidOut
             elements.append(element)
         }
         logRecordObservationElements = elements
