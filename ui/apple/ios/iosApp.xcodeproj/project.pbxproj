@@ -25,6 +25,8 @@
 		F20000000000000000000008 /* DobbySessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000005 /* DobbySessionViewModel.swift */; };
 		F20000000000000000000009 /* DobbyRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000006 /* DobbyRootView.swift */; };
 		F2000000000000000000000A /* DobbyShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* DobbyShareSheet.swift */; };
+		F20000000000000000000047 /* LogRecordRanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000047 /* LogRecordRanges.swift */; };
+		F20000000000000000000046 /* IOSLogAccessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000046 /* IOSLogAccessibility.swift */; };
 		C20000000000000000000001 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000001 /* LICENSE */; };
 		C20000000000000000000002 /* THIRD_PARTY_NOTICES in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000002 /* THIRD_PARTY_NOTICES */; };
 		C20000000000000000000003 /* LICENSES in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000003 /* LICENSES */; };
@@ -73,6 +75,8 @@
 		F10000000000000000000005 /* DobbySessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbySessionViewModel.swift; sourceTree = "<group>"; };
 		F10000000000000000000006 /* DobbyRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyRootView.swift; sourceTree = "<group>"; };
 		F10000000000000000000007 /* DobbyShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyShareSheet.swift; sourceTree = "<group>"; };
+		F10000000000000000000047 /* LogRecordRanges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogRecordRanges.swift; sourceTree = "<group>"; };
+		F10000000000000000000046 /* IOSLogAccessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSLogAccessibility.swift; sourceTree = "<group>"; };
 		F10000000000000000000008 /* Dobby-Vpn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dobby-Vpn.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10000000000000000000001 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../../../LICENSE; sourceTree = "<group>"; };
 		C10000000000000000000002 /* THIRD_PARTY_NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../../../THIRD_PARTY_NOTICES; sourceTree = "<group>"; };
@@ -222,6 +226,8 @@
 				F10000000000000000000005 /* DobbySessionViewModel.swift */,
 				F10000000000000000000006 /* DobbyRootView.swift */,
 				F10000000000000000000007 /* DobbyShareSheet.swift */,
+				F10000000000000000000047 /* LogRecordRanges.swift */,
+				F10000000000000000000046 /* IOSLogAccessibility.swift */,
 			);
 			path = ../shared/ui;
 			sourceTree = "<group>";
@@ -424,6 +430,8 @@
 				F20000000000000000000008 /* DobbySessionViewModel.swift in Sources */,
 				F20000000000000000000009 /* DobbyRootView.swift in Sources */,
 				F2000000000000000000000A /* DobbyShareSheet.swift in Sources */,
+				F20000000000000000000047 /* LogRecordRanges.swift in Sources */,
+				F20000000000000000000046 /* IOSLogAccessibility.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
