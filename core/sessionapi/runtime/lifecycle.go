@@ -668,7 +668,7 @@ func logEventHealthCheckResult(ctx context.Context, ref sessionapi.SessionRef, r
 	if ctx.Err() != nil {
 		fields["result"] = "canceled"
 	} else if err != nil {
-		fields["result"] = "failed"
+		fields["result"] = stageResultFailed
 		log.Warn(category, "event health check completed", fields)
 		return
 	}
@@ -753,7 +753,10 @@ func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyA
 // stageOutcome names one finished connect stage.
 func stageOutcome(err error) string {
 	if err != nil {
-		return "failed"
+		return stageResultFailed
 	}
 	return "ok"
 }
+
+// stageResultFailed is the result every finished stage reports on error.
+const stageResultFailed = "failed"

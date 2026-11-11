@@ -58,7 +58,7 @@ const nativeLogCategory = "RUNTIME"
 // internalRuntimeStageResult names one finished native lifecycle stage.
 func internalRuntimeStageResult(err error) string {
 	if err != nil {
-		return "failed"
+		return stageResultFailed
 	}
 	return "ok"
 }
