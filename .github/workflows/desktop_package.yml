@@ -78,6 +78,9 @@ jobs:
             macos:amd64) symbols=dobbyvpn-symbols-macos-amd64.tar.gz ;;
             *) exit 1 ;;
           esac
+          # The bundle name must follow its producer: a debug build writes the
+          # -debug stem, so the gate names exactly that file and nothing wider.
+          if [[ "$DEBUG" == true ]]; then symbols="${symbols%.tar.gz}-debug.tar.gz"; fi
           test -s "$output/$symbols"
           printf 'symbols=%s\n' "$output/$symbols" >> "$GITHUB_OUTPUT"
           printf 'symbols-artifact=%s\n' "$symbols" >> "$GITHUB_OUTPUT"

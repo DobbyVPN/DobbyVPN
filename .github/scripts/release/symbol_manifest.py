@@ -46,13 +46,15 @@ DIAGNOSTIC_FILES = (
     "core/ffi/android/logger.go",
     "ui/windows/DobbyVPN.Windows/NativeDiagnostics.cs",
     "ui/apple/shared/diagnostics/DiagnosticFiles.swift",
+    "ui/apple/shared/diagnostics/DiagnosticFilesMigration.swift",
     "ui/apple/ios/integration/IOSLifecycleDiagnostics.swift",
 )
 DIAGNOSTIC_CONSTANTS = {
-    "timeline_file": "timeline.jsonl",
-    "dump_prefix": "hang-dump-",
-    "dump_max_bytes": 1 << 20,
-    "dump_max_files": 4,
+    "stage_event": "lifecycle.stage",
+    "hang_event": "hang.capture",
+    "hang_capture_max_bytes": 1 << 20,
+    "max_retained_log_files": 4,
+    "rotation_threshold_bytes": 150_000_000,
 }
 
 DOCUMENT_KEYS = frozenset({
@@ -148,11 +150,31 @@ def go_buildinfo(path: Path) -> dict[str, Any] | None:
     return info
 
 
+# The Mach-O magic words. Only a file that carries one is asked of dwarfdump,
+# so identification of a PE, ELF or PDB artifact never depends on a macOS tool.
+MACHO_MAGICS = frozenset({0xFEEDFACE, 0xCEFAEDFE, 0xFEEDFACF, 0xCFFAEDFE, 0xCAFEBABE, 0xBEBAFECA})
+
+
+def is_macho(path: Path) -> bool:
+    """True when the file's leading bytes are a Mach-O magic word."""
+    with Path(path).open("rb") as handle:
+        head = handle.read(4)
+    return len(head) == 4 and struct.unpack(">I", head)[0] in MACHO_MAGICS
+
+
 def macho_uuid(path: Path) -> str | None:
-    """Read the Mach-O LC_UUID with ``dwarfdump``; ``None`` when not Mach-O."""
+    """Read the Mach-O LC_UUID with ``dwarfdump``; ``None`` when not Mach-O.
+
+    A Mach-O without the tool is an error: a release must never ship a Mac
+    artifact whose identity could not be read. Non-Mach-O files never invoke it.
+    """
     path = Path(path)
     if not path.is_file():
         raise SymbolManifestError(f"file is missing: {path}")
+    if not is_macho(path):
+        return None
+    if shutil.which("dwarfdump") is None:
+        raise SymbolManifestError(f"could not run dwarfdump for {path}: tool is not on PATH")
     result = _run(["dwarfdump", "--uuid", str(path)])
     if result.returncode != 0:
         return None
@@ -290,13 +312,25 @@ def pe_debug_identity(path: Path) -> dict[str, Any] | None:
             break
     else:
         return None
-    record, size_of_data, data_rva = struct.unpack_from("<III", data, file_offset)
-    if record == 0 and size_of_data == 0:
-        return None
-    if size_of_data < 24:
-        return None
-    payload = data[file_offset + data_rva:file_offset + data_rva + size_of_data]
-    if payload[:4] != b"RSDS":
+    # IMAGE_DEBUG_DIRECTORY is 28 bytes: Characteristics, TimeDateStamp,
+    # MajorVersion, MinorVersion, Type, SizeOfData, AddressOfRawData and
+    # PointerToRawData (an absolute file offset). The directory holds one entry
+    # per debug type, so the CodeView entry is selected, never assumed first.
+    payload = None
+    for index in range(debug_size // 28):
+        entry = file_offset + 28 * index
+        if entry + 28 > len(data):
+            break
+        (_, _, _, _, debug_type, size_of_data, _, pointer_to_raw) = struct.unpack_from(
+            "<IIHHIIII", data, entry
+        )
+        if debug_type != 2 or size_of_data == 0 or pointer_to_raw == 0:
+            continue
+        if pointer_to_raw + size_of_data > len(data):
+            continue
+        payload = data[pointer_to_raw:pointer_to_raw + size_of_data]
+        break
+    if payload is None or payload[:4] != b"RSDS" or len(payload) < 24:
         return None
     guid_bytes = payload[4:20]
     age = struct.unpack_from("<I", payload, 20)[0]
@@ -308,6 +342,66 @@ def pe_debug_identity(path: Path) -> dict[str, Any] | None:
         f"{guid_bytes[8:10].hex().upper()}-{guid_bytes[10:16].hex().upper()}"
     )
     return {"guid": guid, "age": age, "pdb_name": name}
+
+
+def pdb_identity(path: Path) -> dict[str, Any] | None:
+    """Read a portable PDB's own id: the ``#Pdb`` stream GUID and stamp.
+
+    A portable PDB starts with the ``BSJB`` metadata signature; its ``#Pdb``
+    stream holds the 20-byte id a linker records as the executable's CodeView
+    GUID/age pair. A file that is not a portable PDB returns ``None``.
+    """
+    path = Path(path)
+    try:
+        data = path.read_bytes()
+    except FileNotFoundError as error:
+        raise SymbolManifestError(f"file is missing: {path}") from error
+    if len(data) < 24 or data[:4] != b"BSJB":
+        return None
+    # ECMA-335 metadata root: signature, major, minor, reserved, version length,
+    # the version string itself, then the stream count and its entries. Offsets
+    # are relative to the start of the streams' data, i.e. after this directory.
+    _, _, _, _, version_length = struct.unpack_from("<IHHII", data, 0)
+    offset = 16 + version_length
+    offset += (-offset) % 4
+    if offset + 2 > len(data):
+        return None
+    stream_count = struct.unpack_from("<H", data, offset)[0]
+    offset += 2
+    streams: dict[str, tuple[int, int]] = {}
+    try:
+        for _ in range(stream_count):
+            if offset + 8 > len(data):
+                return None
+            relative, size = struct.unpack_from("<II", data, offset)
+            offset += 8
+            end = data.index(b"\0", offset)
+            name = data[offset:end].decode("ascii", errors="replace")
+            offset = end + 1
+            offset += (-offset) % 4
+            streams[name] = (relative, size)
+    except ValueError:
+        return None
+    pdb = streams.get("#Pdb")
+    if pdb is None or pdb[1] < 20:
+        return None
+    start = offset + pdb[0]
+    if start + 20 > len(data):
+        return None
+    guid_bytes = data[start:start + 16]
+    stamp = struct.unpack_from("<I", data, start + 16)[0]
+    guid = (
+        f"{int.from_bytes(guid_bytes[0:4], 'little'):08X}-"
+        f"{int.from_bytes(guid_bytes[4:6], 'little'):04X}-"
+        f"{int.from_bytes(guid_bytes[6:8], 'little'):04X}-"
+        f"{guid_bytes[8:10].hex().upper()}-{guid_bytes[10:16].hex().upper()}"
+    )
+    return {"guid": guid, "stamp": f"{stamp:08X}"}
+
+
+def _basename(value: str) -> str:
+    """The file name of a Windows or POSIX path a linker recorded."""
+    return value.replace("\\", "/").rsplit("/", 1)[-1]
 
 
 def identity_of(path: Path) -> dict[str, Any]:
@@ -339,9 +433,16 @@ def match_symbols(symbol_id: dict[str, Any], shipped_id: dict[str, Any]) -> dict
     if symbol_id.get("build_id") and symbol_id["build_id"] == shipped_id.get("build_id"):
         return {"kind": "elf-build-id", "value": symbol_id["build_id"]}
     shipped_debug = shipped_id.get("pe_debug")
-    if shipped_debug:
-        pdb_name = symbol_id.get("pdb_name") or symbol_name.rsplit("/", 1)[-1]
-        if shipped_debug.get("pdb_name") == pdb_name:
+    symbol_pdb = symbol_id.get("pdb_id")
+    if shipped_debug and symbol_pdb:
+        # Bind on the identity the files actually carry: the PDB's own id must be
+        # the GUID/age pair the executable's CodeView record names, and the names
+        # must agree once both sides are reduced to a file name.
+        pdb_name = symbol_id.get("pdb_name") or symbol_name
+        if (
+            symbol_pdb.get("guid") == shipped_debug.get("guid")
+            and _basename(str(shipped_debug.get("pdb_name") or "")) == _basename(str(pdb_name))
+        ):
             return {
                 "kind": "pdb-guid",
                 "value": f"{shipped_debug['guid']}/{shipped_debug['age']}",
@@ -658,7 +759,8 @@ def _symbol_identity(path: Path) -> dict[str, Any]:
             raise SymbolManifestError(f"symbol bundle is empty: {path.name}")
         return {"file": str(path), "sha256": _sha256(member), "uuid": macho_uuid(member)}
     if path.suffix.lower() == ".pdb":
-        return {"file": str(path), "sha256": _sha256(path), "pdb_name": path.name}
+        return {"file": str(path), "sha256": _sha256(path), "pdb_name": path.name,
+                "pdb_id": pdb_identity(path)}
     if path.suffix.lower() == ".txt":
         # A build-info capture belongs to its binary; it is evidence, not an
         # identity of its own, so it is bound by the record it sits beside.
@@ -728,16 +830,29 @@ def collect_desktop_symbols(
                 ))
         elif platform == "windows":
             frontend = Path(frontend_directory or service_directory / "frontend")
+            # The publish output has two frontend files with different symbol
+            # owners. DobbyVPN.dll is the managed assembly whose linker emitted
+            # DobbyVPN.pdb; DobbyVPN.exe is the .NET apphost, whose CodeView
+            # record points at the runtime's own apphost.pdb, which is not part
+            # of this product's publish output. So the PDB binds to the assembly
+            # by its own identity, and the apphost is retained the way the Go
+            # binaries are: as the exact file that shipped.
+            assembly_pdb = frontend / "DobbyVPN.pdb"
+            staged_pdb = _stage(root, "pdbs/DobbyVPN.pdb", assembly_pdb)
             for name, role in (
                 ("DobbyVPN.exe", "frontend"),
                 ("DobbyVPN.dll", "frontend-assembly"),
             ):
                 staged = _stage(root, f"binaries/{name}", frontend / name)
-                pdb_name = f"{Path(name).stem}.pdb"
-                staged_pdb = _stage(root, f"pdbs/{pdb_name}", frontend / pdb_name)
-                match = _bind(staged, [staged_pdb])
+                if name == "DobbyVPN.dll":
+                    symbol_files = [staged_pdb]
+                else:
+                    # The apphost's own record names a runtime PDB this product
+                    # does not publish, so its retained copy is the identity.
+                    symbol_files = [_stage(root, f"binaries/{name}.unstripped", frontend / name)]
+                match = _bind(staged, symbol_files)
                 binaries.append(_binary_record(
-                    root, role=role, file=staged, symbol_files=[staged_pdb], match=match,
+                    root, role=role, file=staged, symbol_files=symbol_files, match=match,
                 ))
             for name, role in (
                 ("dobbyvpn-backend.exe", "backend"),
