@@ -1,13 +1,12 @@
 package tunnel
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
-	"runtime/pprof"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,8 +24,9 @@ import (
 )
 
 var (
-	engineMu     sync.Mutex
-	activeEngine *Engine
+	engineMu              sync.Mutex
+	activeEngine          *Engine
+	stopOperationSequence atomic.Uint64
 )
 
 // ErrEngineBusy means another session currently owns tun2socks.  tun2socks
@@ -51,7 +51,9 @@ type Engine struct {
 
 	// stopPlatform exists so ownership bookkeeping can be tested without a
 	// real TUN device. Production handles use platform_engine.EngineStop.
-	stopPlatform func(context.Context) error
+	stopPlatform      func(context.Context) error
+	stopAfter         func(time.Duration, func()) func() bool
+	captureStopStacks func() ([]byte, bool, error)
 }
 
 const udpAssociationIdleTimeout = 10 * time.Second
@@ -491,35 +493,70 @@ func (e *Engine) Stop(ctx context.Context) error {
 	engineMu.Unlock()
 	started := time.Now()
 	generation, iface := e.attempt, e.ifaceName
+	operation := stopOperationSequence.Add(1)
 	var phase atomic.Value
 	phase.Store("starting")
-	timer := time.AfterFunc(3*time.Second, func() {
-		var stacks bytes.Buffer
-		err := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
-		log.Warnf(Category, "[Engine] stop slow generation=%d interface=%s phase=%s elapsed=%s contextError=%v stackError=%v\n%s", generation, iface, phase.Load(), time.Since(started), ctx.Err(), err, stacks.String())
+	after := e.stopAfter
+	if after == nil {
+		after = func(delay time.Duration, callback func()) func() bool {
+			timer := time.AfterFunc(delay, callback)
+			return timer.Stop
+		}
+	}
+	capture := e.captureStopStacks
+	if capture == nil {
+		capture = func() ([]byte, bool, error) {
+			buffer := make([]byte, 64*1024)
+			n := runtime.Stack(buffer, true)
+			return buffer[:n], n == len(buffer), nil
+		}
+	}
+	var diagnosticOnce sync.Once
+	stopTimer := after(3*time.Second, func() {
+		diagnosticOnce.Do(func() {
+			stage := phase.Load().(string)
+			log.Warnf(Category, "[Engine] stop slow operation=%d generation=%d interface=%s phase=%s elapsed=%s contextError=%v", operation, generation, iface, stage, time.Since(started), ctx.Err())
+			stacks, truncated, err := capture()
+			if len(stacks) > 64*1024 {
+				stacks = stacks[:64*1024]
+				truncated = true
+			}
+			if err != nil {
+				log.Errorf(Category, "[Engine] stop stack capture failed operation=%d generation=%d interface=%s phase=%s truncated=%t err=%v", operation, generation, iface, stage, truncated, err)
+				if len(stacks) == 0 {
+					return
+				}
+			}
+			log.Warnf(Category, "[Engine] stop stacks operation=%d generation=%d interface=%s phase=%s truncated=%t\n%s", operation, generation, iface, stage, truncated, stacks)
+		})
 	})
-	defer timer.Stop()
-	runPhase := func(name string, fn func()) {
+	defer stopTimer()
+	runPhase := func(name string, fn func() error) error {
 		phase.Store(name)
 		phaseStarted := time.Now()
-		log.Debugf(Category, "[Engine] stop phase=%s started generation=%d interface=%s", name, generation, iface)
-		fn()
-		log.Debugf(Category, "[Engine] stop phase=%s finished generation=%d interface=%s elapsed=%s", name, generation, iface, time.Since(phaseStarted))
+		log.Infof(Category, "[Engine] stop phase=%s started operation=%d generation=%d interface=%s", name, operation, generation, iface)
+		err := fn()
+		if err != nil {
+			log.Errorf(Category, "[Engine] stop phase=%s failed operation=%d generation=%d interface=%s elapsed=%s err=%v", name, operation, generation, iface, time.Since(phaseStarted), err)
+		} else {
+			log.Infof(Category, "[Engine] stop phase=%s finished operation=%d generation=%d interface=%s elapsed=%s", name, operation, generation, iface, time.Since(phaseStarted))
+		}
+		return err
 	}
-	log.Debugf(Category, "[Engine] stopping owned tun2socks engine")
+	log.Infof(Category, "[Engine] stopping owned tun2socks engine operation=%d generation=%d interface=%s", operation, generation, iface)
 	if e.router != nil {
-		runPhase("router-close", e.router.close)
+		_ = runPhase("router-close", func() error { e.router.close(); return nil })
 	}
 	if e.proxy != nil {
-		runPhase("flow-close", e.proxy.flows.sealAndClose)
+		_ = runPhase("flow-close", func() error { e.proxy.flows.sealAndClose(); return nil })
 	}
 	var platformErr error
 	if stopPlatform != nil {
-		runPhase("platform-stop", func() { platformErr = stopPlatform(ctx) })
+		platformErr = runPhase("platform-stop", func() error { return stopPlatform(ctx) })
 	}
 	var flowErr error
 	if e.proxy != nil {
-		runPhase("flow-wait", func() { flowErr = e.proxy.flows.wait(ctx) })
+		flowErr = runPhase("flow-wait", func() error { return e.proxy.flows.wait(ctx) })
 	}
 	e.stopErr = errors.Join(platformErr, flowErr)
 	if e.stopErr != nil {
@@ -531,7 +568,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 		activeEngine = nil
 	}
 	engineMu.Unlock()
-	log.Debugf(Category, "[Engine] owned tun2socks engine stopped")
+	log.Infof(Category, "[Engine] owned tun2socks engine stopped operation=%d generation=%d interface=%s", operation, generation, iface)
 	return e.stopErr
 }
 
