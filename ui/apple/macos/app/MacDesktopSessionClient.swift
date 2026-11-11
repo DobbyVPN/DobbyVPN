@@ -1,4 +1,3 @@
-import CryptoKit
 import DobbyDiagnosticFiles
 import DobbyNativeUI
 import Foundation
@@ -21,8 +20,9 @@ final class MacDesktopSessionClient: DobbySessionClient {
     }
 
     var diagnosticPaths: [URL] {
-        DiagnosticFiles.diagnosticExtras(directory: URL(fileURLWithPath: backendLogPath).deletingLastPathComponent())
-            + [URL(fileURLWithPath: backendLogPath), uiDiagnosticPath]
+        // The retained logs of this app: the backend's structured log and the
+        // UI log Swift rotates. No stream beyond the logging contract's budget.
+        [URL(fileURLWithPath: backendLogPath), uiDiagnosticPath]
     }
 
     var uiDiagnosticPath: URL {
@@ -35,12 +35,6 @@ final class MacDesktopSessionClient: DobbySessionClient {
 
     var sourceCommit: String {
         Bundle.main.infoDictionary?["DobbySourceCommit"] as? String ?? "N/A"
-    }
-
-    /// One-way digest of a configuration input for diagnostics.
-    static func digest(_ value: String) -> String {
-        let hash = SHA256.hash(data: Data(value.utf8))
-        return hash.map { String(format: "%02x", $0) }.joined()
     }
 
     func call(_ method: String, parameters: [String: Any]) -> String {
@@ -91,10 +85,10 @@ final class MacDesktopSessionClient: DobbySessionClient {
                 source: "native-ui",
                 to: uiDiagnosticPath,
                 fields: [
-                    // A subscription URL is a credential-bearing configuration
-                    // input, so the diagnostic keeps only its digest and length.
-                    "source_digest": Self.digest(source),
-                    "source_length": source.count,
+                    // The configuration source is part of the diagnostic
+                    // contract: a support reader compares the exact value the
+                    // backend was asked to configure.
+                    "parameters": ["source": source],
                     "succeeded": responseReceived && responseIsSuccessful,
                     "response_read_monotonic_uptime": ProcessInfo.processInfo.systemUptime,
                 ], legacyDesktop: true, legacyExcludedPaths: [backendLogPath]

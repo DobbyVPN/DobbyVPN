@@ -58,7 +58,13 @@ extension PacketTunnelProvider {
 
     func releaseTunnel(sessionID: String?, generation: Int64, timeoutMillis: Int64) -> String {
         settingsQueue.sync {
+            let attempt = DiagnosticsAttempt.current
             let started = DiagnosticFiles.monotonicNow()
+            // The OS settings release can block on the system; record that it
+            // was entered before calling it, then its outcome after.
+            DiagnosticFiles.stage(
+                operation: "os-teardown", stage: "tun-settings-release", role: "ios-tunnel",
+                phase: "begin", attemptID: attempt, to: logs.path)
             let error = settingsOwner.release(session: sessionID ?? "", generation: generation, timeout: Double(timeoutMillis) / 1000) { completed in
                 self.setTunnelNetworkSettings(nil, completionHandler: completed)
             }
@@ -70,7 +76,9 @@ extension PacketTunnelProvider {
                 operation: "os-teardown", stage: "tun-settings-release", role: "ios-tunnel",
                 phase: "end", result: error == nil ? "ok" : "error",
                 elapsedMs: DiagnosticFiles.elapsedMs(since: started),
-                attemptID: DiagnosticsAttempt.current, to: logs.path)
+                attemptID: attempt,
+                extraFields: error.map { ["error": String(reflecting: $0)] } ?? [:],
+                to: logs.path)
             return tunnelResult(error: error, pending: error != nil)
         }
     }
@@ -256,31 +264,13 @@ extension PacketTunnelProvider {
         let attempt = DiagnosticsAttempt.current
         DiagnosticFiles.stage(operation: "os-teardown", stage: "teardown", role: "ios-tunnel",
                               phase: "begin", attemptID: attempt, to: logs.path)
-        var goStopStart = DiagnosticFiles.monotonicNow()
-        var releaseStart = DiagnosticFiles.monotonicNow()
-        var pathStart = DiagnosticFiles.monotonicNow()
         IOSProviderStopBoundary.perform(
-            stopGoSessionAndWait: {
-                goStopStart = DiagnosticFiles.monotonicNow()
-                let reply = DobbyvpnStopSessionAndWait()
-                DiagnosticFiles.stage(operation: "os-teardown", stage: "go-stop", role: "ios-tunnel",
-                                      phase: "end", result: reply.isEmpty ? "ok" : "failed",
-                                      elapsedMs: DiagnosticFiles.elapsedMs(since: goStopStart), attemptID: attempt, to: logs.path)
-                return reply
-            },
-            releasePlatformCallbacks: {
-                releaseStart = DiagnosticFiles.monotonicNow()
-                callbackBridge = nil
-                DiagnosticFiles.stage(operation: "os-teardown", stage: "runtime-release", role: "ios-tunnel",
-                                      phase: "end", elapsedMs: DiagnosticFiles.elapsedMs(since: releaseStart), attemptID: attempt, to: logs.path)
-            },
+            stopGoSessionAndWait: { DobbyvpnStopSessionAndWait() },
+            releasePlatformCallbacks: { callbackBridge = nil },
             stopPathMonitoring: {
-                pathStart = DiagnosticFiles.monotonicNow()
                 pathMonitor?.cancel()
                 pathMonitor = nil
                 lastPathSignature = nil
-                DiagnosticFiles.stage(operation: "os-teardown", stage: "path-monitor-release", role: "ios-tunnel",
-                                      phase: "end", elapsedMs: DiagnosticFiles.elapsedMs(since: pathStart), attemptID: attempt, to: logs.path)
             },
             completeOSStop: { failure in
                 if !failure.isEmpty {
@@ -293,7 +283,9 @@ extension PacketTunnelProvider {
                 logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel cleanup wait ended; calling OS completionHandler")
                 completionHandler()
                 logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
-            }
+            },
+            stageLog: logs.path,
+            attempt: attempt
         )
     }
 }

@@ -14,15 +14,16 @@ final class IOSSessionClient: DobbyOnDemandClient, @unchecked Sendable {
     }
 
     func call(_ method: String, parameters: [String: Any]) -> String {
-        // One user command is one attempt. Its identity and the reply's
-        // generation let app, provider and Go records be ordered and joined.
-        let attempt = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        // One user command is one attempt. The same identity crosses the
+        // provider boundary, so app and provider stage records of this command
+        // join; the reply's generation joins the Go engine records.
+        let attempt = DiagnosticsAttempt.reset()
         let operation = method == "Stop" ? "cancel" : "connect"
         let store = DobbyLogStore(path: IOSAppCompositionRoot.appLogPath())
         let started = ProcessInfo.processInfo.systemUptime
         store.writeStage(operation: operation, stage: "command", role: "ios-app", phase: "begin",
                          attemptID: attempt, fields: ["command": method])
-        let reply = shell.call(method: method, parameters: parameters)
+        let reply = shell.call(method: method, parameters: parameters, attemptID: attempt)
         let succeeded = !reply.contains("\"error\"")
         let elapsed = Int(((ProcessInfo.processInfo.systemUptime - started) * 1000).rounded())
         var fields: [String: Any] = ["command": method]

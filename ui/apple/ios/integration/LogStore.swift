@@ -8,7 +8,10 @@ public final class DobbyLogStore {
     public init(path: URL, enabled: Bool = true) { self.path = path; self.enabled = enabled }
 
     /// One lifecycle stage record with the same field vocabulary the Go
-    /// timeline uses, so a single reader can order records from both processes.
+    /// stage records use, so a single reader can order records from both
+    /// processes. It goes through the shared append path, so the destination is
+    /// created when missing, appended under the file lock and its rotation owner
+    /// is respected; a failure is reported and returned, never swallowed.
     @discardableResult
     public func writeStage(
         operation: String, stage: String, role: String, phase: String,
@@ -16,34 +19,10 @@ public final class DobbyLogStore {
         result: String? = nil, elapsedMs: Int? = nil
     ) -> Bool {
         guard enabled else { return false }
-        var record: [String: Any] = [
-            "event": "lifecycle.stage",
-            "level": "DEBUG",
-            "message": "stage \(operation) \(stage)",
-            "role": role,
-            "operation": operation,
-            "stage": stage,
-            "phase": phase,
-            "attempt_id": attemptID ?? "",
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-        ]
-        if let result, !result.isEmpty { record["result"] = result }
-        if let elapsedMs { record["elapsed_ms"] = elapsedMs }
-        for (key, value) in fields { record[key] = value }
-        guard JSONSerialization.isValidJSONObject(record),
-              let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]),
-              let line = String(data: data, encoding: .utf8) else { return false }
-        // Write through the same single-record append path the Go writer uses.
-        do {
-            let handle = try FileHandle(forWritingTo: path)
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: Data((line + "\n").utf8))
-            return true
-        } catch {
-            try? FileHandle.standardError.write(contentsOf: Data("stage record write failed path=\(path.path): \(String(reflecting: error))\n".utf8))
-            return false
-        }
+        // The Go raw-capture monitor owns rotation of this destination.
+        return DiagnosticFiles.stage(operation: operation, stage: stage, role: role, phase: phase,
+                                    result: result, elapsedMs: elapsedMs, attemptID: attemptID,
+                                    extraFields: fields, to: path, rotating: false)
     }
 
     @discardableResult
