@@ -30,25 +30,12 @@ public enum IOSAppCompositionRoot {
         return sharedLogPath(isTunnel ? "go_tunnel_logs.jsonl" : "go_app_logs.jsonl")
     }
 
-    /// Fixed files owned by the iOS app group and packet tunnel, plus the
-    /// lifecycle timeline and retained hang captures beside them. The app and
-    /// the extension share this directory, so both see the same artifacts.
+    /// The two retained logs of the iOS app group: one for the containing app
+    /// and one for the packet tunnel. Stage records and hang captures are
+    /// ordinary records inside them, so the archive never adds a stream beyond
+    /// the logging contract's budget.
     public static func diagnosticPaths() -> [URL] {
-        diagnosticExtras() + [sharedLogPath("go_app_logs.jsonl"), sharedLogPath("go_tunnel_logs.jsonl")]
-    }
-
-    /// Timeline and up to four dumps in the shared directory; missing files are
-    /// skipped so an archive never claims an artifact that was not written.
-    public static func diagnosticExtras(dumpLimit: Int = 4) -> [URL] {
-        let directory = sharedDirectory()
-        var extras: [URL] = []
-        let timeline = directory.appendingPathComponent("timeline.jsonl")
-        if FileManager.default.fileExists(atPath: timeline.path) { extras.append(timeline) }
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        let dumps = names.filter { $0.hasPrefix("hang-dump-") && $0.hasSuffix(".txt") }
-            .sorted().suffix(max(0, dumpLimit))
-            .map { directory.appendingPathComponent($0) }
-        return extras + dumps
+        [sharedLogPath("go_app_logs.jsonl"), sharedLogPath("go_tunnel_logs.jsonl")]
     }
 
     public static let logsRepository: DobbyLogStore = {
