@@ -284,8 +284,13 @@ extension PacketTunnelProvider {
                 completionHandler()
                 logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
             },
-            stageLog: logs.path,
-            attempt: attempt
+            recordStage: { stage, phase, result, elapsedMs, extra in
+                // The Go raw-capture monitor owns rotation of this destination.
+                DiagnosticFiles.stage(operation: "os-teardown", stage: stage, role: "ios-tunnel",
+                                      phase: phase, result: result, elapsedMs: elapsedMs,
+                                      attemptID: attempt, extraFields: extra,
+                                      to: self.logs.path, rotating: false)
+            }
         )
     }
 }

@@ -43,7 +43,16 @@ public enum IOSAppCompositionRoot {
         return DobbyLogStore(path: current)
     }()
 
-    public static let vpnManager = VpnManagerImpl()
+    /// The app owns the attempt identity; the transport bridge reports it so a
+    /// command envelope always carries the operation the app minted.
+    private static let identityInstallation: Void = {
+        DiagnosticsAttemptBridge.provider = { DiagnosticsAttempt.current }
+    }()
+
+    public static let vpnManager: VpnManagerImpl = {
+        _ = identityInstallation
+        return VpnManagerImpl()
+    }()
     public static let sessionShell = IOSSessionShell(manager: vpnManager)
 }
 
