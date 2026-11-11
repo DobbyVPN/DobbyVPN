@@ -160,7 +160,6 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         if sizeChanged && preservesReadingPosition {
             restoreReadingPosition()
         }
-        updateLogRecordObservationElements()
     }
 
     func updateFollowingAccessibilityHint(isFollowing: Bool) {
