@@ -437,10 +437,47 @@ struct DobbyLogView: UIViewRepresentable {
     }
 }
 #elseif os(macOS)
-private final class DobbyLogTextView: NSTextView {
+final class DobbyLogTextView: NSTextView {
     var onSendLogs: () -> Void = {}
     var onUploadLogs: (() -> Void)?
     var onClear: () -> Void = {}
+
+    override func accessibilityChildren() -> [Any]? {
+        let existing = super.accessibilityChildren() ?? []
+        guard let storage = textStorage, storage.length > 0, let layout = layoutManager,
+              let container = textContainer, let window, enclosingScrollView != nil else { return existing }
+        layout.ensureLayout(for: container)
+        let origin = textContainerOrigin
+        let viewport = visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+        let visibleGlyphs = layout.glyphRange(forBoundingRect: viewport, in: container)
+        guard visibleGlyphs.length > 0 else { return existing }
+        let visibleCharacters = layout.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+        guard visibleCharacters.length > 0 else { return existing }
+        var children: [Any] = existing
+        storage.enumerateAttribute(logRecordIDKey, in: visibleCharacters, options: []) { value, range, _ in
+            guard let id = value as? String else { return }
+            var fullRange = NSRange()
+            _ = storage.attribute(logRecordIDKey, at: range.location, longestEffectiveRange: &fullRange,
+                                  in: NSRange(location: 0, length: storage.length))
+            // logText appends exactly one separator; preserve newlines in the
+            // original record and measure all of its actual text.
+            let contentRange = NSRange(location: fullRange.location, length: fullRange.length - 1)
+            let glyphs = layout.glyphRange(forCharacterRange: contentRange, actualCharacterRange: nil)
+            guard glyphs.length > 0 else { return }
+            let bounds = layout.boundingRect(forGlyphRange: glyphs, in: container)
+                .offsetBy(dx: origin.x, dy: origin.y)
+            guard bounds.intersects(visibleRect), !bounds.isEmpty else { return }
+            let screenFrame = window.convertToScreen(convert(bounds, to: nil))
+            let text = (storage.string as NSString).substring(with: contentRange)
+            guard let child = NSAccessibilityElement.element(withRole: .staticText, frame: screenFrame,
+                                                              label: nil, parent: self) as? NSAccessibilityElement else { return }
+            child.setAccessibilityFrameInParentSpace(bounds)
+            child.setAccessibilityIdentifier("logs.record." + id)
+            child.setAccessibilityValue(text)
+            children.append(child)
+        }
+        return children
+    }
 
     private var logsMenu: NSMenu {
         let menu = NSMenu()
@@ -561,7 +598,7 @@ struct DobbyLogView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
+        guard let view = scroll.documentView as? DobbyLogTextView else { return }
         let coordinator = context.coordinator
         view.onSendLogs = onSendLogs
         view.onUploadLogs = onUploadLogs
@@ -577,6 +614,11 @@ struct DobbyLogView: NSViewRepresentable {
         if clear != coordinator.lastClear {
             coordinator.resetForClear()
         }
+        updateLogContent(scroll, coordinator: coordinator)
+    }
+
+    func updateLogContent(_ scroll: NSScrollView, coordinator: Coordinator) {
+        guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
         guard coordinator.desiredFollowing else { return }
         coordinator.entries = entries
         let attributed: NSAttributedString
@@ -587,10 +629,9 @@ struct DobbyLogView: NSViewRepresentable {
             coordinator.renderedEntries = entries
             coordinator.renderedText = attributed
         }
-        let text = attributed.string
         coordinator.updating = true
         let selection = view.selectedRange()
-        if view.string != text {
+        if !storage.isEqual(to: attributed) {
             storage.setAttributedString(attributed)
             if NSMaxRange(selection) <= storage.length { view.setSelectedRange(selection) }
         }
@@ -853,6 +894,8 @@ private let logFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
 private let boldLogFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
 #endif
 
+let logRecordIDKey = NSAttributedString.Key("DobbyLogRecordID")
+
 private let logTimeFormat: DateFormatter = {
     let format = DateFormatter()
     format.locale = Locale(identifier: "en_US_POSIX")
@@ -866,6 +909,7 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     // Extra space goes below each line so a line's text starts at the top of its fragment.
     paragraph.lineSpacing = 3
     for entry in entries {
+        let start = output.length
         let time = entry.date.map(logTimeFormat.string) ?? entry.timestamp
         if !time.isEmpty {
             output.append(NSAttributedString(string: time + "  ", attributes: [
@@ -882,6 +926,8 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
         output.append(NSAttributedString(string: entry.message + "\n", attributes: [
             .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
         ]))
+        output.addAttribute(logRecordIDKey, value: entry.id,
+                            range: NSRange(location: start, length: output.length - start))
     }
     return output
 }
