@@ -55,15 +55,8 @@ private struct DobbyErrorDetailView: UIViewRepresentable {
     @ScaledMetric(relativeTo: .caption) private var fontSize: CGFloat = 11.5
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
-        view.isEditable = false
-        view.isSelectable = false
-        view.isScrollEnabled = true
-        view.backgroundColor = .clear
-        view.textContainerInset = .zero
-        view.textContainer.lineFragmentPadding = 0
-        view.accessibilityIdentifier = "error.detail"
-        view.isAccessibilityElement = true
+        let view = DobbyErrorTextView()
+        configureErrorDetailTextView(view)
         return view
     }
 
