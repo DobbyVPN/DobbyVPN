@@ -38,6 +38,7 @@ WINDOWS_TEMP_PATH_BUFFER_CAPACITY = 32768
 WIX_VERSION = "6.0.0"
 
 sys.path.insert(0, str(SCRIPT_DIR.parent))
+sys.path.insert(0, str(SCRIPT_DIR.parent / "release"))
 from bounded_process import (
     COMMAND_DEADLINE_ENV,
     CommandDeadlineError,
@@ -47,6 +48,7 @@ from bounded_process import (
     run_finite_capture,
     run_streamed,
 )
+import symbol_manifest
 
 
 class DesktopPlatformError(RuntimeError):
@@ -435,6 +437,175 @@ def _select_host(platform: str, architecture: str | None) -> tuple[str, str]:
     return platform, selected_arch
 
 
+TOOLCHAIN_PROBES = {
+    "macos": {
+        "go": ["go", "version"],
+        "swift": ["swift", "--version"],
+        "xcodebuild": ["xcodebuild", "-version"],
+        "clang": ["clang", "--version"],
+    },
+    "windows": {
+        "go": ["go", "version"],
+        "dotnet": ["dotnet", "--version"],
+        "dotnet_sdks": ["dotnet", "--list-sdks"],
+        "wix": ["wix", "--version"],
+        "mingw": ["gcc", "-dumpmachine"],
+    },
+    "linux": {
+        "go": ["go", "version"],
+        "gcc": ["gcc", "--version"],
+        "dpkg_deb": ["dpkg-deb", "--version"],
+    },
+}
+WINDOWS_APP_SDK_PATTERN = re.compile(
+    r'Microsoft\.WindowsAppSDK" Version="([^"]+)"'
+)
+LLVM_LIBCXX_VERSION = "21.1.8"
+TRUST_TUNNEL_BRIDGE_VERSION = "1.0.2"
+MACOS_MINIMUM_SYSTEM_VERSION = "12.0"
+LIBRARY_PROBES = {"linux": ("libc++.so.1", "libc++abi.so.1")}
+
+
+def _diagnostics_document() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "feature_flags": None,
+        "files": symbol_manifest.diagnostics_files(ROOT),
+        "constants": dict(symbol_manifest.DIAGNOSTIC_CONSTANTS),
+    }
+
+
+def _build_flags(platform: str, configuration: str, source_sha: str, version: str) -> dict[str, Any]:
+    """State the Go link flags this build uses, plus the platform-only flags."""
+    flags: dict[str, Any] = {
+        "go_ldflags": (
+            f"-buildid= -X core/buildinfo.Version={version}"
+            f" -X core/buildinfo.Commit={source_sha}"
+            f" -X core/buildinfo.Configuration={configuration}"
+        ),
+        "go_toolchain": "local",
+    }
+    if platform == "macos":
+        flags["extra"] = {"swift": "-Xswiftc -g", "macos_minimum": MACOS_MINIMUM_SYSTEM_VERSION}
+    elif platform == "windows":
+        flags["extra"] = {"dotnet_configuration": configuration, "platform": "x64"}
+    else:
+        flags["extra"] = {
+            "libcxx": LLVM_LIBCXX_VERSION,
+            "trust_tunnel_bridge": TRUST_TUNNEL_BRIDGE_VERSION,
+        }
+    return flags
+
+
+def _toolchain_document(platform: str, environment: dict[str, str]) -> dict[str, str]:
+    probes = TOOLCHAIN_PROBES[platform]
+    captured: dict[str, str] = {}
+    # A project-local Xcode (DEVELOPER_DIR) is how this lab and the runners
+    # select a toolchain; the probe must see the same one the build used.
+    developer_dir = environment.get("DEVELOPER_DIR")
+    if developer_dir:
+        environment = {**environment, "DEVELOPER_DIR": developer_dir}
+    for name, command in probes.items():
+        try:
+            result = subprocess.run(
+                command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, check=False, env=environment, timeout=120,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise DesktopPlatformError(f"toolchain probe failed: {name}: {error}") from error
+        if result.returncode != 0:
+            raise DesktopPlatformError(f"toolchain probe failed: {name}: {result.stdout}")
+        lines = [line for line in (result.stdout or "").splitlines() if line.strip()]
+        if not lines:
+            raise DesktopPlatformError(f"toolchain probe produced no output: {name}")
+        captured[name] = lines[0].strip()
+    if platform == "macos":
+        captured["macos_minimum"] = MACOS_MINIMUM_SYSTEM_VERSION
+    elif platform == "windows":
+        project = ROOT / "ui" / "windows" / "DobbyVPN.Windows" / "DobbyVPN.Windows.csproj"
+        match = WINDOWS_APP_SDK_PATTERN.search(project.read_text(encoding="utf-8"))
+        if match is None:
+            raise DesktopPlatformError("Windows App SDK version is missing from the project")
+        captured["windows_app_sdk"] = match.group(1)
+    else:
+        captured["libcxx"] = LLVM_LIBCXX_VERSION
+        captured["trust_tunnel_bridge"] = TRUST_TUNNEL_BRIDGE_VERSION
+    return captured
+
+
+def _third_party_document(platform: str) -> list[dict[str, Any]]:
+    library_names = LIBRARY_PROBES.get(platform, ())
+    return [
+        {
+            "name": name,
+            "sha256": None,
+            "source": f"desktop_build.py pinned digest for {name}",
+        }
+        for name in library_names
+    ]
+
+
+def collect_symbols(
+    *, platform: str, architecture: str, service_directory: Path,
+    frontend_directory: Path | None, output_dir: Path, version: str,
+    source_sha: str, package: Path, debug: bool, environment: dict[str, str],
+) -> Path:
+    """Produce this platform's symbol bundle beside the package."""
+    source_tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, check=False,
+    )
+    tree = (source_tree.stdout or "").strip()
+    if source_tree.returncode != 0 or SHA_PATTERN.fullmatch(tree) is None:
+        raise DesktopPlatformError("could not read the source tree identity")
+    return symbol_manifest.collect_desktop_symbols(
+        platform=platform,
+        architecture=architecture,
+        service_directory=service_directory,
+        frontend_directory=frontend_directory,
+        output_dir=output_dir,
+        version=version,
+        source_sha=source_sha,
+        source_tree=tree,
+        package=package,
+        toolchain=_toolchain_document(platform, environment),
+        build_flags=_build_flags(platform, "Debug" if debug else "Release", source_sha, version),
+        diagnostics=_diagnostics_document(),
+        third_party=_third_party_document(platform),
+        debug=debug,
+    )
+
+
+def _manifest_digest(bundle: Path) -> str:
+    """Hash the build-identity.json carried inside one symbol bundle."""
+    import tarfile
+
+    with tarfile.open(bundle) as tar:
+        member = next(
+            (item for item in tar.getmembers() if item.name.endswith("/build-identity.json")),
+            None,
+        )
+        if member is None:
+            raise DesktopPlatformError(f"symbol bundle carries no manifest: {bundle}")
+        source = tar.extractfile(member)
+        if source is None:
+            raise DesktopPlatformError(f"symbol manifest is unreadable: {bundle}")
+        return hashlib.sha256(source.read()).hexdigest()
+
+
+def _strip_macos_debug_sections(service_directory: Path, environment: dict[str, str]) -> None:
+    """Ship the macOS frontend without its debug sections; LC_UUID stays."""
+    binary = service_directory / "DobbyVPNMacApp"
+    if not binary.is_file():
+        raise DesktopPlatformError(f"macOS frontend is missing before stripping: {binary}")
+    result = subprocess.run(
+        ["strip", "-S", str(binary)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, check=False, env=environment,
+    )
+    if result.returncode != 0:
+        raise DesktopPlatformError(f"could not strip macOS debug sections: {result.stdout}")
+
+
 def _build(args: argparse.Namespace) -> int:
     platform, architecture = _select_host(args.platform, args.arch)
     version = _version(args.version)
@@ -482,11 +653,20 @@ def _build(args: argparse.Namespace) -> int:
             env=environment,
         )
 
-    if args.debug and platform == "macos":
+    if platform == "macos":
+        # Both configurations keep symbols: a release symbol bundle whose dSYMs
+        # are not bound to the shipped binaries would prove nothing.
         symbols = service_directory / "DebugSymbols"
         symbols.mkdir(exist_ok=True)
         for name in ("DobbyVPNMacApp", "dobbyvpn-backend", "dobby-cli"):
-            _run("macOS debug symbols", ["dsymutil", str(service_directory / name), "-o", str(symbols / f"{name}.dSYM")], env=environment)
+            _run(
+                "macOS debug symbols",
+                ["dsymutil", str(service_directory / name), "-o", str(symbols / f"{name}.dSYM")],
+                env=environment,
+            )
+        # The dSYM is read from the debug info; the shipped package must not
+        # carry it, and the retained symbol bundle copies these same bytes.
+        _strip_macos_debug_sections(service_directory, environment)
 
     with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-package-") as temporary:
         work = Path(temporary)
@@ -529,6 +709,24 @@ def _build(args: argparse.Namespace) -> int:
             target = target.with_stem(target.stem + "-debug")
         shutil.copyfile(produced, target)
 
+    frontend_directory = service_directory / "frontend" if platform == "windows" else None
+    symbols_bundle: Path | None = None
+    try:
+        symbols_bundle = collect_symbols(
+            platform=platform,
+            architecture=architecture,
+            service_directory=service_directory,
+            frontend_directory=frontend_directory,
+            output_dir=output,
+            version=version,
+            source_sha=source_sha,
+            package=target,
+            debug=args.debug,
+            environment=environment,
+        )
+    except symbol_manifest.SymbolManifestError as error:
+        _fail(f"symbol bundle: {error}")
+
     package_record = {
         "file_name": target.name,
         "path": str(target.resolve()),
@@ -546,8 +744,16 @@ def _build(args: argparse.Namespace) -> int:
         "package_path": package_record["path"],
         "package_sha256": package_record["sha256"],
     }
+    if symbols_bundle is not None:
+        descriptor["symbols"] = {
+            "file_name": symbols_bundle.name,
+            "sha256": _sha256(symbols_bundle),
+            "manifest_sha256": _manifest_digest(symbols_bundle),
+        }
     _write_json(output / "desktop-package.json", descriptor)
     _log(f"built {package_record['file_name']} sha256={package_record['sha256']}")
+    if symbols_bundle is not None:
+        _log(f"symbols {symbols_bundle}")
     return 0
 
 

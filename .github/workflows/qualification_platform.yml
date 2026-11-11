@@ -371,6 +371,14 @@ jobs:
               "torturer_sha": tests_sha,
               "torturer_tree_sha256": tests_tree,
           }
+          signer_payload = Path(os.environ["RUN_DIR"]) / "apk-signer-pairing.json"
+          if signer_payload.is_file():
+              signed = json.loads(signer_payload.read_text())
+              pairing.update(
+                  target_package=signed["target_package"],
+                  target_version_code=int(signed["target_version_code"]),
+                  signer_certificate_sha256=signed["companion_signer_certificate_sha256"],
+              )
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write("pairing=" + json.dumps(pairing, separators=(",", ":")) + "\n")
           PYTHON
@@ -555,7 +563,9 @@ jobs:
               run_timed android-temporary-test-signature python3 .github/scripts/android/android_apk_signing.py sign-test \
                 --unsigned-app "$unsigned_app" --unsigned-companion "$unsigned_companion" \
                 --signed-app "$signed_app" --signed-companion "$signed_companion" \
-                --apksigner "$apksigner_bin" --keytool "$keytool_bin"
+                --apksigner "$apksigner_bin" --keytool "$keytool_bin" \
+                --aapt "$sdk_root/build-tools/$build_tools/aapt" \
+                --pairing-output "$RUN_DIR/apk-signer-pairing.json"
               printf 'ANDROID_SIGNED_APP=%s\nANDROID_SIGNED_COMPANION=%s\n' \
                 "$signed_app" "$signed_companion" >> "$GITHUB_ENV"
               emulator_bin="$sdk_root/emulator/emulator"
@@ -1504,6 +1514,17 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}
           if-no-files-found: error
           include-hidden-files: true
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Retain signed Android test companion and signer pairing
+        if: always() && inputs.platform == 'android'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-android-test-companion-signed-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dobbyvpn-android-test-signed/DobbyVPN-test-companion.apk
+            ${{ runner.temp }}/dobbyvpn-release-run/apk-signer-pairing.json
+          if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 
       - name: Remove disposable qualification scratch

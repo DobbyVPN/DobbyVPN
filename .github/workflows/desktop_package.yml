@@ -71,11 +71,29 @@ jobs:
           test -s "$output/$package"
           printf 'package=%s\n' "$output/$package" >> "$GITHUB_OUTPUT"
           printf 'artifact=%s\n' "$package" >> "$GITHUB_OUTPUT"
+          case "$PLATFORM:$ARCHITECTURE" in
+            linux:amd64) symbols=dobbyvpn-symbols-linux-amd64.tar.gz ;;
+            windows:amd64) symbols=dobbyvpn-symbols-windows-amd64.tar.gz ;;
+            macos:arm64) symbols=dobbyvpn-symbols-macos-aarch64.tar.gz ;;
+            macos:amd64) symbols=dobbyvpn-symbols-macos-amd64.tar.gz ;;
+            *) exit 1 ;;
+          esac
+          test -s "$output/$symbols"
+          printf 'symbols=%s\n' "$output/$symbols" >> "$GITHUB_OUTPUT"
+          printf 'symbols-artifact=%s\n' "$symbols" >> "$GITHUB_OUTPUT"
 
       - name: Upload exact package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.build.outputs.artifact }}${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
           path: ${{ steps.build.outputs.package }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload matching symbol bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.build.outputs.symbols-artifact }}${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
+          path: ${{ steps.build.outputs.symbols }}
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}

@@ -1229,7 +1229,10 @@ def build_native_ui(
 
     environment = os.environ.copy()
     environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_MINIMUM_SYSTEM_VERSION
-    run(["swift", "build", "--package-path", str(ROOT_DIR / "ui" / "apple"), "--configuration", "debug" if debug else "release", "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
+    # Release keeps debug info so a dSYM can be emitted and bound to the
+    # shipped binary; the shipped Mach-O has its debug sections stripped later.
+    debug_flags = [] if debug else ["-Xswiftc", "-g"]
+    run(["swift", "build", "--package-path", str(ROOT_DIR / "ui" / "apple"), "--configuration", "debug" if debug else "release", "--product", "DobbyVPNMacApp", *debug_flags], cwd=ROOT_DIR, env=environment)
     binary = ROOT_DIR / "ui" / "apple" / ".build" / ("debug" if debug else "release") / "DobbyVPNMacApp"
     if not binary.is_file():
         fail(f"Swift build did not produce {binary}")
