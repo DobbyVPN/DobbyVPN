@@ -16,6 +16,8 @@ import (
 	"core/sessionapi/wire"
 )
 
+const snapshotMethod = "Snapshot"
+
 // PlatformCallbacks is implemented by the Android service or iOS extension
 // shell. PublishState synchronizes native tunnel lifecycle state; UI clients
 // independently read Snapshot as the authoritative state. Every callback
@@ -282,7 +284,7 @@ func (b *Binding) CallJSONWithOperation(ctx context.Context, operationID, method
 		}
 	}
 	started := time.Now()
-	if method != "Snapshot" {
+	if method != snapshotMethod {
 		log.Info("SESSION", "mobile operation entered", fields)
 	}
 	response := b.CallJSONWithConfiguration(ctx, method, params, rawConfiguration, hasConfiguration)
@@ -291,17 +293,19 @@ func (b *Binding) CallJSONWithOperation(ctx context.Context, operationID, method
 		OK    bool          `json:"ok"`
 		Error *wire.Failure `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(response), &outcome); err != nil {
+	err := json.Unmarshal([]byte(response), &outcome)
+	switch {
+	case err != nil:
 		fields["error"] = err.Error()
 		log.Error("SESSION", "mobile operation failed", fields)
-	} else if outcome.Error != nil {
+	case outcome.Error != nil:
 		fields["error"] = outcome.Error.Message
 		fields["error_code"] = outcome.Error.Code
 		log.Error("SESSION", "mobile operation failed", fields)
-	} else if !outcome.OK {
+	case !outcome.OK:
 		fields["error"] = "command returned failure without details"
 		log.Error("SESSION", "mobile operation failed", fields)
-	} else if method != "Snapshot" {
+	case method != snapshotMethod:
 		log.Info("SESSION", "mobile operation completed", fields)
 	}
 	return response
@@ -344,7 +348,7 @@ func (b *Binding) CallJSONWithConfiguration(
 			return failed(err)
 		}
 		return success(result)
-	case "Snapshot":
+	case snapshotMethod:
 		return b.SnapshotContext(ctx, value.SessionID)
 	case "Configure":
 		if hasConfiguration {
