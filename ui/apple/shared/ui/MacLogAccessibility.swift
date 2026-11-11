@@ -18,17 +18,30 @@ struct MacLogAccessibilityObservation {
     let firstFrame: CGRect
 }
 
-// AppKit requires a role-specific protocol for virtual accessibility elements.
-// The parent is held weakly by NSAccessibilityElement, avoiding a retain cycle.
-final class MacLogRecordAccessibilityElement: NSAccessibilityElement, NSAccessibilityStaticText {
+// Role-specific virtual elements use AppKit's standard accessibility protocol.
+// Retain them in the renderer; their parent remains weak to avoid a cycle.
+final class MacLogRecordAccessibilityElement: NSObject, NSAccessibilityStaticText {
+    private weak var parentView: NSView?
+    private let identifier: String
     private var recordText = ""
+    private var screenFrame = NSRect.zero
 
-    override func accessibilityValue() -> String? { recordText }
+    init(identifier: String, parent: NSView) {
+        self.identifier = identifier
+        self.parentView = parent
+        super.init()
+    }
 
-    func update(text: String, frame: CGRect, screenFrame: CGRect) {
+    func accessibilityFrame() -> NSRect { screenFrame }
+    func accessibilityParent() -> Any? { parentView }
+    func accessibilityIdentifier() -> String { identifier }
+    func accessibilityValue() -> String? { recordText }
+    @objc func accessibilityRole() -> NSAccessibility.Role? { .staticText }
+    @objc func isAccessibilityElement() -> Bool { true }
+
+    func update(text: String, screenFrame: CGRect) {
         recordText = text
-        setAccessibilityFrame(screenFrame)
-        setAccessibilityFrameInParentSpace(frame)
+        self.screenFrame = screenFrame
     }
 }
 
@@ -52,12 +65,9 @@ final class DobbyLogTextView: NSTextView {
             if let existing = recordElements[identifier] {
                 child = existing
             } else {
-                guard let created = MacLogRecordAccessibilityElement.element(withRole: .staticText, frame: screenFrame,
-                                                                              label: nil, parent: self) as? MacLogRecordAccessibilityElement else { return nil }
-                child = created
-                child.setAccessibilityIdentifier(identifier)
+                child = MacLogRecordAccessibilityElement(identifier: identifier, parent: self)
             }
-            child.update(text: fragment.text, frame: fragment.frame, screenFrame: screenFrame)
+            child.update(text: fragment.text, screenFrame: screenFrame)
             visible[identifier] = child
             return child
         }
@@ -66,7 +76,7 @@ final class DobbyLogTextView: NSTextView {
             reportedAccessibilityObservation = true
             onAccessibilityObservation(MacLogAccessibilityObservation(
                 parentRole: accessibilityRole()?.rawValue ?? "unavailable", visibleCount: elements.count,
-                firstID: first.accessibilityIdentifier() ?? "unavailable",
+                firstID: first.accessibilityIdentifier(),
                 firstRole: first.accessibilityRole()?.rawValue ?? "unavailable", firstFrame: first.accessibilityFrame()))
         }
         return elements
