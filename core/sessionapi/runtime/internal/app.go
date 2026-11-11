@@ -24,6 +24,7 @@ import (
 	"core/tunnel"
 	"errors"
 	"fmt"
+	"net"
 	"runtime/debug"
 	"sync"
 )
@@ -40,6 +41,18 @@ type App struct {
 	DNSCache        *dnscache.Cache
 	BypassPolicy    *tunnel.BypassPolicy
 	RoutingConfig   *RoutingConfig
+}
+
+// retainedNetworkReadyFields identifies the owner independently of whichever
+// attempt is currently reflected in the process-wide log correlation.
+func retainedNetworkReadyFields(ref sessionapi.SessionRef, name string) map[string]any {
+	fields := map[string]any{"session_id": ref.SessionID, "network_generation": ref.Generation, "interface": name}
+	if iface, err := net.InterfaceByName(name); err == nil {
+		fields["interface_index"] = iface.Index
+	} else {
+		fields["interface_index_error"] = err.Error()
+	}
+	return fields
 }
 
 type RoutingConfig struct {

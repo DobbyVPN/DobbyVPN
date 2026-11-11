@@ -158,7 +158,11 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Info(Category, "Windows retained network ready", map[string]any{"interface": ownedEngine.InterfaceName(), "ipv4_interface": ipv4, "ipv6_interface": ipv6, "duration_ms": time.Since(startedAt).Milliseconds()})
+	readyFields := retainedNetworkReadyFields(app.NetworkRef, ownedEngine.InterfaceName())
+	readyFields["ipv4_interface"] = ipv4
+	readyFields["ipv6_interface"] = ipv6
+	readyFields["duration_ms"] = time.Since(startedAt).Milliseconds()
+	log.Info(Category, "Windows retained network ready", readyFields)
 	signalInit(initResult, nil)
 
 	// Keep socket bindings and bootstrap permissions current even while no
