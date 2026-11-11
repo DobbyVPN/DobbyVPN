@@ -379,7 +379,7 @@ public sealed partial class MainWindow : Window
                 _sourceInitialized = true;
             }
             var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (!result.Configured && !_subscriptionLoad.SourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
+            if (_subscriptionLoad.CanRestore(SourceEditor.Text, _acceptedInThisWindow, result.Configured) && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
                 await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);

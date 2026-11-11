@@ -54,6 +54,12 @@ internal sealed class SubscriptionLoadState
         return _revision;
     }
 
+    // A native TextChanged notification can arrive after a snapshot observes the editor.
+    // Restore only the source this window already accepted, never an unreported edit.
+    internal bool CanRestore(string source, string? acceptedSource, bool configured) =>
+        !configured && !SourceDirty && !IsLoading && source.Length > 0 &&
+        string.Equals(source, acceptedSource, StringComparison.Ordinal);
+
     internal bool IsCurrent(Request request) => request.Revision == _revision;
 
     internal Request? BeginReady(TimeSpan now)
