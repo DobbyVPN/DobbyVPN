@@ -8,8 +8,9 @@ import SystemConfiguration
 import Network
 
 private enum GomobileProviderSessionClient {
-    static func call(method: String, params: Data, rawConfiguration: Data?) -> Data {
+    static func call(method: String, operationID: String, params: Data, rawConfiguration: Data?) -> Data {
         let response = DobbyvpnCallSessionJSON(
+            operationID,
             method,
             params,
             rawConfiguration ?? Data(),
@@ -364,8 +365,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         IOSProviderCommandHandler.dispatch(
             messageData, trace: trace, tunnelID: tunnelId,
             loadMailbox: { self.secrets.data(for: SharedKeychainSecretStore.sessionConfigurationMailboxKey) },
-            callGo: { method, params, configuration in
-                GomobileProviderSessionClient.call(method: method, params: params, rawConfiguration: configuration)
+            callGo: { method, operationID, params, configuration in
+                GomobileProviderSessionClient.call(method: method, operationID: operationID, params: params, rawConfiguration: configuration)
             },
             failure: { VpnManagerImpl.transportFailure($0, message: $1) },
             log: { level, message in _ = self.logs.writeLog(level: level, log: message) }

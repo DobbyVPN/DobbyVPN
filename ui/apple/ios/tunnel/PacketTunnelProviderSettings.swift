@@ -248,7 +248,7 @@ extension PacketTunnelProvider {
         IOSProviderStopBoundary.perform(
             stopGoSessionAndWait: {
                 logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] Go stop begin operation_id=\(operationID)")
-                let failure = DobbyvpnStopSessionAndWait()
+                let failure = DobbyvpnStopSessionAndWait(operationID)
                 logs.writeLog(level: failure.isEmpty ? "INFO" : "ERROR", log: "[tunnel:\(tunnelId)] [teardown] Go stop end operation_id=\(operationID) elapsed=\(ProcessInfo.processInfo.systemUptime - started) error=\(failure)")
                 return failure
             },

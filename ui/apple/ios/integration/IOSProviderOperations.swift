@@ -45,7 +45,7 @@ public enum IOSProviderCommandHandler {
     public static func dispatch(
         _ messageData: Data, trace: Bool, tunnelID: String,
         loadMailbox: () -> Data?,
-        callGo: (String, Data, Data?) -> Data,
+        callGo: (String, String, Data, Data?) -> Data,
         failure: (String, String) -> Data,
         log: (String, String) -> Void
     ) -> Data {
@@ -90,7 +90,7 @@ public enum IOSProviderCommandHandler {
         }
         stage = "go-dispatch"
         if trace { log("INFO", "[tunnel:\(tunnelID)] Go dispatch begin \(identity)") }
-        let result = callGo(command.method == "StartWithSource" ? "Start" : command.method, command.params, configuration)
+        let result = callGo(command.method == "StartWithSource" ? "Start" : command.method, command.requestID, command.params, configuration)
         let outcome = ((try? JSONSerialization.jsonObject(with: result)) as? [String: Any])?["ok"] as? Bool
         if outcome != true {
             log("ERROR", "[tunnel:\(tunnelID)] Go dispatch failed \(identity) stage=\(stage) elapsed=\(ProcessInfo.processInfo.systemUptime - started) response=\(reversibleDiagnosticText(result))")
