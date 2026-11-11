@@ -176,16 +176,21 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         accessibilityLabel = NSLocalizedString("Connection logs", comment: "")
     }
 
-    var accessibilityViewportText: String {
-        guard textStorage.length > 0 else { return "" }
-        let viewport = CGRect(
-            x: contentOffset.x - textContainerInset.left,
-            y: contentOffset.y - textContainerInset.top,
-            width: bounds.width,
-            height: bounds.height
-        )
-        guard viewport.width > 0, viewport.height > 0 else { return "" }
+    private func viewportGlyphRange() -> NSRange? {
+        layoutManager.ensureLayout(for: textContainer)
+        // Clip to what the native viewport actually shows: the window and every
+        // clipping ancestor, not just this view's bounds. Offscreen history is
+        // never published as visible.
+        guard let visible = effectiveVisibleTextBounds(self) else { return nil }
+        let viewport = visible.offsetBy(dx: -textContainerInset.left, dy: -textContainerInset.top)
+        guard viewport.width > 0, viewport.height > 0 else { return nil }
         let glyphs = layoutManager.glyphRange(forBoundingRect: viewport, in: textContainer)
+        guard glyphs.length > 0 else { return nil }
+        return glyphs
+    }
+
+    var accessibilityViewportText: String {
+        guard textStorage.length > 0, let glyphs = viewportGlyphRange() else { return "" }
         let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
         guard characters.location < textStorage.length, characters.length > 0 else { return "" }
         let content = textStorage.string as NSString
@@ -198,6 +203,74 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     override var accessibilityValue: String? {
         get { accessibilityViewportText }
         set { super.accessibilityValue = newValue }
+    }
+
+    /// One accessibility element per rendered record intersecting the viewport,
+    /// each carrying the record's stable identity and its laid-out frame. Kept
+    /// bounded to what is on screen: offscreen history is never published.
+    private(set) var logRecordObservationElements: [UIAccessibilityElement] = []
+
+    func updateLogRecordObservationElements() {
+        guard textStorage.length > 0, let glyphs = viewportGlyphRange() else {
+            logRecordObservationElements = []
+            return
+        }
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        guard characters.length > 0, characters.location < textStorage.length else {
+            logRecordObservationElements = []
+            return
+        }
+        let container = superview ?? self
+        var elements: [UIAccessibilityElement] = []
+        for run in recordRuns(intersecting: characters) {
+            guard let id = textStorage.attribute(logRecordEntryIDKey, at: run.location, effectiveRange: nil) as? String,
+                  !id.isEmpty else { continue }
+            let recordGlyphs = layoutManager.glyphRange(forCharacterRange: run, actualCharacterRange: nil)
+            guard recordGlyphs.length > 0 else { continue }
+            // Layout-manager rects are in text-container space. Shift them by the
+            // text inset and the scroll offset to get the on-screen rect, which is
+            // also the container's space because the text view fills it.
+            let laidOut = layoutManager.boundingRect(forGlyphRange: recordGlyphs, in: textContainer)
+                .offsetBy(
+                    dx: textContainerInset.left - contentOffset.x,
+                    dy: textContainerInset.top - contentOffset.y
+                )
+            // The observed record is its message; the time prefix stays part of
+            // the rendered text but is not what identifies the record.
+            let line = textStorage.attributedSubstring(from: run).string
+                .trimmingCharacters(in: .newlines)
+            guard !line.isEmpty else { continue }
+            let message = logRecordMessage(of: line)
+            let element = UIAccessibilityElement(accessibilityContainer: container)
+            element.accessibilityIdentifier = "log.record"
+            element.accessibilityLabel = message
+            element.accessibilityValue = id
+            element.accessibilityTraits = .staticText
+            // `laidOut` is already measured from the visible top-left corner and
+            // the text view fills the container, so it is exactly this container's
+            // space. UIKit resolves the container space to a screen rectangle, so
+            // XCTest and VoiceOver both read the record's real on-screen frame.
+            element.accessibilityFrameInContainerSpace = laidOut
+            elements.append(element)
+        }
+        logRecordObservationElements = elements
+    }
+
+    private func recordRuns(intersecting characters: NSRange) -> [NSRange] {
+        var runs: [NSRange] = []
+        let full = NSRange(location: 0, length: textStorage.length)
+        let end = min(NSMaxRange(characters), full.length)
+        var index = characters.location
+        while index < end {
+            var effective = NSRange(location: 0, length: 0)
+            let id = textStorage.attribute(
+                logRecordEntryIDKey, at: index, longestEffectiveRange: &effective, in: full
+            ) as? String
+            guard NSMaxRange(effective) > index else { break }
+            if id != nil { runs.append(effective) }
+            index = NSMaxRange(effective)
+        }
+        return runs
     }
 
     override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
@@ -267,6 +340,138 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     }
 }
 
+/// One visibility fragment of a rendered record: a whole record when its whole
+/// laid-out line extent fits the visible viewport, otherwise the visible part of
+/// one line. Frames are in the text view's bounds coordinates; UIKit performs the
+/// screen conversion.
+struct IOSLogVisibleFragment {
+    let recordID: String
+    let offset: Int
+    let length: Int
+    let text: String
+    let frame: CGRect
+    let isWholeRecord: Bool
+    let isFullyVisible: Bool
+}
+
+/// The effective native viewport in the text view's bounds coordinates: the view's
+/// own bounds intersected with its window and every clipping ancestor, so records
+/// hidden behind the keyboard, the tray or any clipped ancestor are not published.
+private func effectiveVisibleTextBounds(_ view: UITextView) -> CGRect? {
+    guard let window = view.window else { return nil }
+    var bounds = view.bounds.intersection(view.convert(window.bounds, from: window))
+    var ancestor = view.superview
+    while let current = ancestor {
+        if current.clipsToBounds {
+            bounds = bounds.intersection(view.convert(current.bounds, from: current))
+        }
+        ancestor = current.superview
+    }
+    return bounds.isNull || bounds.isEmpty ? nil : bounds
+}
+
+/// The attributed range carrying a record's stable identity.
+func logRecordRange(_ id: String, in text: NSAttributedString) -> NSRange? {
+    var result: NSRange?
+    text.enumerateAttribute(logRecordEntryIDKey, in: NSRange(location: 0, length: text.length)) { value, range, stop in
+        if value as? String == id { result = range; stop.pointee = true }
+    }
+    return result
+}
+
+func visibleIOSLogRecordFragments(in view: DobbyLogTextView) -> [IOSLogVisibleFragment] {
+    let storage = view.textStorage
+    guard storage.length > 0, let visibleBounds = effectiveVisibleTextBounds(view) else { return [] }
+    let layout = view.layoutManager
+    let container = view.textContainer
+    layout.ensureLayout(for: container)
+    let inset = view.textContainerInset
+    let viewport = visibleBounds.offsetBy(dx: -inset.left, dy: -inset.top)
+    let visibleGlyphs = layout.glyphRange(forBoundingRect: viewport, in: container)
+    guard visibleGlyphs.length > 0 else { return [] }
+    let visibleCharacters = layout.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+    let text = storage.string as NSString
+    var fragments: [IOSLogVisibleFragment] = []
+    storage.enumerateAttribute(logRecordEntryIDKey, in: visibleCharacters) { value, range, _ in
+        guard let id = value as? String else { return }
+        var record = NSRange()
+        _ = storage.attribute(logRecordEntryIDKey, at: range.location, longestEffectiveRange: &record,
+                              in: NSRange(location: 0, length: storage.length))
+        let content = NSRange(location: record.location, length: max(0, record.length - 1))
+        let glyphs = layout.glyphRange(forCharacterRange: content, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return }
+        let fullBounds = layout.boundingRect(forGlyphRange: glyphs, in: container)
+        // Ink bounds omit blank and whitespace-only lines. A whole-record
+        // element is valid only when every actual laid-out line fits.
+        var lineBounds = CGRect.null
+        // Include the formatting delimiter: it may lay out a trailing blank
+        // line after a message ending in a newline, although AX omits it.
+        let recordGlyphs = layout.glyphRange(forCharacterRange: record, actualCharacterRange: nil)
+        layout.enumerateLineFragments(forGlyphRange: recordGlyphs) { rect, _, _, _, _ in
+            lineBounds = lineBounds.union(rect)
+        }
+        // Line allocation rectangles span the container width; only their vertical
+        // extent describes blank lines. Horizontal visibility comes from ink bounds.
+        if !fullBounds.isEmpty && !lineBounds.isNull && viewport.contains(fullBounds)
+            && viewport.minY <= lineBounds.minY && viewport.maxY >= lineBounds.maxY {
+            fragments.append(IOSLogVisibleFragment(recordID: id, offset: 0, length: content.length,
+                text: text.substring(with: content), frame: fullBounds.offsetBy(dx: inset.left, dy: inset.top),
+                isWholeRecord: true, isFullyVisible: true))
+            return
+        }
+        let shown = NSIntersectionRange(glyphs, visibleGlyphs)
+        layout.enumerateLineFragments(forGlyphRange: shown) { _, _, _, lineGlyphs, _ in
+            let line = NSIntersectionRange(shown, lineGlyphs)
+            guard line.length > 0 else { return }
+            let characters = layout.characterRange(forGlyphRange: line, actualGlyphRange: nil)
+            let composed = NSIntersectionRange(content, text.rangeOfComposedCharacterSequences(for: characters))
+            guard composed.length > 0 else { return }
+            let composedGlyphs = layout.glyphRange(forCharacterRange: composed, actualCharacterRange: nil)
+            let bounds = layout.boundingRect(forGlyphRange: composedGlyphs, in: container)
+            guard !bounds.isEmpty && bounds.intersects(viewport) else { return }
+            fragments.append(IOSLogVisibleFragment(recordID: id, offset: composed.location - content.location,
+                length: composed.length, text: text.substring(with: composed),
+                frame: bounds.offsetBy(dx: inset.left, dy: inset.top), isWholeRecord: false,
+                isFullyVisible: viewport.contains(bounds)))
+        }
+    }
+    return fragments
+}
+
+final class DobbyLogContainerView: UIView {
+    let textView = DobbyLogTextView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isAccessibilityElement = false
+        textView.frame = bounds
+        textView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(textView)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        isAccessibilityElement = false
+        textView.frame = bounds
+        textView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(textView)
+    }
+
+    // The text view keeps its own element (label, viewport value, hint, custom
+    // actions, selection); the rendered records follow it as extra children.
+    override var accessibilityElements: [Any]? {
+        get { [textView] + textView.logRecordObservationElements }
+        set { super.accessibilityElements = newValue }
+    }
+
+    // SwiftUI's identifier modifier lands on the representable's view; keep a
+    // single identified element in the tree by forwarding it to the text view.
+    override var accessibilityIdentifier: String? {
+        get { textView.accessibilityIdentifier }
+        set { textView.accessibilityIdentifier = newValue }
+    }
+}
+
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     let clear: Int
@@ -276,8 +481,9 @@ struct DobbyLogView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> UITextView {
-        let view = DobbyLogTextView()
+    func makeUIView(context: Context) -> DobbyLogContainerView {
+        let container = DobbyLogContainerView()
+        let view = container.textView
         view.isEditable = false
         view.isSelectable = true
         view.backgroundColor = DobbyPalette.surface
@@ -289,29 +495,26 @@ struct DobbyLogView: UIViewRepresentable {
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
         view.updateFollowingAccessibilityHint(isFollowing: true)
-        return view
+        return container
     }
 
-    func updateUIView(_ view: UITextView, context: Context) {
+    func updateUIView(_ container: DobbyLogContainerView, context: Context) {
         let coordinator = context.coordinator
-        if let logView = view as? DobbyLogTextView {
-            logView.onSendLogs = onSendLogs
-            logView.onShowMenu = onShowMenu
-            logView.onClear = onClear
-            logView.onAccessibilityScroll = { [weak coordinator, weak logView] in
-                guard let logView else { return }
-                coordinator?.updateFollowingState(for: logView)
-            }
+        let view = container.textView
+        view.onSendLogs = onSendLogs
+        view.onShowMenu = onShowMenu
+        view.onClear = onClear
+        view.onAccessibilityScroll = { [weak coordinator, weak view] in
+            guard let view else { return }
+            coordinator?.updateFollowingState(for: view)
         }
         coordinator.latestEntries = entries
         let cleared = clear != coordinator.lastClear
         if cleared { coordinator.followingState.resetForClear() }
         if coordinator.followingState.isFollowing { coordinator.displayedEntries = entries }
-        if let logView = view as? DobbyLogTextView {
-            logView.preservesReadingPosition = !coordinator.followingState.isFollowing
-            logView.updateFollowingAccessibilityHint(isFollowing: coordinator.followingState.isFollowing)
-        }
-        let restoreCountBeforeLayout = (view as? DobbyLogTextView)?.readingPositionRestoreCount
+        view.preservesReadingPosition = !coordinator.followingState.isFollowing
+        view.updateFollowingAccessibilityHint(isFollowing: coordinator.followingState.isFollowing)
+        let restoreCountBeforeLayout = view.readingPositionRestoreCount
         let attributed = logText(coordinator.displayedEntries)
         let text = attributed.string
         coordinator.updating = true
@@ -323,17 +526,16 @@ struct DobbyLogView: UIViewRepresentable {
             if NSMaxRange(selection) <= view.textStorage.length { view.selectedRange = selection }
         }
         view.layoutIfNeeded()
-        if let logView = view as? DobbyLogTextView {
-            _ = coordinator.effectiveContentHeight(for: logView)
-        }
+        _ = coordinator.effectiveContentHeight(for: view)
         let layoutRestoredReadingPosition =
-            restoreCountBeforeLayout != (view as? DobbyLogTextView)?.readingPositionRestoreCount
+            restoreCountBeforeLayout != view.readingPositionRestoreCount
         if coordinator.followingState.isFollowing || cleared {
             view.scrollRangeToVisible(NSRange(location: view.textStorage.length, length: 0))
         } else if !layoutRestoredReadingPosition {
             // Keep the captured offset unless layoutSubviews already restored a newer character anchor.
             view.setContentOffset(offset, animated: false)
         }
+        view.updateLogRecordObservationElements()
         coordinator.lastClear = clear
         coordinator.updating = false
     }
@@ -348,7 +550,8 @@ struct DobbyLogView: UIViewRepresentable {
         private var lastStableContentHeight: CGFloat?
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            guard scrollView is DobbyLogTextView else { return }
+            guard let logView = scrollView as? DobbyLogTextView else { return }
+            logView.updateLogRecordObservationElements()
             let gestureActive = isUserDragging || scrollView.isDragging || scrollView.isDecelerating
             guard gestureActive else { return }
 
@@ -860,12 +1063,23 @@ private let logTimeFormat: DateFormatter = {
     return format
 }()
 
+/// Stable identity of one rendered log record: `DiagnosticFiles.Entry.id`.
+let logRecordEntryIDKey = NSAttributedString.Key("DobbyLogEntryID")
+
+/// A rendered record without its leading `HH:mm:ss  ` timestamp.
+func logRecordMessage(of line: String) -> String {
+    let prefix = #"^\d{2}:\d{2}:\d{2}  "#
+    guard let range = line.range(of: prefix, options: .regularExpression) else { return line }
+    return String(line[range.upperBound...])
+}
+
 func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     let output = NSMutableAttributedString(string: "")
     let paragraph = NSMutableParagraphStyle()
     // Extra space goes below each line so a line's text starts at the top of its fragment.
     paragraph.lineSpacing = 3
     for entry in entries {
+        let start = output.length
         let time = entry.date.map(logTimeFormat.string) ?? entry.timestamp
         if !time.isEmpty {
             output.append(NSAttributedString(string: time + "  ", attributes: [
@@ -882,6 +1096,10 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
         output.append(NSAttributedString(string: entry.message + "\n", attributes: [
             .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
         ]))
+        output.addAttribute(
+            logRecordEntryIDKey, value: entry.id,
+            range: NSRange(location: start, length: output.length - start)
+        )
     }
     return output
 }
