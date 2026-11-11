@@ -437,44 +437,6 @@ struct DobbyLogView: UIViewRepresentable {
     }
 }
 #elseif os(macOS)
-private final class DobbyLogTextView: NSTextView {
-    var onSendLogs: () -> Void = {}
-    var onUploadLogs: (() -> Void)?
-    var onClear: () -> Void = {}
-
-    private var logsMenu: NSMenu {
-        let menu = NSMenu()
-        if let onUploadLogs { menu.addItem(LogsMenuItem("Upload logs", handler: onUploadLogs)) }
-        menu.addItem(LogsMenuItem("Send logs") { [weak self] in self?.onSendLogs() })
-        menu.addItem(LogsMenuItem("Clear") { [weak self] in self?.onClear() })
-        return menu
-    }
-
-    override func menu(for event: NSEvent) -> NSMenu? { logsMenu }
-
-    override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 {
-            NSMenu.popUpContextMenu(logsMenu, with: event, for: self)
-        } else {
-            super.mouseDown(with: event)
-        }
-    }
-}
-
-private final class LogsMenuItem: NSMenuItem {
-    private let handler: () -> Void
-
-    init(_ title: String, handler: @escaping () -> Void) {
-        self.handler = handler
-        super.init(title: title, action: #selector(run), keyEquivalent: "")
-        target = self
-    }
-
-    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    @objc private func run() { handler() }
-}
-
 final class DobbyLogScrollView: NSScrollView {
     var onWheelStart: (() -> Void)?
     var onWheelEnd: ((Bool) -> Void)?
@@ -498,6 +460,7 @@ struct DobbyLogView: NSViewRepresentable {
     let onClear: () -> Void
     var onReadingPositionRestored: (MacLogRestoreObservation) -> Void = { _ in }
     var onReadingPositionCaptured: (MacLogReadingAnchor) -> Void = { _ in }
+    var onAccessibilityObservation: (MacLogAccessibilityObservation) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -561,10 +524,11 @@ struct DobbyLogView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
+        guard let view = scroll.documentView as? DobbyLogTextView else { return }
         let coordinator = context.coordinator
         view.onSendLogs = onSendLogs
         view.onUploadLogs = onUploadLogs
+        view.onAccessibilityObservation = onAccessibilityObservation
         view.onClear = { [weak coordinator] in
             coordinator?.resetForClear()
             onClear()
@@ -577,6 +541,11 @@ struct DobbyLogView: NSViewRepresentable {
         if clear != coordinator.lastClear {
             coordinator.resetForClear()
         }
+        updateLogContent(scroll, coordinator: coordinator)
+    }
+
+    func updateLogContent(_ scroll: NSScrollView, coordinator: Coordinator) {
+        guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
         guard coordinator.desiredFollowing else { return }
         coordinator.entries = entries
         let attributed: NSAttributedString
@@ -587,10 +556,9 @@ struct DobbyLogView: NSViewRepresentable {
             coordinator.renderedEntries = entries
             coordinator.renderedText = attributed
         }
-        let text = attributed.string
         coordinator.updating = true
         let selection = view.selectedRange()
-        if view.string != text {
+        if !storage.isEqual(to: attributed) {
             storage.setAttributedString(attributed)
             if NSMaxRange(selection) <= storage.length { view.setSelectedRange(selection) }
         }
@@ -853,6 +821,8 @@ private let logFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
 private let boldLogFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
 #endif
 
+let logRecordIDKey = NSAttributedString.Key("DobbyLogRecordID")
+
 private let logTimeFormat: DateFormatter = {
     let format = DateFormatter()
     format.locale = Locale(identifier: "en_US_POSIX")
@@ -866,6 +836,7 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     // Extra space goes below each line so a line's text starts at the top of its fragment.
     paragraph.lineSpacing = 3
     for entry in entries {
+        let start = output.length
         let time = entry.date.map(logTimeFormat.string) ?? entry.timestamp
         if !time.isEmpty {
             output.append(NSAttributedString(string: time + "  ", attributes: [
@@ -882,6 +853,8 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
         output.append(NSAttributedString(string: entry.message + "\n", attributes: [
             .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
         ]))
+        output.addAttribute(logRecordIDKey, value: entry.id,
+                            range: NSRange(location: start, length: output.length - start))
     }
     return output
 }
