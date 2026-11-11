@@ -359,13 +359,15 @@ def pdb_identity(path: Path) -> dict[str, Any] | None:
     if len(data) < 24 or data[:4] != b"BSJB":
         return None
     # ECMA-335 metadata root: signature, major, minor, reserved, version length,
-    # the version string itself, then the stream count and its entries. Offsets
-    # are relative to the start of the streams' data, i.e. after this directory.
+    # the version string itself, then a flags field, the stream count and the
+    # stream entries. Stream offsets are relative to the root, which is byte 0
+    # of a PDB file.
     _, _, _, _, version_length = struct.unpack_from("<IHHII", data, 0)
     offset = 16 + version_length
     offset += (-offset) % 4
-    if offset + 2 > len(data):
+    if offset + 4 > len(data):
         return None
+    offset += 2  # flags; a portable PDB writes zero here
     stream_count = struct.unpack_from("<H", data, offset)[0]
     offset += 2
     streams: dict[str, tuple[int, int]] = {}
@@ -385,7 +387,7 @@ def pdb_identity(path: Path) -> dict[str, Any] | None:
     pdb = streams.get("#Pdb")
     if pdb is None or pdb[1] < 20:
         return None
-    start = offset + pdb[0]
+    start = pdb[0]
     if start + 20 > len(data):
         return None
     guid_bytes = data[start:start + 16]
