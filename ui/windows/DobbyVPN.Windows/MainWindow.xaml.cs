@@ -859,6 +859,20 @@ public sealed partial class MainWindow : Window
 
     private async Task PerformActionAsync(int? index, bool forceStop, CancellationToken cancellationToken)
     {
+        var actionMode = index is null ? "AUTO_SELECT" : "PROFILE_INDEX";
+        _diagnostics.RecordDebug("ui.connection-action",
+            $"connection_action mode={actionMode} index={index?.ToString() ?? "auto"} force_stop={forceStop} " +
+            $"generation={_snapshot?.Generation} sequence={_snapshot?.Sequence} status={_status}",
+            new
+            {
+                index,
+                force_stop = forceStop,
+                mode = actionMode,
+                replace_current = true,
+                generation = _snapshot?.Generation,
+                sequence = _snapshot?.Sequence,
+                status_before = _status,
+            });
         if (_lifetime.IsClosing) return;
         if (_snapshot is not { } current) return;
         if (forceStop || IsStopTarget(index))
