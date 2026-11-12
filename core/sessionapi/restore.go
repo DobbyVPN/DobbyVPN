@@ -26,10 +26,12 @@ type savedActivation struct {
 }
 
 func (s FileSourceStore) LoadActivation(ctx context.Context) ([]byte, error) {
-	return (FileSourceStore{Path: s.Path + ".activation.json"}).Load(ctx)
+	s.Path += ".activation.json"
+	return s.Load(ctx)
 }
 func (s FileSourceStore) SaveActivation(ctx context.Context, raw []byte) error {
-	return (FileSourceStore{Path: s.Path + ".activation.json"}).Save(ctx, raw)
+	s.Path += ".activation.json"
+	return s.Save(ctx, raw)
 }
 
 func decodeActivation(raw []byte) (savedActivation, error) {

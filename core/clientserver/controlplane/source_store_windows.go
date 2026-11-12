@@ -5,6 +5,8 @@ package controlplane
 import (
 	"fmt"
 	"os/user"
+
+	"core/sessionapi"
 )
 
 func controlUserHome() (string, error) {
@@ -20,4 +22,8 @@ func controlUserHome() (string, error) {
 		return "", fmt.Errorf("desktop connection URL owner has no home directory")
 	}
 	return entry.HomeDir, nil
+}
+
+func controlSourceDirectoryOwner(string) (*sessionapi.SourceDirectoryOwner, error) {
+	return nil, nil
 }
