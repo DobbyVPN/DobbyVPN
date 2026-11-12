@@ -375,9 +375,25 @@ public struct DobbyRootView: View {
         VStack(spacing: 0) {
             Rectangle().fill(Color.ink).frame(height: 1.5)
 #if os(iOS)
+            if showingLogMenu {
+                VStack(spacing: 4) {
+                    if model.snapshot.logsUploadAvailable {
+                        Button { showingLogMenu = false; model.startLogsUpload() } label: {
+                            Text("Upload logs").frame(maxWidth: .infinity).contentShape(Rectangle())
+                        }
+                            .accessibilityIdentifier("logs.upload")
+                            .disabled(!model.uploadStatus.isEmpty)
+                    }
+                    HStack {
+                        Button("Clear") { showingLogMenu = false; model.clearLogs() }.accessibilityIdentifier("logs.clear")
+                        Spacer()
+                        Button("Send logs") { showingLogMenu = false; sendLogs() }.accessibilityIdentifier("logs.share")
+                    }
+                }.padding().background(Color.surface)
+            }
             GeometryReader { geometry in
                 VStack(spacing: 0) {
-                    // Upload history/menu content can grow with Dynamic Type.
+                    // Upload history can grow with Dynamic Type.
                     // Scroll it within the space left after reserving real log
                     // content, rather than pushing the connection controls off screen.
                     ScrollView {
@@ -411,24 +427,7 @@ public struct DobbyRootView: View {
 
     private var logActions: some View {
         VStack(spacing: 0) {
-#if os(iOS)
-            if showingLogMenu {
-                VStack(spacing: 4) {
-                    if model.snapshot.logsUploadAvailable {
-                        Button { showingLogMenu = false; model.startLogsUpload() } label: {
-                            Text("Upload logs").frame(maxWidth: .infinity).contentShape(Rectangle())
-                        }
-                            .accessibilityIdentifier("logs.upload")
-                            .disabled(!model.uploadStatus.isEmpty)
-                    }
-                    HStack {
-                        Button("Clear") { showingLogMenu = false; model.clearLogs() }.accessibilityIdentifier("logs.clear")
-                        Spacer()
-                        Button("Send logs") { showingLogMenu = false; sendLogs() }.accessibilityIdentifier("logs.share")
-                    }
-                }.padding().background(Color.surface)
-            }
-#endif
+
             if !model.uploadError.isEmpty {
                 Text(model.uploadError).accessibilityIdentifier("logs.upload.error").padding()
             }
