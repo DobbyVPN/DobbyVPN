@@ -106,6 +106,8 @@ public sealed partial class MainWindow : Window
         RestoreLogUpload();
         SizeWindow();
         Column.SizeChanged += (_, _) => UpdateTrayHeight();
+        Controls.SizeChanged += (_, _) => UpdateTrayHeight();
+        UploadStatusPanel.SizeChanged += (_, _) => UpdateTrayHeight();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
         Root.Loaded += (_, _) =>
         {
@@ -291,14 +293,21 @@ public sealed partial class MainWindow : Window
         AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + (area.Height - AppWindow.Size.Height) / 2));
     }
 
-    // Four connections when there is room; on short windows the logs keep a quarter of the height.
+    // Four connections when there is room. Reserve the log viewport itself,
+    // separately from an upload reference and the measured, text-scaled controls.
     private void UpdateTrayHeight()
     {
         if (_lifetime.IsClosing) return;
         var height = Column.ActualHeight;
         if (height <= 0) return;
         var fourRows = 4 * Math.Max(_rowHeight, 42) + 5 * 6;
-        ConnectionsTray.Height = Math.Min(Math.Max(height - 135 - height / 4, 54), fourRows);
+        var controlsHeight = Math.Max(0, Controls.ActualHeight - ConnectionsTray.ActualHeight);
+        var uploadHeight = UploadStatusPanel.Visibility == Visibility.Visible ? UploadStatusPanel.ActualHeight : 0;
+        var logHeight = Math.Max(120, height / 4);
+        var available = height - controlsHeight - uploadHeight - 1.5 - logHeight;
+        var trayHeight = Math.Min(Math.Max(available, 54), fourRows);
+        if (Math.Abs(ConnectionsTray.Height - trayHeight) > 0.5 || double.IsNaN(ConnectionsTray.Height))
+            ConnectionsTray.Height = trayHeight;
     }
 
     private void RecordAppStarted()
