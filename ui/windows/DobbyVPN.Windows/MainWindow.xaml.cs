@@ -377,8 +377,8 @@ public sealed partial class MainWindow : Window
                 _renderedSource = sourceToDisplay;
                 _sourceInitialized = true;
             }
-            var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (!result.Configured && !_subscriptionLoad.SourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
+            var restoreKey = result.SessionId + "|" + _acceptedInThisWindow;
+            if (!result.Configured && _subscriptionLoad.CanRestore(_acceptedInThisWindow, SourceEditor.Text) && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
                 await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);
@@ -963,15 +963,21 @@ public sealed partial class MainWindow : Window
         if (_lifetime.IsClosing) return;
         var source = SourceEditor.Text.Trim();
         var valid = ValidSubscription(source);
-        var revision = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
+        var edit = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
+        var revision = edit.Revision;
         _diagnostics.RecordInfo(
             "subscription.source-edited",
             "Edited the subscription source",
             new
             {
                 source,
+                accepted_source = _acceptedInThisWindow,
+                source_initialized = _sourceInitialized,
+                editor_focus_state = SourceEditor.FocusState.ToString(),
                 input_kind = kind.ToString(),
                 revision,
+                duplicate_suppressed = edit.DuplicateSuppressed,
+                dropped_queued = edit.DroppedQueued,
                 valid,
                 session_id = _snapshot?.SessionId,
                 sequence = _snapshot?.Sequence,
