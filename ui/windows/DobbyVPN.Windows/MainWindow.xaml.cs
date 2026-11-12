@@ -908,7 +908,8 @@ public sealed partial class MainWindow : Window
         if (_lifetime.IsClosing) return;
         var source = SourceEditor.Text.Trim();
         var valid = ValidSubscription(source);
-        var revision = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
+        var edit = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
+        var revision = edit.Revision;
         _diagnostics.RecordInfo(
             "subscription.source-edited",
             "Edited the subscription source",
@@ -920,6 +921,8 @@ public sealed partial class MainWindow : Window
                 editor_focus_state = SourceEditor.FocusState.ToString(),
                 input_kind = kind.ToString(),
                 revision,
+                duplicate_suppressed = edit.DuplicateSuppressed,
+                dropped_queued = edit.DroppedQueued,
                 valid,
                 session_id = _snapshot?.SessionId,
                 sequence = _snapshot?.Sequence,

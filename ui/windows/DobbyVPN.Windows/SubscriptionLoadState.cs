@@ -13,7 +13,9 @@ internal enum SubscriptionInputKind
 
 /// <summary>
 /// Owns URL edit freshness, the typed-input debounce, and serialized Configure dispatch.
-/// Time is supplied by the caller so the production decisions can be exercised deterministically.
+/// The latest editor text is the authoritative intent: a queued request that no longer
+/// matches it can neither start nor report its outcome. Time is supplied by the caller so
+/// the production decisions can be exercised deterministically.
 /// </summary>
 internal sealed class SubscriptionLoadState
 {
@@ -21,45 +23,75 @@ internal sealed class SubscriptionLoadState
 
     internal sealed record Request(long Revision, string Source, SubscriptionInputKind Kind);
 
+    internal sealed record EditResult(long Revision, bool DuplicateSuppressed, bool DroppedQueued);
+
     private long _revision;
     private Request? _scheduled;
     private TimeSpan? _scheduledAt;
     private Request? _pending;
     private Request? _inFlight;
-    private string? _lastFinishedSource;
-    private TimeSpan _lastFinishedAt;
+    private Request? _latestRequest;
+    private string? _latestEditorSource;
+    private string? _acceptedSource;
 
     internal long Revision => _revision;
     internal bool SourceDirty { get; private set; }
     internal bool IsLoading => _inFlight is not null;
+    internal string? AcceptedSource => _acceptedSource;
 
     internal bool CanRestore(string? acceptedSource, string editorSource) =>
         !SourceDirty && !string.IsNullOrEmpty(acceptedSource) &&
         string.Equals(acceptedSource, editorSource, StringComparison.Ordinal);
 
-    internal long Edit(string source, bool valid, SubscriptionInputKind kind, TimeSpan now)
+    internal EditResult Edit(string source, bool valid, SubscriptionInputKind kind, TimeSpan now)
     {
-        // A duplicate typed edit for the same source (e.g. a spurious TextChanged) must not
-        // supersede an in-flight or queued load: that hides the current load's outcome
-        // and can dispatch a second request (#331). Explicit Retry/Paste/Import/Restore
-        // keep the existing behavior.
-        if (valid && kind == SubscriptionInputKind.Typed &&
+        _latestEditorSource = source;
+
+        // A duplicate typed edit for the latest intent (e.g. a spurious TextChanged) must not
+        // supersede an in-flight or queued load (#331). It also drops any queued request for a
+        // superseded source, so the editor intent that is on screen is the only one that can
+        // start. Explicit Retry/Paste/Import/Restore always proceed.
+        var duplicate = valid && kind == SubscriptionInputKind.Typed &&
             (string.Equals(_inFlight?.Source, source, StringComparison.Ordinal) ||
-             string.Equals(_pending?.Source, source, StringComparison.Ordinal) ||
-             string.Equals(_scheduled?.Source, source, StringComparison.Ordinal)))
+             string.Equals(_latestRequest?.Source, source, StringComparison.Ordinal));
+        if (duplicate)
         {
-            return _revision;
+            var dropped = false;
+            if (_scheduled is { } scheduled && !string.Equals(scheduled.Source, source, StringComparison.Ordinal))
+            {
+                _scheduled = null;
+                _scheduledAt = null;
+                dropped = true;
+            }
+            if (_pending is { } pending && !string.Equals(pending.Source, source, StringComparison.Ordinal))
+            {
+                _pending = null;
+                dropped = true;
+            }
+            if (string.Equals(_inFlight?.Source, source, StringComparison.Ordinal))
+                _latestRequest = _inFlight;
+            if (_inFlight is null && string.Equals(_acceptedSource, source, StringComparison.Ordinal))
+                SourceDirty = false;
+            return new EditResult(_revision, true, dropped);
         }
 
+        var superseded = _scheduled is not null || _pending is not null;
         _revision++;
         SourceDirty = true;
         _scheduled = null;
         _scheduledAt = null;
         _pending = null;
 
-        if (!valid) return _revision;
+        if (!valid)
+        {
+            // No request represents the intent while the text is invalid, so a later valid edit
+            // for the previous source must queue again instead of being taken as a duplicate.
+            _latestRequest = null;
+            return new EditResult(_revision, false, superseded);
+        }
 
         var request = new Request(_revision, source, kind);
+        _latestRequest = request;
         if (kind == SubscriptionInputKind.Typed)
         {
             _scheduled = request;
@@ -69,21 +101,18 @@ internal sealed class SubscriptionLoadState
         {
             _pending = request;
         }
-        return _revision;
+        return new EditResult(_revision, false, superseded);
     }
 
-    internal bool IsCurrent(Request request) => request.Revision == _revision;
+    internal bool IsCurrent(Request request) =>
+        string.Equals(request.Source, _latestEditorSource, StringComparison.Ordinal);
 
     internal Request? BeginReady(TimeSpan now)
     {
         if (_inFlight is not null) return null;
         PromoteElapsed(now);
         if (_pending is not { } request) return null;
-        // Guard against a duplicate typed dispatch for a source that just finished
-        // (#331). Explicit retries/paste/import always proceed.
-        if (request.Kind == SubscriptionInputKind.Typed &&
-            string.Equals(_lastFinishedSource, request.Source, StringComparison.Ordinal) &&
-            (now - _lastFinishedAt) < TimeSpan.FromSeconds(3))
+        if (!string.Equals(request.Source, _latestEditorSource, StringComparison.Ordinal))
         {
             _pending = null;
             return null;
@@ -96,7 +125,9 @@ internal sealed class SubscriptionLoadState
     /// <summary>Marks only the newest successful request accepted by the backend.</summary>
     internal bool MarkAccepted(Request request)
     {
-        if (_inFlight != request || !IsCurrent(request)) return false;
+        if (_inFlight != request ||
+            !string.Equals(request.Source, _latestEditorSource, StringComparison.Ordinal)) return false;
+        _acceptedSource = request.Source;
         SourceDirty = false;
         return true;
     }
@@ -110,15 +141,12 @@ internal sealed class SubscriptionLoadState
         if (_inFlight != request)
             throw new InvalidOperationException("Completed subscription load did not match the in-flight request");
 
-        _lastFinishedSource = request.Source;
-        _lastFinishedAt = now;
         _inFlight = null;
         PromoteElapsed(now);
         if (_pending is not { } next) return null;
-        // Do not auto-dispatch a duplicate typed request for the source that just
-        // finished (#331). Explicit non-typed requests still proceed.
-        if (next.Kind == SubscriptionInputKind.Typed &&
-            string.Equals(next.Source, request.Source, StringComparison.Ordinal))
+        // Only the latest editor intent may start; a queued request for a superseded source is
+        // dropped instead of overwriting the accepted state (#331).
+        if (!string.Equals(next.Source, _latestEditorSource, StringComparison.Ordinal))
         {
             _pending = null;
             return null;
