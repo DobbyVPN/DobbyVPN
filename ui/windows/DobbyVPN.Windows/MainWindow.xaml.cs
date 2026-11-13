@@ -1350,6 +1350,28 @@ public sealed partial class MainWindow : Window
                 _diagnostics.Record(error.ToString(), "logs.pointer-entry.failure");
             }
         }), true);
+        // Observe context input and popup lifetime without changing the native
+        // ContextFlyout routing. This distinguishes input that never opens a
+        // menu from a menu that opens and closes during a later log update.
+        LogsScroll.AddHandler(UIElement.RightTappedEvent, new RightTappedEventHandler((_, args) =>
+        {
+            try
+            {
+                var position = args.GetPosition(LogsScroll);
+                RecordLogMenuObservation("right-tap", new
+                {
+                    source_type = args.OriginalSource?.GetType().FullName,
+                    handled = args.Handled,
+                    x = position.X,
+                    y = position.Y,
+                });
+            }
+            catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.menu-observation.failure"); }
+        }), true);
+        LogsMenu.Opening += (_, _) => RecordLogMenuObservation("opening");
+        LogsMenu.Opened += (_, _) => RecordLogMenuObservation("opened");
+        LogsMenu.Closing += (_, _) => RecordLogMenuObservation("closing");
+        LogsMenu.Closed += (_, _) => RecordLogMenuObservation("closed");
         LogsScroll.AddHandler(UIElement.DoubleTappedEvent, new DoubleTappedEventHandler((_, args) =>
         {
             var scrollbarSource = FindLogVerticalScrollBar(args.OriginalSource) is not null;
@@ -1772,6 +1794,25 @@ public sealed partial class MainWindow : Window
             if (_logPresentation.FollowsTail) RenderLogs();
         }
         catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _logsError = error.Message; RenderError(); }
+    }
+
+    private void RecordLogMenuObservation(string stage, object? gesture = null)
+    {
+        try
+        {
+            var target = LogsMenu.Target;
+            _diagnostics.RecordDebug("logs.menu-" + stage, "Observed log context menu", new
+            {
+                gesture,
+                target_type = target?.GetType().FullName,
+                target_id = target is null ? null : AutomationProperties.GetAutomationId(target),
+                target_is_viewport = ReferenceEquals(target, LogsScroll),
+                is_open = LogsMenu.IsOpen,
+                rendered_rows = _renderedLogRows.Count,
+                state = CaptureLogScrollDiagnosticState(),
+            });
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.menu-observation.failure"); }
     }
 
     private static List<NativeDiagnostics.Entry> Shown(IEnumerable<NativeDiagnostics.Entry> entries) =>
