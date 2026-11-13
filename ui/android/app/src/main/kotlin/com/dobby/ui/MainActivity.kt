@@ -29,7 +29,10 @@ import androidx.lifecycle.ViewModelProvider
 import com.dobby.nativebridge.LogUploader
 import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
+import com.dobby.presentation.ConsentRecovery
+import com.dobby.presentation.ConsentRecoveryOutcome
 import com.dobby.presentation.LoadTrigger
+import com.dobby.presentation.PendingConsent
 import com.dobby.presentation.LogFollowState
 import com.dobby.presentation.PermissionSnapshot
 import com.dobby.presentation.PermissionTarget
@@ -85,6 +88,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
         private const val DISMISSED_ERRORS = "com.dobby.ui.DISMISSED_ERRORS"
+        private const val PENDING_CONSENT = "com.dobby.ui.PENDING_CONSENT"
         private const val EXPORT_NAME = "com.dobby.ui.EXPORT_NAME"
         private const val EXPORT_LAUNCHED = "com.dobby.ui.EXPORT_LAUNCHED"
         private const val EXPORT_RETURNED = "com.dobby.ui.EXPORT_RETURNED"
@@ -119,7 +123,10 @@ class MainActivity : ComponentActivity() {
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        NativeVpnBridge.consentResult(result.resultCode == android.app.Activity.RESULT_OK)
+        val granted = result.resultCode == android.app.Activity.RESULT_OK
+        // Always release the bridge's consent slot; a recreated Activity's request was cancelled.
+        NativeVpnBridge.consentResult(granted)
+        if (::controller.isInitialized) controller.consentReturned(granted)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -261,6 +268,7 @@ class MainActivity : ComponentActivity() {
                     savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
                     retainedLogViewModel,
                     savedInstanceState?.getStringArrayList(DISMISSED_ERRORS).orEmpty().toSet(),
+                    restoredConsent = PendingConsent.decode(savedInstanceState?.getString(PENDING_CONSENT)),
                     backendAvailable = backendFailure == null,
                     backendUnavailableMessage = backendFailure?.message.orEmpty(),
                 )
@@ -289,6 +297,8 @@ class MainActivity : ComponentActivity() {
             controller.saveSourceEditorState()?.let { outState.putBundle(SOURCE_EDITOR_STATE, it) }
                 ?: outState.remove(SOURCE_EDITOR_STATE)
             outState.putStringArrayList(DISMISSED_ERRORS, ArrayList(controller.dismissedErrors))
+            controller.pendingConsent()?.let { outState.putString(PENDING_CONSENT, it.encode()) }
+                ?: outState.remove(PENDING_CONSENT)
         }
     }
 
@@ -658,7 +668,10 @@ internal class SessionController(
     restoredDismissedErrors: Set<String> = emptySet(),
     backendAvailable: Boolean = true,
     backendUnavailableMessage: String = "",
+    restoredConsent: PendingConsent? = null,
 ) {
+    private val consentRecovery = ConsentRecovery(restoredConsent)
+    private var consentAwaiting = false
     @Volatile private var backendAvailable = backendAvailable
     @Volatile private var backendUnavailableMessage = backendUnavailableMessage
 
@@ -684,7 +697,7 @@ internal class SessionController(
     private val closed: Boolean get() = lifetime.isClosed
     private fun post(action: () -> Unit) = lifetime.post(action)
     private var preparation: NativeVpnBridge.Preparation? = null
-    private fun cancelPreparation() { preparation?.cancel(); preparation = null }
+    private fun cancelPreparation() { preparation?.cancel(); preparation = null; consentAwaiting = false }
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
     private val uploadWorker = Executors.newSingleThreadExecutor()
@@ -1058,8 +1071,10 @@ internal class SessionController(
             if (closed || permissionTarget !== target) return@prepareForSelection
             when (result) {
                 NativeVpnBridge.PreparationResult.Ready -> { preparation = null; continuePermission(true) }
-                NativeVpnBridge.PreparationResult.PermissionRequired ->
+                NativeVpnBridge.PreparationResult.PermissionRequired -> {
+                    consentAwaiting = true
                     state = state.copy(busy = false, error = "Approve the Android VPN permission to connect")
+                }
                 NativeVpnBridge.PreparationResult.Cancelled -> { selectionAdmission.invalidate(target); preparation = null; permissionTarget = null; state = state.copy(busy = false) }
                 NativeVpnBridge.PreparationResult.PermissionDenied -> {
                     preparation = null
@@ -1072,6 +1087,39 @@ internal class SessionController(
                     report("Android VPN service could not be prepared: ${result.error.message}", result.error)
                 }
             }
+        }
+    }
+
+    /** The connection the user asked for, while the system consent dialog is open. */
+    fun pendingConsent(): PendingConsent? {
+        val target = permissionTarget?.takeIf { consentAwaiting } ?: return null
+        return PendingConsent(
+            index = if (target.selection.mode == "PROFILE_INDEX") target.selection.index else null,
+            retry = target.retry,
+        )
+    }
+
+    /** Continues the connection saved by a previous Activity instance, or reports a refusal. */
+    fun consentReturned(granted: Boolean) {
+        when (val outcome = consentRecovery.result(granted)) {
+            ConsentRecoveryOutcome.NotRestored -> Unit
+            ConsentRecoveryOutcome.Refused -> report("VPN permission was not granted")
+            is ConsentRecoveryOutcome.Resume -> worker.execute {
+                refreshSnapshot()
+                post { resumeConnection(outcome.intent) }
+            }
+        }
+    }
+
+    private fun resumeConnection(intent: PendingConsent) {
+        if (closed) return
+        if (intent.retry) {
+            if (!retryActionEnabled) { report("VPN connection was not started. Try again"); return }
+            retry()
+        } else {
+            if (isStopTarget(intent.index)) return
+            if (!canAct(intent.index)) { report("VPN connection was not started. Try again"); return }
+            connectOrDisconnect(intent.index)
         }
     }
 
