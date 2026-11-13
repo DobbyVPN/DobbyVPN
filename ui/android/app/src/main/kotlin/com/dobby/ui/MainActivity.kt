@@ -1092,7 +1092,7 @@ internal class SessionController(
 
     /** The connection the user asked for, while the system consent dialog is open. */
     fun pendingConsent(): PendingConsent? {
-        val target = permissionTarget?.takeIf { consentAwaiting } ?: return null
+        val target = permissionTarget?.takeIf { consentAwaiting } ?: return consentRecovery.pending
         return PendingConsent(
             index = if (target.selection.mode == "PROFILE_INDEX") target.selection.index else null,
             retry = target.retry,

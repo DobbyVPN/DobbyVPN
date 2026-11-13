@@ -28,6 +28,9 @@ sealed class ConsentRecoveryOutcome {
 
 /** Holds a restored consent intent until the first consent result reaches the recreated Activity. */
 class ConsentRecovery(private var restored: PendingConsent?) {
+    /** The restored intent that no consent result has consumed yet; it must be saved again. */
+    val pending: PendingConsent? get() = restored
+
     fun result(granted: Boolean): ConsentRecoveryOutcome {
         val intent = restored ?: return ConsentRecoveryOutcome.NotRestored
         restored = null
