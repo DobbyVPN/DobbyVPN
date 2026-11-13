@@ -12,7 +12,17 @@ namespace DobbyVPN.Windows;
 /// </summary>
 internal static class StaActivationRedirect
 {
+    /// <summary>
+    /// How long the second process waits for the running instance to take over
+    /// its activation. A healthy hand-off takes well under a second; ten
+    /// seconds tolerates a loaded machine while a frozen first instance cannot
+    /// keep the second process waiting forever.
+    /// </summary>
+    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
+
     private const uint WaitForever = 0xFFFFFFFF;
+    private const int RpcSCallPending = unchecked((int)0x80010115);
+    private const int WaitTimeout = 0x102;
 
     [DllImport("ole32.dll", PreserveSig = true)]
     private static extern int CoWaitForMultipleObjects(
@@ -22,9 +32,13 @@ internal static class StaActivationRedirect
         [In] IntPtr[] handles,
         out uint handleIndex);
 
-    internal static void WaitForRedirect(Func<Task> redirect, uint? targetProcessId = null)
+    /// <exception cref="TimeoutException">The redirect neither completed nor lost its target within <paramref name="timeout"/>.</exception>
+    internal static void WaitForRedirect(Func<Task> redirect, uint? targetProcessId = null, TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(redirect);
+        var limit = timeout ?? DefaultTimeout;
+        if (limit <= TimeSpan.Zero || limit.TotalMilliseconds >= WaitForever)
+            throw new ArgumentOutOfRangeException(nameof(timeout), limit, "The activation redirect timeout must be positive and finite.");
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
             throw new InvalidOperationException("Windows activation redirection must be waited on from an STA thread.");
 
@@ -32,7 +46,12 @@ internal static class StaActivationRedirect
         using var completed = new EventWaitHandle(false, EventResetMode.ManualReset);
         var redirectTask = Task.Run(async () => await redirect().ConfigureAwait(false));
         _ = redirectTask.ContinueWith(
-            _ => { try { completed.Set(); } catch (ObjectDisposedException) { } },
+            finished =>
+            {
+                // A redirect abandoned after a timeout may fault later; observe it.
+                _ = finished.Exception;
+                try { completed.Set(); } catch (ObjectDisposedException) { }
+            },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
@@ -40,7 +59,11 @@ internal static class StaActivationRedirect
         var handles = target is null
             ? new[] { completed.SafeWaitHandle.DangerousGetHandle() }
             : new[] { completed.SafeWaitHandle.DangerousGetHandle(), target.Handle };
-        var waitResult = CoWaitForMultipleObjects(0, WaitForever, (uint)handles.Length, handles, out var handleIndex);
+        var waitResult = CoWaitForMultipleObjects(
+            0, (uint)Math.Ceiling(limit.TotalMilliseconds), (uint)handles.Length, handles, out var handleIndex);
+        if (waitResult is RpcSCallPending or WaitTimeout)
+            throw new TimeoutException(
+                $"Activation redirection did not complete within {limit.TotalSeconds:0.###} s; the running instance did not answer.");
         Marshal.ThrowExceptionForHR(waitResult);
         if (handleIndex >= handles.Length)
             throw new InvalidOperationException($"Activation redirection wait returned unexpected handle index {handleIndex}.");
