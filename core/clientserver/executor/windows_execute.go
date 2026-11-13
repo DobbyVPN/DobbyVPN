@@ -154,10 +154,21 @@ running:
 }
 
 func runService() error {
-	if err := configureServiceShutdownBudget(); err != nil {
-		return err
+	return runServiceWith(configureServiceShutdownBudget, func() error {
+		return svc.Run("DobbyVPN Go backend", &managerService{})
+	})
+}
+
+// A nil result from run means the SCM handler ran; failures inside it are
+// reported through the service exit code, not here.
+func runServiceWith(configureBudget, run func() error) error {
+	if err := configureBudget(); err != nil {
+		return fmt.Errorf("configure service shutdown budget: %w", err)
 	}
-	return svc.Run("DobbyVPN Go backend", &managerService{})
+	if err := run(); err != nil {
+		return fmt.Errorf("run service dispatcher: %w", err)
+	}
+	return nil
 }
 
 // Ordinary shutdown notification can force termination before the Go owner's
@@ -206,20 +217,30 @@ func run() {
 }
 
 func (c *Executor) Execute(mode string) {
-	if err := initExplicitLocalLog(); err != nil {
-		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to initialize local logging: %v\n", err)
-		return
+	if code := executeWith(mode, initExplicitLocalLog, run, runService); code != 0 {
+		exitProcess(code)
+	}
+}
+
+// executeWith returns the process exit code. Only failures before or outside
+// the SCM handler are non-zero.
+func executeWith(mode string, initLog func() error, runNormal func(), runServiceMode func() error) int {
+	if err := initLog(); err != nil {
+		return reportStartupFailure("initialize local logging", err)
 	}
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)
 
 	switch mode {
 	case "normal":
-		run()
+		runNormal()
 	case "service":
-		if err := runService(); err != nil {
+		if err := runServiceMode(); err != nil {
 			log.Errorf(desktopLogCategory, "Go backend service failed: %v", err)
+			return reportStartupFailure("service", err)
 		}
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
+		return reportStartupFailure("select run mode", fmt.Errorf("invalid run mode %q", mode))
 	}
+	return 0
 }

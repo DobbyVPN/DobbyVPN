@@ -67,6 +67,15 @@
 			</RegistryValue>
 		</Component>
 		
+		<!-- Event Log source for startup failures that happen before the service handler runs.
+		     EventCreate.exe supplies the message text for event IDs 1-1000. -->
+		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNEventSource" Guid="390613db-cd4a-4303-8b6a-d0cb483b7396">
+			<RegistryKey Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\DobbyVPN Go backend" ForceDeleteOnUninstall="yes">
+				<RegistryValue Name="EventMessageFile" Type="expandable" Value="%SystemRoot%\System32\EventCreate.exe" KeyPath="yes" />
+				<RegistryValue Name="TypesSupported" Type="integer" Value="7" />
+			</RegistryKey>
+		</Component>
+
 		<!-- The unpackaged WinUI app loads its self-contained runtime files beside the EXE. -->
 		<Files Directory="DobbyVPNFolderBin" Include="dobbyVPN-windows\bin\**">
 			<Exclude Files="dobbyVPN-windows\bin\DobbyVPN.exe" />
