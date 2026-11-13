@@ -168,16 +168,25 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 			errs = append(errs, fmt.Errorf("remove owned fwmark rule: %w", deleteErr))
 		}
 	}
-	for _, route := range routes.deletes {
-		if deleteErr := linuxRouteOperation("delete", &route, linuxRouteDel); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
-			errs = append(errs, fmt.Errorf("remove owned route %s: %w", route.String(), deleteErr))
-		}
-	}
+	// Restore the default route before removing the marked routes that carry
+	// the uplink gateway. If the restore is ambiguous or fails, keep those
+	// routes: they are the only record, so the next recovery reports it again.
+	restoreFailed := false
 	if routes.restoreDefaultAmbiguous {
+		restoreFailed = true
 		errs = append(errs, fmt.Errorf("restore interrupted default route: owned marked routes disagree"))
 	} else if routes.restoreDefault != nil && !routes.hasIndependentDefault {
 		if restoreErr := linuxRouteOperation("replace", routes.restoreDefault, linuxRouteReplace); restoreErr != nil {
+			restoreFailed = true
 			errs = append(errs, fmt.Errorf("restore interrupted default route: %w", restoreErr))
+		}
+	}
+	if restoreFailed {
+		return errors.Join(errs...)
+	}
+	for _, route := range routes.deletes {
+		if deleteErr := linuxRouteOperation("delete", &route, linuxRouteDel); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
+			errs = append(errs, fmt.Errorf("remove owned route %s: %w", route.String(), deleteErr))
 		}
 	}
 	return errors.Join(errs...)
