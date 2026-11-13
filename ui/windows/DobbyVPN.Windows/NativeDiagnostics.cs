@@ -43,7 +43,7 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
         }
     }
 
-    private void RecordReadFailure(string path, Exception? error)
+    internal void RecordReadFailure(string path, Exception? error)
     {
         lock (_gate)
         {
