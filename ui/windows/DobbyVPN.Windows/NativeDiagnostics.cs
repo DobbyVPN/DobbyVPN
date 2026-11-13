@@ -53,12 +53,21 @@ internal sealed class NativeDiagnostics(string backendPath, string uiPath)
                 _lastErrors.Remove(key);
                 return;
             }
-            var message = error.ToString();
-            if (_lastErrors.GetValueOrDefault(key) == message) return;
-            _lastErrors[key] = message;
-            Write("ERROR", "ui.logs.read_failed", message, new { path });
+            // Stack frames can change between reads (including tiered JIT).
+            // An episode follows the failure, while its first full stack remains
+            // available in the ordinary diagnostic record and export.
+            var identity = ReadFailureIdentity(error);
+            if (_lastErrors.GetValueOrDefault(key) == identity) return;
+            _lastErrors[key] = identity;
+            Write("ERROR", "ui.logs.read_failed", error.ToString(), new { path });
         }
     }
+
+    private static string ReadFailureIdentity(Exception error) => JsonSerializer.Serialize(new
+    {
+        type = error.GetType().FullName, error.HResult, error.Message,
+        cause = error.InnerException is null ? null : ReadFailureIdentity(error.InnerException)
+    });
 
     public void RecordInfo(string category, string message, object fields)
     {
