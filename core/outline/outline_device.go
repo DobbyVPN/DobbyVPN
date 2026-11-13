@@ -44,6 +44,7 @@ type OutlineDevice struct {
 	websocket     bool
 	hasTCPPath    bool
 	hasUDPPath    bool
+	ipv6          ipv6Capability
 }
 
 func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {
@@ -174,6 +175,14 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 	port, _ := strconv.Atoi(portStr)
 	if host == "" || port == 0 {
 		log.Warnf(Category, "[SOCKS5 DIAL WARN] network=%s addr=%s parsedHost=%s parsedPort=%d", network, addr, host, port)
+	}
+
+	// Applications prefer IPv6 and keep retrying an address that never works
+	// (issue #341). Whether it can work depends on the server's IPv6 egress, so
+	// the profile is probed once; IPv6 stays fully available when it passes.
+	if isRealIPv6Literal(host) && ctx.Value(ipv6ProbeKey{}) == nil && !d.ipv6.usable(ctx, d.probeIPv6) {
+		log.Debugf(Category, "[SOCKS5 DIAL] profile has no IPv6 egress, rejecting dst=%s network=%s", addr, network)
+		return nil, fmt.Errorf("IPv6 is not reachable through this profile: %s", addr)
 	}
 
 	switch network {
@@ -343,4 +352,11 @@ func (d *OutlineDevice) GetProxyAddr() string {
 		return ""
 	}
 	return d.proxyAddr
+}
+
+// isRealIPv6Literal reports whether host is a genuine IPv6 literal, as
+// opposed to an IPv4 address or an IPv4-mapped IPv6 address (::ffff:a.b.c.d).
+func isRealIPv6Literal(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
 }
