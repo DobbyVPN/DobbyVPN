@@ -750,6 +750,7 @@ internal class SessionController(
         }
         NativeVpnBridge.recordDiagnostic(activity, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
+        consentRecovery.interruptedHandoff()?.let(::startResume)
     }
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
@@ -1107,9 +1108,15 @@ internal class SessionController(
         when (val outcome = consentRecovery.result(granted)) {
             ConsentRecoveryOutcome.NotRestored -> Unit
             ConsentRecoveryOutcome.Refused -> report("VPN permission was not granted")
-            is ConsentRecoveryOutcome.Resume -> worker.execute {
-                refreshSnapshot()
-                post { resumeConnection(outcome.intent) }
+            is ConsentRecoveryOutcome.Resume -> startResume(outcome.intent)
+        }
+    }
+
+    private fun startResume(intent: PendingConsent) {
+        worker.execute {
+            refreshSnapshot()
+            post {
+                try { resumeConnection(intent) } finally { consentRecovery.handoffComplete() }
             }
         }
     }
