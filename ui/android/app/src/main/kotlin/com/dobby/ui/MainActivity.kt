@@ -1096,6 +1096,9 @@ internal class SessionController(
         return PendingConsent(
             index = if (target.selection.mode == "PROFILE_INDEX") target.selection.index else null,
             retry = target.retry,
+            sessionId = target.fence.sessionId,
+            digest = target.fence.digest,
+            generation = target.fence.generation,
         )
     }
 
@@ -1113,6 +1116,11 @@ internal class SessionController(
 
     private fun resumeConnection(intent: PendingConsent) {
         if (closed) return
+        val current = latest
+        if (!intent.stillCurrent(current.sessionId, current.digest, current.generation)) {
+            report("VPN connection was not started. Try again")
+            return
+        }
         if (intent.retry) {
             if (!retryActionEnabled) { report("VPN connection was not started. Try again"); return }
             retry()
