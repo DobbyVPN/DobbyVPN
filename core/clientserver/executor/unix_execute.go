@@ -133,6 +133,15 @@ func defaultDesktopLogPath() (root, path string) {
 	return root, filepath.Join(root, "backend.jsonl")
 }
 
+// A failed recovery must not stop the service: it opens the control socket and
+// reports the error; every Connect retries the recovery.
+func recordStartupRecovery(recoverState func() error) {
+	if err := recoverState(); err != nil {
+		log.Errorf(desktopLogCategory, "startup recovery failed: %v", err)
+		startupFailure = err
+	}
+}
+
 func run() {
 	if err := initExplicitLocalLog(); err != nil {
 		panic(fmt.Sprintf("failed to initialize local logging: %v", err))
@@ -142,9 +151,7 @@ func run() {
 	logrus.StandardLogger().ExitFunc = func(code int) {
 		panic(fmt.Sprintf("fatal error (exit code %d)", code))
 	}
-	if err := recoverInterruptedState(); err != nil {
-		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
-	}
+	recordStartupRecovery(recoverInterruptedState)
 	listener, err := controlplane.ListenControlSocket()
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
