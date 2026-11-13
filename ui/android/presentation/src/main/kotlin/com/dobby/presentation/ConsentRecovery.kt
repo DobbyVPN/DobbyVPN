@@ -72,7 +72,10 @@ sealed class ConsentRecoveryOutcome {
  * keeps the intent (marked granted) until [handoffComplete], so a recreation in between still
  * saves it and the next Activity resumes it.
  */
-class ConsentRecovery(private var restored: PendingConsent?) {
+class ConsentRecovery(restored: PendingConsent?) {
+    // Written by the controller's worker and main threads, read by the state save.
+    @Volatile private var restored: PendingConsent? = restored
+
     /** The intent that must be saved again by the next state save. */
     val pending: PendingConsent? get() = restored
 

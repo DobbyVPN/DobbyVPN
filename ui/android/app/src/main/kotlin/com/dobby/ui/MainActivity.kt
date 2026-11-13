@@ -697,7 +697,11 @@ internal class SessionController(
     private val closed: Boolean get() = lifetime.isClosed
     private fun post(action: () -> Unit) = lifetime.post(action)
     private var preparation: NativeVpnBridge.Preparation? = null
-    private fun cancelPreparation() { preparation?.cancel(); preparation = null; consentAwaiting = false }
+    /** A user-initiated cancel ends a resumed request; recreation (close) and a new preparation keep it. */
+    private fun cancelPreparation(keepRecovery: Boolean = false) {
+        if (!keepRecovery) consentRecovery.handoffComplete()
+        preparation?.cancel(); preparation = null; consentAwaiting = false
+    }
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
     private val uploadWorker = Executors.newSingleThreadExecutor()
@@ -1063,9 +1067,9 @@ internal class SessionController(
     }
 
     private fun preparePermission() {
-        cancelPreparation()
+        cancelPreparation(keepRecovery = true)
         val target = permissionTarget ?: return
-        if (!selectionAdmission.register(target, target.fence.sourceRevision)) return
+        if (!selectionAdmission.register(target, target.fence.sourceRevision)) { consentRecovery.handoffComplete(); return }
         val details = "session_id=${target.session.sessionId} generation=${target.session.generation} " +
             "source_revision=${target.fence.sourceRevision} selection=${target.selection} retry=${target.retry}"
         preparation = NativeVpnBridge.prepareForSelection(activity, details) { result ->
@@ -1073,15 +1077,17 @@ internal class SessionController(
             when (result) {
                 NativeVpnBridge.PreparationResult.Ready -> { preparation = null; continuePermission(true) }
                 NativeVpnBridge.PreparationResult.PermissionRequired -> {
+                    consentRecovery.handoffComplete()
                     consentAwaiting = true
                     state = state.copy(busy = false, error = "Approve the Android VPN permission to connect")
                 }
-                NativeVpnBridge.PreparationResult.Cancelled -> { selectionAdmission.invalidate(target); preparation = null; permissionTarget = null; state = state.copy(busy = false) }
+                NativeVpnBridge.PreparationResult.Cancelled -> { consentRecovery.handoffComplete(); selectionAdmission.invalidate(target); preparation = null; permissionTarget = null; state = state.copy(busy = false) }
                 NativeVpnBridge.PreparationResult.PermissionDenied -> {
                     preparation = null
                     continuePermission(false)
                 }
                 is NativeVpnBridge.PreparationResult.Failed -> {
+                    consentRecovery.handoffComplete()
                     selectionAdmission.invalidate(target)
                     preparation = null
                     permissionTarget = null
@@ -1115,39 +1121,45 @@ internal class SessionController(
     private fun startResume(intent: PendingConsent) {
         worker.execute {
             refreshSnapshot()
-            post {
-                try { resumeConnection(intent) } finally { consentRecovery.handoffComplete() }
-            }
+            post { resumeConnection(intent) }
         }
     }
 
+    /**
+     * The recovery state stays saved until the start command was issued (or the attempt ended),
+     * so an Activity recreated while the preparation is still running resumes it again.
+     */
     private fun resumeConnection(intent: PendingConsent) {
         if (closed) return
         val current = latest
         if (!intent.stillCurrent(current.sessionId, current.digest, current.generation)) {
+            consentRecovery.handoffComplete()
             report("VPN connection was not started. Try again")
             return
         }
         if (intent.retry) {
-            if (!retryActionEnabled) { report("VPN connection was not started. Try again"); return }
+            if (!retryActionEnabled) { consentRecovery.handoffComplete(); report("VPN connection was not started. Try again"); return }
             retry()
         } else {
-            if (isStopTarget(intent.index)) return
-            if (!canAct(intent.index)) { report("VPN connection was not started. Try again"); return }
+            if (isStopTarget(intent.index)) { consentRecovery.handoffComplete(); return }
+            if (!canAct(intent.index)) { consentRecovery.handoffComplete(); report("VPN connection was not started. Try again"); return }
             connectOrDisconnect(intent.index)
         }
+        // No preparation was queued, so nothing will complete the handoff later.
+        if (permissionTarget == null) consentRecovery.handoffComplete()
     }
 
     private fun continuePermission(granted: Boolean) {
         val target = permissionTarget ?: return
         permissionTarget = null
-        if (!granted) { selectionAdmission.invalidate(target); report("VPN permission was not granted"); return }
+        if (!granted) { consentRecovery.handoffComplete(); selectionAdmission.invalidate(target); report("VPN permission was not granted"); return }
         val selected = target.session
         val current = latest
         if (!target.retry && !PermissionTargetFence.stillCurrent(
                 target.fence,
                 current.permissionSnapshot(sourceLoads.revision, state.sourceDirty),
             )) {
+            consentRecovery.handoffComplete()
             selectionAdmission.invalidate(target)
             worker.execute { refreshSnapshot(clearBusy = true) }
             return
@@ -1222,6 +1234,8 @@ internal class SessionController(
                     )
                 }
             }
+            // The start command is issued (or rejected); the backend now owns the attempt.
+            consentRecovery.handoffComplete()
             if (!admitted) selectionAdmission.invalidate(target)
             if (admitted) {
                 NativeVpnBridge.recordDiagnostic(activity.applicationContext, "ui.selection_completed",
@@ -1384,7 +1398,7 @@ internal class SessionController(
             lifetime.close()
             sourceLoads.close()
         }
-        cancelPreparation()
+        cancelPreparation(keepRecovery = true)
         permissionTarget = null
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         uploader?.cancel()
