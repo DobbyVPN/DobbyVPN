@@ -19,7 +19,6 @@ import (
 	"core/sessionapi"
 	"core/tunnel/platform_engine"
 
-	"core/diagnostics"
 	"core/log"
 
 	"golang.org/x/sys/windows"
