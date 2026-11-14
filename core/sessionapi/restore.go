@@ -101,47 +101,68 @@ func (m *Manager) stopActivationLocked(ctx context.Context) error {
 // Manual selections require the exact inventory, so a changed subscription
 // can never silently connect a different profile at the same numeric index.
 func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (StartResult, error) {
+	result, _, err := m.restoreAttempt(ctx, onlyPreviouslyEnabled, nil)
+	return result, err
+}
+
+// restorePhase tells a retrying caller how far one attempt got. Only failures
+// before a connection attempt exists (reading the saved activation, loading its
+// source) can be transient; a started connection is owned by the session's
+// ordinary failure handling.
+type restorePhase int
+
+const (
+	restorePhaseLoad restorePhase = iota
+	restorePhaseConnect
+)
+
+// restoreAttempt is one restore. A non-nil fixedEpoch pins the user-intent
+// epoch of the first attempt, so a retry never overrides a later user action.
+func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool, fixedEpoch *uint64) (StartResult, restorePhase, error) {
 	s := m.session
 	s.mu.Lock()
 	if s.vpnActive && !s.stopRequested && !s.closing {
 		result := StartResult{Generation: s.generation, Sequence: s.sequence}
 		s.mu.Unlock()
-		return result, nil
+		return result, restorePhaseConnect, nil
 	}
 	if s.closing || !s.cleanupDone {
 		s.mu.Unlock()
-		return StartResult{}, failure(FailureConflict, "previous VPN owner has not completed cleanup")
+		return StartResult{}, restorePhaseConnect, failure(FailureConflict, "previous VPN owner has not completed cleanup")
 	}
 	store, ok := m.sourceStore.(ActivationStore)
 	sessionID, sequence, epoch := s.id, s.sequence, s.restoreEpoch
+	if fixedEpoch != nil {
+		epoch = *fixedEpoch
+	}
 	s.mu.Unlock()
 	if !ok {
-		return StartResult{}, failure(FailureNotConfigured, "automatic startup storage is unavailable")
+		return StartResult{}, restorePhaseLoad, failure(FailureNotConfigured, "automatic startup storage is unavailable")
 	}
 	raw, err := store.LoadActivation(ctx)
 	if err != nil {
-		return StartResult{}, failureWithCause(FailurePlatform, "saved activation could not be read", err)
+		return StartResult{}, restorePhaseLoad, failureWithCause(FailurePlatform, "saved activation could not be read", err)
 	}
 	saved, err := decodeActivation(raw)
 	if err != nil {
-		return StartResult{}, err
+		return StartResult{}, restorePhaseLoad, err
 	}
 	if !saved.Enabled && (onlyPreviouslyEnabled || saved.Version == 1 || saved.Source == "") {
-		return StartResult{}, nil
+		return StartResult{}, restorePhaseConnect, nil
 	}
 	configured, err := m.configure(ctx, sessionID, sequence, []byte(saved.Source), &epoch)
 	if err != nil {
-		return StartResult{}, err
+		return StartResult{}, restorePhaseLoad, err
 	}
 	if saved.Mode == ProfileIndex && configured.Digest != saved.Digest {
-		return StartResult{}, failure(FailureConflict, "saved profile inventory changed; select the profile again")
+		return StartResult{}, restorePhaseConnect, failure(FailureConflict, "saved profile inventory changed; select the profile again")
 	}
 	log.Info("sessionapi", "OS activation requested", map[string]any{"mode": saved.Mode, "profile_index": saved.Index, "inventory_digest": configured.Digest})
 	result, err := m.start(ctx, sessionID, configured.Sequence, StartTarget{Mode: saved.Mode, Index: saved.Index, Digest: configured.Digest}, &epoch)
 	if err != nil {
-		return result, err
+		return result, restorePhaseConnect, err
 	}
-	return result, waitForRestoredNetwork(ctx, s, result.Generation)
+	return result, restorePhaseConnect, waitForRestoredNetwork(ctx, s, result.Generation)
 }
 
 func waitForRestoredNetwork(ctx context.Context, s *session, expectedGeneration uint64) error {
