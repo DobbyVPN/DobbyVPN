@@ -154,6 +154,7 @@ func run() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, controlplane.AuthenticateLocalPeer)
 	}()
 	log.Debugf(desktopLogCategory, "desktop JSON control socket ready")
+	restoreDesktopSession(desktopProcessBinding())
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	var serveErr error

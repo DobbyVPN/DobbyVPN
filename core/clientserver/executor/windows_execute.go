@@ -66,6 +66,7 @@ func serveDesktopControl(listener net.Listener) (func() error, <-chan error) {
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, nil)
 	}()
+	restoreDesktopSession(desktopProcessBinding())
 	return listener.Close, serveDone
 }
 
