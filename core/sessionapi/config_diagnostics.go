@@ -62,7 +62,7 @@ type profileRef struct {
 }
 
 func (p profileRef) label() string {
-	name := string(protocolDisplayName(p.protocol))
+	name := protocolDisplayName(p.protocol)
 	if p.description != "" {
 		return fmt.Sprintf("Profile %d (%s %q)", p.number, name, truncateRunes(p.description, maxDescriptionInError))
 	}
@@ -128,6 +128,26 @@ func (p profileRef) emit(warnings []profileWarning) {
 
 var knownOutlineFields = []string{
 	fieldDescription, fieldServer, fieldPort, fieldPassword, fieldMethod, fieldDisguisePrefix, fieldWebSocket, fieldWebSocketPath, fieldCloak,
+}
+
+// profileSettingWarnings lists settings that are accepted but have no effect.
+// They stay warnings so that subscriptions that connect today keep connecting.
+func profileSettingWarnings(protocol Protocol, block map[string]interface{}) []profileWarning {
+	if protocol != ProtocolOutline {
+		return nil
+	}
+	warnings := unknownOutlineFieldWarnings(block)
+	if value, present := block[fieldDisguisePrefix]; present {
+		if _, isString := value.(string); !isString {
+			warnings = append(warnings, profileWarning{field: fieldDisguisePrefix, message: `field "DisguisePrefix" must be a string, ignoring it`})
+		}
+	}
+	if websocket, _ := block[fieldWebSocket].(bool); !websocket {
+		if _, present := block[fieldWebSocketPath]; present {
+			warnings = append(warnings, profileWarning{field: fieldWebSocketPath, message: `field "WebSocketPath" is ignored because WebSocket is not true`})
+		}
+	}
+	return warnings
 }
 
 func unknownOutlineFieldWarnings(block map[string]interface{}) []profileWarning {

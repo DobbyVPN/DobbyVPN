@@ -177,7 +177,7 @@ func parseProfile(root configRoot, next map[string]int, protocolName string, pro
 			return RuntimeProfile{}, ref, nil, ref.reject(err)
 		}
 	}
-	normalized, warnings, err := normalizeProfileChecked(protocol, block)
+	normalized, err := normalizeProfile(protocol, block)
 	if err != nil {
 		return RuntimeProfile{}, ref, nil, ref.reject(err)
 	}
@@ -185,7 +185,7 @@ func parseProfile(root configRoot, next map[string]int, protocolName string, pro
 		Summary:      ProfileSummary{Index: profileIndex, Protocol: protocol, Description: description},
 		Config:       normalized,
 		ExcludeCIDRs: append([]string(nil), root.ExcludeIPs.IPs...),
-	}, ref, warnings, nil
+	}, ref, profileSettingWarnings(protocol, block), nil
 }
 
 func nextProfile(root configRoot, next map[string]int, name string) (map[string]interface{}, Protocol) {
@@ -248,30 +248,25 @@ func validateTrustTunnelVerification(block map[string]interface{}) error {
 }
 
 func normalizeProfile(kind Protocol, block map[string]any) (protocolconfig.Config, error) {
-	normalized, _, err := normalizeProfileChecked(kind, block)
-	return normalized, err
-}
-
-func normalizeProfileChecked(kind Protocol, block map[string]any) (protocolconfig.Config, []profileWarning, error) {
 	switch kind {
 	case ProtocolXray:
 		outbounds, ok := block[fieldOutbounds]
 		if !ok {
-			return protocolconfig.Config{}, nil, invalidField(fieldOutbounds, reasonRequired)
+			return protocolconfig.Config{}, invalidField(fieldOutbounds, reasonRequired)
 		}
 		switch outbounds.(type) {
 		case []any, []map[string]any:
 		default:
-			return protocolconfig.Config{}, nil, invalidField(fieldOutbounds, "must be an array")
+			return protocolconfig.Config{}, invalidField(fieldOutbounds, "must be an array")
 		}
-		return protocolconfig.Config{Xray: protocolconfig.CloneFields(block)}, nil, nil
+		return protocolconfig.Config{Xray: protocolconfig.CloneFields(block)}, nil
 	case ProtocolOutline:
-		normalized, warnings, err := normalizeOutlineBlock(block)
-		return protocolconfig.Config{OutlineURL: normalized}, warnings, err
+		normalized, err := normalizeOutlineURL(block)
+		return protocolconfig.Config{OutlineURL: normalized}, err
 	case ProtocolTrustTunnel:
-		return protocolconfig.Config{TrustTunnel: protocolconfig.CloneFields(block)}, nil, nil
+		return protocolconfig.Config{TrustTunnel: protocolconfig.CloneFields(block)}, nil
 	default:
-		return protocolconfig.Config{}, nil, failure(FailureUnsupported, "unsupported protocol")
+		return protocolconfig.Config{}, failure(FailureUnsupported, "unsupported protocol")
 	}
 }
 
@@ -280,65 +275,51 @@ func normalizeProfileChecked(kind Protocol, block map[string]any) (protocolconfi
 // Android/iOS/desktop cannot diverge in method defaults, websocket paths, or
 // transport URL escaping. Protocol validation remains the runtime's job.
 func normalizeOutlineURL(block map[string]interface{}) (string, error) {
-	normalized, _, err := normalizeOutlineBlock(block)
-	return normalized, err
-}
-
-// normalizeOutlineBlock also reports settings that are accepted but have no
-// effect (unknown keys, an ignored WebSocketPath or DisguisePrefix). Those stay
-// warnings so that subscriptions that connect today keep connecting.
-func normalizeOutlineBlock(block map[string]interface{}) (string, []profileWarning, error) {
-	warnings := unknownOutlineFieldWarnings(block)
 	method, err := outlineMethod(block)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	password, err := outlinePassword(block)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	server := stringValue(block, fieldServer)
 	if server == "" {
-		return "", nil, invalidField(fieldServer, reasonRequired)
+		return "", invalidField(fieldServer, reasonRequired)
 	}
 	host, ok := outlineServerHost(server)
 	if !ok {
-		return "", nil, invalidField(fieldServer, "must be a hostname or IP address")
+		return "", invalidField(fieldServer, "must be a hostname or IP address")
 	}
 	websocket := false
 	if value, present := block[fieldWebSocket]; present {
 		websocket, ok = value.(bool)
 		if !ok {
-			return "", nil, invalidField(fieldWebSocket, reasonBoolean)
+			return "", invalidField(fieldWebSocket, reasonBoolean)
 		}
 	}
 	port, err := outlinePortField(block, websocket)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	encoded := base64.StdEncoding.EncodeToString([]byte(method + ":" + password))
 	ssURL := "ss://" + encoded + "@" + net.JoinHostPort(host, port)
-	if prefix, warning := outlineDisguisePrefix(block); warning != nil {
-		warnings = append(warnings, *warning)
-	} else if prefix != "" {
+	if prefix, _ := block[fieldDisguisePrefix].(string); prefix != "" {
 		ssURL += "?prefix=" + url.QueryEscape(prefix)
 	}
 	if !websocket {
-		if _, present := block[fieldWebSocketPath]; present {
-			warnings = append(warnings, profileWarning{field: fieldWebSocketPath, message: `field "WebSocketPath" is ignored because WebSocket is not true`})
-		}
-		return ssURL, warnings, nil
+		return ssURL, nil
 	}
 	path, ok := block[fieldWebSocketPath].(string)
 	if !ok || strings.TrimSpace(path) == "" {
-		return "", nil, invalidField(fieldWebSocketPath, "must be a non-empty string when WebSocket = true")
+		return "", invalidField(fieldWebSocketPath, "must be a non-empty string when WebSocket = true")
 	}
 	base := strings.TrimRight(path, "/")
 	if base != "" && !strings.HasPrefix(base, "/") {
 		base = "/" + base
 	}
 	params := url.Values{"tcp_path": {base + "/tcp"}, "udp_path": {base + "/udp"}}
-	return "tls:sni=" + host + "|ws:" + params.Encode() + "|" + ssURL, warnings, nil
+	return "tls:sni=" + host + "|ws:" + params.Encode() + "|" + ssURL, nil
 }
 
 // outlineMethod keeps the default cipher for an absent or blank Method; only a
@@ -387,20 +368,6 @@ func outlinePortField(block map[string]interface{}, websocket bool) (string, err
 		return "443", nil
 	}
 	return "", invalidField(fieldPort, "is required unless WebSocket = true")
-}
-
-// outlineDisguisePrefix returns the prefix, or a warning when the value is not
-// a string and is therefore dropped, as it always has been.
-func outlineDisguisePrefix(block map[string]interface{}) (string, *profileWarning) {
-	value, present := block[fieldDisguisePrefix]
-	if !present {
-		return "", nil
-	}
-	prefix, ok := value.(string)
-	if !ok {
-		return "", &profileWarning{field: fieldDisguisePrefix, message: `field "DisguisePrefix" must be a string, ignoring it`}
-	}
-	return prefix, nil
 }
 
 func outlinePort(value interface{}) (string, bool) {
