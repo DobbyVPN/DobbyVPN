@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -16,6 +17,82 @@ import traceback
 sys.path.insert(0, str(Path(__file__).resolve().parent / "release"))
 from bounded_process import run_streamed
 from dependency_fetch import MAX_ATTEMPTS, RETRY_DELAYS, retryable_transport_failure
+
+
+START_ATTEMPTS = 3
+START_RETRY_PAUSE_SECONDS = 5
+
+# Machine-readable statuses. They only label where a failure came from; the job
+# conclusion stays "failure" so that "Re-run failed jobs" restarts this host
+# together with a failed consumer.
+HOST_FAILED = "fixture-host-failed"
+START_FAILED = "fixture-start-failed"
+HEALTHY = "fixture-healthy"
+DEGRADED = "fixture-ingress-degraded"
+UNKNOWN = "fixture-health-unknown"
+
+
+def announce(status: str, title: str, message: str, level: str = "error") -> None:
+    """Make the failure origin visible as an annotation and in the job summary."""
+    text = f"{message} [fixture_status={status}]"
+    print(f"::{level} title={title}::{text.replace('%', '%25').replace(chr(13), '%0D').replace(chr(10), '%0A')}",
+          flush=True)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as stream:
+            stream.write(f"### {title}\n\n{text}\n\n")
+
+
+def summarize_health(path: Path) -> dict | None:
+    """Read the fixture's public-ingress probes; None when there is no usable sample."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    samples = unhealthy = errors = 0
+    first_unhealthy = None
+    targets: set[str] = set()
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict) or type(record.get("epoch")) not in (int, float):
+            continue
+        ok = record.get("ok")
+        if ok is None:
+            errors += 1
+            continue
+        if type(ok) is not bool:
+            continue
+        samples += 1
+        if not ok:
+            unhealthy += 1
+            failed = record.get("failed")
+            if isinstance(failed, list):
+                targets.update(item for item in failed if isinstance(item, str))
+            if first_unhealthy is None:
+                first_unhealthy = record["epoch"]
+    if samples == 0:
+        return None
+    return {"samples": samples, "unhealthy": unhealthy, "probe_errors": errors,
+            "first_unhealthy_epoch": first_unhealthy, "failed_targets": sorted(targets)}
+
+
+def classify_consumer_failure(health: dict | None) -> tuple[str, str]:
+    if health is None:
+        return UNKNOWN, "no public-ingress health samples were recorded"
+    unrun = (f"; {health['probe_errors']} more probes could not run"
+             if health["probe_errors"] else "")
+    if health["unhealthy"] == 0:
+        if health["probe_errors"]:
+            # Probes that could not run say nothing about the ingress.
+            return UNKNOWN, (f"public ingress was healthy in {health['samples']} probes{unrun}, "
+                             "so its health during the failure is not established")
+        return HEALTHY, f"public ingress was healthy in {health['samples']} of {health['samples']} probes"
+    when = time.strftime("%H:%M:%SZ", time.gmtime(health["first_unhealthy_epoch"]))
+    return DEGRADED, (f"public ingress was unhealthy in {health['unhealthy']} of {health['samples']} probes "
+                      f"(first at {when}; targets: {', '.join(health['failed_targets']) or 'unknown'}){unrun}")
 
 
 def remaining() -> float:
@@ -152,7 +229,7 @@ def ready(key: str, producer: str, output: Path) -> None:
         pause(30)
 
 
-def start(root: Path, tools: Path, tests: Path) -> None:
+def launch(root: Path, tools: Path, tests: Path) -> subprocess.Popen:
     root.mkdir(parents=True, exist_ok=True)
     public = root / "public"
     private = root / "private"
@@ -168,12 +245,64 @@ def start(root: Path, tools: Path, tests: Path) -> None:
         process = subprocess.Popen(command, cwd=tests, env=environment, stdout=stdout,
                                    stderr=stderr, start_new_session=True)
     (root / "pid").write_text(str(process.pid), encoding="ascii")
+    return process
+
+
+def await_ready(root: Path, process: subprocess.Popen) -> None:
+    public = root / "public"
     while not (public / "ready.json").exists():
         if process.poll() is not None:
             raise RuntimeError(f"fixture service exited before readiness: {process.returncode}")
         pause()
     if (public / "result.json").exists():
         raise RuntimeError("fixture service stopped during readiness")
+
+
+def archive_failed_start(root: Path, process: subprocess.Popen, attempt: int) -> None:
+    """Free the fixed paths for the next attempt while keeping this attempt's output."""
+    if process.poll() is None:
+        for sig, wait in ((signal.SIGTERM, 15), (signal.SIGKILL, 5)):
+            try:
+                os.killpg(process.pid, sig)
+            except ProcessLookupError:
+                break
+            try:
+                process.wait(timeout=wait)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    logs = root / "logs"
+    for name in ("service.stdout.log", "service.stderr.log"):
+        if (logs / name).exists():
+            (logs / name).rename(logs / f"attempt-{attempt}.{name}")
+    if (root / "public").exists():
+        shutil.move(str(root / "public"), str(logs / f"attempt-{attempt}-public"))
+    shutil.rmtree(root / "private", ignore_errors=True)
+    (root / "pid").unlink(missing_ok=True)
+
+
+def start(root: Path, tools: Path, tests: Path, attempts: int = START_ATTEMPTS) -> None:
+    """Start the fixtures, repeating only this infrastructure step when it fails.
+
+    Only a service that exits or stops before it is ready is started again;
+    deadline expiry and launch errors are not retried, and no test runs here.
+    """
+    if attempts < 1:
+        raise ValueError("fixture start needs at least one attempt")
+    for attempt in range(1, attempts + 1):
+        process = launch(root, tools, tests)
+        try:
+            await_ready(root, process)
+            return
+        except RuntimeError as error:
+            if attempt == attempts:
+                message = f"{error} (fixture start attempt {attempt}/{attempts})"
+                announce(START_FAILED, "Fixture host failed to start", message)
+                raise RuntimeError(f"fixture_status={START_FAILED}: {message}") from error
+            print(f"::warning title=Fixture start retry::fixture start attempt {attempt}/{attempts} failed: {error}",
+                  flush=True)
+            archive_failed_start(root, process, attempt)
+            pause(START_RETRY_PAUSE_SECONDS)
 
 
 def stop(root: Path) -> None:
@@ -220,14 +349,21 @@ def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = Non
     try:
         while True:
             if (root / "public" / "result.json").exists():
-                raise RuntimeError("fixture service stopped while consumers were active")
+                message = "fixture service stopped while consumers were active"
+                announce(HOST_FAILED, "Fixture host failed", message)
+                raise RuntimeError(f"fixture_status={HOST_FAILED}: {message}")
             jobs = jobs_snapshot()
             require_current = any(jobs.get(name, {}).get("run_attempt") == attempt
                                   for name in (freshness_jobs or []))
             complete, success = consumers_complete(jobs, names, attempt, require_current)
             if complete:
                 if not success:
-                    raise RuntimeError("one or more fixture consumers failed; retain this host for failed-job recovery")
+                    status, detail = classify_consumer_failure(summarize_health(root / "public" / "health.jsonl"))
+                    message = ("one or more fixture consumers failed; retain this host for failed-job recovery. "
+                               f"This job mirrors the consumer result; the fixture host itself: {detail}")
+                    announce(status, "Consumer failed; fixture host status", message,
+                             "warning" if status == HEALTHY else "error")
+                    raise RuntimeError(f"fixture_status={status}: {message}")
                 return
             pause(30)
     finally:
@@ -245,6 +381,7 @@ def main() -> None:
     producer.add_argument("--root", type=Path, required=True)
     producer.add_argument("--tools", type=Path, required=True)
     producer.add_argument("--tests", type=Path, required=True)
+    producer.add_argument("--attempts", type=int, default=START_ATTEMPTS)
     watch = commands.add_parser("monitor")
     watch.add_argument("--root", type=Path, required=True)
     watch.add_argument("--consumers", required=True)
@@ -255,7 +392,7 @@ def main() -> None:
     if args.command == "ready":
         ready(args.key, args.producer_name, args.output)
     elif args.command == "start":
-        start(args.root, args.tools, args.tests)
+        start(args.root, args.tools, args.tests, args.attempts)
     elif args.command == "monitor":
         monitor(args.root, json.loads(args.consumers), json.loads(args.freshness_jobs))
     else:

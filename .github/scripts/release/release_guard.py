@@ -21,6 +21,9 @@ TEST_WORKFLOW_FILE = "test.yml"
 TESTS_REPOSITORY = "DobbyVPN/Torturer"
 SCHEMA = 1
 PAGE_SIZE = 100
+# Offset pagination can shift while other jobs create deployments, so a record
+# may appear on two pages. Only that read-only observation is re-read.
+PAGINATION_READ_ATTEMPTS = 3
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -38,6 +41,10 @@ WORKFLOW_RUN_STATUSES = frozenset({"queued", "in_progress", "completed", "waitin
 
 class ReleaseGuardError(ValueError):
     """A guard record or GitHub response is invalid, ambiguous, or unresolved."""
+
+
+class PaginationShiftError(ReleaseGuardError):
+    """One record was listed twice, which means the list moved while it was read."""
 
 
 class GitHubAPI:
@@ -171,6 +178,23 @@ def _validate_repository(repository: Any) -> str:
 
 
 def _paged(api: Any, endpoint: str, **filters: str) -> list[Any]:
+    """Read a whole list, re-reading it from page one if the list shifted.
+
+    Only GET reads are repeated, and only after a duplicate record ID; a missing
+    or malformed ID, an API failure, or a persistent duplicate still fails closed.
+    """
+    for attempt in range(1, PAGINATION_READ_ATTEMPTS + 1):
+        try:
+            return _paged_once(api, endpoint, **filters)
+        except PaginationShiftError as error:
+            if attempt == PAGINATION_READ_ATTEMPTS:
+                raise
+            print(f"[release-guard] {error}; re-reading list, attempt {attempt + 1}/{PAGINATION_READ_ATTEMPTS}",
+                  file=sys.stderr, flush=True)
+    raise AssertionError("pagination retry loop exhausted unexpectedly")
+
+
+def _paged_once(api: Any, endpoint: str, **filters: str) -> list[Any]:
     records: list[Any] = []
     seen_ids: set[int] = set()
     page = 1
@@ -183,7 +207,9 @@ def _paged(api: Any, endpoint: str, **filters: str) -> list[Any]:
             if not isinstance(item, dict):
                 raise ReleaseGuardError("GitHub API returned a malformed list item")
             identifier = item.get("id")
-            if type(identifier) is not int or identifier <= 0 or identifier in seen_ids:
+            if type(identifier) is int and identifier > 0 and identifier in seen_ids:
+                raise PaginationShiftError(f"GitHub API returned a missing or duplicate record ID: endpoint={endpoint} page={page} id={identifier!r}")
+            if type(identifier) is not int or identifier <= 0:
                 raise ReleaseGuardError(f"GitHub API returned a missing or duplicate record ID: endpoint={endpoint} page={page} id={identifier!r}")
             seen_ids.add(identifier)
             records.append(item)
