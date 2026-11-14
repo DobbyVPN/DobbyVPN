@@ -82,11 +82,17 @@ def summarize_health(path: Path) -> dict | None:
 def classify_consumer_failure(health: dict | None) -> tuple[str, str]:
     if health is None:
         return UNKNOWN, "no public-ingress health samples were recorded"
+    unrun = (f"; {health['probe_errors']} more probes could not run"
+             if health["probe_errors"] else "")
     if health["unhealthy"] == 0:
+        if health["probe_errors"]:
+            # Probes that could not run say nothing about the ingress.
+            return UNKNOWN, (f"public ingress was healthy in {health['samples']} probes{unrun}, "
+                             "so its health during the failure is not established")
         return HEALTHY, f"public ingress was healthy in {health['samples']} of {health['samples']} probes"
     when = time.strftime("%H:%M:%SZ", time.gmtime(health["first_unhealthy_epoch"]))
     return DEGRADED, (f"public ingress was unhealthy in {health['unhealthy']} of {health['samples']} probes "
-                      f"(first at {when}; targets: {', '.join(health['failed_targets']) or 'unknown'})")
+                      f"(first at {when}; targets: {', '.join(health['failed_targets']) or 'unknown'}){unrun}")
 
 
 def remaining() -> float:
