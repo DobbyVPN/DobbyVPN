@@ -16,6 +16,10 @@ const (
 	RestoreRetryWindow = 2 * time.Minute
 )
 
+// SubscriptionUnreachableMessage is shown in the snapshot when the startup
+// restore ran out of retries because the subscription server did not answer.
+const SubscriptionUnreachableMessage = "Could not reach the subscription server"
+
 // RestoreRetryPolicy bounds the retry window. Now and Sleep exist so tests
 // can drive the window without real waiting; zero values use the real clock.
 type RestoreRetryPolicy struct {
@@ -72,12 +76,12 @@ func (m *Manager) RestoreAtServiceStart(ctx context.Context, policy RestoreRetry
 			return result, nil
 		}
 		if phase != restorePhaseLoad || !transientRestoreFailure(ctx, err) {
-			m.reportStartupRestoreFailure(ctx, epoch, err)
+			m.reportStartupRestoreFailure(ctx, epoch, err, false)
 			return result, err
 		}
 		if policy.now().Add(policy.Interval).After(deadline) {
 			log.Error("sessionapi", "automatic restore gave up", map[string]any{"attempts": attempt, "failure_code": string(CodeOf(err))})
-			m.reportStartupRestoreFailure(ctx, epoch, err)
+			m.reportStartupRestoreFailure(ctx, epoch, err, true)
 			return result, err
 		}
 		log.Info("sessionapi", "automatic restore will be retried", map[string]any{"attempt": attempt, "failure_code": string(CodeOf(err))})
@@ -101,7 +105,7 @@ func transientRestoreFailure(ctx context.Context, err error) bool {
 // last failure, the field the snapshot already reports before the first Start.
 // It is skipped when the user acted meanwhile, when a failure is already
 // shown, and for "nothing saved", which is the normal state of a fresh install.
-func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64, err error) {
+func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64, err error, exhausted bool) {
 	code := CodeOf(err)
 	if code == FailureNotConfigured || code == FailureCanceled && ctx.Err() != nil {
 		return
@@ -111,12 +115,19 @@ func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64,
 	if errors.As(err, &domain) {
 		message = domain.Message
 	}
+	text := "automatic restore failed: " + message
+	if exhausted && (code == FailureInvalidArgument || code == FailureCanceled) {
+		// Retries ran out while the subscription source could not be fetched
+		// (no network yet, or the fetch timed out): say so plainly. CANCELED
+		// stays reserved for a restore that was really canceled.
+		code, text = FailurePlatform, SubscriptionUnreachableMessage
+	}
 	s := m.session
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.restoreEpoch != epoch || s.closing || s.vpnActive || s.lastFailure != "" || s.pending != nil {
 		return
 	}
-	s.lastFailure, s.lastFailureMessage = code, "automatic restore failed: "+message
+	s.lastFailure, s.lastFailureMessage = code, text
 	m.appendLocked(s)
 }
