@@ -20,6 +20,9 @@ internal static class StaActivationRedirect
     /// </summary>
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>Shown when a link or second launch cannot be handed to a running instance.</summary>
+    internal const string NotRespondingMessage = "DobbyVPN is not responding. Close it and open the link again.";
+
     private const uint WaitForever = 0xFFFFFFFF;
     private const int RpcSCallPending = unchecked((int)0x80010115);
     private const int WaitTimeout = 0x102;
@@ -31,6 +34,43 @@ internal static class StaActivationRedirect
         uint handleCount,
         [In] IntPtr[] handles,
         out uint handleIndex);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int MessageBoxW(IntPtr window, string text, string caption, uint type);
+
+    /// <summary>
+    /// Redirects activation and reports whether the running instance took it.
+    /// On a timeout, target exit or any other redirect failure it logs through
+    /// <paramref name="onFailure"/>, tells the user with <paramref name="show"/>
+    /// (a system message box by default), and returns false so the caller can
+    /// exit normally. Nothing is written to disk.
+    /// </summary>
+    internal static bool TryRedirect(
+        Func<Task> redirect, uint? targetProcessId, Action<Exception> onFailure,
+        Action<string>? show = null, TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(onFailure);
+        try
+        {
+            WaitForRedirect(redirect, targetProcessId, timeout);
+            return true;
+        }
+        catch (Exception error)
+        {
+            try { onFailure(error); } catch (Exception) { /* logging must not hide the user message */ }
+            ShowNotRespondingMessage(show);
+            return false;
+        }
+    }
+
+    internal static void ShowNotRespondingMessage(Action<string>? show = null)
+    {
+        try { (show ?? ShowSystemMessage)(NotRespondingMessage); }
+        catch (Exception) { /* nothing else can be shown; the caller still exits normally */ }
+    }
+
+    private static void ShowSystemMessage(string message) =>
+        MessageBoxW(IntPtr.Zero, message, "DobbyVPN", 0x00000010 /* MB_ICONERROR */ | 0x00010000 /* MB_SETFOREGROUND */);
 
     /// <exception cref="TimeoutException">The redirect neither completed nor lost its target within <paramref name="timeout"/>.</exception>
     internal static void WaitForRedirect(Func<Task> redirect, uint? targetProcessId = null, TimeSpan? timeout = null)

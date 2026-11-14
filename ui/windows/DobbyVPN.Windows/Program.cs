@@ -43,20 +43,11 @@ internal static class Program
         {
             LogInstanceVersions(instance.ProcessId);
             LogActivation("activation.redirect-start", "Redirecting activation to the running app", activation, args);
-            try
-            {
-                StaActivationRedirect.WaitForRedirect(async () => await instance.RedirectActivationToAsync(activation), instance.ProcessId);
+            if (StaActivationRedirect.TryRedirect(
+                    async () => await instance.RedirectActivationToAsync(activation), instance.ProcessId,
+                    error => LogActivation("activation.redirect-failed", "Startup activation redirect failed", activation, args,
+                        false, error: error.ToString())))
                 LogActivation("activation.redirect-complete", "Startup activation redirect completed; recipient acceptance is not confirmed", activation, args, true);
-            }
-            catch (Exception error)
-            {
-                // The running instance did not answer in time, exited, or
-                // rejected the redirect. Keep the link for the next start and
-                // exit normally instead of crashing or waiting.
-                LogActivation("activation.redirect-failed", "Startup activation redirect failed", activation, args,
-                    false, error: error.ToString());
-                SaveUndeliveredLinks(activation, "redirect-failed");
-            }
             return;
         }
         _instance = instance;
@@ -85,8 +76,11 @@ internal static class Program
             {
                 NativeDiagnostics.Current.Record("Activation dispatcher rejected delivery or the application stopped accepting activations; pending delivery is retained when possible.", "activation.dispatch.failure");
                 // Once the final window has closed nothing will ever drain the
-                // queue, so a link that arrived in that gap goes to the next start.
-                if (!Activations.IsAccepting) SaveUndeliveredLinks(activation, "app-closing");
+                // queue, so tell the user instead of dropping the link silently.
+                if (!Activations.IsAccepting)
+                    // A modal box must not block the activation callback, and the
+                    // non-background thread keeps the exiting process alive until it is read.
+                    new Thread(() => StaActivationRedirect.ShowNotRespondingMessage()) { IsBackground = false }.Start();
             }
         }
         catch (Exception error)
@@ -173,67 +167,7 @@ internal static class Program
         catch (Exception error) { return new { error = error.ToString() }; }
     }
 
-    internal static void Attach(MainWindow window)
-    {
-        // Links saved by an earlier instance that could not hand them over are
-        // older than this launch's own activation, so import them first.
-        var saved = TakeSavedLinks();
-        if (saved.Count != 0 &&
-            !window.TryAcceptActivation(() => { foreach (var link in saved) window.ImportLink(link); }))
-            SaveLinks(saved, "window-closing");
-        Activations.Attach(window, Accept);
-    }
-
-    private static IReadOnlyList<string> TakeSavedLinks()
-    {
-        try
-        {
-            var links = PendingActivationLinks.Default.TakeFresh();
-            if (links.Count != 0)
-                NativeDiagnostics.Current.RecordInfo("activation.pending-links-replayed",
-                    "Importing links saved by an instance that could not hand them over", new { count = links.Count });
-            return links;
-        }
-        catch (Exception error)
-        {
-            NativeDiagnostics.Current.Record(error.ToString(), "activation.pending-links.read-failure");
-            return [];
-        }
-    }
-
-    private static void SaveUndeliveredLinks(AppActivationArguments activation, string reason)
-    {
-        try { SaveLinks(ExtractLinks(activation), reason); }
-        catch (Exception error)
-        {
-            NativeDiagnostics.Current.Record(error.ToString(), "activation.pending-links.save-failure");
-        }
-    }
-
-    private static void SaveLinks(IReadOnlyCollection<string> links, string reason)
-    {
-        if (links.Count == 0) return;
-        try
-        {
-            PendingActivationLinks.Default.Save(links);
-            NativeDiagnostics.Current.RecordInfo("activation.pending-links-saved",
-                "Saved undelivered links for the next start", new { count = links.Count, reason });
-        }
-        catch (Exception error)
-        {
-            NativeDiagnostics.Current.Record(error.ToString(), "activation.pending-links.save-failure");
-        }
-    }
-
-    private static List<string> ExtractLinks(AppActivationArguments activation)
-    {
-        var links = new List<string>();
-        if (activation.Kind == ExtendedActivationKind.Protocol && activation.Data is IProtocolActivatedEventArgs protocol)
-            links.Add(protocol.Uri.AbsoluteUri);
-        else if (activation.Data is ILaunchActivatedEventArgs launch)
-            links.AddRange(Arguments(launch.Arguments).Where(value => value.StartsWith("dobbyvpn:", StringComparison.OrdinalIgnoreCase)));
-        return links;
-    }
+    internal static void Attach(MainWindow window) => Activations.Attach(window, Accept);
 
     internal static void FinalClose(MainWindow window, Action close) =>
         Activations.FinalClose(window,
