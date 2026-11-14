@@ -71,13 +71,13 @@ func (m *Manager) RestoreAtServiceStart(ctx context.Context, policy RestoreRetry
 		if err == nil {
 			return result, nil
 		}
-		if phase != restorePhaseLoad || !transientRestoreFailure(err) {
-			m.reportStartupRestoreFailure(epoch, err)
+		if phase != restorePhaseLoad || !transientRestoreFailure(ctx, err) {
+			m.reportStartupRestoreFailure(ctx, epoch, err)
 			return result, err
 		}
 		if policy.now().Add(policy.Interval).After(deadline) {
 			log.Error("sessionapi", "automatic restore gave up", map[string]any{"attempts": attempt, "failure_code": string(CodeOf(err))})
-			m.reportStartupRestoreFailure(epoch, err)
+			m.reportStartupRestoreFailure(ctx, epoch, err)
 			return result, err
 		}
 		log.Info("sessionapi", "automatic restore will be retried", map[string]any{"attempt": attempt, "failure_code": string(CodeOf(err))})
@@ -87,19 +87,23 @@ func (m *Manager) RestoreAtServiceStart(ctx context.Context, policy RestoreRetry
 	}
 }
 
-func transientRestoreFailure(err error) bool {
+// A CANCELED failure is transient when only one source fetch timed out
+// (its own request deadline); it is final when the restore's own context ended.
+func transientRestoreFailure(ctx context.Context, err error) bool {
 	code := CodeOf(err)
-	return code != FailureNotConfigured && code != FailureMalformedConfig && code != FailureConflict &&
-		code != FailureCanceled && code != FailureUnsupported
+	if code == FailureCanceled {
+		return ctx.Err() == nil
+	}
+	return code != FailureNotConfigured && code != FailureMalformedConfig && code != FailureConflict && code != FailureUnsupported
 }
 
 // reportStartupRestoreFailure shows a failed restore in the idle session's
 // last failure, the field the snapshot already reports before the first Start.
 // It is skipped when the user acted meanwhile, when a failure is already
 // shown, and for "nothing saved", which is the normal state of a fresh install.
-func (m *Manager) reportStartupRestoreFailure(epoch uint64, err error) {
+func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64, err error) {
 	code := CodeOf(err)
-	if code == FailureNotConfigured || code == FailureCanceled {
+	if code == FailureNotConfigured || code == FailureCanceled && ctx.Err() != nil {
 		return
 	}
 	message := errorMessage(err)
