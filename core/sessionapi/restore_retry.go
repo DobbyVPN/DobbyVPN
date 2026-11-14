@@ -88,11 +88,9 @@ func (m *Manager) RestoreAtServiceStart(ctx context.Context, policy RestoreRetry
 }
 
 func transientRestoreFailure(err error) bool {
-	switch CodeOf(err) {
-	case FailureNotConfigured, FailureMalformedConfig, FailureConflict, FailureCanceled, FailureUnsupported:
-		return false
-	}
-	return true
+	code := CodeOf(err)
+	return code != FailureNotConfigured && code != FailureMalformedConfig && code != FailureConflict &&
+		code != FailureCanceled && code != FailureUnsupported
 }
 
 // reportStartupRestoreFailure shows a failed restore in the idle session's
