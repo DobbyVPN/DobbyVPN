@@ -88,7 +88,7 @@ jobs:
           PYTHON
       - name: Start supervised disposable fixtures and verify public ingress
         run: |
-          python3 .github/scripts/fixture_jobs.py start --root "$FIXTURE_ROOT" --tools "$FIXTURE_TOOLS" --tests torturer
+          python3 .github/scripts/fixture_jobs.py start --root "$FIXTURE_ROOT" --tools "$FIXTURE_TOOLS" --tests torturer --attempts 3
       - name: Publish current-attempt readiness while servers remain alive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
