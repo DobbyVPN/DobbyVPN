@@ -38,8 +38,9 @@ const (
 	defaultOutlineMethod = "chacha20-ietf-poly1305"
 	logCategoryConfig    = "CONFIGURATION"
 
-	maxDescriptionInError = 40
-	minBase64Payload      = 24
+	maxUnknownFieldWarnings = 20
+	maxDescriptionInError   = 40
+	minBase64Payload        = 24
 )
 
 var shareLinkSchemes = []string{
@@ -152,8 +153,13 @@ func profileSettingWarnings(protocol Protocol, block map[string]interface{}) []p
 
 func unknownOutlineFieldWarnings(block map[string]interface{}) []profileWarning {
 	var warnings []profileWarning
+	unlisted := 0
 	for _, key := range sortedKeys(block) {
 		if isKnownOutlineField(key) {
+			continue
+		}
+		if len(warnings) >= maxUnknownFieldWarnings {
+			unlisted++
 			continue
 		}
 		name := truncateRunes(key, maxDescriptionInError)
@@ -162,6 +168,9 @@ func unknownOutlineFieldWarnings(block map[string]interface{}) []profileWarning 
 			message += fmt.Sprintf(", did you mean %q?", suggestion)
 		}
 		warnings = append(warnings, profileWarning{field: name, message: message})
+	}
+	if unlisted > 0 {
+		warnings = append(warnings, profileWarning{field: "unknown", message: fmt.Sprintf("%d more unknown fields not listed", unlisted)})
 	}
 	return warnings
 }
