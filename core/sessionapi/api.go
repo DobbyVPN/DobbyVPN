@@ -258,6 +258,9 @@ type ManagerOptions struct {
 	Loader      ConfigLoader
 	SourceStore SourceStore
 	Now         func() time.Time
+	// StartupFailure, when set, is reported as the last failure of the initial
+	// idle session until the next Start. Nil leaves behavior unchanged.
+	StartupFailure error
 }
 
 type Manager struct {
@@ -311,6 +314,7 @@ type session struct {
 	active                     *ProfileSummary
 	lastFailure                FailureCode
 	lastFailureMessage         string
+	startupFailure             *Error
 	cleanupDone                bool
 	cleanupFailed              bool
 	cancel                     context.CancelFunc
@@ -365,12 +369,17 @@ func NewManager(options ManagerOptions) *Manager {
 			}
 		}
 	}
+	initial := &session{
+		id: id, state: StateIdle, cleanupDone: true, sequence: 1, sourceURL: sourceURL,
+		sourceKind: sourceKind, sourceError: sourceError, changed: make(chan struct{}),
+	}
+	if options.StartupFailure != nil {
+		initial.startupFailure = &Error{Code: CodeOf(options.StartupFailure), Message: options.StartupFailure.Error()}
+		initial.lastFailure, initial.lastFailureMessage = initial.startupFailure.Code, initial.startupFailure.Message
+	}
 	return &Manager{
 		runtime: r, platform: p, loader: loader, sourceStore: options.SourceStore, now: now, initErr: initErr,
-		session: &session{
-			id: id, state: StateIdle, cleanupDone: true, sequence: 1, sourceURL: sourceURL,
-			sourceKind: sourceKind, sourceError: sourceError, changed: make(chan struct{}),
-		},
+		session: initial,
 	}
 }
 
@@ -502,6 +511,10 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 func resetConfiguredSessionLocked(s *session) {
 	if s.cleanupDone && !s.cleanupFailed && !s.recovering && s.pending == nil {
 		s.active, s.lastFailure, s.lastFailureMessage, s.state = nil, "", "", StateConfigured
+		if s.startupFailure != nil {
+			// Reported until the first Start; Configure must not hide it.
+			s.lastFailure, s.lastFailureMessage = s.startupFailure.Code, s.startupFailure.Message
+		}
 		s.activeDigest, s.activeProfiles, s.activeTarget = "", nil, StartTarget{}
 		s.recoveryOriginGeneration, s.recoveryCount = 0, 0
 	}
@@ -646,6 +659,7 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cleanupBudget = &cleanupBudget{}
 	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, false, false, nil, "", ""
+	s.startupFailure = nil
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.failureMessageAfterCleanup = ""
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
