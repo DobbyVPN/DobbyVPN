@@ -50,12 +50,16 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 	if err != nil {
 		return parsedConfig{}, err
 	}
-	profiles, err := parseProfiles(root, protocols)
+	profiles, warnings, err := parseProfiles(root, protocols)
 	if err != nil {
 		return parsedConfig{}, err
 	}
 	if validateErr := validateLogsEndpoint(root.LogsEndpoint); validateErr != nil {
 		return parsedConfig{}, validateErr
+	}
+	// Warnings are logged only for a subscription that is accepted.
+	for _, w := range warnings {
+		w.ref.emit(w.items)
 	}
 	digest := sha256.Sum256(raw)
 	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles, logsEndpoint: root.LogsEndpoint}, nil
@@ -86,12 +90,15 @@ func decodeConfig(raw []byte) (configRoot, []string, error) {
 		return configRoot{}, nil, failure(FailureMalformedConfig, "configuration exceeds the 1 MiB size limit")
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return configRoot{}, nil, failure(FailureMalformedConfig, "configuration is blank")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "The subscription is empty. Expected TOML with at least one [[Outline]], [[Xray]] or [[TrustTunnel]] profile, see "+subscriptionFormatURL)
 	}
 	var root configRoot
 	metadata, err := toml.Decode(string(raw), &root)
 	if err != nil {
-		return configRoot{}, nil, failureWithCause(FailureMalformedConfig, "TOML could not be parsed", err)
+		if what, foreign := detectForeignFormat(raw); foreign {
+			return configRoot{}, nil, notDobbySubscription(what)
+		}
+		return configRoot{}, nil, failureWithCause(FailureMalformedConfig, "This is not a valid DobbyVPN subscription: TOML could not be parsed", withFormatPointer{err})
 	}
 	if metadata.IsDefined("logs_endpoint") && root.LogsEndpoint == "" {
 		return configRoot{}, nil, failure(FailureMalformedConfig, "logs_endpoint must not be empty")
@@ -111,7 +118,7 @@ func decodeConfig(raw []byte) (configRoot, []string, error) {
 		}
 	}
 	if len(protocols) == 0 {
-		return configRoot{}, nil, failure(FailureMalformedConfig, "expected one or more [[Outline]], [[Xray]], or [[TrustTunnel]] sections")
+		return configRoot{}, nil, failure(FailureMalformedConfig, "The subscription contains no profiles. Add at least one [[Outline]], [[Xray]] or [[TrustTunnel]] section, see "+subscriptionFormatURL)
 	}
 
 	counts := map[string]int{}
@@ -124,53 +131,64 @@ func decodeConfig(raw []byte) (configRoot, []string, error) {
 	return root, protocols, nil
 }
 
-func parseProfiles(root configRoot, protocols []string) ([]RuntimeProfile, error) {
-	next := map[string]int{}
-	profiles := make([]RuntimeProfile, 0, len(protocols))
-	for index, protocolName := range protocols {
-		profile, err := parseProfile(root, next, protocolName, int32(index))
-		if err != nil {
-			return nil, err
-		}
-		profiles = append(profiles, profile)
-	}
-	return profiles, nil
+type profileWarnings struct {
+	ref   profileRef
+	items []profileWarning
 }
 
-func parseProfile(root configRoot, next map[string]int, protocolName string, profileIndex int32) (RuntimeProfile, error) {
+func parseProfiles(root configRoot, protocols []string) ([]RuntimeProfile, []profileWarnings, error) {
+	next := map[string]int{}
+	profiles := make([]RuntimeProfile, 0, len(protocols))
+	var warnings []profileWarnings
+	for index, protocolName := range protocols {
+		profile, ref, items, err := parseProfile(root, next, protocolName, int32(index))
+		if err != nil {
+			return nil, nil, err
+		}
+		profiles = append(profiles, profile)
+		if len(items) > 0 {
+			warnings = append(warnings, profileWarnings{ref: ref, items: items})
+		}
+	}
+	return profiles, warnings, nil
+}
+
+func parseProfile(root configRoot, next map[string]int, protocolName string, profileIndex int32) (RuntimeProfile, profileRef, []profileWarning, error) {
 	block, protocol := nextProfile(root, next, protocolName)
 	next[protocolName]++
-	if cloakValue, present := block["Cloak"]; present {
-		cloak, ok := cloakValue.(bool)
-		if !ok {
-			return RuntimeProfile{}, failure(FailureMalformedConfig, "Cloak must be a boolean")
-		}
-		if cloak {
-			return RuntimeProfile{}, failure(FailureUnsupported, "configuration contains a removed Cloak profile")
-		}
-	}
-	if protocol == ProtocolTrustTunnel {
-		if err := validateTrustTunnelVerification(block); err != nil {
-			return RuntimeProfile{}, err
-		}
-	}
+	ref := profileRef{number: int(profileIndex) + 1, protocol: protocol}
 	description := ""
 	if value, present := block["Description"]; present {
 		var ok bool
 		description, ok = value.(string)
 		if !ok {
-			return RuntimeProfile{}, failure(FailureMalformedConfig, "Description must be a string")
+			return RuntimeProfile{}, ref, nil, ref.reject(invalidField("Description", "must be a string"))
 		}
 	}
-	normalized, err := normalizeProfile(protocol, block)
+	ref.description = description
+	if cloakValue, present := block["Cloak"]; present {
+		cloak, ok := cloakValue.(bool)
+		if !ok {
+			return RuntimeProfile{}, ref, nil, ref.reject(invalidField("Cloak", "must be true or false"))
+		}
+		if cloak {
+			return RuntimeProfile{}, ref, nil, ref.reject(&fieldError{code: FailureUnsupported, field: "Cloak", reason: "removed Cloak profiles are not supported"})
+		}
+	}
+	if protocol == ProtocolTrustTunnel {
+		if err := validateTrustTunnelVerification(block); err != nil {
+			return RuntimeProfile{}, ref, nil, ref.reject(err)
+		}
+	}
+	normalized, warnings, err := normalizeProfileChecked(protocol, block)
 	if err != nil {
-		return RuntimeProfile{}, err
+		return RuntimeProfile{}, ref, nil, ref.reject(err)
 	}
 	return RuntimeProfile{
 		Summary:      ProfileSummary{Index: profileIndex, Protocol: protocol, Description: description},
 		Config:       normalized,
 		ExcludeCIDRs: append([]string(nil), root.ExcludeIPs.IPs...),
-	}, nil
+	}, ref, warnings, nil
 }
 
 func nextProfile(root configRoot, next map[string]int, name string) (map[string]interface{}, Protocol) {
@@ -208,11 +226,15 @@ func validateRootKeys(keys []toml.Key) error {
 
 func validateTrustTunnelVerification(block map[string]interface{}) error {
 	if _, present := block["skip_verification"]; present {
-		return failure(FailureMalformedConfig, "TrustTunnel skip_verification is only supported under endpoint")
+		return invalidField("skip_verification", "is only supported under endpoint")
 	}
-	endpoint, ok := block["endpoint"].(map[string]interface{})
-	if !ok {
+	endpointValue, hasEndpoint := block["endpoint"]
+	if !hasEndpoint {
 		return nil
+	}
+	endpoint, ok := endpointValue.(map[string]interface{})
+	if !ok {
+		return invalidField("endpoint", "must be a table")
 	}
 	value, present := endpoint["skip_verification"]
 	if !present {
@@ -220,28 +242,39 @@ func validateTrustTunnelVerification(block map[string]interface{}) error {
 	}
 	skipVerification, ok := value.(bool)
 	if !ok {
-		return failure(FailureMalformedConfig, "TrustTunnel endpoint.skip_verification must be a boolean")
+		return invalidField("endpoint.skip_verification", "must be true or false")
 	}
 	if skipVerification {
-		return failure(FailureMalformedConfig, "TrustTunnel certificate verification must remain enabled")
+		return invalidField("endpoint.skip_verification", "certificate verification must remain enabled")
 	}
 	return nil
 }
 
 func normalizeProfile(kind Protocol, block map[string]any) (protocolconfig.Config, error) {
+	normalized, _, err := normalizeProfileChecked(kind, block)
+	return normalized, err
+}
+
+func normalizeProfileChecked(kind Protocol, block map[string]any) (protocolconfig.Config, []profileWarning, error) {
 	switch kind {
 	case ProtocolXray:
-		if _, ok := block["outbounds"]; !ok {
-			return protocolconfig.Config{}, failure(FailureMalformedConfig, "Xray profile requires outbounds")
+		outbounds, ok := block["outbounds"]
+		if !ok {
+			return protocolconfig.Config{}, nil, invalidField("outbounds", "is required")
 		}
-		return protocolconfig.Config{Xray: protocolconfig.CloneFields(block)}, nil
+		switch outbounds.(type) {
+		case []any, []map[string]any:
+		default:
+			return protocolconfig.Config{}, nil, invalidField("outbounds", "must be an array")
+		}
+		return protocolconfig.Config{Xray: protocolconfig.CloneFields(block)}, nil, nil
 	case ProtocolOutline:
-		normalized, err := normalizeOutlineURL(block)
-		return protocolconfig.Config{OutlineURL: normalized}, err
+		normalized, warnings, err := normalizeOutlineBlock(block)
+		return protocolconfig.Config{OutlineURL: normalized}, warnings, err
 	case ProtocolTrustTunnel:
-		return protocolconfig.Config{TrustTunnel: protocolconfig.CloneFields(block)}, nil
+		return protocolconfig.Config{TrustTunnel: protocolconfig.CloneFields(block)}, nil, nil
 	default:
-		return protocolconfig.Config{}, failure(FailureUnsupported, "unsupported protocol")
+		return protocolconfig.Config{}, nil, failure(FailureUnsupported, "unsupported protocol")
 	}
 }
 
@@ -250,25 +283,50 @@ func normalizeProfile(kind Protocol, block map[string]any) (protocolconfig.Confi
 // Android/iOS/desktop cannot diverge in method defaults, websocket paths, or
 // transport URL escaping. Protocol validation remains the runtime's job.
 func normalizeOutlineURL(block map[string]interface{}) (string, error) {
-	method := stringValue(block, "Method")
-	if method == "" {
-		method = "chacha20-ietf-poly1305"
+	normalized, _, err := normalizeOutlineBlock(block)
+	return normalized, err
+}
+
+// normalizeOutlineBlock also reports settings that are accepted but have no
+// effect (unknown keys, an ignored WebSocketPath or DisguisePrefix). Those stay
+// warnings so that subscriptions that connect today keep connecting.
+func normalizeOutlineBlock(block map[string]interface{}) (string, []profileWarning, error) {
+	warnings := unknownOutlineFieldWarnings(block)
+	method := "chacha20-ietf-poly1305"
+	if value, present := block["Method"]; present {
+		text, ok := value.(string)
+		if !ok {
+			return "", nil, invalidField("Method", "must be a string")
+		}
+		if trimmed := strings.TrimSpace(text); trimmed != "" {
+			method = trimmed
+		}
 	}
-	password := stringValue(block, "Password")
+	password := ""
+	if value, present := block["Password"]; present {
+		text, ok := value.(string)
+		if !ok {
+			return "", nil, invalidField("Password", "must be a string")
+		}
+		password = strings.TrimSpace(text)
+	}
 	if password == "" {
-		return "", failure(FailureMalformedConfig, "Outline profile requires a password")
+		return "", nil, invalidField("Password", "is required")
 	}
 	server := stringValue(block, "Server")
+	if server == "" {
+		return "", nil, invalidField("Server", "is required")
+	}
 	host, ok := outlineServerHost(server)
 	if !ok {
-		return "", failure(FailureMalformedConfig, "Outline server must be a hostname or IP address")
+		return "", nil, invalidField("Server", "must be a hostname or IP address")
 	}
 	websocket := false
 	if value, present := block["WebSocket"]; present {
 		var valid bool
 		websocket, valid = value.(bool)
 		if !valid {
-			return "", failure(FailureMalformedConfig, "Outline WebSocket must be a boolean")
+			return "", nil, invalidField("WebSocket", "must be true or false")
 		}
 	}
 	port := ""
@@ -276,32 +334,39 @@ func normalizeOutlineURL(block map[string]interface{}) (string, error) {
 		var valid bool
 		port, valid = outlinePort(value)
 		if !valid {
-			return "", failure(FailureMalformedConfig, "Outline port must be an integer from 1 to 65535")
+			return "", nil, invalidField("Port", "must be an integer from 1 to 65535")
 		}
 	} else if websocket {
 		port = "443"
 	} else {
-		return "", failure(FailureMalformedConfig, "Outline profile requires a port")
+		return "", nil, invalidField("Port", "is required unless WebSocket = true")
 	}
 	serverPort := net.JoinHostPort(host, port)
 	encoded := base64.StdEncoding.EncodeToString([]byte(method + ":" + password))
 	ssURL := "ss://" + encoded + "@" + serverPort
-	if prefix := rawStringValue(block, "DisguisePrefix"); prefix != "" {
-		ssURL += "?prefix=" + url.QueryEscape(prefix)
+	if value, present := block["DisguisePrefix"]; present {
+		if prefix, isString := value.(string); !isString {
+			warnings = append(warnings, profileWarning{field: "DisguisePrefix", message: `field "DisguisePrefix" must be a string, ignoring it`})
+		} else if prefix != "" {
+			ssURL += "?prefix=" + url.QueryEscape(prefix)
+		}
 	}
 	if !websocket {
-		return ssURL, nil
+		if _, present := block["WebSocketPath"]; present {
+			warnings = append(warnings, profileWarning{field: "WebSocketPath", message: `field "WebSocketPath" is ignored because WebSocket is not true`})
+		}
+		return ssURL, warnings, nil
 	}
 	path, ok := block["WebSocketPath"].(string)
 	if !ok || strings.TrimSpace(path) == "" {
-		return "", failure(FailureMalformedConfig, "Outline WebSocketPath must be a nonempty string")
+		return "", nil, invalidField("WebSocketPath", "must be a non-empty string when WebSocket = true")
 	}
 	base := strings.TrimRight(path, "/")
 	if base != "" && !strings.HasPrefix(base, "/") {
 		base = "/" + base
 	}
 	params := url.Values{"tcp_path": {base + "/tcp"}, "udp_path": {base + "/udp"}}
-	return "tls:sni=" + host + "|ws:" + params.Encode() + "|" + ssURL, nil
+	return "tls:sni=" + host + "|ws:" + params.Encode() + "|" + ssURL, warnings, nil
 }
 
 func outlinePort(value interface{}) (string, bool) {
