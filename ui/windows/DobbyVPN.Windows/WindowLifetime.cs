@@ -3,7 +3,17 @@ namespace DobbyVPN.Windows;
 /// <summary>Owns asynchronous work and cancellation for one Windows frontend window.</summary>
 internal sealed class WindowLifetime
 {
+    /// <summary>
+    /// How long closing waits for tracked work to unwind after cancellation.
+    /// Normal work unwinds in milliseconds once its token is canceled; five
+    /// seconds tolerates a slow disk or network teardown while keeping a stuck
+    /// operation (for example a clipboard provider that never answers) from
+    /// leaving the window open and inert.
+    /// </summary>
+    internal static readonly TimeSpan DefaultDrainTimeout = TimeSpan.FromSeconds(5);
+
     private readonly object _gate = new();
+    private readonly TimeSpan _drainTimeout;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly CancellationToken _shutdownToken;
     private readonly HashSet<Task> _pending = [];
@@ -12,7 +22,14 @@ internal sealed class WindowLifetime
     private Task<bool>? _drainTask;
     private Task? _closeTask;
 
-    public WindowLifetime() => _shutdownToken = _shutdown.Token;
+    public WindowLifetime(TimeSpan? drainTimeout = null)
+    {
+        var limit = drainTimeout ?? DefaultDrainTimeout;
+        if (limit <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(drainTimeout), limit, "The drain timeout must be positive.");
+        _drainTimeout = limit;
+        _shutdownToken = _shutdown.Token;
+    }
 
     // Cache the token so callbacks already in flight never query a disposed source.
     public CancellationToken ShutdownToken => _shutdownToken;
@@ -94,8 +111,11 @@ internal sealed class WindowLifetime
 
     /// <summary>
     /// Cancel pending modal work and drain tracked operations before allowing the
-    /// owning window to close. A failed drain is reported, and never marked as
-    /// successful, while the final close request is still made.
+    /// owning window to close. A failed or timed-out drain is reported, and never
+    /// marked as successful, while the final close request is still made. The
+    /// wait for tracked work is bounded by the drain timeout; work that outlives
+    /// it keeps running against the canceled token and the lifetime is disposed
+    /// when it finally finishes.
     /// </summary>
     public Task DrainBeforeCloseAsync(
         Action cancelPendingOperations,
@@ -178,7 +198,19 @@ internal sealed class WindowLifetime
         catch (Exception error) { drainFailures.Add(error); }
 
         var drain = DrainAsync();
-        try { await drain; }
+        try { await drain.WaitAsync(_drainTimeout); }
+        catch (TimeoutException)
+        {
+            // The drain keeps running; observe its eventual failure so it is
+            // not reported as an unobserved task exception.
+            _ = drain.ContinueWith(
+                finished => _ = finished.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            drainFailures.Add(new TimeoutException(
+                $"Tracked window work did not finish within {_drainTimeout.TotalSeconds:0.###} s of the close request."));
+        }
         catch (Exception error) { drainFailures.Add(error); }
 
         if (drainFailures.Count == 0)

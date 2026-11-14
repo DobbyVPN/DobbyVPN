@@ -1033,7 +1033,7 @@ public sealed partial class MainWindow : Window
         _diagnostics.RecordInfo("subscription.paste-click", "Started handling a Paste button click", new { session_id = _snapshot?.SessionId });
         try
         {
-            var pastedText = (await Clipboard.GetContent().GetTextAsync()).Trim();
+            var pastedText = (await ReadClipboardTextAsync(cancellationToken)).Trim();
             if (cancellationToken.IsCancellationRequested) return;
             _diagnostics.RecordInfo("subscription.paste-clipboard-text-returned", "Clipboard text returned to the Paste handler", new { session_id = _snapshot?.SessionId, text_length = pastedText.Length });
             if (!ValidSubscription(pastedText)) throw new InvalidOperationException("Paste an HTTPS subscription URL with a host");
@@ -1041,6 +1041,21 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); Render(); }
     }
+
+    // A clipboard provider can withhold completion indefinitely. Cancelling
+    // the WinRT operation alone would still wait for the provider to report
+    // back, so the wait itself also ends as soon as the window starts closing.
+    private static async Task<string> ReadClipboardTextAsync(CancellationToken cancellationToken)
+    {
+        var operation = Clipboard.GetContent().GetTextAsync();
+        using var cancelOperation = cancellationToken.Register(() =>
+        {
+            try { operation.Cancel(); }
+            catch (Exception) { /* already completed or closed; the wait below ends regardless */ }
+        });
+        return await operation.AsTask().WaitAsync(cancellationToken);
+    }
+
     private void ImportSubscription(string source, SubscriptionInputKind kind)
     {
         if (!ValidSubscription(source)) throw new InvalidOperationException("Enter an HTTPS subscription URL with a host");

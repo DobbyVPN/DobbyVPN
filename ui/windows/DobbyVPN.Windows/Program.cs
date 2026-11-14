@@ -43,17 +43,11 @@ internal static class Program
         {
             LogInstanceVersions(instance.ProcessId);
             LogActivation("activation.redirect-start", "Redirecting activation to the running app", activation, args);
-            try
-            {
-                StaActivationRedirect.WaitForRedirect(async () => await instance.RedirectActivationToAsync(activation), instance.ProcessId);
+            if (StaActivationRedirect.TryRedirect(
+                    async () => await instance.RedirectActivationToAsync(activation), instance.ProcessId,
+                    error => LogActivation("activation.redirect-failed", "Startup activation redirect failed", activation, args,
+                        false, error: error.ToString())))
                 LogActivation("activation.redirect-complete", "Startup activation redirect completed; recipient acceptance is not confirmed", activation, args, true);
-            }
-            catch (Exception error)
-            {
-                LogActivation("activation.redirect-failed", "Startup activation redirect failed", activation, args,
-                    false, error: error.ToString());
-                throw;
-            }
             return;
         }
         _instance = instance;
@@ -79,7 +73,15 @@ internal static class Program
                     var dispatcher = _dispatcher;
                     return dispatcher is null || dispatcher.TryEnqueue(Drain);
                 }, queued))
+            {
                 NativeDiagnostics.Current.Record("Activation dispatcher rejected delivery or the application stopped accepting activations; pending delivery is retained when possible.", "activation.dispatch.failure");
+                // Once the final window has closed nothing will ever drain the
+                // queue, so tell the user instead of dropping the link silently.
+                if (!Activations.IsAccepting)
+                    // A modal box must not block the activation callback, and the
+                    // non-background thread keeps the exiting process alive until it is read.
+                    new Thread(() => StaActivationRedirect.ShowNotRespondingMessage()) { IsBackground = false }.Start();
+            }
         }
         catch (Exception error)
         {

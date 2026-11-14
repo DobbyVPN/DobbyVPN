@@ -13,6 +13,12 @@ internal sealed class ActivationLifetime<TActivation, TWindow> where TWindow : c
     private TWindow? _window;
     private bool _accepting = true;
 
+    /// <summary>False once the final window has closed and no later delivery can be drained.</summary>
+    internal bool IsAccepting
+    {
+        get { lock (_gate) return _accepting; }
+    }
+
     internal bool Enqueue(TActivation activation, Func<bool> schedule, Action? queued = null)
     {
         lock (_gate)
