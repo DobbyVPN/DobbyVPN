@@ -95,10 +95,7 @@ func decodeConfig(raw []byte) (configRoot, []string, error) {
 	var root configRoot
 	metadata, err := toml.Decode(string(raw), &root)
 	if err != nil {
-		if what, foreign := detectForeignFormat(raw); foreign {
-			return configRoot{}, nil, notDobbySubscription(what)
-		}
-		return configRoot{}, nil, failureWithCause(FailureMalformedConfig, "This is not a valid DobbyVPN subscription: TOML could not be parsed", withFormatPointer{err})
+		return configRoot{}, nil, undecodableConfigError(raw, err)
 	}
 	if metadata.IsDefined("logs_endpoint") && root.LogsEndpoint == "" {
 		return configRoot{}, nil, failure(FailureMalformedConfig, "logs_endpoint must not be empty")
@@ -158,21 +155,21 @@ func parseProfile(root configRoot, next map[string]int, protocolName string, pro
 	next[protocolName]++
 	ref := profileRef{number: int(profileIndex) + 1, protocol: protocol}
 	description := ""
-	if value, present := block["Description"]; present {
+	if value, present := block[fieldDescription]; present {
 		var ok bool
 		description, ok = value.(string)
 		if !ok {
-			return RuntimeProfile{}, ref, nil, ref.reject(invalidField("Description", "must be a string"))
+			return RuntimeProfile{}, ref, nil, ref.reject(invalidField(fieldDescription, reasonString))
 		}
 	}
 	ref.description = description
-	if cloakValue, present := block["Cloak"]; present {
+	if cloakValue, present := block[fieldCloak]; present {
 		cloak, ok := cloakValue.(bool)
 		if !ok {
-			return RuntimeProfile{}, ref, nil, ref.reject(invalidField("Cloak", "must be true or false"))
+			return RuntimeProfile{}, ref, nil, ref.reject(invalidField(fieldCloak, reasonBoolean))
 		}
 		if cloak {
-			return RuntimeProfile{}, ref, nil, ref.reject(&fieldError{code: FailureUnsupported, field: "Cloak", reason: "removed Cloak profiles are not supported"})
+			return RuntimeProfile{}, ref, nil, ref.reject(&fieldError{code: FailureUnsupported, field: fieldCloak, reason: "removed Cloak profiles are not supported"})
 		}
 	}
 	if protocol == ProtocolTrustTunnel {
@@ -225,27 +222,27 @@ func validateRootKeys(keys []toml.Key) error {
 }
 
 func validateTrustTunnelVerification(block map[string]interface{}) error {
-	if _, present := block["skip_verification"]; present {
-		return invalidField("skip_verification", "is only supported under endpoint")
+	if _, present := block[fieldSkipVerification]; present {
+		return invalidField(fieldSkipVerification, "is only supported under endpoint")
 	}
-	endpointValue, hasEndpoint := block["endpoint"]
+	endpointValue, hasEndpoint := block[fieldEndpoint]
 	if !hasEndpoint {
 		return nil
 	}
 	endpoint, ok := endpointValue.(map[string]interface{})
 	if !ok {
-		return invalidField("endpoint", "must be a table")
+		return invalidField(fieldEndpoint, "must be a table")
 	}
-	value, present := endpoint["skip_verification"]
+	value, present := endpoint[fieldSkipVerification]
 	if !present {
 		return nil
 	}
 	skipVerification, ok := value.(bool)
 	if !ok {
-		return invalidField("endpoint.skip_verification", "must be true or false")
+		return invalidField(fieldEndpointSkipVerification, reasonBoolean)
 	}
 	if skipVerification {
-		return invalidField("endpoint.skip_verification", "certificate verification must remain enabled")
+		return invalidField(fieldEndpointSkipVerification, "certificate verification must remain enabled")
 	}
 	return nil
 }
@@ -258,14 +255,14 @@ func normalizeProfile(kind Protocol, block map[string]any) (protocolconfig.Confi
 func normalizeProfileChecked(kind Protocol, block map[string]any) (protocolconfig.Config, []profileWarning, error) {
 	switch kind {
 	case ProtocolXray:
-		outbounds, ok := block["outbounds"]
+		outbounds, ok := block[fieldOutbounds]
 		if !ok {
-			return protocolconfig.Config{}, nil, invalidField("outbounds", "is required")
+			return protocolconfig.Config{}, nil, invalidField(fieldOutbounds, reasonRequired)
 		}
 		switch outbounds.(type) {
 		case []any, []map[string]any:
 		default:
-			return protocolconfig.Config{}, nil, invalidField("outbounds", "must be an array")
+			return protocolconfig.Config{}, nil, invalidField(fieldOutbounds, "must be an array")
 		}
 		return protocolconfig.Config{Xray: protocolconfig.CloneFields(block)}, nil, nil
 	case ProtocolOutline:
@@ -292,74 +289,49 @@ func normalizeOutlineURL(block map[string]interface{}) (string, error) {
 // warnings so that subscriptions that connect today keep connecting.
 func normalizeOutlineBlock(block map[string]interface{}) (string, []profileWarning, error) {
 	warnings := unknownOutlineFieldWarnings(block)
-	method := "chacha20-ietf-poly1305"
-	if value, present := block["Method"]; present {
-		text, ok := value.(string)
-		if !ok {
-			return "", nil, invalidField("Method", "must be a string")
-		}
-		if trimmed := strings.TrimSpace(text); trimmed != "" {
-			method = trimmed
-		}
+	method, err := outlineMethod(block)
+	if err != nil {
+		return "", nil, err
 	}
-	password := ""
-	if value, present := block["Password"]; present {
-		text, ok := value.(string)
-		if !ok {
-			return "", nil, invalidField("Password", "must be a string")
-		}
-		password = strings.TrimSpace(text)
+	password, err := outlinePassword(block)
+	if err != nil {
+		return "", nil, err
 	}
-	if password == "" {
-		return "", nil, invalidField("Password", "is required")
-	}
-	server := stringValue(block, "Server")
+	server := stringValue(block, fieldServer)
 	if server == "" {
-		return "", nil, invalidField("Server", "is required")
+		return "", nil, invalidField(fieldServer, reasonRequired)
 	}
 	host, ok := outlineServerHost(server)
 	if !ok {
-		return "", nil, invalidField("Server", "must be a hostname or IP address")
+		return "", nil, invalidField(fieldServer, "must be a hostname or IP address")
 	}
 	websocket := false
-	if value, present := block["WebSocket"]; present {
-		var valid bool
-		websocket, valid = value.(bool)
-		if !valid {
-			return "", nil, invalidField("WebSocket", "must be true or false")
+	if value, present := block[fieldWebSocket]; present {
+		websocket, ok = value.(bool)
+		if !ok {
+			return "", nil, invalidField(fieldWebSocket, reasonBoolean)
 		}
 	}
-	port := ""
-	if value, present := block["Port"]; present {
-		var valid bool
-		port, valid = outlinePort(value)
-		if !valid {
-			return "", nil, invalidField("Port", "must be an integer from 1 to 65535")
-		}
-	} else if websocket {
-		port = "443"
-	} else {
-		return "", nil, invalidField("Port", "is required unless WebSocket = true")
+	port, err := outlinePortField(block, websocket)
+	if err != nil {
+		return "", nil, err
 	}
-	serverPort := net.JoinHostPort(host, port)
 	encoded := base64.StdEncoding.EncodeToString([]byte(method + ":" + password))
-	ssURL := "ss://" + encoded + "@" + serverPort
-	if value, present := block["DisguisePrefix"]; present {
-		if prefix, isString := value.(string); !isString {
-			warnings = append(warnings, profileWarning{field: "DisguisePrefix", message: `field "DisguisePrefix" must be a string, ignoring it`})
-		} else if prefix != "" {
-			ssURL += "?prefix=" + url.QueryEscape(prefix)
-		}
+	ssURL := "ss://" + encoded + "@" + net.JoinHostPort(host, port)
+	if prefix, warning := outlineDisguisePrefix(block); warning != nil {
+		warnings = append(warnings, *warning)
+	} else if prefix != "" {
+		ssURL += "?prefix=" + url.QueryEscape(prefix)
 	}
 	if !websocket {
-		if _, present := block["WebSocketPath"]; present {
-			warnings = append(warnings, profileWarning{field: "WebSocketPath", message: `field "WebSocketPath" is ignored because WebSocket is not true`})
+		if _, present := block[fieldWebSocketPath]; present {
+			warnings = append(warnings, profileWarning{field: fieldWebSocketPath, message: `field "WebSocketPath" is ignored because WebSocket is not true`})
 		}
 		return ssURL, warnings, nil
 	}
-	path, ok := block["WebSocketPath"].(string)
+	path, ok := block[fieldWebSocketPath].(string)
 	if !ok || strings.TrimSpace(path) == "" {
-		return "", nil, invalidField("WebSocketPath", "must be a non-empty string when WebSocket = true")
+		return "", nil, invalidField(fieldWebSocketPath, "must be a non-empty string when WebSocket = true")
 	}
 	base := strings.TrimRight(path, "/")
 	if base != "" && !strings.HasPrefix(base, "/") {
@@ -367,6 +339,68 @@ func normalizeOutlineBlock(block map[string]interface{}) (string, []profileWarni
 	}
 	params := url.Values{"tcp_path": {base + "/tcp"}, "udp_path": {base + "/udp"}}
 	return "tls:sni=" + host + "|ws:" + params.Encode() + "|" + ssURL, warnings, nil
+}
+
+// outlineMethod keeps the default cipher for an absent or blank Method; only a
+// value that is not a string is rejected.
+func outlineMethod(block map[string]interface{}) (string, error) {
+	value, present := block[fieldMethod]
+	if !present {
+		return defaultOutlineMethod, nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", invalidField(fieldMethod, reasonString)
+	}
+	if trimmed := strings.TrimSpace(text); trimmed != "" {
+		return trimmed, nil
+	}
+	return defaultOutlineMethod, nil
+}
+
+func outlinePassword(block map[string]interface{}) (string, error) {
+	value, present := block[fieldPassword]
+	if !present {
+		return "", invalidField(fieldPassword, reasonRequired)
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", invalidField(fieldPassword, reasonString)
+	}
+	password := strings.TrimSpace(text)
+	if password == "" {
+		return "", invalidField(fieldPassword, reasonRequired)
+	}
+	return password, nil
+}
+
+func outlinePortField(block map[string]interface{}, websocket bool) (string, error) {
+	value, present := block[fieldPort]
+	if present {
+		port, valid := outlinePort(value)
+		if !valid {
+			return "", invalidField(fieldPort, "must be an integer from 1 to 65535")
+		}
+		return port, nil
+	}
+	if websocket {
+		return "443", nil
+	}
+	return "", invalidField(fieldPort, "is required unless WebSocket = true")
+}
+
+// outlineDisguisePrefix returns the prefix, or a warning when the value is not
+// a string and is therefore dropped, as it always has been.
+func outlineDisguisePrefix(block map[string]interface{}) (string, *profileWarning) {
+	value, present := block[fieldDisguisePrefix]
+	if !present {
+		return "", nil
+	}
+	prefix, ok := value.(string)
+	if !ok {
+		return "", &profileWarning{field: fieldDisguisePrefix, message: `field "DisguisePrefix" must be a string, ignoring it`}
+	}
+	return prefix, nil
 }
 
 func outlinePort(value interface{}) (string, bool) {
@@ -415,8 +449,4 @@ func outlineServerHost(server string) (string, bool) {
 func stringValue(block map[string]interface{}, key string) string {
 	value, _ := block[key].(string)
 	return strings.TrimSpace(value)
-}
-func rawStringValue(block map[string]interface{}, key string) string {
-	value, _ := block[key].(string)
-	return value
 }

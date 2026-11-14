@@ -3,8 +3,10 @@ package sessionapi
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -15,6 +17,27 @@ import (
 const subscriptionFormatURL = "https://github.com/DobbyVPN/DobbyVPN#using-dobbyvpn"
 
 const (
+	fieldDescription              = "Description"
+	fieldServer                   = "Server"
+	fieldPort                     = "Port"
+	fieldPassword                 = "Password"
+	fieldMethod                   = "Method"
+	fieldDisguisePrefix           = "DisguisePrefix"
+	fieldWebSocket                = "WebSocket"
+	fieldWebSocketPath            = "WebSocketPath"
+	fieldCloak                    = "Cloak"
+	fieldOutbounds                = "outbounds"
+	fieldEndpoint                 = "endpoint"
+	fieldSkipVerification         = "skip_verification"
+	fieldEndpointSkipVerification = "endpoint.skip_verification"
+
+	reasonRequired = "is required"
+	reasonString   = "must be a string"
+	reasonBoolean  = "must be true or false"
+
+	defaultOutlineMethod = "chacha20-ietf-poly1305"
+	logCategoryConfig    = "CONFIGURATION"
+
 	maxDescriptionInError = 40
 	minBase64Payload      = 24
 )
@@ -82,7 +105,8 @@ func invalidField(field, reason string) error {
 }
 
 func (p profileRef) reject(err error) error {
-	if fe, ok := err.(*fieldError); ok {
+	var fe *fieldError
+	if errors.As(err, &fe) {
 		return failure(fe.code, fmt.Sprintf("Subscription rejected. %s, field %s: %s.", p.label(), fe.field, fe.reason))
 	}
 	return err
@@ -97,13 +121,13 @@ type profileWarning struct {
 
 func (p profileRef) emit(warnings []profileWarning) {
 	for _, warning := range warnings {
-		log.Warn("CONFIGURATION", fmt.Sprintf("Profile %d: %s", p.number, warning.message),
+		log.Warn(logCategoryConfig, fmt.Sprintf("Profile %d: %s", p.number, warning.message),
 			map[string]any{"profile": p.number, "field": warning.field})
 	}
 }
 
 var knownOutlineFields = []string{
-	"Description", "Server", "Port", "Password", "Method", "DisguisePrefix", "WebSocket", "WebSocketPath", "Cloak",
+	fieldDescription, fieldServer, fieldPort, fieldPassword, fieldMethod, fieldDisguisePrefix, fieldWebSocket, fieldWebSocketPath, fieldCloak,
 }
 
 func unknownOutlineFieldWarnings(block map[string]interface{}) []profileWarning {
@@ -136,11 +160,7 @@ func sortedKeys(block map[string]interface{}) []string {
 	for key := range block {
 		keys = append(keys, key)
 	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
+	sort.Strings(keys)
 	return keys
 }
 
@@ -189,6 +209,15 @@ type withFormatPointer struct{ err error }
 
 func (e withFormatPointer) Error() string { return e.err.Error() + ". See " + subscriptionFormatURL }
 func (e withFormatPointer) Unwrap() error { return e.err }
+
+// undecodableConfigError explains a body that is not valid TOML: either a
+// recognised foreign format or a broken DobbyVPN subscription.
+func undecodableConfigError(raw []byte, decodeErr error) error {
+	if what, foreign := detectForeignFormat(raw); foreign {
+		return notDobbySubscription(what)
+	}
+	return failureWithCause(FailureMalformedConfig, "This is not a valid DobbyVPN subscription: TOML could not be parsed", withFormatPointer{decodeErr})
+}
 
 func notDobbySubscription(what string) error {
 	return failure(FailureMalformedConfig,
