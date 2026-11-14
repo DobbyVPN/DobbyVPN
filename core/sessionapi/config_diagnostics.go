@@ -39,6 +39,7 @@ const (
 	logCategoryConfig    = "CONFIGURATION"
 
 	maxUnknownFieldWarnings = 20
+	maxSuggestionDistance   = 2
 	maxDescriptionInError   = 40
 	minBase64Payload        = 24
 )
@@ -194,19 +195,26 @@ func sortedKeys(block map[string]interface{}) []string {
 }
 
 func suggestField(key string, candidates []string) string {
+	keyLength := utf8.RuneCountInString(key)
+	if keyLength < 4 {
+		return ""
+	}
 	for _, candidate := range candidates {
 		if strings.EqualFold(key, candidate) {
 			return candidate
 		}
 	}
-	best, bestDistance := "", 3
+	lowered := strings.ToLower(key)
+	best, bestDistance := "", maxSuggestionDistance+1
 	for _, candidate := range candidates {
-		if d := editDistance(strings.ToLower(key), strings.ToLower(candidate)); d < bestDistance {
+		// A length difference above the threshold already rules the candidate
+		// out, so a huge field name never reaches the quadratic comparison.
+		if diff := keyLength - utf8.RuneCountInString(candidate); diff > maxSuggestionDistance || -diff > maxSuggestionDistance {
+			continue
+		}
+		if d := editDistance(lowered, strings.ToLower(candidate)); d < bestDistance {
 			best, bestDistance = candidate, d
 		}
-	}
-	if len([]rune(key)) < 4 {
-		return ""
 	}
 	return best
 }
