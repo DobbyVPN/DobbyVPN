@@ -10,7 +10,7 @@ import (
 
 // interruptedStateMessage is the only recovery text shown to clients; the
 // detailed cause goes to the service log.
-const interruptedStateMessage = "could not restore network state left by a previous run; the VPN was not started"
+const interruptedStateMessage = "could not restore network state left by a previous run; the VPN was not started. See journalctl -u dobbyvpn for details"
 
 // recoverOwnedLinuxRoutes is a seam for the runtime unit tests. The concrete
 // implementation removes only routes carrying DobbyVPN's ownership tags.

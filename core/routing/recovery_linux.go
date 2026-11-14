@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"core/log"
 
@@ -18,6 +19,7 @@ type linuxRecoveryRoutes struct {
 	hasIndependentDefault   bool
 	restoreDefault          *netlink.Route
 	restoreDefaultAmbiguous bool
+	markedDefaults          []netlink.Route
 }
 
 func linuxOwnedProxyRoute(route netlink.Route) bool {
@@ -114,6 +116,7 @@ func collectLinuxRecoveryRoutes(ipv4Routes, ipv6Routes []netlink.Route, tableID 
 			Type:      unix.RTN_UNICAST,
 			Scope:     netlink.SCOPE_UNIVERSE,
 		}
+		recovered.markedDefaults = append(recovered.markedDefaults, candidate)
 		if recovered.restoreDefault == nil {
 			recovered.restoreDefault = &candidate
 		} else if recovered.restoreDefault.LinkIndex != candidate.LinkIndex ||
@@ -184,7 +187,12 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 
 func restoreLinuxInterruptedDefault(routes linuxRecoveryRoutes) error {
 	if routes.restoreDefaultAmbiguous {
-		return fmt.Errorf("restore interrupted default route: owned marked routes disagree")
+		candidates := make([]string, 0, len(routes.markedDefaults))
+		for _, route := range routes.markedDefaults {
+			candidates = append(candidates, fmt.Sprintf("gateway %s via interface index %d", route.Gw, route.LinkIndex))
+		}
+		return fmt.Errorf("restore interrupted default route: owned marked routes disagree (%s); the routes were left in place",
+			strings.Join(candidates, "; "))
 	}
 	if routes.restoreDefault == nil || routes.hasIndependentDefault {
 		return nil
