@@ -135,6 +135,12 @@ var knownOutlineFields = []string{
 // profileSettingWarnings lists settings that are accepted but have no effect.
 // They stay warnings so that subscriptions that connect today keep connecting.
 func profileSettingWarnings(protocol Protocol, block map[string]interface{}) []profileWarning {
+	if protocol == ProtocolTrustTunnel {
+		if _, present := block[fieldEndpoint]; !present {
+			return []profileWarning{{field: fieldEndpoint, message: `field "endpoint" is missing; the profile will fail to connect`}}
+		}
+		return nil
+	}
 	if protocol != ProtocolOutline {
 		return nil
 	}
