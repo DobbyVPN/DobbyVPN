@@ -10,9 +10,10 @@ import (
 )
 
 // sessionRestorer is the part of the process binding the desktop service uses
-// to bring back a session that was active before the service stopped.
+// to bring back a session that was active before the service stopped, with
+// the bounded retries of the service start window.
 type sessionRestorer interface {
-	Restore(onlyPreviouslyEnabled bool) string
+	RestoreAtServiceStart() string
 }
 
 // restoreDesktopSession restores the session that was active before the
@@ -28,7 +29,7 @@ func restoreDesktopSession(owner sessionRestorer) {
 				log.Errorf(desktopLogCategory, "automatic session restore panicked: %v", recovered)
 			}
 		}()
-		logRestoreResult(owner.Restore(true))
+		logRestoreResult(owner.RestoreAtServiceStart())
 	}()
 }
 
