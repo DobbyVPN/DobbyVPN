@@ -94,6 +94,8 @@ public struct DobbyRootView: View {
     @State private var showingLogMenu = false
     @State private var showingReferenceShare = false
     @State private var rowHeight: CGFloat = 0
+    @State private var controlsHeight: CGFloat = 0
+    @State private var referenceBlockHeight: CGFloat = 0
     @State private var errorDetailHeight: CGFloat = 240
 
     public init(model: DobbySessionViewModel) {
@@ -121,7 +123,18 @@ public struct DobbyRootView: View {
                 .padding(.bottom, pt(12))
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("Connection controls")
+                .background(GeometryReader { Color.clear.preference(key: ControlsHeight.self, value: $0.size.height) })
+                .onPreferenceChange(ControlsHeight.self) { controlsHeight = $0 }
+#if os(iOS)
+            // The root stack sizes to its children's ideal heights, so an unbounded log section
+            // pushes the stored reference's Copy/Share and the log page below the window at the
+            // largest text size. Give the section the height the controls leave; the reference
+            // block inside it is bounded against the log's 60-point floor.
+            logs(availableHeight: controlsHeight > 0 ? logsHeight(geometry) : nil)
+                .frame(height: controlsHeight > 0 ? logsHeight(geometry) : nil)
+#else
             logs.frame(maxHeight: .infinity)
+#endif
             }
 #if os(macOS)
             // On macOS the window can be stretched arbitrarily wide; let the content follow it
@@ -376,6 +389,15 @@ public struct DobbyRootView: View {
     }
 
     private var logs: some View {
+        logs(availableHeight: nil)
+    }
+
+    /// Height of the log section below the measured controls group, never below the log bar.
+    private func logsHeight(_ geometry: GeometryProxy) -> CGFloat {
+        max(pt(60), geometry.size.height - controlsHeight)
+    }
+
+    private func logs(availableHeight: CGFloat?) -> some View {
         VStack(spacing: 0) {
             Rectangle().fill(Color.ink).frame(height: 1.5)
 #if os(iOS)
@@ -406,14 +428,19 @@ public struct DobbyRootView: View {
                 }.padding()
             }
             if let latest = model.latestUpload {
-                VStack(alignment: .leading) {
-                    Text(latest.reference).textSelection(.enabled).accessibilityIdentifier("logs.upload.reference")
-                    Text("\(latest.completed.formatted()) · \(latest.provider)").font(.caption)
-                    HStack {
-                        Button("Copy reference") { copyUploadReference(latest.reference) }.accessibilityIdentifier("logs.upload.copy")
-                        Button("Share reference") { shareUploadReference(latest.shareText) }.accessibilityIdentifier("logs.upload.share")
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding()
+#if os(iOS)
+                // The reference block may use the space above the log's 60-point floor and no
+                // more; when it is taller than that it scrolls inside itself, so the reference
+                // and its Copy/Share controls stay reachable inside the window.
+                ScrollView(.vertical) {
+                    referenceBlock(latest)
+                }
+                .frame(height: min(referenceBlockHeight,
+                                   max(0, (availableHeight ?? .infinity) - pt(60) - 1.5)))
+                .onPreferenceChange(ReferenceBlockHeight.self) { referenceBlockHeight = $0 }
+#else
+                referenceBlock(latest)
+#endif
             }
 #if os(iOS)
             DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs, onShowMenu: { showingLogMenu.toggle() }, onClear: model.clearLogs)
@@ -423,13 +450,27 @@ public struct DobbyRootView: View {
             DobbyLogView(
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
                 interactive: !showingError, onSendLogs: sendLogs, onUploadLogs: model.snapshot.logsUploadAvailable ? { model.startLogsUpload() } : nil, onClear: { followingLogs = true; model.clearLogs() },
-                onReadingPositionRestored: model.recordMacLogRestore,
-                onReadingPositionCaptured: model.recordMacLogCapture
+                onReadingPositionRestored: model.macLogRestore,
+                onReadingPositionCaptured: model.macLogCapture
             )
             .accessibilityIdentifier("Connection logs")
 #endif
         }
         .background(Color.surface.ignoresSafeArea(edges: .bottom))
+    }
+
+    private func referenceBlock(_ latest: DobbyUploadReference) -> some View {
+        VStack(alignment: .leading) {
+            Text(latest.reference).textSelection(.enabled).accessibilityIdentifier("logs.upload.reference")
+            Text("\(latest.completed.formatted()) · \(latest.provider)").font(.caption)
+            HStack {
+                Button("Copy reference") { copyUploadReference(latest.reference) }.accessibilityIdentifier("logs.upload.copy")
+                Button("Share reference") { shareUploadReference(latest.shareText) }.accessibilityIdentifier("logs.upload.share")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(GeometryReader { Color.clear.preference(key: ReferenceBlockHeight.self, value: $0.size.height) })
     }
 
     private func copyUploadReference(_ text: String) {
@@ -643,6 +684,16 @@ private struct ConnectionButton: View {
 }
 
 private struct RowHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct ControlsHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct ReferenceBlockHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
