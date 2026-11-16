@@ -39,16 +39,12 @@ func desktopProcessBinding() *mobilebinding.Binding {
 		if err != nil {
 			panic(fmt.Sprintf("failed to locate desktop connection URL storage: %v", err))
 		}
-		processBinding = newDesktopBinding(sourceStore, startupFailure)
+		manager := sessionapi.NewManager(sessionapi.ManagerOptions{
+			Runtime:        runtimebridge.New(nil),
+			SourceStore:    sourceStore,
+			StartupFailure: startupFailure,
+		})
+		processBinding = mobilebinding.NewForDesktop(manager)
 	})
 	return processBinding
-}
-
-func newDesktopBinding(sourceStore sessionapi.SourceStore, failure error) *mobilebinding.Binding {
-	manager := sessionapi.NewManager(sessionapi.ManagerOptions{
-		Runtime:        runtimebridge.New(nil),
-		SourceStore:    sourceStore,
-		StartupFailure: failure,
-	})
-	return mobilebinding.NewForDesktop(manager)
 }
