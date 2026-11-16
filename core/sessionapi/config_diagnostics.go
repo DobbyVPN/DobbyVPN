@@ -49,8 +49,9 @@ var shareLinkSchemes = []string{
 }
 
 var (
-	yamlKeyLineRE = regexp.MustCompile(`^["']?[A-Za-z0-9_.-][^=:]*["']?:(\s|$)`)
-	base64BodyRE  = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
+	profileHeaderLineRE = regexp.MustCompile(`(?m)^[ \t]*\[\[(Outline|Xray|TrustTunnel)\]\][ \t\r]*$`)
+	yamlKeyLineRE       = regexp.MustCompile(`^["']?[A-Za-z0-9_.-][^=:]*["']?:(\s|$)`)
+	base64BodyRE        = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
 )
 
 // profileRef identifies a profile the way the client lists show it: the
@@ -225,7 +226,9 @@ func detectForeignFormat(raw []byte) (string, bool) {
 	if what, ok := describeBase64(text); ok {
 		return what, true
 	}
-	if looksLikeYAML(text) {
+	// A line that is a profile header makes the body a broken DobbyVPN
+	// subscription, not YAML, so its TOML error is kept.
+	if looksLikeYAML(text) && !profileHeaderLineRE.MatchString(text) {
 		return "YAML", true
 	}
 	return "", false
