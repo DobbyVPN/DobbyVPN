@@ -116,7 +116,7 @@ func (d *OutlineDevice) probeTarget(ctx context.Context, target string) bool {
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	deadline, _ := ctx.Deadline()
 	_ = conn.SetDeadline(deadline)
 	if _, err := conn.Write([]byte(ipv6ProbeRequest)); err != nil {
