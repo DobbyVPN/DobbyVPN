@@ -78,6 +78,8 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 			return nil
 		}
 	}
+	// A partly closed plan no longer matches the remembered identity.
+	p.complete = false
 	if p.current != nil {
 		if err := p.current.Close(ctx); err != nil {
 			return err
