@@ -55,11 +55,10 @@ func startupFailureMessage(stage string, cause error) string {
 func reportStartupFailure(stage string, cause error, toEventLog bool) int {
 	message := startupFailureMessage(stage, cause)
 	_, _ = fmt.Fprintln(diagnostics.Stderr, message)
-	if !toEventLog {
-		return 1
-	}
-	if err := writeStartupFailureEvent(message); err != nil {
-		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to write startup failure to the Windows Event Log: %v\n", err)
+	if toEventLog {
+		if err := writeStartupFailureEvent(message); err != nil {
+			_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to write startup failure to the Windows Event Log: %v\n", err)
+		}
 	}
 	return 1
 }
