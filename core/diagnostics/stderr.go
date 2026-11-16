@@ -249,6 +249,10 @@ func rotationRetryDelayTicks(failures int) int {
 func (capture *rawCapture) rotate() error {
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
+	// Idle ticks only compare the size; the lock file is for an actual rotation.
+	if info, err := capture.file.Stat(); err == nil && !capture.pending && info.Size() < capture.limit {
+		return nil
+	}
 	return withFileLock(capture.path, func() error {
 		info, err := capture.file.Stat()
 		if err != nil {
