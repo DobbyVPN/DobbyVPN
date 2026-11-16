@@ -722,7 +722,7 @@ internal class SessionController(
     private var preparation: NativeVpnBridge.Preparation? = null
     /** A user-initiated cancel ends a resumed request; recreation (close) and a new preparation keep it. */
     private fun cancelPreparation(keepRecovery: Boolean = false) {
-        if (!keepRecovery) consentRecovery.handoffComplete()
+        if (!keepRecovery) consentRecovery.cancel()
         preparation?.cancel(); preparation = null; consentAwaiting = false
     }
     private val worker = Executors.newSingleThreadScheduledExecutor()
