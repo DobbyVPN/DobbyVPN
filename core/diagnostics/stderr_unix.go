@@ -9,3 +9,5 @@ import (
 )
 
 func redirectStderr(file *os.File) error { return unix.Dup2(int(file.Fd()), 2) }
+
+func redirectStdout(file *os.File) error { return unix.Dup2(int(file.Fd()), 1) }

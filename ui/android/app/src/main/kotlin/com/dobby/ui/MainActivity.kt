@@ -1,5 +1,6 @@
 package com.dobby.ui
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ClipDescription
 import android.content.Intent
@@ -18,12 +19,14 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.dobby.nativebridge.LogUploader
 import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.presentation.LoadTrigger
@@ -32,6 +35,8 @@ import com.dobby.presentation.PermissionSnapshot
 import com.dobby.presentation.PermissionTarget
 import com.dobby.presentation.PermissionTargetFence
 import com.dobby.presentation.SubscriptionLoadCoordinator
+import com.dobby.presentation.CallbackLifetime
+import com.dobby.presentation.SelectionAdmission
 import com.dobby.presentation.SubscriptionRequest
 import com.dobby.presentation.UiOperationDiagnostics
 import com.dobby.vpn.BuildConfig
@@ -55,12 +60,35 @@ internal data class FrozenLogViewState(
 
 internal class RetainedLogViewModel : ViewModel() {
     var frozenView: FrozenLogViewState? = null
+    val exportWorker = Executors.newSingleThreadExecutor()
+    var exportPreparing = false
+    var exportFile: File? = null
+    var exportLaunched = false
+    var exportReturned = false
+    var exportDeparted = false
+    var exportOwnerCleared = false
+    var exportContext: android.content.Context? = null
+    override fun onCleared() {
+        exportOwnerCleared = true
+        val context = exportContext
+        val archive = exportFile
+        exportFile = null
+        if (context != null && archive != null) {
+            try { NativeVpnBridge.deleteLogExport(context, archive) }
+            catch (failure: Exception) { NativeVpnBridge.recordDiagnostic(context, "logs.export_cleanup_failed", "Diagnostic archive owner cleanup failed", failure) }
+        }
+        exportWorker.shutdown()
+    }
 }
 
 class MainActivity : ComponentActivity() {
     companion object {
         private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
         private const val DISMISSED_ERRORS = "com.dobby.ui.DISMISSED_ERRORS"
+        private const val EXPORT_NAME = "com.dobby.ui.EXPORT_NAME"
+        private const val EXPORT_LAUNCHED = "com.dobby.ui.EXPORT_LAUNCHED"
+        private const val EXPORT_RETURNED = "com.dobby.ui.EXPORT_RETURNED"
+        private const val EXPORT_DEPARTED = "com.dobby.ui.EXPORT_DEPARTED"
         internal const val CONNECTION_CONTROLS_DESCRIPTION = "Connection controls"
 
         @Volatile
@@ -83,10 +111,15 @@ class MainActivity : ComponentActivity() {
     private var firstOnDrawListener: ViewTreeObserver.OnDrawListener? = null
     private var firstPreDrawSeen = false
     private var firstOnDrawSeen = false
+    private var activityResumed = false
+    private val exportLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        retainedLogViewModel.exportReturned = true
+        advanceLogExport()
+    }
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        controller.permissionResult(result.resultCode == android.app.Activity.RESULT_OK)
+        NativeVpnBridge.consentResult(result.resultCode == android.app.Activity.RESULT_OK)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -105,6 +138,9 @@ class MainActivity : ComponentActivity() {
         try {
             recordWindowFocusDiagnostic("entry", hasFocus, pid, tid, startedNs)
             super.onWindowFocusChanged(hasFocus)
+            if (!hasFocus && ::retainedLogViewModel.isInitialized && retainedLogViewModel.exportLaunched)
+                retainedLogViewModel.exportDeparted = true
+            if (hasFocus && ::retainedLogViewModel.isInitialized) advanceLogExport()
         } catch (failure: Throwable) {
             callbackFailure = failure
             throw failure
@@ -190,10 +226,34 @@ class MainActivity : ComponentActivity() {
                 navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
             )
             current = this
-            startupDiagnostics.observe("MainActivity.onCreate.nativeGoSessionAttach") {
-                NativeGoSession.attach(this)
+            val backendFailure = try {
+                startupDiagnostics.observe("MainActivity.onCreate.nativeGoSessionAttach") {
+                    NativeGoSession.attach(this)
+                }
+                null
+            } catch (failure: Throwable) {
+                failure
+            }
+            if (backendFailure != null) {
+                NativeVpnBridge.recordNativeFailure(this, "go.attach_failed", backendFailure)
             }
             retainedLogViewModel = ViewModelProvider(this)[RetainedLogViewModel::class.java]
+            retainedLogViewModel.exportContext = applicationContext
+            if (retainedLogViewModel.exportFile == null && !retainedLogViewModel.exportPreparing) {
+                savedInstanceState?.getString(EXPORT_NAME)?.let { name ->
+                    val restored = NativeVpnBridge.ownedLogExport(this, name)
+                    if (restored != null) {
+                        retainedLogViewModel.exportFile = restored
+                        retainedLogViewModel.exportLaunched = savedInstanceState?.getBoolean(EXPORT_LAUNCHED) == true
+                        retainedLogViewModel.exportReturned = savedInstanceState?.getBoolean(EXPORT_RETURNED) == true
+                        retainedLogViewModel.exportDeparted = savedInstanceState?.getBoolean(EXPORT_DEPARTED) == true
+                    }
+                }
+            }
+            if (!retainedLogViewModel.exportPreparing) {
+                try { NativeVpnBridge.cleanupLogExports(this, retainedLogViewModel.exportFile?.name) }
+                catch (failure: Exception) { NativeVpnBridge.recordDiagnostic(this, "logs.export_cleanup_failed", "Diagnostic archive cleanup failed", failure) }
+            }
             startupDiagnostics.observe("MainActivity.onCreate.sessionControllerInitialization") {
                 controller = SessionController(
                     this,
@@ -201,7 +261,10 @@ class MainActivity : ComponentActivity() {
                     savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
                     retainedLogViewModel,
                     savedInstanceState?.getStringArrayList(DISMISSED_ERRORS).orEmpty().toSet(),
+                    backendAvailable = backendFailure == null,
+                    backendUnavailableMessage = backendFailure?.message.orEmpty(),
                 )
+                controller.setExportingLogs(retainedLogViewModel.exportPreparing || retainedLogViewModel.exportFile != null)
                 if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) {
                     controller.importLink(intent.dataString.orEmpty())
                 }
@@ -215,6 +278,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
+        if (::retainedLogViewModel.isInitialized) {
+            retainedLogViewModel.exportFile?.let { outState.putString(EXPORT_NAME, it.name) }
+            outState.putBoolean(EXPORT_LAUNCHED, retainedLogViewModel.exportLaunched)
+            outState.putBoolean(EXPORT_RETURNED, retainedLogViewModel.exportReturned)
+            outState.putBoolean(EXPORT_DEPARTED, retainedLogViewModel.exportDeparted)
+        }
         if (::controller.isInitialized) {
             controller.saveLogViewState()?.let { outState.putBundle(LOG_VIEW_STATE, it) }
             controller.saveSourceEditorState()?.let { outState.putBundle(SOURCE_EDITOR_STATE, it) }
@@ -239,12 +308,83 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         startupDiagnostics.observe("MainActivity.onResume") {
             super.onResume()
+            activityResumed = true
+            if (::retainedLogViewModel.isInitialized) advanceLogExport()
         }
     }
 
     override fun onStop() {
         if (::controller.isInitialized) controller.setVisible(false)
         super.onStop()
+    }
+
+    override fun onPause() {
+        activityResumed = false
+        if (::retainedLogViewModel.isInitialized && retainedLogViewModel.exportLaunched)
+            retainedLogViewModel.exportDeparted = true
+        super.onPause()
+    }
+
+    internal fun beginLogExport() {
+        val owner = retainedLogViewModel
+        if (owner.exportPreparing || owner.exportFile != null) return
+        owner.exportPreparing = true
+        controller.setExportingLogs(true)
+        val app = applicationContext
+        try { owner.exportWorker.execute {
+            val result = runCatching { NativeVpnBridge.prepareLogExport(app) }
+            Handler(Looper.getMainLooper()).post {
+                owner.exportPreparing = false
+                val archive = result.getOrNull()
+                if (owner.exportOwnerCleared && archive != null) {
+                    try { NativeVpnBridge.deleteLogExport(app, archive) }
+                    catch (failure: Exception) { NativeVpnBridge.recordDiagnostic(app, "logs.export_cleanup_failed", "Late diagnostic archive cleanup failed", failure) }
+                    return@post
+                }
+                owner.exportFile = archive
+                val activity = current?.takeIf { it.retainedLogViewModel === owner }
+                if (result.isFailure) {
+                    NativeVpnBridge.recordDiagnostic(app, "logs.export_failed", "Diagnostic archive preparation failed", result.exceptionOrNull())
+                    activity?.controller?.setExportingLogs(false, "Android could not export diagnostics. See logs for details.")
+                } else activity?.advanceLogExport()
+            }
+        } } catch (failure: java.util.concurrent.RejectedExecutionException) {
+            owner.exportPreparing = false
+            NativeVpnBridge.recordDiagnostic(app, "logs.export_failed", "Diagnostic archive preparation could not start", failure)
+            controller.setExportingLogs(false, "Android could not export diagnostics. See logs for details.")
+        }
+    }
+
+    private fun advanceLogExport() {
+        if (!activityResumed || !hasWindowFocus() || !::controller.isInitialized) return
+        val owner = retainedLogViewModel
+        val archive = owner.exportFile ?: return
+        if (owner.exportReturned && owner.exportDeparted) {
+            releaseLogExport(archive)
+        } else if (!owner.exportLaunched) {
+            try {
+                val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", archive)
+                val share = Intent(Intent.ACTION_SEND).setType("application/gzip")
+                    .putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                share.clipData = ClipData.newUri(contentResolver, "DobbyVPN logs", uri)
+                owner.exportLaunched = true
+                exportLauncher.launch(Intent.createChooser(share, "Export logs"))
+                NativeVpnBridge.recordDiagnostic(this, "logs.export_started", "Diagnostic export share chooser opened")
+            } catch (failure: Exception) {
+                NativeVpnBridge.recordDiagnostic(this, "logs.export_failed", "Diagnostic export chooser failed", failure)
+                releaseLogExport(archive, "Android could not export diagnostics. See logs for details.")
+            }
+        }
+    }
+
+    private fun releaseLogExport(archive: File, message: String = "") {
+        try { NativeVpnBridge.deleteLogExport(this, archive) }
+        catch (failure: Exception) { NativeVpnBridge.recordDiagnostic(this, "logs.export_cleanup_failed", "Diagnostic archive cleanup failed", failure) }
+        retainedLogViewModel.exportFile = null
+        retainedLogViewModel.exportLaunched = false
+        retainedLogViewModel.exportReturned = false
+        retainedLogViewModel.exportDeparted = false
+        controller.setExportingLogs(false, message)
     }
 
     internal fun launchVpnConsent(permission: Intent) {
@@ -454,6 +594,7 @@ internal data class SessionData(
     val state: String = "IDLE",
     val primaryAction: String = "NONE",
     val configured: Boolean = false,
+    val logsUploadAvailable: Boolean = false,
     val sourceUrl: String = "",
     val digest: String = "",
     val profiles: List<ProfileData> = emptyList(),
@@ -499,7 +640,14 @@ internal data class ScreenState(
     val logs: List<LogEntry> = emptyList(),
     val clearRevision: Int = 0,
     val logsError: String = "",
+    val uploadError: String = "",
     val exportingLogs: Boolean = false,
+    val uploadingLogs: Boolean = false,
+    val uploadPhase: String = "",
+    val uploadedReference: String = "",
+    val uploadedProvider: String = "",
+    val uploadedTime: String = "",
+    val showUploadSuccess: Boolean = false,
 )
 
 internal class SessionController(
@@ -508,27 +656,43 @@ internal class SessionController(
     restoredSourceEditorState: Bundle? = null,
     private val retainedLogViewModel: RetainedLogViewModel,
     restoredDismissedErrors: Set<String> = emptySet(),
+    backendAvailable: Boolean = true,
+    backendUnavailableMessage: String = "",
 ) {
+    @Volatile private var backendAvailable = backendAvailable
+    @Volatile private var backendUnavailableMessage = backendUnavailableMessage
+
     var state by mutableStateOf(ScreenState(
         source = restoredSourceEditorState?.getString(SOURCE_TEXT).orEmpty(),
         sourceDirty = restoredSourceEditorState?.getBoolean(SOURCE_DIRTY) == true,
+        uploadedReference = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("reference", "").orEmpty(),
+        uploadedProvider = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("provider", "").orEmpty(),
+        uploadedTime = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("time", "").orEmpty(),
         loadError = restoredSourceEditorState?.getString(SOURCE_LOAD_ERROR).orEmpty(),
     ))
         private set
 
     val errors: List<String> get() =
-        listOf(state.loadError, state.error, state.session.failure, state.logsError).filter(String::isNotEmpty).distinct()
+        listOf(state.loadError, state.error, state.session.failure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
 
     /** Messages the user closed; they stay hidden until they clear or the user makes a new attempt. */
     var dismissedErrors by mutableStateOf(restoredDismissedErrors)
         private set
 
     private val main = Handler(Looper.getMainLooper())
+    private val lifetime = CallbackLifetime { action -> main.post { action() } }
+    private val closed: Boolean get() = lifetime.isClosed
+    private fun post(action: () -> Unit) = lifetime.post(action)
+    private var preparation: NativeVpnBridge.Preparation? = null
+    private fun cancelPreparation() { preparation?.cancel(); preparation = null }
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
+    private val uploadWorker = Executors.newSingleThreadExecutor()
+    private var uploader: LogUploader? = null
     @Volatile private var visible = false
     @Volatile private var latest = SessionData()
     private var permissionTarget: PendingPermissionAction? = null
+    private val selectionAdmission = SelectionAdmission<PendingPermissionAction>()
     private val loadWorker = Executors.newSingleThreadExecutor()
     private val sourceLoads = SubscriptionLoadCoordinator(
         schedule = { delayMillis, callback ->
@@ -559,16 +723,32 @@ internal class SessionController(
 
 
     init {
+        LogUploader.cleanupStartup(activity.applicationContext)
         clipboard.addPrimaryClipChangedListener(clipboardListener)
-        worker.scheduleWithFixedDelay({
-            refreshSnapshot()
-            if (visible) refreshClipboard()
-        }, 0, 500, TimeUnit.MILLISECONDS)
+        if (backendAvailable) {
+            worker.scheduleWithFixedDelay({
+                refreshSnapshot()
+                if (visible) refreshClipboard()
+            }, 0, 500, TimeUnit.MILLISECONDS)
+        } else {
+            post {
+                state = state.copy(error = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            }
+        }
         NativeVpnBridge.recordDiagnostic(activity, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
     }
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
+        selectionAdmission.invalidate()
+        if (!backendAvailable) {
+            cancelPreparation()
+            permissionTarget = null
+            state = state.copy(source = value, sourceDirty = true, loading = false, busy = false,
+                loadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
+        cancelPreparation()
         restoredPendingSource = null
         if (trigger != LoadTrigger.RESTORE && trigger != LoadTrigger.TYPED) dismissedErrors = emptySet()
         val source = value.trim()
@@ -577,7 +757,7 @@ internal class SessionController(
         val alreadyAccepted = trigger == LoadTrigger.TYPED && valid &&
             state.loadError.isEmpty() && !sourceLoads.inFlight &&
             sourceLoads.isAlreadyAccepted(source, latest.configured, latest.sourceUrl)
-        sourceLoads.change(source, trigger, valid, alreadyAccepted)
+        selectionAdmission.sourceChanged { sourceLoads.change(source, trigger, valid, alreadyAccepted) }
         if (alreadyAccepted) {
             if (permissionTarget != null) state = state.copy(busy = false)
             permissionTarget = null
@@ -596,6 +776,10 @@ internal class SessionController(
     }
 
     private fun startSourceLoad(request: SubscriptionRequest) {
+        if (!backendAvailable) {
+            state = state.copy(loading = false, loadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         NativeVpnBridge.recordDiagnostic(activity, "subscription.load_started",
             "Loading subscription revision=${request.revision} source=${request.source}")
         state = state.copy(loading = true)
@@ -612,17 +796,18 @@ internal class SessionController(
                 requireOK(configured)
                 configured.getJSONObject("result").getLong("sequence")
             }
-            main.post {
+            val failure = outcome.exceptionOrNull()
+            val currentAtCompletion = !closed && request.revision == sourceLoads.revision
+            val message = "Subscription revision=${request.revision} source=${request.source} " +
+                "current=$currentAtCompletion closed=$closed succeeded=${outcome.isSuccess}"
+            if (!currentAtCompletion && failure != null) {
+                NativeVpnBridge.recordDiagnostic(activity.applicationContext, "subscription.load_completed",
+                    "$message superseded_failure=${failure.stackTraceToString()}")
+            } else {
+                NativeVpnBridge.recordDiagnostic(activity.applicationContext, "subscription.load_completed", message, failure)
+            }
+            post {
                 sourceLoads.complete(request, succeeded = outcome.isSuccess) { current ->
-                    val failure = outcome.exceptionOrNull()
-                    val message = "Subscription revision=${request.revision} source=${request.source} " +
-                        "current=$current succeeded=${outcome.isSuccess}"
-                    if (!current && failure != null) {
-                        NativeVpnBridge.recordDiagnostic(activity, "subscription.load_completed",
-                            "$message superseded_failure=${failure.stackTraceToString()}")
-                    } else {
-                        NativeVpnBridge.recordDiagnostic(activity, "subscription.load_completed", message, failure)
-                    }
                     state = state.copy(loading = false)
                     if (outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
                     if (current) {
@@ -799,6 +984,10 @@ internal class SessionController(
                 "permission_target_present=${permissionTarget != null} " +
                 "source_revision=${sourceLoads.revision}",
         )
+        if (!backendAvailable) {
+            report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         if (!allowed) return
         if (isStopTarget(index)) { stop(); return }
         dismissedErrors = emptySet()
@@ -813,16 +1002,14 @@ internal class SessionController(
             ),
             PermissionTarget(current.sessionId, current.digest, current.generation, sourceLoads.revision),
         )
-        worker.execute {
-            when (NativeVpnBridge.prepare(activity)) {
-                1 -> main.post { continuePermission(true) }
-                0 -> main.post { state = state.copy(busy = false, error = "Approve the Android VPN permission to connect") }
-                else -> main.post { permissionTarget = null; report("Android VPN service could not be prepared") }
-            }
-        }
+        preparePermission()
     }
 
     fun retry() {
+        if (!backendAvailable) {
+            report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
         if (!retryActionEnabled) return
         val current = latest
         if (!current.protectedFailure || current.sessionId != state.session.sessionId) {
@@ -837,16 +1024,16 @@ internal class SessionController(
             fence = PermissionTarget(current.sessionId, current.digest, current.generation, sourceLoads.revision),
             retry = true,
         )
-        worker.execute {
-            when (NativeVpnBridge.prepare(activity)) {
-                1 -> main.post { continuePermission(true) }
-                0 -> main.post { state = state.copy(busy = false, error = "Approve the Android VPN permission to connect") }
-                else -> main.post { permissionTarget = null; report("Android VPN service could not be prepared") }
-            }
-        }
+        preparePermission()
     }
 
     fun stop() {
+        if (!backendAvailable) {
+            report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
+        selectionAdmission.invalidate()
+        cancelPreparation()
         permissionTarget = null
         val current = latest
         if (state.busy || (current.primaryAction != "STOP" && !current.vpnActive)) return
@@ -861,20 +1048,28 @@ internal class SessionController(
         }
     }
 
-    fun permissionResult(granted: Boolean) {
-        if (permissionTarget == null) return
-        if (!granted) { continuePermission(false); return }
-        state = state.copy(busy = true, error = "")
-        // Granting consent only authorizes VpnService. Prepare again off the UI
-        // thread to start it and wait for attachment before Go acquires a TUN.
-        worker.execute {
-            val ready = NativeVpnBridge.prepare(activity)
-            main.post {
-                if (permissionTarget == null) return@post
-                if (ready == 1) continuePermission(true)
-                else {
+    private fun preparePermission() {
+        cancelPreparation()
+        val target = permissionTarget ?: return
+        if (!selectionAdmission.register(target, target.fence.sourceRevision)) return
+        val details = "session_id=${target.session.sessionId} generation=${target.session.generation} " +
+            "source_revision=${target.fence.sourceRevision} selection=${target.selection} retry=${target.retry}"
+        preparation = NativeVpnBridge.prepareForSelection(activity, details) { result ->
+            if (closed || permissionTarget !== target) return@prepareForSelection
+            when (result) {
+                NativeVpnBridge.PreparationResult.Ready -> { preparation = null; continuePermission(true) }
+                NativeVpnBridge.PreparationResult.PermissionRequired ->
+                    state = state.copy(busy = false, error = "Approve the Android VPN permission to connect")
+                NativeVpnBridge.PreparationResult.Cancelled -> { selectionAdmission.invalidate(target); preparation = null; permissionTarget = null; state = state.copy(busy = false) }
+                NativeVpnBridge.PreparationResult.PermissionDenied -> {
+                    preparation = null
+                    continuePermission(false)
+                }
+                is NativeVpnBridge.PreparationResult.Failed -> {
+                    selectionAdmission.invalidate(target)
+                    preparation = null
                     permissionTarget = null
-                    report("Android VPN service could not be prepared after permission approval")
+                    report("Android VPN service could not be prepared: ${result.error.message}", result.error)
                 }
             }
         }
@@ -883,18 +1078,20 @@ internal class SessionController(
     private fun continuePermission(granted: Boolean) {
         val target = permissionTarget ?: return
         permissionTarget = null
-        if (!granted) { report("VPN permission was not granted"); return }
+        if (!granted) { selectionAdmission.invalidate(target); report("VPN permission was not granted"); return }
         val selected = target.session
         val current = latest
         if (!target.retry && !PermissionTargetFence.stillCurrent(
                 target.fence,
                 current.permissionSnapshot(sourceLoads.revision, state.sourceDirty),
             )) {
+            selectionAdmission.invalidate(target)
             worker.execute { refreshSnapshot(clearBusy = true) }
             return
         }
         state = state.copy(busy = true, error = "")
         worker.execute {
+            var admitted = false
             val command = runCatching {
                 val response = JSONObject(NativeGoSession.snapshot(selected.sessionId))
                 requireOK(response)
@@ -944,25 +1141,29 @@ internal class SessionController(
                             "fence=${target.fence} snapshot=$freshSnapshot",
                     )
                     null
-                } else if (target.retry) {
-                    NativeGoSession.startSelection(
-                        sessionId,
-                        sequence,
-                        target.selection.mode,
-                        target.selection.index,
-                        target.selection.digest,
-                        false,
-                    )
+                } else if (!selectionAdmission.claim(target, target.fence.sourceRevision)) {
+                    NativeVpnBridge.recordDiagnostic(activity.applicationContext, "ui.permission_selection_discarded",
+                        "reason=admission_invalidated selection=${target.selection} fence=${target.fence}")
+                    null
                 } else {
+                    admitted = true
+                    NativeVpnBridge.recordDiagnostic(activity.applicationContext, "ui.selection_admitted",
+                        "session_id=$sessionId generation=$generation source_revision=${target.fence.sourceRevision} selection=${target.selection} retry=${target.retry}")
                     NativeGoSession.startSelection(
                         sessionId,
                         sequence,
                         target.selection.mode,
                         target.selection.index,
                         target.selection.digest,
-                        true,
+                        !target.retry,
                     )
                 }
+            }
+            if (!admitted) selectionAdmission.invalidate(target)
+            if (admitted) {
+                NativeVpnBridge.recordDiagnostic(activity.applicationContext, "ui.selection_completed",
+                    "session_id=${target.session.sessionId} generation=${target.session.generation} source_revision=${target.fence.sourceRevision} " +
+                        "selection=${target.selection} closed=$closed succeeded=${command.isSuccess}", command.exceptionOrNull())
             }
             command.onSuccess { encoded ->
                 if (encoded == null) refreshSnapshot(clearBusy = true)
@@ -976,7 +1177,7 @@ internal class SessionController(
 
     private fun refreshClipboard() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            main.post { refreshClipboard() }
+            post { refreshClipboard() }
             return
         }
         val available = runCatching {
@@ -1049,7 +1250,7 @@ internal class SessionController(
     private fun readLogs() {
         val retained = retainedLogViewState
         val result = diagnosticView.readWithRetainedBoundary(retained?.entries, retained?.clearBoundary)
-        main.post {
+        post {
             latestClearBoundary = result.clearBoundary
             if (retained != null && retainedLogViewState === retained) {
                 retainedLogViewValid = result.retainedEntriesVisible == true
@@ -1063,34 +1264,79 @@ internal class SessionController(
             try {
                 diagnosticView.clear()
                 NativeVpnBridge.recordAppStarted(activity)
-                main.post { state = state.copy(logs = emptyList(), clearRevision = state.clearRevision + 1) }
-            } catch (failure: Exception) { main.post { state = state.copy(logsError = failure.stackTraceToString()) } }
+                post { state = state.copy(logs = emptyList(), clearRevision = state.clearRevision + 1) }
+            } catch (failure: Exception) { post { state = state.copy(logsError = failure.stackTraceToString()) } }
         }
     }
 
     fun exportLogs() {
-        if (state.exportingLogs) return
-        state = state.copy(exportingLogs = true)
-        logWorker.execute {
-            val succeeded = NativeVpnBridge.exportLogs(activity)
-            main.post {
-                state = state.copy(
-                    exportingLogs = false,
-                    logsError = if (succeeded) "" else "Android could not export diagnostics. See logs for details.",
-                )
+        activity.beginLogExport()
+    }
+
+    fun setExportingLogs(exporting: Boolean, error: String = "") {
+        state = state.copy(exportingLogs = exporting, logsError = error)
+    }
+
+    fun uploadLogs() {
+        if (!backendAvailable) {
+            state = state.copy(uploadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
+            return
+        }
+        if (state.uploadingLogs || !latest.logsUploadAvailable) return
+        val selected = latest
+        val attempt = LogUploader(activity.applicationContext, phase = { phase ->
+            post { if (state.uploadingLogs) state = state.copy(uploadPhase = phase) }
+        })
+        uploader = attempt
+        state = state.copy(uploadingLogs = true, uploadPhase = "Preparing logs…", uploadError = "")
+        uploadWorker.execute {
+            val outcome = runCatching { attempt.upload(selected.sessionId, selected.digest) }
+            NativeVpnBridge.recordDiagnostic(activity.applicationContext, "logs.upload_completed",
+                if (outcome.isSuccess) "Diagnostic upload completed" else "Diagnostic upload failed",
+                outcome.exceptionOrNull())
+            post {
+                if (uploader === attempt) {
+                    uploader = null
+                    state = state.copy(uploadingLogs = false,
+                        uploadedReference = outcome.getOrNull()?.reference ?: state.uploadedReference,
+                        uploadedProvider = outcome.getOrNull()?.provider ?: state.uploadedProvider,
+                        uploadedTime = outcome.getOrNull()?.time ?: state.uploadedTime,
+                        showUploadSuccess = outcome.isSuccess,
+                        uploadError = outcome.exceptionOrNull()?.message ?: outcome.getOrNull()?.persistenceError.orEmpty())
+                }
             }
         }
     }
 
+    fun cancelUpload() { uploader?.cancel() }
+    fun dismissUploadSuccess() { state = state.copy(showUploadSuccess = false) }
+    fun copyUploadReference() { clipboard.setPrimaryClip(ClipData.newPlainText("DobbyVPN logs", state.uploadedReference)) }
+    fun shareUploadReference() {
+        activity.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, "DobbyVPN logs: ${state.uploadedReference}"), "Share log reference"))
+    }
+
     fun close() {
+        selectionAdmission.close {
+            lifetime.close()
+            sourceLoads.close()
+        }
+        cancelPreparation()
+        permissionTarget = null
         clipboard.removePrimaryClipChangedListener(clipboardListener)
+        uploader?.cancel()
+        uploadWorker.shutdownNow()
         worker.shutdownNow()
         logWorker.shutdownNow()
         loadWorker.shutdownNow()
-        sourceLoads.close()
     }
 
     private fun refreshSnapshot(clearBusy: Boolean = false) {
+        if (closed) return
+        if (!backendAvailable) {
+            if (clearBusy) post { state = state.copy(busy = false) }
+            return
+        }
         try {
             val sessionId = latest.sessionId
             var reattached = false
@@ -1114,6 +1360,7 @@ internal class SessionController(
                 state = snapshot.optString("state", "IDLE"),
                 primaryAction = snapshot.optString("primary_action", "NONE"),
                 configured = snapshot.optBoolean("configured"),
+                logsUploadAvailable = snapshot.optBoolean("logs_upload_available"),
                 sourceUrl = snapshot.optString("source_url"),
                 digest = snapshot.optString("digest"),
                 profiles = snapshot.optJSONArray("profiles")?.let { profiles ->
@@ -1141,8 +1388,8 @@ internal class SessionController(
             )
             // Command policy consumes only the backend snapshot. The UI projection
             // below preserves inventory while a source edit is still pending.
-            latest = current
-            main.post {
+            post {
+                latest = current
                 if (current.sessionId == state.session.sessionId && current.sequence < maxOf(state.session.sequence, acceptedSequence)) return@post
                 if (current.sessionId != state.session.sessionId) acceptedSequence = 0
                 sourceLoads.snapshotObserved()
@@ -1177,11 +1424,24 @@ internal class SessionController(
                 }
                 sourceLoads.sessionBecameReady()
             }
+        } catch (failure: LinkageError) {
+            handleNativeLinkageFailure(failure)
         } catch (failure: Exception) {
-            latest = SessionData()
             val message = commandError(failure)
             NativeVpnBridge.recordDiagnostic(activity, "ui.snapshot_failed", message, failure)
-            main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
+            post { latest = SessionData(); state = state.copy(session = SessionData(), busy = false, error = message) }
+        }
+    }
+
+    internal fun handleNativeLinkageFailure(failure: LinkageError) {
+        val message = failure.message?.takeIf(String::isNotBlank) ?: "Go backend is unavailable"
+        NativeVpnBridge.recordNativeFailure(activity.applicationContext, "go.snapshot_linkage_failed", failure)
+        if (closed) return
+        post {
+            backendUnavailableMessage = message
+            backendAvailable = false
+            latest = SessionData()
+            state = state.copy(session = SessionData(), busy = false, error = message)
         }
     }
 
@@ -1209,7 +1469,7 @@ internal class SessionController(
 
     private fun report(message: String, failure: Throwable? = null) {
         NativeVpnBridge.recordDiagnostic(activity, "ui.failure", message, failure)
-        main.post {
+        post {
             dismissedErrors = dismissedErrors - message
             state = state.copy(busy = false, error = message)
         }
@@ -1218,7 +1478,7 @@ internal class SessionController(
 
 internal class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {
     private val content = android.widget.TextView(context).apply {
-        id = R.id.logs_viewport
+        id = R.id.logs_content
         typeface = android.graphics.Typeface.MONOSPACE
         textSize = 11.5f
         setLineSpacing(0f, 1.25f)
@@ -1246,6 +1506,7 @@ internal class LiveLogView(context: android.content.Context) : android.widget.Sc
     private var restoredVisibleBoundaries: Map<String, Long>? = null
 
     init {
+        id = R.id.logs_viewport
         isFillViewport = true
         addView(content)
         content.setTextColor(Ink.toArgb())

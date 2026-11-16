@@ -51,9 +51,9 @@ func RegisterSessionPlatform(callbacks PlatformCallbacks) string {
 // CallSessionJSON accepts the same method/params command used by desktop
 // control. iOS configuration bytes arrive separately from the NetworkExtension
 // message through the request-scoped Keychain mailbox.
-func CallSessionJSON(method string, params []byte, rawConfiguration []byte, hasConfiguration bool) string {
-	return mobileSessions.CallJSONWithConfiguration(
-		context.Background(), method, json.RawMessage(params), rawConfiguration, hasConfiguration,
+func CallSessionJSON(operationID, method string, params []byte, rawConfiguration []byte, hasConfiguration bool) string {
+	return mobileSessions.CallJSONWithOperation(
+		context.Background(), operationID, method, json.RawMessage(params), rawConfiguration, hasConfiguration,
 	)
 }
 
@@ -81,8 +81,8 @@ func GetTunnelFileDescriptor() int {
 
 // StopSessionAndWait is the provider lifecycle boundary, separate from the
 // public command protocol. Callbacks stay registered until release completes.
-func StopSessionAndWait() string {
-	if err := mobileSessions.StopAndWait(context.Background()); err != nil {
+func StopSessionAndWait(operationID string) string {
+	if err := mobileSessions.StopAndWaitWithOperation(context.Background(), operationID); err != nil {
 		return err.Error()
 	}
 	mobileSessions.SetPlatformCallbacks(nil)

@@ -9,7 +9,8 @@ import (
 )
 
 const (
-	defaultXrayLogLevelName = "debug"
+	xrayLogLevelDebug       = "debug"
+	defaultXrayLogLevelName = xrayLogLevelWarning
 	xrayLogLevelInfo        = "info"
 	xrayLogLevelWarning     = "warning"
 	xrayLogLevelError       = "error"
@@ -17,7 +18,7 @@ const (
 )
 
 func DefaultXrayLogLevel() xrayLog.Severity {
-	return xrayLog.Severity_Debug
+	return xrayLog.Severity_Warning
 }
 
 func NoXrayLogLevel() xrayLog.Severity {
@@ -27,7 +28,7 @@ func NoXrayLogLevel() xrayLog.Severity {
 func XrayLogLevelName(level xrayLog.Severity) string {
 	switch level {
 	case xrayLog.Severity_Debug:
-		return defaultXrayLogLevelName
+		return xrayLogLevelDebug
 	case xrayLog.Severity_Info:
 		return xrayLogLevelInfo
 	case xrayLog.Severity_Warning:
@@ -51,7 +52,7 @@ func ExtractLogLevel(config map[string]any) (xrayLog.Severity, error) {
 		}
 		if loglevel, ok := log["loglevel"].(string); ok {
 			switch strings.ToLower(loglevel) {
-			case defaultXrayLogLevelName:
+			case xrayLogLevelDebug:
 				return xrayLog.Severity_Debug, nil
 			case xrayLogLevelInfo:
 				return xrayLog.Severity_Info, nil

@@ -19,11 +19,26 @@ func openLocalFile(path string, flags int) (*os.File, error) {
 	}
 	return os.NewFile(uintptr(fd), path), nil
 }
+func openLegacyInput(path string) (*os.File, error) { return openLocalFile(path, unix.O_RDONLY) }
 func openAppend(path string) (*os.File, error) {
 	return openLocalFile(path, unix.O_CREAT|unix.O_WRONLY|unix.O_APPEND)
 }
+func openStartupMarker(path string) (*os.File, error) {
+	return openLocalFile(path, unix.O_RDONLY|unix.O_NONBLOCK)
+}
+func openExistingFailedStartup(path string) (*os.File, error) {
+	return openLocalFile(path, unix.O_WRONLY|unix.O_APPEND|unix.O_NONBLOCK)
+}
+func openFailedStartup(path string) (*os.File, error) {
+	return openLocalFile(path, unix.O_CREAT|unix.O_WRONLY|unix.O_APPEND|unix.O_NONBLOCK)
+}
 func openLock(path string) (*os.File, error)  { return openLocalFile(path, unix.O_CREAT|unix.O_RDWR) }
 func OpenInput(path string) (*os.File, error) { return os.Open(path) }
+
+func renameGeneration(oldPath, newPath string) (bool, error) {
+	err := os.Rename(oldPath, newPath)
+	return err == nil, err
+}
 
 func readLockFile(file *os.File) error { return unix.Flock(int(file.Fd()), unix.LOCK_SH) }
 func preservePermissions(file *os.File, info os.FileInfo) error {

@@ -564,3 +564,17 @@ func Java_com_dobby_nativebridge_NativeGoSession_resume(env *C.JNIEnv, _ C.jclas
 func Java_com_dobby_nativebridge_NativeGoSession_restore(env *C.JNIEnv, _ C.jclass, onlyPreviouslyEnabled C.jboolean) C.jstring {
 	return jniResult(env, mobileSessions.Restore(onlyPreviouslyEnabled != 0))
 }
+
+//export Java_com_dobby_nativebridge_NativeGoSession_prepareLogUpload
+func Java_com_dobby_nativebridge_NativeGoSession_prepareLogUpload(env *C.JNIEnv, _ C.jclass, session C.jstring, digest C.jstring) C.jstring {
+	return jniResult(env, mobileSessions.PrepareLogUpload(jniString(env, session), jniString(env, digest)))
+}
+
+//export Java_com_dobby_nativebridge_NativeGoSession_appendServiceDiagnostic
+func Java_com_dobby_nativebridge_NativeGoSession_appendServiceDiagnostic(env *C.JNIEnv, _ C.jclass, path C.jstring, record C.jstring) C.jstring {
+	err := AppendAndroidRecord(jniString(env, path), jniString(env, record))
+	if err != nil {
+		return jniResult(env, err.Error())
+	}
+	return jniResult(env, "")
+}

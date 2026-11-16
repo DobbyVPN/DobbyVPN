@@ -55,15 +55,8 @@ private struct DobbyErrorDetailView: UIViewRepresentable {
     @ScaledMetric(relativeTo: .caption) private var fontSize: CGFloat = 11.5
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
-        view.isEditable = false
-        view.isSelectable = false
-        view.isScrollEnabled = true
-        view.backgroundColor = .clear
-        view.textContainerInset = .zero
-        view.textContainer.lineFragmentPadding = 0
-        view.accessibilityIdentifier = "error.detail"
-        view.isAccessibilityElement = true
+        let view = DobbyErrorTextView()
+        configureErrorDetailTextView(view)
         return view
     }
 
@@ -91,8 +84,13 @@ public struct DobbyRootView: View {
     @State private var followingLogs = true
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
+    @State private var showingLogMenu = false
+    @State private var showingReferenceShare = false
     @State private var rowHeight: CGFloat = 0
     @State private var errorDetailHeight: CGFloat = 240
+#if os(iOS)
+    @State private var logActionsHeight: CGFloat = 0
+#endif
 
     public init(model: DobbySessionViewModel) {
         self.model = model
@@ -111,7 +109,7 @@ public struct DobbyRootView: View {
                             .disabled(model.onDemandBusy || model.busy)
                     }
                     connections
-                        .frame(height: trayHeight(geometry.size.height))
+                        .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))
                         .padding(.top, pt(8))
                 }
                 .padding(.horizontal, pt(12))
@@ -119,7 +117,7 @@ public struct DobbyRootView: View {
                 .padding(.bottom, pt(12))
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("Connection controls")
-                logs
+            logs.frame(maxHeight: .infinity)
             }
 #if os(macOS)
             // On macOS the window can be stretched arbitrarily wide; let the content follow it
@@ -157,8 +155,24 @@ public struct DobbyRootView: View {
 #endif
         .onOpenURL { model.importLink($0) }
 #if os(iOS)
-        .sheet(isPresented: $showingExport, onDismiss: removeExport) {
-            if let url = exportedLogsURL { DobbyShareSheet(url: url) }
+        .sheet(isPresented: $showingReferenceShare, onDismiss: {
+            model.recordLogsShare(kind: "reference", phase: "dismissed")
+        }) {
+            if let latest = model.latestUpload {
+                DobbyShareSheet(url: nil, text: latest.shareText) {
+                    model.recordLogsShare(kind: "reference", phase: "controller-created")
+                }.onAppear { model.recordLogsShare(kind: "reference", phase: "view-appeared") }
+            }
+        }
+        .sheet(isPresented: $showingExport, onDismiss: {
+            model.recordLogsShare(kind: "archive", phase: "dismissed")
+            removeExport()
+        }) {
+            if let url = exportedLogsURL {
+                DobbyShareSheet(url: url) {
+                    model.recordLogsShare(kind: "archive", phase: "controller-created")
+                }.onAppear { model.recordLogsShare(kind: "archive", phase: "view-appeared") }
+            }
         }
 #endif
     }
@@ -361,13 +375,49 @@ public struct DobbyRootView: View {
         VStack(spacing: 0) {
             Rectangle().fill(Color.ink).frame(height: 1.5)
 #if os(iOS)
-            DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs, onClear: model.clearLogs)
-                .accessibilityIdentifier("Connection logs")
+            if showingLogMenu {
+                VStack(spacing: 4) {
+                    if model.snapshot.logsUploadAvailable {
+                        Button { showingLogMenu = false; model.startLogsUpload() } label: {
+                            Text("Upload logs").frame(maxWidth: .infinity).contentShape(Rectangle())
+                        }
+                            .accessibilityIdentifier("logs.upload")
+                            .disabled(!model.uploadStatus.isEmpty)
+                    }
+                    HStack {
+                        Button("Clear") { showingLogMenu = false; model.clearLogs() }.accessibilityIdentifier("logs.clear")
+                        Spacer()
+                        Button("Send logs") { showingLogMenu = false; sendLogs() }.accessibilityIdentifier("logs.share")
+                    }
+                }.padding().background(Color.surface)
+            }
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    // Upload history can grow with Dynamic Type.
+                    // Scroll it within the space left after reserving real log
+                    // content, rather than pushing the connection controls off screen.
+                    ScrollView {
+                        logActions.background(GeometryReader { content in
+                            Color.clear.preference(key: LogActionsHeight.self, value: content.size.height)
+                        })
+                    }
+                    .frame(height: min(logActionsHeight, max(0, geometry.size.height - pt(60))))
+                    .accessibilityIdentifier("logs.actions.viewport")
+                    .onPreferenceChange(LogActionsHeight.self) { logActionsHeight = $0 }
+                    DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs, onShowMenu: { showingLogMenu.toggle() }, onClear: model.clearLogs)
+                        .accessibilityIdentifier("Connection logs")
+                        .frame(minHeight: pt(60), maxHeight: .infinity)
+                }
+            }
+            .frame(minHeight: pt(60))
 #else
+            logActions
             DobbyLogView(
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
-                interactive: !showingError, onSendLogs: sendLogs, onClear: { followingLogs = true; model.clearLogs() },
-                onReadingPositionRestored: model.recordMacLogRestore
+                interactive: !showingError, onSendLogs: sendLogs, onUploadLogs: model.snapshot.logsUploadAvailable ? { model.startLogsUpload() } : nil, onClear: { followingLogs = true; model.clearLogs() },
+                onReadingPositionRestored: model.recordMacLogRestore,
+                onReadingPositionCaptured: model.recordMacLogCapture,
+                onAccessibilityObservation: model.recordMacLogAccessibility
             )
             .accessibilityIdentifier("Connection logs")
 #endif
@@ -375,7 +425,54 @@ public struct DobbyRootView: View {
         .background(Color.surface.ignoresSafeArea(edges: .bottom))
     }
 
+    private var logActions: some View {
+        VStack(spacing: 0) {
+
+            if !model.uploadError.isEmpty {
+                Text(model.uploadError).accessibilityIdentifier("logs.upload.error").padding()
+            }
+            if !model.uploadStatus.isEmpty {
+                HStack {
+                    ProgressView(); Text(model.uploadStatus)
+                    Spacer(); Button("Cancel") { model.cancelLogsUpload() }.accessibilityIdentifier("logs.upload.cancel")
+                }.padding()
+            }
+            if let latest = model.latestUpload {
+                VStack(alignment: .leading) {
+                    Text(latest.reference).textSelection(.enabled).accessibilityIdentifier("logs.upload.reference")
+                    Text("\(latest.completed.formatted()) · \(latest.provider)").font(.caption)
+                    HStack {
+                        Button("Copy reference") { copyUploadReference(latest.reference) }.accessibilityIdentifier("logs.upload.copy")
+                        Button("Share reference") { shareUploadReference(latest.shareText) }.accessibilityIdentifier("logs.upload.share")
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding()
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func copyUploadReference(_ text: String) {
+#if os(iOS)
+        UIPasteboard.general.string = text
+#else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+#endif
+    }
+
+    private func shareUploadReference(_ text: String) {
+#if os(iOS)
+        model.recordLogsShare(kind: "reference", phase: "requested", context: "scene=\(String(describing: scenePhase)) reference_binding=\(showingReferenceShare) archive_binding=\(showingExport) menu_open=\(showingLogMenu)")
+        showingReferenceShare = true
+#else
+        DobbyMacSharePresenter.present(text: text, reportError: model.reportLogsError)
+#endif
+    }
+
     private func sendLogs() {
+#if os(iOS)
+        model.recordLogsShare(kind: "archive", phase: "requested", context: "scene=\(String(describing: scenePhase)) reference_binding=\(showingReferenceShare) archive_binding=\(showingExport) menu_open=\(showingLogMenu)")
+#endif
         model.prepareLogsExport { url in
 #if os(macOS)
             DobbyMacSharePresenter.present(url: url, reportError: model.reportLogsError)
@@ -568,6 +665,13 @@ private struct RowHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
+
+#if os(iOS)
+private struct LogActionsHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+#endif
 
 private struct ErrorDetailHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0

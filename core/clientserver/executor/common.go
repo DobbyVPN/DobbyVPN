@@ -6,8 +6,12 @@ import (
 	"core/diagnostics"
 	"core/log"
 	sessionruntime "core/sessionapi/runtime"
+	"errors"
 	"fmt"
+	"runtime"
 )
+
+const darwinPlatform = "darwin"
 
 type Executor struct {
 }
@@ -17,14 +21,34 @@ func recoverInterruptedState() error {
 }
 
 // Capture raw output before opening the structured sink so its own startup
-// failures survive. Validate the supervisor's path before creating either file.
-func initExplicitLocalLog() error {
+// failures survive. Validate the supervisor's path before creating the destination.
+func initExplicitLocalLog() (resultErr error) {
 	path, err := prepareLocalLogPath()
 	if err != nil {
 		return err
 	}
-	if err := diagnostics.CaptureStderr(path+".stderr", path); err != nil {
-		return fmt.Errorf("capture backend stderr: %w", err)
+	defer func() {
+		if resultErr != nil {
+			if err := diagnostics.CaptureFailedStartup(path); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("capture failed startup diagnostics: %w", err))
+			}
+		}
+	}()
+	sources := []diagnostics.LegacySource{{Path: path + ".stderr", Label: "stderr"}}
+	if runtime.GOOS == darwinPlatform {
+		sources = append(sources, diagnostics.LegacySource{Path: path + ".stdout", Label: "stdout"})
 	}
-	return log.SetPath(path)
+	if err := diagnostics.MigrateLegacy(path, sources); err != nil {
+		return fmt.Errorf("migrate backend diagnostics: %w", err)
+	}
+	var captureErr error
+	if runtime.GOOS == darwinPlatform {
+		captureErr = diagnostics.CaptureOutput(path, path)
+	} else {
+		captureErr = diagnostics.CaptureStderr(path, path)
+	}
+	if captureErr != nil {
+		return fmt.Errorf("capture backend output: %w", captureErr)
+	}
+	return log.SetAppenderPath(path)
 }

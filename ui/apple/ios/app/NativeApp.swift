@@ -1,17 +1,28 @@
 import SwiftUI
 import IOSIntegration
+import DobbyVPNRuntime
 
 @main
 struct NativeDobbyVPNApp: App {
-    @StateObject private var model: DobbySessionViewModel
+    private let loggingError: String
 
     init() {
-        _model = StateObject(wrappedValue: DobbySessionViewModel(client: IOSSessionClient()))
+        loggingError = DobbyvpnInitLoggerError(IOSAppCompositionRoot.goLogFilePath().path)
     }
 
     var body: some Scene {
         WindowGroup {
-            DobbyRootView(model: model)
+            if loggingError.isEmpty {
+                NativeAppContent()
+            } else {
+                Text("Unable to initialize diagnostic logging: \(loggingError)")
+                    .accessibilityIdentifier("diagnostics.initialization.error")
+            }
         }
     }
+}
+
+private struct NativeAppContent: View {
+    @StateObject private var model = DobbySessionViewModel(client: IOSSessionClient())
+    var body: some View { DobbyRootView(model: model) }
 }

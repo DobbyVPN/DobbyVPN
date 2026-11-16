@@ -12,10 +12,42 @@ import (
 	"core/dnscache"
 	"core/log"
 	"core/routing"
+	"core/sessionapi"
 	"core/tunnel"
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
 )
+
+func macOSNetworkFields(physical routing.MacOSPhysicalNetwork, ref sessionapi.SessionRef) map[string]any {
+	return map[string]any{
+		"session_id":                    ref.SessionID,
+		"network_generation":            ref.Generation,
+		"network_identity":              physical.Identity,
+		"physical_ipv4_interface_index": physical.IPv4,
+		"physical_ipv6_interface_index": physical.IPv6,
+		"ipv4_available":                physical.IPv4 > 0,
+		"ipv6_available":                physical.IPv6 > 0,
+	}
+}
+
+func macOSReadyFields(physical routing.MacOSPhysicalNetwork, ref sessionapi.SessionRef, name string) map[string]any {
+	fields := macOSNetworkFields(physical, ref)
+	fields["interface"] = name
+	return fields
+}
+
+func macOSRefreshFields(physical routing.MacOSPhysicalNetwork, ref sessionapi.SessionRef, repaired bool) map[string]any {
+	fields := macOSNetworkFields(physical, ref)
+	fields["routes_repaired"] = repaired
+	return fields
+}
+
+func macOSMaintenanceFailureFields(physical routing.MacOSPhysicalNetwork, ref sessionapi.SessionRef, name string, source string, err error) map[string]any {
+	fields := macOSReadyFields(physical, ref, name)
+	fields["cause"] = err.Error()
+	fields["network_observation"] = source
+	return fields
+}
 
 func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error) {
 	defer func() { runErr = app.finishCleanup(ctx, runErr) }()
@@ -39,15 +71,15 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 
-	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
+	capturePhysical := func(queryCtx context.Context) (routing.MacOSPhysicalNetwork, dnscache.Resolver, error) {
 		physical, err := routing.CaptureMacOSPhysicalNetwork(queryCtx)
 		if err != nil {
 			protected_dialer.ResetDefaultRoute()
-			return "", nil, err
+			return routing.MacOSPhysicalNetwork{}, nil, err
 		}
 		if err := physicalRoutes.Update(queryCtx, physical); err != nil {
 			protected_dialer.ResetDefaultRoute()
-			return "", nil, err
+			return physical, nil, err
 		}
 		protected_dialer.SetPhysicalInterfaces(physical.IPv4, physical.IPv6)
 		index := physical.IPv4
@@ -66,11 +98,18 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			}
 			return addresses, err
 		}
-		return physical.Identity, fenced, nil
+		return physical, fenced, nil
+	}
+	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
+		physical, resolver, err := capturePhysical(queryCtx)
+		if err != nil {
+			return "", nil, err
+		}
+		return physical.Identity, resolver, nil
 	}
 	// Capture the physical service before publishing the owned supplemental DNS.
 	// The same source is refreshed for every endpoint lookup and link observation.
-	identity, _, err := capture(ctx)
+	physical, _, err := capturePhysical(ctx)
 	if err != nil {
 		signalInit(initResult, err)
 		return err
@@ -98,12 +137,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	log.Info(Category, "macOS retained network ready", map[string]any{"interface": name, "network_identity": identity})
+	log.Info(Category, "macOS retained network ready", macOSReadyFields(physical, app.NetworkRef, name))
 	signalInit(initResult, nil)
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	previousError := ""
+	var previousFailureNetwork routing.MacOSPhysicalNetwork
 	for {
 		select {
 		case <-ctx.Done():
@@ -113,17 +153,24 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			// the exact routes owned by this network; never replace foreign state.
 			repaired, repairErr := plan.Repair()
 			refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			currentIdentity, _, refreshErr := capture(refreshCtx)
+			current, _, refreshErr := capturePhysical(refreshCtx)
 			cancel()
 			if err := errors.Join(repairErr, refreshErr); err != nil {
-				if err.Error() != previousError {
-					log.Error(Category, "macOS network maintenance failed; interface retained", map[string]any{"interface": name, "cause": err.Error()})
+				observed := physical
+				source := "last_successful"
+				if current.Identity != "" {
+					observed = current
+					source = "current"
+				}
+				if err.Error() != previousError || observed != previousFailureNetwork {
+					log.Error(Category, "macOS network maintenance failed; interface retained", macOSMaintenanceFailureFields(observed, app.NetworkRef, name, source, err))
 					previousError = err.Error()
+					previousFailureNetwork = observed
 				}
 			} else {
-				if currentIdentity != identity || repaired || previousError != "" {
-					log.Info(Category, "macOS physical network refreshed", map[string]any{"network_identity": currentIdentity, "routes_repaired": repaired})
-					identity = currentIdentity
+				if current != physical || repaired || previousError != "" {
+					log.Info(Category, "macOS physical network refreshed", macOSRefreshFields(current, app.NetworkRef, repaired))
+					physical = current
 				}
 				previousError = ""
 			}

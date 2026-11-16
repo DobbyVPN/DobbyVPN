@@ -6,9 +6,61 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+// FILE_RENAME_INFO uses native HANDLE alignment and a variable UTF-16 filename.
+type fileRenameInfo struct {
+	flags          uint32
+	rootDirectory  windows.Handle
+	fileNameLength uint32
+	fileName       [1]uint16
+}
+
+// makeRenameInformation includes a terminating UTF-16 NUL in the passed buffer.
+func makeRenameInformation(absolute string) ([]uintptr, uint32, error) {
+	name, err := windows.UTF16FromString(absolute)
+	if err != nil {
+		return nil, 0, err
+	}
+	offset := unsafe.Offsetof(fileRenameInfo{}.fileName)
+	size := offset + uintptr(len(name))*2
+	if size < unsafe.Sizeof(fileRenameInfo{}) {
+		size = unsafe.Sizeof(fileRenameInfo{})
+	}
+	words := make([]uintptr, (size+unsafe.Sizeof(uintptr(0))-1)/unsafe.Sizeof(uintptr(0)))
+	info := (*fileRenameInfo)(unsafe.Pointer(&words[0]))
+	info.flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+	info.fileNameLength = uint32((len(name) - 1) * 2)
+	copy(unsafe.Slice((*uint16)(unsafe.Add(unsafe.Pointer(info), offset)), len(name)), name)
+	return words, uint32(size), nil
+}
+
+func renameGeneration(oldPath, newPath string) (bool, error) {
+	file, err := openShared(oldPath, windows.DELETE|windows.FILE_READ_ATTRIBUTES, windows.OPEN_EXISTING)
+	if err != nil {
+		return false, &os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: err}
+	}
+	absolute, err := filepath.Abs(newPath)
+	if err != nil {
+		return false, errors.Join(&os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: err}, file.Close())
+	}
+	words, size, err := makeRenameInformation(absolute)
+	if err != nil {
+		return false, errors.Join(&os.LinkError{Op: "rename", Old: oldPath, New: newPath, Err: err}, file.Close())
+	}
+	info := (*fileRenameInfo)(unsafe.Pointer(&words[0]))
+	callErr := windows.SetFileInformationByHandle(windows.Handle(file.Fd()), windows.FileRenameInfoEx, (*byte)(unsafe.Pointer(info)), size)
+	var renameErr error
+	if callErr != nil {
+		renameErr = &os.LinkError{Op: "rename", Old: oldPath, New: newPath,
+			Err: fmt.Errorf("SetFileInformationByHandle FileRenameInfoEx flags=REPLACE_IF_EXISTS|POSIX_SEMANTICS filename_bytes=%d buffer_bytes=%d: %w", info.fileNameLength, size, callErr)}
+	}
+	return callErr == nil, errors.Join(renameErr, file.Close())
+}
 
 func lockFile(file *os.File) error {
 	return windows.LockFileEx(windows.Handle(file.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &windows.Overlapped{})
@@ -38,9 +90,15 @@ func openShared(path string, access, disposition uint32) (*os.File, error) {
 func openLock(path string) (*os.File, error) {
 	return openShared(path, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.OPEN_ALWAYS)
 }
+func openLegacyInput(path string) (*os.File, error) { return OpenInput(path) }
 func openAppend(path string) (*os.File, error) {
 	return openShared(path, windows.FILE_APPEND_DATA|windows.FILE_READ_ATTRIBUTES, windows.OPEN_ALWAYS)
 }
+func openStartupMarker(path string) (*os.File, error) { return OpenInput(path) }
+func openExistingFailedStartup(path string) (*os.File, error) {
+	return openShared(path, windows.FILE_APPEND_DATA|windows.FILE_READ_ATTRIBUTES, windows.OPEN_EXISTING)
+}
+func openFailedStartup(path string) (*os.File, error) { return openAppend(path) }
 func OpenInput(path string) (*os.File, error) {
 	return openShared(path, windows.GENERIC_READ, windows.OPEN_EXISTING)
 }

@@ -1,4 +1,5 @@
 require "shellwords"
+require_relative "ios_release_notes"
 
 # CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
 # Apple CFBundleVersion uses the stable VERSION-derived number shared with Android.
@@ -128,6 +129,12 @@ platform :ios do
       ENV["APP_STORE_RELEASE_NOTES"].to_s
     end
 
+    begin
+      IosReleaseNotes.validate!(release_notes)
+    rescue ArgumentError => error
+      UI.user_error!(error.message)
+    end
+
     unless version.match?(/\A\d+\.\d+\.\d+\z/)
       UI.user_error!("APP_STORE_VERSION must use X.Y.Z format")
     end
@@ -210,7 +217,7 @@ platform :ios do
       run_precheck_before_submit: true,
       precheck_include_in_app_purchases: false
     }
-    options[:release_notes] = { "en-US" => release_notes } unless release_notes.empty?
+    options[:release_notes] = { "en-US" => release_notes }
 
     attempts_remaining = 6
     begin

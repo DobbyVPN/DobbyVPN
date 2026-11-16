@@ -64,33 +64,64 @@ if [[ "$module_version" != "$mobile_version" ]]; then
 fi
 
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-ios-xcframework.XXXXXX")"
-trap 'rm -rf "$workdir"' EXIT
+cleanup_workdir() {
+  local status=$? cleanup_status=0
+  rm -rf "$workdir" || cleanup_status=$?
+  if (( cleanup_status != 0 )); then
+    echo "failed to remove iOS build work directory $workdir (exit $cleanup_status)" >&2
+    if (( status == 0 )); then status=$cleanup_status; fi
+  fi
+  exit "$status"
+}
+trap cleanup_workdir EXIT
 
 mkdir -p "$workdir/device" "$workdir/simulator"
 device_output="$workdir/device/DobbyVPNRuntime.xcframework"
 simulator_output="$workdir/simulator/DobbyVPNRuntime.xcframework"
 
+run_bind() {
+  local stage=$1 target=$2 tags=$3 bind_output=$4
+  shift 4
+  local arch query_tags="${tags// /,},ios" bind_tmp="$workdir/$stage-tmp" status=0 cleanup_status=0
+  for arch in "$@"; do
+    echo "iOS $stage module query: GO111MODULE=on GOOS=ios GOARCH=$arch go list -m -json -tags=$query_tags all" >&2
+    GO111MODULE=on GOOS=ios GOARCH="$arch" go list -m -json "-tags=$query_tags" all
+  done
+  mkdir -p "$bind_tmp"
+  echo "iOS $stage gomobile bind: target=$target work=$bind_tmp" >&2
+  if TMPDIR="$bind_tmp" GOTMPDIR="$bind_tmp" GO111MODULE=on gomobile bind \
+    -x -work -tags="$tags" -ldflags="$go_identity" "${go_debug_flags[@]}" \
+    -iosversion=15.6 -target="$target" -o "$bind_output" ./ffi/ios; then
+    :
+  else
+    status=$?
+    echo "iOS $stage gomobile bind failed (exit $status); generated go.mod files:" >&2
+    find "$bind_tmp" -type f -name go.mod -exec sh -c '
+      for file do
+        printf "generated go.mod: %s\n" "$file" >&2
+        cat "$file" >&2 || echo "failed to read generated go.mod: $file" >&2
+      done
+    ' sh {} + || echo "failed to find generated go.mod files in $bind_tmp" >&2
+  fi
+  rm -rf "$bind_tmp" || cleanup_status=$?
+  if (( cleanup_status != 0 )); then
+    echo "failed to remove iOS $stage temporary directory $bind_tmp (exit $cleanup_status)" >&2
+    if (( status == 0 )); then status=$cleanup_status; fi
+  fi
+  return "$status"
+}
+
 if [[ -z "$simulator_architecture" ]]; then
-  GO111MODULE=on gomobile bind \
-    -tags=static \
-    -ldflags="$go_identity" "${go_debug_flags[@]}" \
-    -iosversion=15.6 \
-    -target=ios/arm64 \
-    -o "$device_output" \
-    ./ffi/ios
+  run_bind device ios/arm64 static "$device_output" arm64
 fi
 
 simulator_target="iossimulator"
 if [[ -n "$simulator_architecture" ]]; then
   simulator_target="iossimulator/$simulator_architecture"
 fi
-GO111MODULE=on gomobile bind \
-  -tags='static simulator' \
-  -ldflags="$go_identity" "${go_debug_flags[@]}" \
-  -iosversion=15.6 \
-  -target="$simulator_target" \
-  -o "$simulator_output" \
-  ./ffi/ios
+simulator_arches_to_query=(arm64 amd64)
+if [[ -n "$simulator_architecture" ]]; then simulator_arches_to_query=("$simulator_architecture"); fi
+run_bind simulator "$simulator_target" 'static simulator' "$simulator_output" "${simulator_arches_to_query[@]}"
 
 simulator_framework_output="$(
   find "$simulator_output" -type d -name DobbyVPNRuntime.framework -print | tee /dev/stderr

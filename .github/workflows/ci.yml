@@ -171,7 +171,7 @@ jobs:
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
 
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: ${{ steps.pins.outputs.java_major }}
@@ -257,6 +257,7 @@ jobs:
         if: ${{ needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'release' }}
         run: |
           set -euo pipefail
+          ruby -I publishing/fastlane/test -e 'Dir["publishing/fastlane/test/*_test.rb"].sort.each { |file| require_relative file }'
           python3 -m compileall -q .github/scripts/release
           PYTHONPATH=.github/scripts:.github/scripts/release python3 - <<'PY'
           import artifact_attempts

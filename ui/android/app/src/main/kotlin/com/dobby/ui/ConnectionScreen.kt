@@ -36,6 +36,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -374,6 +376,19 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
     val state = controller.state
     val density = LocalDensity.current
     var menuAt by remember { mutableStateOf<IntOffset?>(null) }
+    val uploadAction = remember { intArrayOf(-1) }
+    if (state.showUploadSuccess) {
+        AlertDialog(
+            onDismissRequest = { controller.dismissUploadSuccess() },
+            title = { Text("Logs uploaded") },
+            text = { Text(state.uploadedReference, Modifier.testTag("logs.upload.success")) },
+            confirmButton = { TextButton(onClick = { controller.copyUploadReference() }, modifier = Modifier.testTag("logs.upload.success.copy")) { Text("Copy") } },
+            dismissButton = { Row {
+                TextButton(onClick = { controller.shareUploadReference() }, modifier = Modifier.testTag("logs.upload.success.share")) { Text("Share") }
+                TextButton(onClick = { controller.dismissUploadSuccess() }) { Text("Close") }
+            } },
+        )
+    }
     Column(modifier.fillMaxWidth().background(Surface)) {
         Box(Modifier.fillMaxWidth().height(1.5.dp).background(Ink))
         Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -388,6 +403,11 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
                 },
                 modifier = Modifier.fillMaxSize().clipToBounds(),
                 update = {
+                    if (uploadAction[0] != -1) ViewCompat.removeAccessibilityAction(it, uploadAction[0])
+                    uploadAction[0] = -1
+                    if (state.session.logsUploadAvailable && !state.uploadingLogs) {
+                        uploadAction[0] = ViewCompat.addAccessibilityAction(it, "Upload logs") { _, _ -> controller.uploadLogs(); true }
+                    }
                     it.update(state.logs, state.clearRevision)
                     controller.restoreRetainedLogView(it)
                 },
@@ -399,19 +419,38 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
                         onDismissRequest = { menuAt = null },
                         modifier = Modifier.semantics { testTagsAsResourceId = true },
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("Send logs", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                            onClick = { menuAt = null; controller.exportLogs() },
-                            enabled = !state.exportingLogs,
-                            modifier = Modifier.testTag("logs.export"),
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Clear", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                            onClick = { menuAt = null; controller.clearLogs() },
-                            modifier = Modifier.testTag("logs.clear"),
-                        )
+                        if (state.session.logsUploadAvailable) {
+                            DropdownMenuItem(
+                                text = { Text(if (state.uploadingLogs) "Uploading logs…" else "Upload logs", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
+                                onClick = { menuAt = null; controller.uploadLogs() },
+                                enabled = !state.uploadingLogs,
+                                modifier = Modifier.testTag("logs.upload"),
+                            )
+                        }
+                        Row(Modifier.fillMaxWidth()) {
+                            TextButton(onClick = { menuAt = null; controller.clearLogs() }, modifier = Modifier.weight(1f).testTag("logs.clear")) { Text("Clear") }
+                            TextButton(onClick = { menuAt = null; controller.exportLogs() }, enabled = !state.exportingLogs, modifier = Modifier.weight(1f).testTag("logs.export")) { Text("Send logs") }
+                        }
+                        if (state.uploadingLogs) {
+                            DropdownMenuItem(text = { Text("Cancel upload", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
+                                onClick = { menuAt = null; controller.cancelUpload() }, modifier = Modifier.testTag("logs.upload.cancel"))
+                        }
+                        if (state.uploadedReference.isNotEmpty()) {
+                            DropdownMenuItem(text = { Text("${state.uploadedReference}\n${state.uploadedProvider}\n${state.uploadedTime}", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
+                                onClick = {}, modifier = Modifier.testTag("logs.upload.reference"))
+                            DropdownMenuItem(text = { Text("Copy reference", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
+                                onClick = { menuAt = null; controller.copyUploadReference() }, modifier = Modifier.testTag("logs.upload.copy"))
+                            DropdownMenuItem(text = { Text("Share reference", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
+                                onClick = { menuAt = null; controller.shareUploadReference() }, modifier = Modifier.testTag("logs.upload.share"))
+                        }
                     }
                 }
+            }
+        }
+        if (state.uploadingLogs) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(state.uploadPhase, Modifier.weight(1f).testTag("logs.upload.progress"))
+                TextButton(onClick = { controller.cancelUpload() }, modifier = Modifier.testTag("logs.upload.cancel.persistent")) { Text("Cancel") }
             }
         }
         Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))

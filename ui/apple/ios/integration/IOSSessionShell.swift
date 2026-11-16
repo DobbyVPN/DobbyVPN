@@ -6,6 +6,7 @@ public final class IOSSessionShell: NSObject {
     private let manager: VpnManagerImpl
     private let logs = IOSAppCompositionRoot.logsRepository
     private let configurationLock = NSLock()
+    private let diagnosticSampler = IOSCommandLogSampler()
 
     init(manager: VpnManagerImpl) {
         self.manager = manager
@@ -78,34 +79,13 @@ public final class IOSSessionShell: NSObject {
         requestID: String,
         params: Data
     ) -> (response: String, isGoResult: Bool) {
-        do {
-            let command = try IOSProviderCommand(method: method, requestID: requestID, params: params)
-            let providerResponse = try IOSProviderResponse.decode(
-                manager.sendProviderMessage(command.encoded()),
-                expectedRequestID: requestID
-            )
-            // The provider envelope preserves exact bytes, but Go's C bridge
-            // accepts UTF-8 text. Never feed replacement characters to Go:
-            // malformed protocol data is a transport failure, and the full
-            // byte sequence is retained reversibly in the native diagnostic.
-            let response: String
-            do {
-                response = try IOSProviderPayload.decode(providerResponse.payload)
-            } catch let error as IOSProviderPayloadError {
-                logs.writeLog(level: "ERROR",
-                    log: "iOS session provider payload decoding failed; " +
-                        "reversible_payload=\(reversibleDiagnosticText(providerResponse.payload))\n" +
-                        diagnosticErrorDescription(error)
-                )
-                return (failure("INTERNAL", message: "iOS session provider response was not valid UTF-8"), false)
-            }
-            return (response, providerResponse.kind == .go)
-        } catch {
-            logs.writeLog(level: "ERROR",
-                log: "iOS session bridge failed method=\(method):\n\(diagnosticErrorDescription(error))"
-            )
-            return (failure("INTERNAL", message: "iOS session provider request failed"), false)
-        }
+        IOSSessionExchange.execute(
+            method: method, requestID: requestID, params: params,
+            trace: diagnosticSampler.shouldTrace(method: method),
+            send: { manager.sendProviderMessage($0) },
+            failure: { self.failure($0, message: $1) },
+            log: { level, message in _ = self.logs.writeLog(level: level, log: message) }
+        )
     }
 
     private func requestID(for method: String) -> String {

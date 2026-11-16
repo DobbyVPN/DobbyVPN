@@ -49,7 +49,7 @@ echo [+] Building DobbyVPN v%DOBBYVPN_VERSION% MSI installers
 	if not exist "bin\%~1" mkdir "bin\%~1"
 
 	echo [+] Compiling %1
-	wix build -src .\Package.wxs -src .\Folders.wxs -src .\AppComponents.wxs -b .\ -d "DOBBYVPN_PLATFORM=%1" -d "DOBBYVPN_VERSION=%DOBBYVPN_VERSION%" -arch %2 -o bin/%1/dobbyVPN-windows-%1.msi || goto :error
+	wix build -ext WixToolset.Util.wixext -src .\Package.wxs -src .\Folders.wxs -src .\AppComponents.wxs -b .\ -d "DOBBYVPN_PLATFORM=%1" -d "DOBBYVPN_VERSION=%DOBBYVPN_VERSION%" -arch %2 -o bin/%1/dobbyVPN-windows-%1.msi || goto :error
 	goto :eof
 
 :error

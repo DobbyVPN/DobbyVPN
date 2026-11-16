@@ -50,6 +50,10 @@ public sealed partial class MainWindow : Window
     private string _exportError = "";
     private string _clearLogsError = "";
     private readonly HashSet<string> _dismissedErrors = [];
+    private string _lastObservedErrorDetail = "";
+    private string? _renderedErrorDetail;
+    private int _errorDetailParagraphCount;
+    private string _errorDetailOriginal = "";
     private string _lastSourceError = "";
     private bool _canPaste;
     private double _rowHeight;
@@ -88,7 +92,10 @@ public sealed partial class MainWindow : Window
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
+    private readonly DesktopControlDiagnostics _controlDiagnostics = new();
     private bool _exportingLogs;
+    private CancellationTokenSource? _logUploadCancellation;
+    private string _lastLogReference = "";
 
     private readonly record struct LogRowKey(string Id, string Raw);
     private sealed record RenderedLogRow(LogRowKey Key, UIElement[] Controls);
@@ -96,8 +103,11 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        RestoreLogUpload();
         SizeWindow();
         Column.SizeChanged += (_, _) => UpdateTrayHeight();
+        Controls.SizeChanged += (_, _) => UpdateTrayHeight();
+        UploadStatusPanel.SizeChanged += (_, _) => UpdateTrayHeight();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
         Root.Loaded += (_, _) =>
         {
@@ -140,7 +150,8 @@ public sealed partial class MainWindow : Window
             // If the dispatcher rejected the programmatic close request, a
             // later user/system close may safely complete the already-drained
             // shutdown instead of leaving the window permanently inert.
-            _allowFinalClose = true;
+            args.Cancel = true;
+            Program.FinalClose(this, () => { _allowFinalClose = true; Close(); });
             return;
         }
         args.Cancel = true;
@@ -186,8 +197,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                _allowFinalClose = true;
-                Close();
+                Program.FinalClose(this, () => { _allowFinalClose = true; Close(); });
                 completion.TrySetResult(true);
             }
             catch (Exception error) { completion.TrySetException(error); }
@@ -265,7 +275,7 @@ public sealed partial class MainWindow : Window
         return DispatcherQueue.TryEnqueue(priority, () => _lifetime.TryRunCallback(callback));
     }
 
-    internal bool TryActivate() => _lifetime.TryRunCallback(Activate);
+    internal bool TryAcceptActivation(Action accept) => _lifetime.TryRunCallback(() => { Activate(); accept(); });
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr window);
@@ -283,14 +293,21 @@ public sealed partial class MainWindow : Window
         AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + (area.Height - AppWindow.Size.Height) / 2));
     }
 
-    // Four connections when there is room; on short windows the logs keep a quarter of the height.
+    // Four connections when there is room. Reserve the log viewport itself,
+    // separately from an upload reference and the measured, text-scaled controls.
     private void UpdateTrayHeight()
     {
         if (_lifetime.IsClosing) return;
         var height = Column.ActualHeight;
         if (height <= 0) return;
         var fourRows = 4 * Math.Max(_rowHeight, 42) + 5 * 6;
-        ConnectionsTray.Height = Math.Min(Math.Max(height - 135 - height / 4, 54), fourRows);
+        var controlsHeight = Math.Max(0, Controls.ActualHeight - ConnectionsTray.ActualHeight);
+        var uploadHeight = UploadStatusPanel.Visibility == Visibility.Visible ? UploadStatusPanel.ActualHeight : 0;
+        var logHeight = Math.Max(120, height / 4);
+        var available = height - controlsHeight - uploadHeight - 1.5 - logHeight;
+        var trayHeight = Math.Min(Math.Max(available, 54), fourRows);
+        if (Math.Abs(ConnectionsTray.Height - trayHeight) > 0.5 || double.IsNaN(ConnectionsTray.Height))
+            ConnectionsTray.Height = trayHeight;
     }
 
     private void RecordAppStarted()
@@ -350,6 +367,8 @@ public sealed partial class MainWindow : Window
                 result.Profiles = previous.Profiles;
             }
             _snapshot = result;
+            UploadLogsItem.Visibility = result.LogsUploadAvailable ? Visibility.Visible : Visibility.Collapsed;
+            UploadLogsItem.IsEnabled = _logUploadCancellation is null;
             _diagnostics.Record(result.LastFailure is null ? "" : $"{result.LastFailure.Message} ({result.LastFailure.Code})", "backend.failure");
             if (!_subscriptionLoad.SourceDirty && SourceEditor.FocusState == FocusState.Unfocused &&
                 (!_sourceInitialized || string.Equals(NormalizeSource(SourceEditor.Text), _renderedSource, StringComparison.Ordinal)))
@@ -369,7 +388,7 @@ public sealed partial class MainWindow : Window
                 _sourceInitialized = true;
             }
             var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (!result.Configured && !_subscriptionLoad.SourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
+            if (_subscriptionLoad.CanRestore(SourceEditor.Text, _acceptedInThisWindow, result.Configured) && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
                 await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);
@@ -587,7 +606,20 @@ public sealed partial class MainWindow : Window
         AutomationProperties.SetItemStatus(ErrorCard, status);
         if (status == _status) return;
         var announce = _status.Length > 0;
+        var previousStatus = _status;
         _status = status;
+        _diagnostics.RecordDebug("ui.frontend-state-rendered",
+            $"frontend_state_rendered from={previousStatus} to={status} " +
+            $"generation={_snapshot?.Generation} sequence={_snapshot?.Sequence}",
+            new
+            {
+                from = previousStatus,
+                to = status,
+                generation = _snapshot?.Generation,
+                sequence = _snapshot?.Sequence,
+                snapshot_state = _snapshot?.State,
+                session_id = _snapshot?.SessionId,
+            });
         if (announce)
             FrameworkElementAutomationPeer.FromElement(ConnectionButton)?.RaiseNotificationEvent(
                 AutomationNotificationKind.ActionCompleted, AutomationNotificationProcessing.MostRecent, status, "connection.status");
@@ -723,6 +755,7 @@ public sealed partial class MainWindow : Window
 
     private bool ErrorShown => ErrorOverlay.Visibility == Visibility.Visible;
 
+    /// <summary>Renders the current error, bounding detail text while keeping the original for Copy.</summary>
     private void RenderError()
     {
         var currentErrors = Errors;
@@ -731,13 +764,43 @@ public sealed partial class MainWindow : Window
         _dismissedErrors.IntersectWith(currentErrors);
         var detail = ShownError;
         var visible = detail.Length > 0;
+        var observeDetail = visible && detail != _lastObservedErrorDetail;
+        if (!visible) _lastObservedErrorDetail = "";
         var loadFailure = visible && detail == _loadError;
         ErrorTitle.Text = loadFailure ? "Couldn't load the subscription" : "Something went wrong";
         AutomationProperties.SetName(ErrorCard, ErrorTitle.Text);
         ErrorHint.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         RetryErrorButton.Visibility = loadFailure ? Visibility.Visible : Visibility.Collapsed;
         Grid.SetColumnSpan(CloseErrorButton, loadFailure ? 1 : 2);
-        ErrorDetail.Text = detail;
+        var displayDetail = visible ? ErrorDisplayText.ForDisplay(detail) : "";
+        var textChanged = visible ? _renderedErrorDetail != displayDetail : _renderedErrorDetail is not null;
+        if (textChanged)
+        {
+            var paragraphs = ErrorDisplayText.Paragraphs(displayDetail);
+            ErrorDetail.Blocks.Clear();
+            foreach (var line in paragraphs)
+            {
+                var paragraph = new Paragraph { Margin = new Thickness(0) };
+                foreach (var text in ErrorDisplayText.Runs(line))
+                    paragraph.Inlines.Add(new Run { Text = text });
+                ErrorDetail.Blocks.Add(paragraph);
+            }
+            _renderedErrorDetail = visible ? displayDetail : null;
+            _errorDetailParagraphCount = paragraphs.Count;
+            ErrorDetailViewport.ChangeView(null, 0, null, disableAnimation: true);
+            if (visible && detail.EnumerateRunes().Count() > ErrorDisplayText.Limit)
+                _diagnostics.RecordDebug("ui.error.details.truncated",
+                    $"error detail truncated for display: scalars={detail.EnumerateRunes().Count()} paragraphs={paragraphs.Count}",
+                    new { paragraphs = paragraphs.Count, original_utf16_length = detail.Length });
+        }
+        else if (observeDetail)
+        {
+            _diagnostics.RecordDebug("ui.error.details.render-skipped",
+                "error detail re-render skipped: unchanged",
+                new { paragraphs = _errorDetailParagraphCount, original_utf16_length = detail.Length });
+        }
+        if (observeDetail) _lastObservedErrorDetail = detail;
+        _errorDetailOriginal = detail;
         var shown = ErrorShown;
         ErrorOverlay.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         if (visible) KeepFocusInError();
@@ -771,6 +834,12 @@ public sealed partial class MainWindow : Window
     private void CloseError_Click(object sender, RoutedEventArgs e) => CloseError();
     private void ErrorOverlay_Tapped(object sender, TappedRoutedEventArgs e) => CloseError();
     private void ErrorCard_Tapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+    private void ErrorOverlay_Loaded(object sender, RoutedEventArgs e) => ConstrainErrorCardHeight();
+    private void ErrorOverlay_SizeChanged(object sender, SizeChangedEventArgs e) => ConstrainErrorCardHeight();
+
+    /// <summary>Keeps the error card inside the overlay, preserving the 18 DIP margin above and below.</summary>
+    private void ConstrainErrorCardHeight() =>
+        ErrorCard.MaxHeight = Math.Max(0, ErrorOverlay.ActualHeight - 36);
 
     private void RetryError_Click(object sender, RoutedEventArgs e)
     {
@@ -778,10 +847,11 @@ public sealed partial class MainWindow : Window
         SourceChanged(SubscriptionInputKind.Retry);
     }
 
+    /// <summary>Copies the complete untruncated error detail that the dialog displays.</summary>
     private void CopyError_Click(object sender, RoutedEventArgs e)
     {
         var package = new DataPackage();
-        package.SetText(ErrorDetail.Text);
+        package.SetText(_errorDetailOriginal);
         try { Clipboard.SetContent(package); }
         catch (Exception error) { RecordError(error.ToString()); }
     }
@@ -1165,30 +1235,47 @@ public sealed partial class MainWindow : Window
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(2));
-        await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-start", "Started connecting the Configure named pipe", new { method, parameters });
-        await pipe.ConnectAsync(3000, timeout.Token);
-        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-end", "Connected the Configure named pipe", new { method, parameters });
-        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
-        using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-        var request = JsonSerializer.Serialize(new { method, @params = parameters });
-        await writer.WriteLineAsync(request.AsMemory(), timeout.Token);
-        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-request-written", "Wrote the Configure request to the Go backend", new { method, parameters });
-        var line = await reader.ReadLineAsync(timeout.Token);
-        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-response-read", "Read the Configure response from the Go backend", new { method, parameters, succeeded = line is not null });
-        if (line is null) throw new IOException("Go backend closed the control connection without a response.");
-        using var response = JsonDocument.Parse(line);
-        if (!response.RootElement.GetProperty("ok").GetBoolean())
+        var operation = _controlDiagnostics.Begin(method, parameters);
+        var started = Stopwatch.GetTimestamp();
+        object fields(string? error = null) => new
         {
-            var failure = response.RootElement.GetProperty("error");
-            var code = failure.GetProperty("code").GetString() ?? "INTERNAL";
-            var message = failure.GetProperty("message").GetString() ?? "Go backend command failed";
-            throw new BackendCommandException(code, message);
+            request_id = operation.Id, method, identity = operation.Identity,
+            elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds, error,
+        };
+        if (operation.Sampled) _diagnostics.RecordInfo("control.command.begin", "Started desktop control command", fields());
+        try
+        {
+            await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-start", "Started connecting the Configure named pipe", new { method, parameters });
+            await pipe.ConnectAsync(3000, timeout.Token);
+            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-end", "Connected the Configure named pipe", new { method, parameters });
+            await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
+            using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+            var request = operation.Encode();
+            await writer.WriteLineAsync(request.AsMemory(), timeout.Token);
+            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-request-written", "Wrote the Configure request to the Go backend", new { method, parameters });
+            var line = await reader.ReadLineAsync(timeout.Token);
+            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-response-read", "Read the Configure response from the Go backend", new { method, parameters, succeeded = line is not null });
+            if (line is null) throw new IOException("Go backend closed the control connection without a response.");
+            using var response = JsonDocument.Parse(line);
+            if (!response.RootElement.GetProperty("ok").GetBoolean())
+            {
+                var failure = response.RootElement.GetProperty("error");
+                var code = failure.GetProperty("code").GetString() ?? "INTERNAL";
+                var message = failure.GetProperty("message").GetString() ?? "Go backend command failed";
+                throw new BackendCommandException(code, message);
+            }
+            var payload = response.RootElement.GetProperty("result");
+            var result = payload.Deserialize<T>(JsonOptions);
+            if (result is null) throw new InvalidDataException("Go backend returned an empty result.");
+            if (operation.Sampled) _diagnostics.RecordInfo("control.command.complete", "Completed desktop control command", fields());
+            return result;
         }
-        var payload = response.RootElement.GetProperty("result");
-        var result = payload.Deserialize<T>(JsonOptions);
-        if (result is null) throw new InvalidDataException("Go backend returned an empty result.");
-        return result;
+        catch (Exception error)
+        {
+            _diagnostics.RecordError("control.command.failure", "Desktop control command failed", fields(error.ToString()));
+            throw;
+        }
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1263,10 +1350,42 @@ public sealed partial class MainWindow : Window
                 _diagnostics.Record(error.ToString(), "logs.pointer-entry.failure");
             }
         }), true);
+        // Observe context input and popup lifetime without changing the native
+        // ContextFlyout routing. This distinguishes input that never opens a
+        // menu from a menu that opens and closes during a later log update.
+        LogsScroll.AddHandler(UIElement.RightTappedEvent, new RightTappedEventHandler((_, args) =>
+        {
+            try
+            {
+                var position = args.GetPosition(LogsScroll);
+                RecordLogMenuObservation("right-tap", new
+                {
+                    source_type = args.OriginalSource?.GetType().FullName,
+                    handled = args.Handled,
+                    x = position.X,
+                    y = position.Y,
+                });
+            }
+            catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.menu-observation.failure"); }
+        }), true);
+        LogsMenu.Opening += (_, _) => RecordLogMenuObservation("opening");
+        LogsMenu.Opened += (_, _) => RecordLogMenuObservation("opened");
+        LogsMenu.Closing += (_, _) => RecordLogMenuObservation("closing");
+        LogsMenu.Closed += (_, _) => RecordLogMenuObservation("closed");
         LogsScroll.AddHandler(UIElement.DoubleTappedEvent, new DoubleTappedEventHandler((_, args) =>
         {
-            args.Handled = true;
-            LogsMenu.ShowAt(LogsScroll, new FlyoutShowOptions { Position = args.GetPosition(LogsScroll) });
+            var scrollbarSource = FindLogVerticalScrollBar(args.OriginalSource) is not null;
+            if (!scrollbarSource)
+            {
+                args.Handled = true;
+                LogsMenu.ShowAt(LogsScroll, new FlyoutShowOptions { Position = args.GetPosition(LogsScroll) });
+            }
+            _diagnostics.RecordDebug("logs.double-tap-dispatch", "Dispatched a log viewport double tap", new
+            {
+                source_type = args.OriginalSource?.GetType().FullName,
+                scrollbar_source = scrollbarSource,
+                action = scrollbarSource ? "ignored-scrollbar" : "opened",
+            });
         }), true);
         LogsScroll.SizeChanged += (_, _) =>
         {
@@ -1511,7 +1630,7 @@ public sealed partial class MainWindow : Window
         }
         if (directManipulation || scrollbarInteraction)
             ObserveLogPresentationForScroll(directManipulation ? "direct-manipulation" : "scrollbar-interaction",
-                isIntermediate);
+                isIntermediate, movedTowardEarlierEntries: offsetDelta < 0);
         if (!_updatingLogs && _logPresentation.FollowsTail) RenderLogs();
     }
 
@@ -1534,10 +1653,10 @@ public sealed partial class MainWindow : Window
         });
 
     private void ObserveLogPresentationForScroll(string cause, bool isIntermediate,
-        long? gestureId = null, string? direction = null)
+        bool movedTowardEarlierEntries, long? gestureId = null, string? direction = null)
     {
         var wasFollowingTail = _logPresentation.FollowsTail;
-        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom());
+        _logPresentation.ObserveUserScroll(IsLogScrollAtBottom(), movedTowardEarlierEntries);
         RecordLogFollowTransition(cause, wasFollowingTail, gestureId, direction, isIntermediate);
     }
 
@@ -1675,6 +1794,25 @@ public sealed partial class MainWindow : Window
             if (_logPresentation.FollowsTail) RenderLogs();
         }
         catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _logsError = error.Message; RenderError(); }
+    }
+
+    private void RecordLogMenuObservation(string stage, object? gesture = null)
+    {
+        try
+        {
+            var target = LogsMenu.Target;
+            _diagnostics.RecordDebug("logs.menu-" + stage, "Observed log context menu", new
+            {
+                gesture,
+                target_type = target?.GetType().FullName,
+                target_id = target is null ? null : AutomationProperties.GetAutomationId(target),
+                target_is_viewport = ReferenceEquals(target, LogsScroll),
+                is_open = LogsMenu.IsOpen,
+                rendered_rows = _renderedLogRows.Count,
+                state = CaptureLogScrollDiagnosticState(),
+            });
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.menu-observation.failure"); }
     }
 
     private static List<NativeDiagnostics.Entry> Shown(IEnumerable<NativeDiagnostics.Entry> entries) =>
@@ -1906,6 +2044,190 @@ public sealed partial class MainWindow : Window
     private string ExportHeader =>
         $"DobbyVPN {_version}\nSource commit: {_commit}\nPlatform: {Environment.OSVersion}\nCaptured: {DateTimeOffset.UtcNow:O}\n\n";
 
+    private sealed class LogUploadPreparation
+    {
+        public string Reference { get; init; } = "";
+        public string Destination { get; init; } = "";
+        public string Authorization { get; init; } = "";
+        public string Provider { get; init; } = "";
+        [JsonPropertyName("max_bytes")] public long MaxBytes { get; init; }
+    }
+
+    private sealed record LastLogUpload(string Reference, string Provider, DateTimeOffset Time);
+    private static string LogUploadDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "LogUploads");
+    private void RestoreLogUpload()
+    {
+        try
+        {
+            Directory.CreateDirectory(LogUploadDirectory);
+            using var cleanupGate = new Mutex(false, @"Local\DobbyVPN.LogUploadCleanup");
+            cleanupGate.WaitOne();
+            try
+            {
+                foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
+                {
+                    FileStream lease;
+                    try { lease = new FileStream(Path.Combine(directory, ".lease"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+                    catch (IOException error) when ((error.HResult & 0xffff) is 32 or 33) { continue; }
+                    catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup.lease"); continue; }
+                    try
+                    {
+                        using (lease)
+                            foreach (var file in Directory.EnumerateFiles(directory))
+                                if (Path.GetFileName(file) != ".lease") File.Delete(file);
+                        Directory.Delete(directory, true);
+                    }
+                    catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup.directory"); }
+                }
+            }
+            finally { cleanupGate.ReleaseMutex(); }
+            var metadata = Path.Combine(LogUploadDirectory, "latest.json");
+            if (!File.Exists(metadata)) return;
+            var latest = JsonSerializer.Deserialize<LastLogUpload>(File.ReadAllText(metadata));
+            if (latest is null) return;
+            _lastLogReference = latest.Reference;
+            UploadStatusText.Text = $"Uploaded: {latest.Reference} · {latest.Time.LocalDateTime:g} · {latest.Provider}";
+            UploadStatusPanel.Visibility = Visibility.Visible;
+            UploadProgress.Visibility = Visibility.Collapsed;
+            UploadCancelButton.Visibility = Visibility.Collapsed;
+            UploadCopyButton.Visibility = Visibility.Visible;
+            UploadShareButton.Visibility = Visibility.Visible;
+            UploadDismissButton.Visibility = Visibility.Visible;
+            CopyUploadItem.Text = $"Copy upload {latest.Reference} ({latest.Time.LocalDateTime:g})";
+            CopyUploadItem.Visibility = Visibility.Visible;
+            ShareUploadItem.Visibility = Visibility.Visible;
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.restore"); }
+    }
+
+    private void UploadLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(UploadLogsAsync);
+    private void CancelUpload_Click(object sender, RoutedEventArgs e) => _logUploadCancellation?.Cancel();
+    private void DismissUpload_Click(object sender, RoutedEventArgs e) => UploadStatusPanel.Visibility = Visibility.Collapsed;
+    [ComImport, Guid("3A3DCD6C-3EAB-43DC-BCDE-45671CE800C8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IDataTransferManagerInterop
+    {
+        IntPtr GetForWindow(IntPtr window, ref Guid iid);
+        void ShowShareUIForWindow(IntPtr window);
+    }
+
+    private DataTransferManager? _shareManager;
+    private void ShareUpload_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastLogReference.Length == 0) return;
+        try
+        {
+            var window = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            var interop = DataTransferManager.As<IDataTransferManagerInterop>();
+            if (_shareManager is null)
+            {
+                var iid = new Guid("a5caee9b-8708-49d1-8d36-67d25a8da00c");
+                var pointer = interop.GetForWindow(window, ref iid);
+                try { _shareManager = WinRT.MarshalInterface<DataTransferManager>.FromAbi(pointer); }
+                finally { Marshal.Release(pointer); }
+                _shareManager.DataRequested += (_, args) =>
+                {
+                    args.Request.Data.Properties.Title = "DobbyVPN logs";
+                    args.Request.Data.SetText("DobbyVPN logs: " + _lastLogReference);
+                };
+            }
+            interop.ShowShareUIForWindow(window);
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.share"); }
+    }
+
+    private void CopyUpload_Click(object sender, RoutedEventArgs e)
+    {
+        if (_lastLogReference.Length == 0) return;
+        var package = new DataPackage();
+        package.SetText(_lastLogReference);
+        Clipboard.SetContent(package);
+    }
+
+    private async Task UploadLogsAsync(CancellationToken cancellationToken)
+    {
+        if (_logUploadCancellation is not null || _snapshot is not { LogsUploadAvailable: true } snapshot) return;
+        using var upload = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _logUploadCancellation = upload;
+        UploadLogsItem.IsEnabled = false;
+        CancelUploadItem.Visibility = Visibility.Visible;
+        UploadLogsItem.Text = "Uploading logs…";
+        UploadStatusText.Text = "Preparing logs…";
+        UploadStatusPanel.Visibility = Visibility.Visible;
+        UploadProgress.Visibility = Visibility.Visible;
+        UploadCancelButton.Visibility = Visibility.Visible;
+        UploadCopyButton.Visibility = Visibility.Collapsed;
+        UploadShareButton.Visibility = Visibility.Collapsed;
+        UploadDismissButton.Visibility = Visibility.Collapsed;
+        string? temporary = null;
+        string? privateDirectory = null;
+        FileStream? lease = null;
+        var confirmed = false;
+        try
+        {
+            var prepared = await CallAsync<LogUploadPreparation>("PrepareLogUpload", new { session_id = snapshot.SessionId, digest = snapshot.Digest }, upload.Token);
+            var directory = LogUploadDirectory;
+            Directory.CreateDirectory(directory);
+            using (var createGate = new Mutex(false, @"Local\DobbyVPN.LogUploadCleanup"))
+            {
+                createGate.WaitOne();
+                try
+                {
+                    privateDirectory = Path.Combine(directory, "upload-" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(privateDirectory);
+                    lease = new FileStream(Path.Combine(privateDirectory, ".lease"), FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+                }
+                finally { createGate.ReleaseMutex(); }
+            }
+            temporary = Path.Combine(privateDirectory, prepared.Reference + ".gz");
+            await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
+                await _diagnostics.ExportAsync(output, ExportHeader, upload.Token, requireComplete: true);
+            upload.Token.ThrowIfCancellationRequested();
+            UploadStatusText.Text = "Uploading logs…";
+            await LogUpload.PutAsync(temporary, prepared.Destination, prepared.Authorization, prepared.MaxBytes, upload.Token);
+            confirmed = true;
+            _lastLogReference = prepared.Reference;
+            UploadStatusText.Text = "Uploaded: " + prepared.Reference;
+            UploadProgress.Visibility = Visibility.Collapsed;
+            UploadCancelButton.Visibility = Visibility.Collapsed;
+            UploadCopyButton.Visibility = Visibility.Visible;
+            UploadShareButton.Visibility = Visibility.Visible;
+            UploadDismissButton.Visibility = Visibility.Visible;
+            var latest = new LastLogUpload(prepared.Reference, prepared.Provider, DateTimeOffset.UtcNow);
+            UploadStatusText.Text = $"Uploaded: {latest.Reference} · {latest.Time.LocalDateTime:g} · {latest.Provider}";
+            CopyUploadItem.Text = $"Copy upload {latest.Reference} ({latest.Time.LocalDateTime:g})";
+            CopyUploadItem.Visibility = Visibility.Visible;
+            ShareUploadItem.Visibility = Visibility.Visible;
+            var metadata = Path.Combine(directory, "latest.json");
+            var staging = metadata + ".tmp";
+            await File.WriteAllTextAsync(staging, JsonSerializer.Serialize(latest));
+            File.Move(staging, metadata, true);
+        }
+        catch (OperationCanceledException) when (upload.IsCancellationRequested) { UploadStatusPanel.Visibility = Visibility.Collapsed; }
+        catch (Exception error) when (!_lifetime.IsClosing)
+        {
+            RecordError(error.ToString());
+            _exportError = confirmed ? "Logs were uploaded, but the reference could not be saved." : "Logs could not be uploaded.";
+            if (!confirmed) UploadStatusPanel.Visibility = Visibility.Collapsed;
+            RenderError();
+        }
+        finally
+        {
+            try
+            {
+                lease?.Dispose();
+                if (privateDirectory is not null) Directory.Delete(privateDirectory, true);
+            }
+            catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup"); }
+            _logUploadCancellation = null;
+            if (!_lifetime.IsClosing)
+            {
+                CancelUploadItem.Visibility = Visibility.Collapsed;
+                UploadLogsItem.Text = "Upload logs";
+                UploadLogsItem.IsEnabled = true;
+            }
+        }
+    }
+
     private void SendLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(SendLogsAsync);
 
     private async Task SendLogsAsync(CancellationToken cancellationToken)
@@ -1933,11 +2255,16 @@ public sealed partial class MainWindow : Window
             {
                 process_id = Environment.ProcessId,
                 selected = file is not null,
+                destination = file?.Path,
             });
             if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
             if (file is not null)
             {
                 await _diagnostics.SaveAsync(file.Path, ExportHeader);
+                _diagnostics.RecordInfo("logs.export.saved", "Saved the log export", new
+                {
+                    destination = file.Path,
+                });
             }
         }
         catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _exportError = "Logs could not be saved. Try another location."; RenderError(); }
@@ -1961,6 +2288,7 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("can_retry")] public bool CanRetry { get; init; }
         [JsonPropertyName("state")] public string State { get; init; } = "IDLE";
         [JsonPropertyName("primary_action")] public string PrimaryAction { get; init; } = "NONE";
+        [JsonPropertyName("logs_upload_available")] public bool LogsUploadAvailable { get; init; }
         [JsonPropertyName("configured")] public bool Configured { get; set; }
         [JsonPropertyName("source_url")] public string SourceUrl { get; set; } = "";
         [JsonPropertyName("source_error")] public string SourceError { get; init; } = "";

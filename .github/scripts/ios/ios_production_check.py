@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze and inspect an unsigned production iPhone archive on a Mac."""
+"""Build the pinned iOS runtime, then analyze and archive unless Simulator-only."""
 
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--simulator-architecture", choices=("arm64", "amd64"))
     args = parser.parse_args()
     if re.fullmatch(r"[0-9a-f]{40}", args.source_sha) is None:
         parser.error("--source-sha must be a full lowercase commit SHA")
@@ -74,7 +75,12 @@ def main() -> int:
     run_dependency([go, "mod", "download"], cwd=module, environment=env)
     for tool in ("gomobile", "gobind"):
         run_dependency([go, "install", f"{MOBILE_MODULE}/cmd/{tool}@{MOBILE_VERSION}"], cwd=module, environment=env)
-    run([str(module / "scripts" / "build_ios_xcframework.sh")], cwd=module, environment=env)
+    command = [str(module / "scripts" / "build_ios_xcframework.sh")]
+    if args.simulator_architecture:
+        command.extend(["--simulator-architecture", args.simulator_architecture])
+    run(command, cwd=module, environment=env)
+    if args.simulator_architecture:
+        return 0
     runtime = module / "DobbyVPNRuntime.xcframework"
     package = module / "scripts" / "package_ios_app.sh"
     run([str(package), "iosanalyze", str(output / "analysis"), str(runtime)], cwd=ROOT, environment=env)

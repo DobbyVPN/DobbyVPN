@@ -14,18 +14,25 @@ public enum DiagnosticFiles {
         init(_ message: String) { description = message }
     }
 
+    // Capture occurrence time before waiting for the writer lock.
     public static func append(
         _ message: String, event: String, level: String, source: String, to path: URL,
-        fields: [String: Any] = [:]
+        fields: [String: Any] = [:], rotating: Bool = true, legacyDesktop: Bool = false, legacyExcludedPaths: [String] = [], legacyHome: URL? = nil, timestampDate: Date = Date()
     ) throws {
         processLock.lock()
         defer { processLock.unlock() }
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
         try withLock(path, writing: true) {
-            if !initialized.contains(path.path) {
-                try migrate(path)
+#if os(macOS)
+            if rotating && !initialized.contains(path.path) {
+                let home = legacyHome ?? FileManager.default.homeDirectoryForCurrentUser
+                let configured = ProcessInfo.processInfo.environment["DOBBY_UI_LOG_PATH"].flatMap { $0.isEmpty ? nil : $0 }
+                    ?? home.appendingPathComponent("Library/Logs/DobbyVPN/ui_diagnostics.jsonl").path
+                let ownsLegacy = legacyDesktop && (legacyHome != nil || path.standardizedFileURL.path == URL(fileURLWithPath: configured).standardizedFileURL.path)
+                try migrateDesktopLegacy(path, includeLegacy: ownsLegacy, excluding: legacyExcludedPaths, homeDirectory: home)
                 initialized.insert(path.path)
             }
+#endif
             sequence += 1
 #if DEBUG
             let configuration = "Debug"
@@ -33,7 +40,7 @@ public enum DiagnosticFiles {
             let configuration = "Release"
 #endif
             let record: [String: Any] = [
-                "schema": "dobby.log/v1", "timestamp": ISO8601DateFormatter().string(from: Date()),
+                "schema": "dobby.log/v1", "timestamp": ISO8601DateFormatter().string(from: timestampDate),
                 "source": source, "level": level, "event": event, "message": message,
                 "process_id": ProcessInfo.processInfo.processIdentifier, "run_id": runID, "process_sequence": sequence,
                 "build": ["version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development",
@@ -44,7 +51,9 @@ public enum DiagnosticFiles {
             if !fields.isEmpty { recordWithFields["fields"] = fields }
             var data = try JSONSerialization.data(withJSONObject: recordWithFields)
             data.append(0x0A)
-            if try size(path) >= threshold { try rotate(path) }
+            if rotating {
+                if try size(path) >= threshold { try rotate(path) }
+            }
             try withFile(try open(path, flags: O_WRONLY | O_CREAT | O_APPEND)) { try $0.write(contentsOf: data) }
         }
     }
@@ -98,11 +107,11 @@ public enum DiagnosticFiles {
         guard size > threshold else { return false }
         return try withFile(open(path, flags: O_RDONLY)) { file in
             try file.seek(toOffset: threshold - 1)
-            var remaining = size - threshold // Exclude the final byte: a newline at EOF completes the crossing record.
+            var remaining = size - threshold
             while remaining > 0 {
                 let data = try file.read(upToCount: Int(min(remaining, 65_536))) ?? Data()
                 guard !data.isEmpty else { return false }
-                if data.contains(0x0A) { return true }
+                if data.contains(10) { return true }
                 remaining -= UInt64(data.count)
             }
             return false
@@ -119,60 +128,185 @@ public enum DiagnosticFiles {
 
     private static func rotate(_ path: URL) throws { try move(path, previous(path)) }
 
-    private static func migrate(_ path: URL) throws {
-        let paths = [previous(path), path]
-        var needsMigration = false
-        for source in paths {
-            let sourceSize = try size(source)
-            if sourceSize > threshold, try hasRecordAfterThreshold(source, size: sourceSize) {
-                needsMigration = true
-                break
-            }
+#if os(macOS)
+    private struct LegacySource: Codable, Equatable {
+        let path: String
+        let label: String
+        private enum CodingKeys: String, CodingKey { case path = "Path", label = "Label" }
+    }
+    private struct LegacyCommit: Codable {
+        let sources: [LegacySource]?
+        let previous: Bool
+        private enum CodingKeys: String, CodingKey { case sources = "Sources", previous = "Previous" }
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            if let sources { try values.encode(sources, forKey: .sources) }
+            else { try values.encodeNil(forKey: .sources) }
+            try values.encode(previous, forKey: .previous)
         }
-        guard needsMigration else { return }
-        let stage = URL(fileURLWithPath: path.path + ".migration-" + UUID().uuidString)
-        var output: FileHandle? = try open(stage, flags: O_CREAT | O_EXCL | O_WRONLY)
-        var failure: Error?
+    }
+
+    private static func syncDirectory(_ url: URL) throws {
+        let fd = Darwin.open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        defer { Darwin.close(fd) }
+        guard fsync(fd) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+    }
+
+    private static func readMigrationMarker(_ marker: URL) throws -> Data? {
         do {
-            var count: UInt64 = 0
-            var atStart = true
-            for source in paths {
+            return try withFile(open(marker, flags: O_RDONLY | O_NONBLOCK)) { file in
+                let limit = 1_048_576
+                var data = Data()
+                while data.count <= limit {
+                    let chunk = try file.read(upToCount: min(65_536, limit + 1 - data.count)) ?? Data()
+                    if chunk.isEmpty { break }
+                    data.append(chunk)
+                }
+                guard data.count <= limit else { throw Failure("Diagnostic migration marker exceeds size limit") }
+                return data
+            }
+        } catch let error as POSIXError where error.code == .ENOENT {
+            return nil
+        }
+    }
+
+    private static func finishCommittedMigration(
+        _ commit: LegacyCommit, destination path: URL, stage: URL, marker: URL, expectedSources: [LegacySource]
+    ) throws {
+        guard commit.sources == nil || commit.sources == expectedSources else { throw Failure("Legacy migration sources changed during recovery") }
+        for isPrevious in [true, false] {
+            let destination = isPrevious ? previous(path) : path
+            let staged = isPrevious ? previous(stage) : stage
+            if isPrevious && !commit.previous { try remove(destination); continue }
+            if FileManager.default.fileExists(atPath: staged.path) { try move(staged, destination) }
+            try syncDirectory(path.deletingLastPathComponent())
+        }
+        // A missing staged file is valid only if an earlier attempt already
+        // published a regular destination. Never discard inputs otherwise.
+        try withFile(open(path, flags: O_RDONLY | O_NONBLOCK)) { _ in }
+        if commit.previous { try withFile(open(previous(path), flags: O_RDONLY | O_NONBLOCK)) { _ in } }
+        for source in commit.sources ?? [] {
+            for suffix in [".previous", ""] { try remove(URL(fileURLWithPath: source.path + suffix)) }
+            let parent = URL(fileURLWithPath: source.path).deletingLastPathComponent()
+            if FileManager.default.fileExists(atPath: parent.path) { try syncDirectory(parent) }
+        }
+        try syncDirectory(path.deletingLastPathComponent())
+        try remove(marker)
+        try syncDirectory(path.deletingLastPathComponent())
+    }
+
+    private static func stageLegacyStreams(_ streams: [LegacySource], stage: URL, normalize: Bool) throws {
+        var count: UInt64 = 0
+        var atStart = true
+        for source in streams {
+            for suffix in [".previous", ""] {
+                let inputPath = URL(fileURLWithPath: source.path + suffix)
                 let input: FileHandle
-                do { input = try open(source, flags: O_RDONLY) }
+                do { input = try open(inputPath, flags: O_RDONLY) }
                 catch let error as POSIXError where error.code == .ENOENT { continue }
                 try withFile(input) { file in
-                    while let data = try file.read(upToCount: 65_536), !data.isEmpty {
-                        var offset = data.startIndex
-                        while offset < data.endIndex {
-                            if atStart && count >= threshold {
-                                try output?.close(); output = nil
-                                try rotate(stage)
-                                output = try open(stage, flags: O_CREAT | O_EXCL | O_WRONLY)
-                                count = 0
+                    var header = try JSONSerialization.data(withJSONObject: ["event": "diagnostics.legacy", "source": source.label, "generation": suffix], options: [.sortedKeys])
+                    header.append(10)
+                    if normalize { header.removeAll() }
+                    if !atStart && !header.isEmpty { header.insert(10, at: 0); atStart = true }
+                    var needsHeader = !header.isEmpty
+                    var output: FileHandle?
+                    do {
+                        while let data = try file.read(upToCount: 65_536), !data.isEmpty {
+                            var offset = data.startIndex
+                            while offset < data.endIndex {
+                                if atStart && count >= threshold {
+                                    try output?.close(); output = nil
+                                    try rotate(stage); count = 0; needsHeader = !header.isEmpty
+                                }
+                                if output == nil { output = try open(stage, flags: O_WRONLY | O_CREAT | O_APPEND) }
+                                let newline = data[offset...].firstIndex(of: 10)
+                                let end = newline.map { data.index(after: $0) } ?? data.endIndex
+                                if needsHeader { try output?.write(contentsOf: header); count += UInt64(header.count); needsHeader = false }
+                                try output?.write(contentsOf: data[offset..<end])
+                                count += UInt64(end - offset)
+                                atStart = newline != nil
+                                offset = end
                             }
-                            let newline = data[offset...].firstIndex(of: 0x0A)
-                            let end = newline.map { data.index(after: $0) } ?? data.endIndex
-                            try output?.write(contentsOf: data[offset..<end])
-                            count += UInt64(end - offset)
-                            atStart = newline != nil
-                            offset = end
                         }
+                        try output?.close(); output = nil
+                    } catch {
+                        let original = error
+                        do { try output?.close() }
+                        catch { throw Failure("\(String(reflecting: original))\nClose migration: \(String(reflecting: error))") }
+                        throw original
                     }
                 }
             }
-            try output?.close(); output = nil
-            try remove(previous(path))
-            if FileManager.default.fileExists(atPath: previous(stage).path) { try move(previous(stage), previous(path)) }
-            try move(stage, path)
-        } catch { failure = error }
-        var cleanup: [String] = []
-        do { try output?.close() } catch { cleanup.append(String(reflecting: error)) }
-        for temporary in [stage, previous(stage)] {
-            do { try remove(temporary) } catch { cleanup.append(String(reflecting: error)) }
         }
-        if let failure { cleanup.insert(String(reflecting: failure), at: 0) }
-        if !cleanup.isEmpty { throw Failure(cleanup.joined(separator: "\n")) }
+        // Empty legacy inputs still publish an empty current generation.
+        if !FileManager.default.fileExists(atPath: stage.path) {
+            try withFile(open(stage, flags: O_WRONLY | O_CREAT | O_EXCL)) { _ in }
+        }
     }
+
+    // Shares the Go owner's durable marker and staging protocol while holding
+    // the same destination lock. Never delete legacy input before publication.
+    private static func migrateDesktopLegacy(_ path: URL, includeLegacy: Bool, excluding: [String], homeDirectory: URL) throws {
+        let home = homeDirectory.appendingPathComponent(".dobbyvpn/app_logs.txt").path
+        let oldBackend = homeDirectory.appendingPathComponent("Library/Application Support/DobbyVPN/Logs/backend.jsonl").path
+        var sources: [LegacySource] = []
+        if includeLegacy {
+            sources = [LegacySource(path: home, label: "cli"), LegacySource(path: home + ".stderr", label: "stderr")]
+            if !excluding.contains(oldBackend) && oldBackend != path.path {
+                sources += [LegacySource(path: oldBackend, label: "backend"), LegacySource(path: oldBackend + ".stderr", label: "stderr")]
+            }
+            sources = sources.filter { $0.path != path.path }
+        }
+        let stage = URL(fileURLWithPath: path.path + ".legacy-stage")
+        let marker = URL(fileURLWithPath: path.path + ".legacy-commit")
+        let markerData = try readMigrationMarker(marker)
+        if let markerData {
+            let commit = try JSONDecoder().decode(LegacyCommit.self, from: markerData)
+            try finishCommittedMigration(commit, destination: path, stage: stage, marker: marker, expectedSources: sources)
+            if commit.sources != nil { return }
+        }
+        try remove(stage); try remove(previous(stage))
+        let hasLegacy = sources.contains(where: { source in
+            [".previous", ""].contains { FileManager.default.fileExists(atPath: source.path + $0) }
+        })
+        var normalize = false
+        if !hasLegacy {
+            for existing in [previous(path), path] {
+                let existingSize = try size(existing)
+                if try hasRecordAfterThreshold(existing, size: existingSize) { normalize = true; break }
+            }
+        }
+        guard hasLegacy || normalize else { return }
+        let streams = [LegacySource(path: path.path, label: "existing")] + (normalize ? [] : sources)
+        try stageLegacyStreams(streams, stage: stage, normalize: normalize)
+        var destinationInfo = stat()
+        let hasDestination = lstat(path.path, &destinationInfo) == 0
+        if !hasDestination && errno != ENOENT { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        for staged in [previous(stage), stage] where FileManager.default.fileExists(atPath: staged.path) {
+            try withFile(open(staged, flags: O_WRONLY | O_APPEND)) { output in
+                if hasDestination {
+                    guard fchmod(output.fileDescriptor, destinationInfo.st_mode & 0o777) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+                    if geteuid() == 0 && fchown(output.fileDescriptor, destinationInfo.st_uid, destinationInfo.st_gid) != 0 {
+                        throw POSIXError(.init(rawValue: errno) ?? .EIO)
+                    }
+                }
+                try output.synchronize()
+            }
+        }
+        let commit = LegacyCommit(sources: normalize ? nil : sources, previous: FileManager.default.fileExists(atPath: previous(stage).path))
+        let temporary = URL(fileURLWithPath: marker.path + ".tmp")
+        try remove(temporary)
+        try withFile(open(temporary, flags: O_WRONLY | O_CREAT | O_EXCL)) { output in
+            try output.write(contentsOf: JSONEncoder().encode(commit))
+            try output.synchronize()
+        }
+        try move(temporary, marker)
+        try syncDirectory(path.deletingLastPathComponent())
+        try finishCommittedMigration(commit, destination: path, stage: stage, marker: marker, expectedSources: sources)
+    }
+#endif
 
     private struct Input { let path: URL; let file: FileHandle; let length: UInt64 }
 
@@ -231,6 +365,29 @@ public enum DiagnosticFiles {
         guard issues.isEmpty else { throw Failure(issues.joined(separator: "\n")) }
         try FileManager.default.createDirectory(at: boundary.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(offsets).write(to: boundary, options: .atomic)
+    }
+
+    /// A cheap fingerprint of everything `entries(paths:boundary:)` reads: for every
+    /// current and previous input and for the viewing boundary, fingerprint file
+    /// identity, content and access metadata without reading file contents. Access
+    /// time is excluded so reading unchanged logs does not invalidate the cache.
+    public static func viewSignature(paths: [URL], boundary: URL) -> String {
+        var parts: [String] = []
+        for url in paths.flatMap({ [previous($0), $0] }) + [boundary] {
+            var info = stat()
+            // Inputs are opened with O_NOFOLLOW; the viewing boundary is read
+            // through Foundation and therefore follows a symlink if present.
+            let status = url == boundary ? stat(url.path, &info) : lstat(url.path, &info)
+            if status == 0 {
+                parts.append("\(url.path):\(info.st_dev):\(info.st_ino):\(info.st_size):" +
+                    "\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec):" +
+                    "\(info.st_ctimespec.tv_sec).\(info.st_ctimespec.tv_nsec):" +
+                    "\(info.st_mode):\(info.st_uid):\(info.st_gid)")
+            } else {
+                parts.append("\(url.path):absent:errno=\(errno)")
+            }
+        }
+        return parts.joined(separator: "|")
     }
 
     public static func entries(paths: [URL], boundary: URL) -> (entries: [Entry], error: String) {
@@ -307,18 +464,14 @@ public enum DiagnosticFiles {
             return Entry(id: id, timestamp: "", level: "RAW", source: stream, message: raw, raw: raw, date: nil)
         }
         let timestamp = value["timestamp"] as? String ?? ""
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let fractional = formatter.date(from: timestamp)
-        formatter.formatOptions = [.withInternetDateTime]
-        let date = fractional ?? formatter.date(from: timestamp)
+        let date = LogTimestampParser.shared.date(from: timestamp)
         let capture = value["event"] as? String == "stderr.capture"
         return Entry(id: id, timestamp: timestamp, level: capture ? "INFO" : (value["level"] as? String ?? "INFO").uppercased(),
                      source: stream + ((value["source"] as? String).map { " · " + $0 } ?? ""),
                      message: capture ? "Stderr capture initialized" : value["message"] as? String ?? raw, raw: raw, date: date)
     }
 
-    public static func export(paths: [URL], to path: URL, header: String) throws -> String {
+    public static func export(paths: [URL], to path: URL, header: String, checkCancellation: () throws -> Void = {}) throws -> String {
         var issues: [String] = []
         let inputs = capture(paths, issues: &issues)
         var compressor: gzFile?
@@ -336,9 +489,11 @@ public enum DiagnosticFiles {
             }
             try writeGzip(Data(header.utf8), to: compressor)
             for input in inputs {
+                try checkCancellation()
                 try writeGzip(Data("\n--- \(input.path.lastPathComponent) ---\n".utf8), to: compressor)
                 var remaining = input.length
                 while remaining > 0 {
+                    try checkCancellation()
                     let data: Data
                     do {
                         data = try input.file.read(upToCount: Int(min(65_536, remaining))) ?? Data()
@@ -381,5 +536,30 @@ public enum DiagnosticFiles {
                 offset += count
             }
         }
+    }
+}
+
+/// Parses log timestamps with two shared formatters. Creating an
+/// `ISO8601DateFormatter` per record dominated the cost of refreshing the log
+/// view, so they are built once and used under a lock.
+final class LogTimestampParser: @unchecked Sendable {
+    static let shared = LogTimestampParser()
+
+    private let lock = NSLock()
+    private let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private let plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    func date(from timestamp: String) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        return fractional.date(from: timestamp) ?? plain.date(from: timestamp)
     }
 }

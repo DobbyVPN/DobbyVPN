@@ -3,10 +3,14 @@ import SwiftUI
 import UIKit
 
 struct DobbyShareSheet: UIViewControllerRepresentable {
-    let url: URL
+    let url: URL?
+    var text: String? = nil
+    var onControllerCreated: () -> Void = {}
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: text.map { [$0] } ?? url.map { [$0] } ?? [], applicationActivities: nil)
+        onControllerCreated()
+        return controller
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
@@ -20,7 +24,8 @@ import SwiftUI
 final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePickerDelegate, NSSharingServiceDelegate {
     private static var live: [ObjectIdentifier: DobbyMacSharePresenter] = [:]
 
-    let url: URL
+    let url: URL?
+    private let item: Any
     private let reportError: (String) -> Void
     private var picker: NSSharingServicePicker?
     private var service: NSSharingService?
@@ -28,9 +33,23 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
 
     init(url: URL, reportError: @escaping (String) -> Void) {
         self.url = url
+        self.item = url
         self.reportError = reportError
         super.init()
         Self.live[ObjectIdentifier(self)] = self
+    }
+
+    init(text: String, reportError: @escaping (String) -> Void) {
+        self.url = nil
+        self.item = text
+        self.reportError = reportError
+        super.init()
+        Self.live[ObjectIdentifier(self)] = self
+    }
+
+    static func present(text: String, reportError: @escaping (String) -> Void) {
+        let presenter = DobbyMacSharePresenter(text: text, reportError: reportError)
+        presenter.present(in: (NSApp.keyWindow ?? NSApp.mainWindow)?.contentView)
     }
 
     static func present(url: URL, reportError: @escaping (String) -> Void) {
@@ -45,7 +64,7 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
             finish()
             return
         }
-        let picker = NSSharingServicePicker(items: [url])
+        let picker = NSSharingServicePicker(items: [item])
         picker.delegate = self
         self.picker = picker
         var point = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
@@ -56,7 +75,9 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
     private func finish() {
         guard !done else { return }
         done = true
-        do { try FileManager.default.removeItem(at: url) } catch { reportError("Could not remove logs export: \(error.localizedDescription)") }
+        if let url {
+            do { try FileManager.default.removeItem(at: url) } catch { reportError("Could not remove logs export: \(error.localizedDescription)") }
+        }
         picker?.delegate = nil
         if service?.delegate === self { service?.delegate = nil }
         picker = nil
@@ -84,32 +105,40 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
 #endif
 
 #if os(iOS)
-private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
+final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     var onSendLogs: () -> Void = {}
+    var onShowMenu: () -> Void = {}
     var onClear: () -> Void = {}
-    private var editMenu: AnyObject?
-    private var editMenuDelegate: AnyObject?
-    private var showingLegacyMenu = false
+    var onAccessibilityScroll: () -> Void = {}
     var preservesReadingPosition = false
     private(set) var isRestoringReadingPosition = false
     private(set) var readingPositionRestoreCount = 0
     private var lastLayoutSize: CGSize?
-    private var anchorCharacterIndex: Int?
+    private var anchorRecordID: String?
+    private var anchorRecordOffset: Int?
+    private var recordElements: [String: IOSLogRecordAccessibilityElement] = [:]
     private var anchorViewportY: CGFloat?
+
+    init() {
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: .zero)
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        super.init(frame: .zero, textContainer: container)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
 
     func installLogsMenu() {
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(showLogsMenu(_:)))
         doubleTap.numberOfTapsRequired = 2
         doubleTap.delegate = self
         addGestureRecognizer(doubleTap)
-        if #available(iOS 16.0, *) {
-            let delegate = LogsEditMenu(self)
-            let interaction = UIEditMenuInteraction(delegate: delegate)
-            addInteraction(interaction)
-            editMenu = interaction
-            editMenuDelegate = delegate
-        }
         accessibilityCustomActions = [
+            UIAccessibilityCustomAction(name: "Show log actions") { [weak self] _ in self?.onShowMenu(); return true },
             UIAccessibilityCustomAction(name: "Send logs") { [weak self] _ in self?.onSendLogs(); return true },
             UIAccessibilityCustomAction(name: "Clear") { [weak self] _ in self?.onClear(); return true },
         ]
@@ -121,35 +150,7 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     }
 
     @objc private func showLogsMenu(_ gesture: UITapGestureRecognizer) {
-        let point = gesture.location(in: self)
-        if #available(iOS 16.0, *), let interaction = editMenu as? UIEditMenuInteraction {
-            interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
-        } else {
-            showingLegacyMenu = true
-            becomeFirstResponder()
-            UIMenuController.shared.menuItems = [
-                UIMenuItem(title: "Send logs", action: #selector(sendLogsFromMenu)),
-                UIMenuItem(title: "Clear", action: #selector(clearFromMenu)),
-            ]
-            UIMenuController.shared.showMenu(from: self, rect: CGRect(origin: point, size: .zero))
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(legacyMenuHidden), name: UIMenuController.willHideMenuNotification, object: nil
-            )
-        }
-    }
-
-    @objc private func sendLogsFromMenu() { onSendLogs() }
-    @objc private func clearFromMenu() { onClear() }
-
-    @objc private func legacyMenuHidden() {
-        showingLegacyMenu = false
-        UIMenuController.shared.menuItems = nil
-        NotificationCenter.default.removeObserver(self, name: UIMenuController.willHideMenuNotification, object: nil)
-    }
-
-    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
-        if action == #selector(sendLogsFromMenu) || action == #selector(clearFromMenu) { return showingLegacyMenu }
-        return !showingLegacyMenu && super.canPerformAction(action, withSender: sender)
+        onShowMenu()
     }
 
     override func layoutSubviews() {
@@ -169,6 +170,77 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
             : NSLocalizedString("New entries are held while you read earlier logs. Scroll to the bottom to resume.", comment: "")
     }
 
+    func installAccessibilitySummary() {
+        isAccessibilityElement = false
+        accessibilityLabel = NSLocalizedString("Connection logs", comment: "")
+    }
+
+    override var accessibilityElements: [Any]? {
+        get {
+            var visible: [String: IOSLogRecordAccessibilityElement] = [:]
+            let elements = visibleIOSLogRecordFragments(in: self).map { fragment in
+                let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)" +
+                    (fragment.isFullyVisible ? "" : ".partial")
+                let identifier = "logs.record." + fragment.recordID + suffix
+                let element = recordElements[identifier] ?? IOSLogRecordAccessibilityElement(accessibilityContainer: self)
+                element.logView = self
+                element.accessibilityIdentifier = identifier
+                element.accessibilityLabel = fragment.text
+                element.accessibilityTraits = .staticText
+                element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(fragment.frame, in: self)
+                element.accessibilityCustomActions = accessibilityCustomActions
+                visible[identifier] = element
+                return element
+            }
+            recordElements = visible
+            return elements
+        }
+        set { super.accessibilityElements = newValue }
+    }
+
+    var accessibilityViewportText: String {
+        guard textStorage.length > 0 else { return "" }
+        let viewport = CGRect(
+            x: contentOffset.x - textContainerInset.left,
+            y: contentOffset.y - textContainerInset.top,
+            width: bounds.width,
+            height: bounds.height
+        )
+        guard viewport.width > 0, viewport.height > 0 else { return "" }
+        let glyphs = layoutManager.glyphRange(forBoundingRect: viewport, in: textContainer)
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        guard characters.location < textStorage.length, characters.length > 0 else { return "" }
+        let content = textStorage.string as NSString
+        // The viewport bounds the text, including partially visible edge lines.
+        // Keep complete Unicode graphemes at both edges so scrolling never
+        // exposes half a character or makes visible text inaccessible.
+        return content.substring(with: content.rangeOfComposedCharacterSequences(for: characters))
+    }
+
+    override var accessibilityValue: String? {
+        get { accessibilityViewportText }
+        set { super.accessibilityValue = newValue }
+    }
+
+    override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        let delta: CGFloat
+        switch direction {
+        case .up: delta = -1
+        case .down: delta = 1
+        default: return false
+        }
+        let minimumY = -adjustedContentInset.top
+        let maximumY = max(minimumY, contentSize.height - bounds.height + adjustedContentInset.bottom)
+        // Overlap pages so wrapped records crossing the edge remain readable.
+        let page = max(1, bounds.height - adjustedContentInset.top - adjustedContentInset.bottom) * 0.8
+        let nextY = min(max(contentOffset.y + delta * page, minimumY), maximumY)
+        guard abs(nextY - contentOffset.y) > 0.5 else { return false }
+        setContentOffset(CGPoint(x: contentOffset.x, y: nextY), animated: false)
+        onAccessibilityScroll()
+        UIAccessibility.post(notification: .pageScrolled, argument: accessibilityViewportText)
+        return true
+    }
+
     func restoreScrollExtent(to height: CGFloat) {
         guard height.isFinite, height > contentSize.height + 1 else { return }
         contentSize = CGSize(width: contentSize.width, height: height)
@@ -177,28 +249,22 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     func captureReadingPosition() {
         guard textStorage.length > 0 else { return }
         layoutManager.ensureLayout(for: textContainer)
-        let point = CGPoint(
-            x: textContainerInset.left + 1,
-            y: contentOffset.y - textContainerInset.top + 1
-        )
-        let topGlyph = layoutManager.glyphIndex(for: point, in: textContainer)
-        var character = min(layoutManager.characterIndexForGlyph(at: topGlyph), textStorage.length - 1)
-        // Anchor the first record shown in full, from its start: records above may wrap differently after a resize.
-        let record = (textStorage.string as NSString).paragraphRange(for: NSRange(location: character, length: 0))
-        let topLine = layoutManager.lineFragmentRect(forGlyphAt: topGlyph, effectiveRange: nil)
-        let cutByTopEdge = topLine.minY + textContainerInset.top < contentOffset.y
-        if (record.location < character || cutByTopEdge) && NSMaxRange(record) < textStorage.length {
-            character = NSMaxRange(record)
-        }
+        let fragments = visibleIOSLogRecordFragments(in: self)
+        guard let fragment = fragments.first(where: { $0.isWholeRecord })
+                ?? fragments.first(where: { $0.isFullyVisible }) ?? fragments.first,
+              let record = logRecordRange(fragment.recordID, in: textStorage) else { return }
+        let character = record.location + fragment.offset
         let line = layoutManager.lineFragmentRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: character), effectiveRange: nil)
-        anchorCharacterIndex = character
+        anchorRecordID = fragment.recordID
+        anchorRecordOffset = fragment.offset
         anchorViewportY = line.minY + textContainerInset.top - contentOffset.y
     }
 
     private func restoreReadingPosition() {
-        guard let character = anchorCharacterIndex,
-              let viewportY = anchorViewportY,
-              textStorage.length > 0 else { return }
+        guard let id = anchorRecordID, let offset = anchorRecordOffset,
+              let record = logRecordRange(id, in: textStorage), offset >= 0, offset < record.length,
+              let viewportY = anchorViewportY, textStorage.length > 0 else { return }
+        let character = (textStorage.string as NSString).rangeOfComposedCharacterSequence(at: record.location + offset).location
         layoutManager.ensureLayout(for: textContainer)
         let glyph = layoutManager.glyphIndexForCharacter(at: min(character, textStorage.length - 1))
         let line = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
@@ -216,38 +282,17 @@ private final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     }
 }
 
-@available(iOS 16.0, *)
-private final class LogsEditMenu: NSObject, UIEditMenuInteractionDelegate {
-    private weak var view: DobbyLogTextView?
-
-    init(_ view: DobbyLogTextView) { self.view = view }
-
-    func editMenuInteraction(
-        _ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]
-    ) -> UIMenu? {
-        UIMenu(children: [
-            UIAction(title: "Send logs") { [weak view] _ in view?.onSendLogs() },
-            UIAction(title: "Clear") { [weak view] _ in view?.onClear() },
-        ])
-    }
-}
-
 struct DobbyLogView: UIViewRepresentable {
     let entries: [DobbyLogEntry]
     let clear: Int
     let onSendLogs: () -> Void
+    var onShowMenu: () -> Void = {}
     let onClear: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UITextView {
-        let view: DobbyLogTextView
-        if #available(iOS 16.0, *) {
-            // Reading-position anchoring below uses NSLayoutManager; select TextKit 1 before layout.
-            view = DobbyLogTextView(usingTextLayoutManager: false)
-        } else {
-            view = DobbyLogTextView()
-        }
+        let view = DobbyLogTextView()
         view.isEditable = false
         view.isSelectable = true
         view.backgroundColor = DobbyPalette.surface
@@ -255,6 +300,7 @@ struct DobbyLogView: UIViewRepresentable {
         view.textContainer.lineFragmentPadding = 0
         view.adjustsFontForContentSizeCategory = true
         view.installLogsMenu()
+        view.installAccessibilitySummary()
         view.delegate = context.coordinator
         view.accessibilityIdentifier = "Connection logs"
         view.updateFollowingAccessibilityHint(isFollowing: true)
@@ -265,7 +311,12 @@ struct DobbyLogView: UIViewRepresentable {
         let coordinator = context.coordinator
         if let logView = view as? DobbyLogTextView {
             logView.onSendLogs = onSendLogs
+            logView.onShowMenu = onShowMenu
             logView.onClear = onClear
+            logView.onAccessibilityScroll = { [weak coordinator, weak logView] in
+                guard let logView else { return }
+                coordinator?.updateFollowingState(for: logView)
+            }
         }
         coordinator.latestEntries = entries
         let cleared = clear != coordinator.lastClear
@@ -336,7 +387,7 @@ struct DobbyLogView: UIViewRepresentable {
             updateFollowingState(for: scrollView)
         }
 
-        private func updateFollowingState(for scrollView: UIScrollView) {
+        fileprivate func updateFollowingState(for scrollView: UIScrollView) {
             guard let logView = scrollView as? DobbyLogTextView,
                   !logView.isRestoringReadingPosition else { return }
             let contentHeight = effectiveContentHeight(for: logView)
@@ -401,42 +452,6 @@ struct DobbyLogView: UIViewRepresentable {
     }
 }
 #elseif os(macOS)
-private final class DobbyLogTextView: NSTextView {
-    var onSendLogs: () -> Void = {}
-    var onClear: () -> Void = {}
-
-    private var logsMenu: NSMenu {
-        let menu = NSMenu()
-        menu.addItem(LogsMenuItem("Send logs") { [weak self] in self?.onSendLogs() })
-        menu.addItem(LogsMenuItem("Clear") { [weak self] in self?.onClear() })
-        return menu
-    }
-
-    override func menu(for event: NSEvent) -> NSMenu? { logsMenu }
-
-    override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 {
-            NSMenu.popUpContextMenu(logsMenu, with: event, for: self)
-        } else {
-            super.mouseDown(with: event)
-        }
-    }
-}
-
-private final class LogsMenuItem: NSMenuItem {
-    private let handler: () -> Void
-
-    init(_ title: String, handler: @escaping () -> Void) {
-        self.handler = handler
-        super.init(title: title, action: #selector(run), keyEquivalent: "")
-        target = self
-    }
-
-    required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    @objc private func run() { handler() }
-}
-
 final class DobbyLogScrollView: NSScrollView {
     var onWheelStart: (() -> Void)?
     var onWheelEnd: ((Bool) -> Void)?
@@ -456,8 +471,11 @@ struct DobbyLogView: NSViewRepresentable {
     /// Off while a popup covers the logs, so the text cursor does not show through it.
     let interactive: Bool
     let onSendLogs: () -> Void
+    var onUploadLogs: (() -> Void)? = nil
     let onClear: () -> Void
     var onReadingPositionRestored: (MacLogRestoreObservation) -> Void = { _ in }
+    var onReadingPositionCaptured: (MacLogReadingAnchor) -> Void = { _ in }
+    var onAccessibilityObservation: (MacLogAccessibilityObservation) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -521,9 +539,11 @@ struct DobbyLogView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
+        guard let view = scroll.documentView as? DobbyLogTextView else { return }
         let coordinator = context.coordinator
         view.onSendLogs = onSendLogs
+        view.onUploadLogs = onUploadLogs
+        view.onAccessibilityObservation = onAccessibilityObservation
         view.onClear = { [weak coordinator] in
             coordinator?.resetForClear()
             onClear()
@@ -536,13 +556,24 @@ struct DobbyLogView: NSViewRepresentable {
         if clear != coordinator.lastClear {
             coordinator.resetForClear()
         }
+        updateLogContent(scroll, coordinator: coordinator)
+    }
+
+    func updateLogContent(_ scroll: NSScrollView, coordinator: Coordinator) {
+        guard let view = scroll.documentView as? DobbyLogTextView, let storage = view.textStorage else { return }
         guard coordinator.desiredFollowing else { return }
         coordinator.entries = entries
-        let attributed = logText(entries)
-        let text = attributed.string
+        let attributed: NSAttributedString
+        if let cached = coordinator.renderedText, coordinator.renderedEntries == entries {
+            attributed = cached
+        } else {
+            attributed = logText(entries)
+            coordinator.renderedEntries = entries
+            coordinator.renderedText = attributed
+        }
         coordinator.updating = true
         let selection = view.selectedRange()
-        if view.string != text {
+        if !storage.isEqual(to: attributed) {
             storage.setAttributedString(attributed)
             if NSMaxRange(selection) <= storage.length { view.setSelectedRange(selection) }
         }
@@ -562,6 +593,10 @@ struct DobbyLogView: NSViewRepresentable {
         private var wheelScrolling = false
         var interacting: Bool { userScrolling || wheelScrolling }
         var entries: [DobbyLogEntry] = []
+        // The attributed text built for `renderedEntries`, reused while the
+        // entries are unchanged so an idle log view does not rebuild it.
+        var renderedEntries: [DobbyLogEntry]?
+        var renderedText: NSAttributedString?
         var alignmentQueued = false
         var readingAnchor: MacLogReadingAnchor?
         var viewportSize: CGSize?
@@ -587,7 +622,9 @@ struct DobbyLogView: NSViewRepresentable {
                 viewportBottom: scroll.contentView.bounds.maxY,
                 contentHeight: scroll.documentView?.bounds.height ?? 0
             )
-            observeUserScroll(atBottom: atBottom, anchor: atBottom ? nil : captureMacLogReadingAnchor(scroll))
+            let anchor = atBottom ? nil : captureMacLogReadingAnchor(scroll)
+            if let anchor { parent.onReadingPositionCaptured(anchor) }
+            observeUserScroll(atBottom: atBottom, anchor: anchor)
         }
 
         func observeUserScroll(atBottom: Bool, anchor: MacLogReadingAnchor?) {
@@ -671,20 +708,23 @@ struct DobbyLogView: NSViewRepresentable {
 }
 // A UTF-16 character identity survives wrapping above the frozen viewport.
 struct MacLogReadingAnchor {
-    let characterIndex: Int
+    let recordID: String
+    let characterOffset: Int
     let viewportY: CGFloat
 }
 
 func captureMacLogReadingAnchor(_ scroll: NSScrollView) -> MacLogReadingAnchor? {
-    guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage,
-          let layout = view.layoutManager, let container = view.textContainer, storage.length > 0 else { return nil }
-    layout.ensureLayout(for: container)
-    guard layout.numberOfGlyphs > 0 else { return nil }
-    let point = NSPoint(x: 1, y: max(0, scroll.contentView.bounds.minY - view.textContainerOrigin.y + 1))
-    let glyph = min(layout.glyphIndex(for: point, in: container), layout.numberOfGlyphs - 1)
+    guard let view = scroll.documentView as? NSTextView,
+          let storage = view.textStorage, let layout = view.layoutManager else { return nil }
+    let fragments = visibleMacLogRecordFragments(in: view)
+    guard let fragment = fragments.first(where: { $0.isWholeRecord })
+            ?? fragments.first(where: { $0.isFullyVisible }) ?? fragments.first,
+          let range = logRecordRange(fragment.recordID, in: storage) else { return nil }
+    let character = range.location + fragment.offset
+    let glyph = layout.glyphIndexForCharacter(at: character)
     let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-    return MacLogReadingAnchor(characterIndex: layout.characterIndexForGlyph(at: glyph),
-                               viewportY: line.minY + view.textContainerOrigin.y - scroll.contentView.bounds.minY)
+    return MacLogReadingAnchor(recordID: fragment.recordID, characterOffset: fragment.offset,
+        viewportY: line.minY + view.textContainerOrigin.y - scroll.contentView.bounds.minY)
 }
 
 struct MacLogRestoreObservation {
@@ -699,9 +739,11 @@ struct MacLogRestoreObservation {
 func restoreMacLogReadingAnchor(_ anchor: MacLogReadingAnchor, in scroll: NSScrollView) -> MacLogRestoreObservation? {
     guard let view = scroll.documentView as? NSTextView, let storage = view.textStorage,
           let layout = view.layoutManager, let container = view.textContainer,
-          anchor.characterIndex >= 0, anchor.characterIndex < storage.length else { return nil }
+          let range = logRecordRange(anchor.recordID, in: storage),
+          anchor.characterOffset >= 0, anchor.characterOffset < range.length else { return nil }
     layout.ensureLayout(for: container)
-    let glyph = layout.glyphIndexForCharacter(at: anchor.characterIndex)
+    let character = (storage.string as NSString).rangeOfComposedCharacterSequence(at: range.location + anchor.characterOffset).location
+    let glyph = layout.glyphIndexForCharacter(at: character)
     guard glyph < layout.numberOfGlyphs else { return nil }
     let line = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
     let maxY = max(0, view.bounds.height - scroll.contentView.bounds.height)
@@ -782,6 +824,8 @@ private let logFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
 private let boldLogFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
 #endif
 
+let logRecordIDKey = NSAttributedString.Key("DobbyLogRecordID")
+
 private let logTimeFormat: DateFormatter = {
     let format = DateFormatter()
     format.locale = Locale(identifier: "en_US_POSIX")
@@ -795,6 +839,7 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     // Extra space goes below each line so a line's text starts at the top of its fragment.
     paragraph.lineSpacing = 3
     for entry in entries {
+        let start = output.length
         let time = entry.date.map(logTimeFormat.string) ?? entry.timestamp
         if !time.isEmpty {
             output.append(NSAttributedString(string: time + "  ", attributes: [
@@ -811,6 +856,8 @@ func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
         output.append(NSAttributedString(string: entry.message + "\n", attributes: [
             .font: font, .foregroundColor: color, .paragraphStyle: paragraph,
         ]))
+        output.addAttribute(logRecordIDKey, value: entry.id,
+                            range: NSRange(location: start, length: output.length - start))
     }
     return output
 }

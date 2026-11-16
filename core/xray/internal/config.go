@@ -65,6 +65,10 @@ func GenerateXrayConfig(
 	userConfig["inbounds"] = []interface{}{socksInbound}
 
 	ensureXrayLogConfig(userConfig)
+	// Xray filters messages before invoking our handler. Capture info when the
+	// requested threshold is warning so the bridge can promote tunnel resets;
+	// the bridge still enforces the requested threshold after classification.
+	captureXrayLogMessages(userConfig)
 
 	finalJSON, err := json.Marshal(userConfig)
 	if err != nil {
@@ -80,6 +84,13 @@ func GenerateXrayConfig(
 	return infraConfig.Build()
 }
 
+func captureXrayLogMessages(userConfig map[string]interface{}) {
+	logConfig := userConfig["log"].(map[string]interface{})
+	if logConfig["loglevel"] == xrayLogLevelWarning {
+		logConfig["loglevel"] = xrayLogLevelInfo
+	}
+}
+
 func ensureXrayLogConfig(userConfig map[string]interface{}) {
 	logConfig, ok := userConfig["log"].(map[string]interface{})
 	if !ok {
@@ -90,7 +101,7 @@ func ensureXrayLogConfig(userConfig map[string]interface{}) {
 	level, _ := logConfig["loglevel"].(string)
 	normalizedLevel := strings.ToLower(level)
 	switch normalizedLevel {
-	case defaultXrayLogLevelName, xrayLogLevelInfo, xrayLogLevelWarning, xrayLogLevelError:
+	case xrayLogLevelDebug, xrayLogLevelInfo, xrayLogLevelWarning, xrayLogLevelError:
 		if level != normalizedLevel {
 			logConfig["loglevel"] = normalizedLevel
 		}

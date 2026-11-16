@@ -9,10 +9,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
+	"core/log"
 	"core/sessionapi"
 	"core/sessionapi/wire"
 )
+
+const snapshotMethod = "Snapshot"
 
 // PlatformCallbacks is implemented by the Android service or iOS extension
 // shell. PublishState synchronizes native tunnel lifecycle state; UI clients
@@ -42,6 +46,8 @@ type managerAPI interface {
 	Start(context.Context, string, uint64, sessionapi.StartTarget) (sessionapi.StartResult, error)
 	Stop(context.Context, string, uint64) (sessionapi.StopResult, error)
 	Snapshot(context.Context, string) (sessionapi.SnapshotResult, error)
+	PrepareLogUpload(context.Context, string, string) (sessionapi.LogUploadPreparation, error)
+	NetworkEvent(context.Context, string, string) error
 }
 
 // Binding is a thin synchronous JSON boundary over one process manager.
@@ -72,6 +78,23 @@ func (b *Binding) StopAndWait(ctx context.Context) error {
 		return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "shutdown owner is unavailable"}
 	}
 	return owner.StopAndWait(ctx)
+}
+
+// StopAndWaitWithOperation records one iOS provider lifecycle operation without
+// altering the owner or its cleanup error.
+func (b *Binding) StopAndWaitWithOperation(ctx context.Context, operationID string) error {
+	fields := map[string]any{"operation_id": operationID, "method": "StopAndWait"}
+	started := time.Now()
+	log.Info("SESSION", "mobile operation entered", fields)
+	err := b.StopAndWait(ctx)
+	fields["elapsed_ms"] = time.Since(started).Milliseconds()
+	if err != nil {
+		fields["error"] = err.Error()
+		log.Error("SESSION", "mobile operation failed", fields)
+	} else {
+		log.Info("SESSION", "mobile operation completed", fields)
+	}
+	return err
 }
 
 func (b *Binding) Resume() error {
@@ -216,6 +239,15 @@ func (b *Binding) StopContext(ctx context.Context, sessionID string, generation 
 	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
 }
 
+// PrepareLogUpload returns fenced, immutable parameters for a native upload.
+func (b *Binding) PrepareLogUpload(sessionID, digest string) string {
+	result, err := b.manager.PrepareLogUpload(context.Background(), sessionID, digest)
+	if err != nil {
+		return failed(err)
+	}
+	return success(result)
+}
+
 // Snapshot attaches to the process-owned session when sessionID is empty.
 func (b *Binding) Snapshot(sessionID string) string {
 	return b.SnapshotContext(context.Background(), sessionID)
@@ -233,6 +265,50 @@ func (b *Binding) SnapshotContext(ctx context.Context, sessionID string) string 
 // methods continue to use the same typed methods and DTO conversions above.
 func (b *Binding) CallJSON(ctx context.Context, method string, params json.RawMessage) string {
 	return b.CallJSONWithConfiguration(ctx, method, params, nil, false)
+}
+
+// CallJSONWithOperation attaches the provider's operation identity to this
+// invocation only; command parameters and responses retain their existing shape.
+func (b *Binding) CallJSONWithOperation(ctx context.Context, operationID, method string, params json.RawMessage, rawConfiguration []byte, hasConfiguration bool) string {
+	fields := map[string]any{"operation_id": operationID, "method": method}
+	var identity struct {
+		SessionID  string `json:"session_id"`
+		Generation *int64 `json:"generation"`
+	}
+	if json.Unmarshal(params, &identity) == nil {
+		if identity.SessionID != "" {
+			fields["requested_session_id"] = identity.SessionID
+		}
+		if identity.Generation != nil {
+			fields["requested_generation"] = *identity.Generation
+		}
+	}
+	started := time.Now()
+	if method != snapshotMethod {
+		log.Info("SESSION", "mobile operation entered", fields)
+	}
+	response := b.CallJSONWithConfiguration(ctx, method, params, rawConfiguration, hasConfiguration)
+	fields["elapsed_ms"] = time.Since(started).Milliseconds()
+	var outcome struct {
+		OK    bool          `json:"ok"`
+		Error *wire.Failure `json:"error"`
+	}
+	err := json.Unmarshal([]byte(response), &outcome)
+	switch {
+	case err != nil:
+		fields["error"] = err.Error()
+		log.Error("SESSION", "mobile operation failed", fields)
+	case outcome.Error != nil:
+		fields["error"] = outcome.Error.Message
+		fields["error_code"] = outcome.Error.Code
+		log.Error("SESSION", "mobile operation failed", fields)
+	case !outcome.OK:
+		fields["error"] = "command returned failure without details"
+		log.Error("SESSION", "mobile operation failed", fields)
+	case method != snapshotMethod:
+		log.Info("SESSION", "mobile operation completed", fields)
+	}
+	return response
 }
 
 // CallJSONWithConfiguration dispatches the same method/params request used by
@@ -256,6 +332,7 @@ func (b *Binding) CallJSONWithConfiguration(
 		Index            int32   `json:"index"`
 		ReplaceCurrent   bool    `json:"replace_current"`
 		Digest           string  `json:"digest"`
+		Reason           string  `json:"reason"`
 	}
 	if len(params) != 0 {
 		decoder := json.NewDecoder(bytes.NewReader(params))
@@ -265,7 +342,13 @@ func (b *Binding) CallJSONWithConfiguration(
 		}
 	}
 	switch method {
-	case "Snapshot":
+	case "PrepareLogUpload":
+		result, err := b.manager.PrepareLogUpload(ctx, value.SessionID, value.Digest)
+		if err != nil {
+			return failed(err)
+		}
+		return success(result)
+	case snapshotMethod:
 		return b.SnapshotContext(ctx, value.SessionID)
 	case "Configure":
 		if hasConfiguration {
@@ -288,6 +371,11 @@ func (b *Binding) CallJSONWithConfiguration(
 		return b.startContext(ctx, value.SessionID, value.ExpectedSequence, value.Mode, value.Index, nil, value.ReplaceCurrent, value.Digest)
 	case "Stop":
 		return b.StopContext(ctx, value.SessionID, value.Generation)
+	case "NetworkEvent":
+		if err := b.manager.NetworkEvent(ctx, value.SessionID, value.Reason); err != nil {
+			return failed(err)
+		}
+		return success(struct{}{})
 	default:
 		return failed(&sessionapi.Error{Code: sessionapi.FailureInvalidArgument, Message: "unknown command"})
 	}

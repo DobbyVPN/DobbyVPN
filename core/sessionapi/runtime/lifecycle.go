@@ -208,6 +208,9 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 	if n.core == nil {
 		return n, errors.New("network core is unavailable")
 	}
+	if owner, ok := n.core.(interface{ setNetworkRef(sessionapi.SessionRef) }); ok {
+		owner.setNetworkRef(ref)
+	}
 	// The native network worker must not inherit a protocol cancellation. Link
 	// acquisition cancellation only until Connect has settled; Stop owns it after.
 	networkCtx, cancel := context.WithCancel(context.Background())
@@ -554,6 +557,7 @@ type lease struct {
 	healthCancel  context.CancelFunc
 	healthDone    chan struct{}
 	healthFailed  chan error
+	probeNow      chan string
 }
 
 func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
@@ -563,17 +567,43 @@ func (l *lease) setOnDone(fn func(error))            { l.onDone = fn }
 // lease has stopped, so the manager watcher cannot outlive its runtime lease.
 func (l *lease) HealthFailures() <-chan error { return l.healthFailed }
 
+// ProbeNow implements sessionapi.ProbingLease. It never blocks; a request that
+// is already queued absorbs later ones.
+func (l *lease) ProbeNow(reason string) {
+	if l.probeNow == nil {
+		return
+	}
+	select {
+	case l.probeNow <- reason:
+	default:
+	}
+}
+
 func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.SessionRef, proxyAddr string, check ConnectedHealthFunc, interval time.Duration, threshold int) {
 	ctx, cancel := context.WithCancel(parent)
 	l.healthCancel = cancel
 	l.healthDone = make(chan struct{})
 	l.healthFailed = make(chan error, 1)
+	l.probeNow = make(chan string, 1)
 	go func() {
 		defer close(l.healthDone)
 		defer close(l.healthFailed)
 		var failures []error
+		var eventReason string
 		for {
-			if err := check(ctx, ref, proxyAddr); err != nil {
+			var started time.Time
+			if eventReason != "" {
+				started = time.Now()
+			}
+			err := check(ctx, ref, proxyAddr)
+			if eventReason != "" {
+				logEventHealthCheckResult(ctx, ref, eventReason, started, err)
+				eventReason = ""
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
 				failures = append(failures, err)
 				if len(failures) >= threshold {
 					cause := errors.Join(failures...)
@@ -601,10 +631,35 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 					<-timer.C
 				}
 				return
+			case reason := <-l.probeNow:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				eventReason = reason
+				log.Infof(category, "health check triggered by %s generation=%d", reason, ref.Generation)
 			case <-timer.C:
 			}
 		}
 	}()
+}
+
+func logEventHealthCheckResult(ctx context.Context, ref sessionapi.SessionRef, reason string, started time.Time, err error) {
+	fields := map[string]any{
+		"reason": reason, "session_id": ref.SessionID,
+		"generation": ref.Generation, "duration_ms": time.Since(started).Milliseconds(),
+		"result": "succeeded",
+	}
+	if err != nil {
+		fields["error"] = err.Error()
+	}
+	if ctx.Err() != nil {
+		fields["result"] = "canceled"
+	} else if err != nil {
+		fields["result"] = "failed"
+		log.Warn(category, "event health check completed", fields)
+		return
+	}
+	log.Info(category, "event health check completed", fields)
 }
 
 func (l *lease) Stop(ctx context.Context) error {

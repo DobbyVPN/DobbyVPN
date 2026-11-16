@@ -4,6 +4,7 @@ package platform_engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -41,17 +42,17 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 	return true, nil
 }
 
-func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
+func stopPlatformEngine(ctx context.Context, stopDevice func(context.Context) error) error {
 	deviceName := lastIface
-	stopDevice()
+	stopErr := stopDevice(ctx)
 	if deviceName == "" {
-		return nil
+		return stopErr
 	}
 
 	for {
 		interfaces, err := net.Interfaces()
 		if err != nil {
-			return fmt.Errorf("list interfaces while releasing macOS TUN %s: %w", deviceName, err)
+			return errors.Join(stopErr, fmt.Errorf("list interfaces while releasing macOS TUN %s: %w", deviceName, err))
 		}
 		found := false
 		for _, iface := range interfaces {
@@ -62,10 +63,10 @@ func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
 		}
 		if !found {
 			lastIface = ""
-			return nil
+			return stopErr
 		}
 		if ctx.Err() != nil {
-			return fmt.Errorf("macOS TUN %s remained after tun2socks stopped", deviceName)
+			return errors.Join(stopErr, fmt.Errorf("macOS TUN %s remained after tun2socks stopped", deviceName))
 		}
 		select {
 		case <-ctx.Done():

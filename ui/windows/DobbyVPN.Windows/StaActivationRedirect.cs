@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,26 +22,40 @@ internal static class StaActivationRedirect
         [In] IntPtr[] handles,
         out uint handleIndex);
 
-    internal static void WaitForRedirect(Func<Task> redirect)
+    internal static void WaitForRedirect(Func<Task> redirect, uint? targetProcessId = null)
     {
         ArgumentNullException.ThrowIfNull(redirect);
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
             throw new InvalidOperationException("Windows activation redirection must be waited on from an STA thread.");
 
+        using var target = targetProcessId is null ? null : Process.GetProcessById(checked((int)targetProcessId.Value));
         using var completed = new EventWaitHandle(false, EventResetMode.ManualReset);
         var redirectTask = Task.Run(async () => await redirect().ConfigureAwait(false));
         _ = redirectTask.ContinueWith(
-            _ => { completed.Set(); },
+            _ => { try { completed.Set(); } catch (ObjectDisposedException) { } },
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
 
-        var waitResult = CoWaitForMultipleObjects(
-            0, WaitForever, 1, [completed.SafeWaitHandle.DangerousGetHandle()], out var handleIndex);
+        var handles = target is null
+            ? new[] { completed.SafeWaitHandle.DangerousGetHandle() }
+            : new[] { completed.SafeWaitHandle.DangerousGetHandle(), target.Handle };
+        var waitResult = CoWaitForMultipleObjects(0, WaitForever, (uint)handles.Length, handles, out var handleIndex);
         Marshal.ThrowExceptionForHR(waitResult);
-        if (handleIndex != 0)
+        if (handleIndex >= handles.Length)
             throw new InvalidOperationException($"Activation redirection wait returned unexpected handle index {handleIndex}.");
 
+        // Preserve the redirect's original failure if it has completed, even if
+        // the target exit was observed at the same time. Completion alone does
+        // not acknowledge that a recipient accepted the payload.
+        CompleteRedirect(redirectTask, target is not null && target.HasExited, handleIndex != 0, targetProcessId);
+    }
+
+    internal static void CompleteRedirect(Task redirectTask, bool targetExited, bool targetSignaled, uint? targetProcessId)
+    {
+        if (redirectTask.IsCompleted) redirectTask.GetAwaiter().GetResult();
+        if (targetExited || targetSignaled)
+            throw new InvalidOperationException($"Activation target process {targetProcessId} exited during redirection.");
         redirectTask.GetAwaiter().GetResult();
     }
 }

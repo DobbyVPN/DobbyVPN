@@ -1,5 +1,6 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Fragment>
+    <util:CloseApplication Id="CloseDobbyFrontend" Target="DobbyVPN.exe" CloseMessage="yes" Timeout="10" ElevatedCloseMessage="yes" RebootPrompt="no" TerminateProcess="0" />
     <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
 		<!-- The v1.5.1 executable path changed; this needs a new MSI component identity. -->
 		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNExecutable" Guid="da24efb2-1702-4156-8ea1-892b0de2e50f">

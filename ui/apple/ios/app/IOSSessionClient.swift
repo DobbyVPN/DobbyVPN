@@ -5,7 +5,7 @@ final class IOSSessionClient: DobbyOnDemandClient, @unchecked Sendable {
     private let shell = IOSAppCompositionRoot.sessionShell
 
     var diagnosticPaths: [URL] { IOSAppCompositionRoot.diagnosticPaths() }
-    var uiDiagnosticPath: URL { IOSAppCompositionRoot.sharedLogPath("ui_diagnostics.jsonl") }
+    var uiDiagnosticPath: URL { IOSAppCompositionRoot.goLogFilePath() }
     var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
     }

@@ -210,6 +210,10 @@ func ConfigureWindowsRouting(plan *Plan, tunDeviceName string) error {
 // route plus interface metric. Gateway-less defaults are valid on a physical
 // point-to-point link. No VPN-owned route participates in selection.
 func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
+	return WindowsPhysicalInterfacesPreferred(0, 0)
+}
+
+func WindowsPhysicalInterfacesPreferred(preferred4, preferred6 uint64) (ipv4, ipv6 int, err error) {
 	for _, family := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
 		rows, readErr := winipcfg.GetIPForwardTable2(family)
 		if readErr != nil {
@@ -217,6 +221,11 @@ func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
 		}
 		best := ^uint64(0)
 		selected := 0
+		var selectedLUID uint64
+		preferred := preferred4
+		if family == windows.AF_INET6 {
+			preferred = preferred6
+		}
 		for _, row := range rows {
 			if row.DestinationPrefix.Prefix().Bits() != 0 {
 				continue
@@ -225,7 +234,11 @@ func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
 			if readErr != nil {
 				return 0, 0, readErr
 			}
-			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || IsTunnelInterfaceName(iface.Name) {
+			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || row.Loopback || uint64(row.InterfaceLUID) == ownedWindowsLUID.Load() {
+				continue
+			}
+			actual, readErr := winipcfg.LUIDFromIndex(row.InterfaceIndex)
+			if readErr != nil || actual != row.InterfaceLUID || (!row.Immortal && row.ValidLifetime == 0) {
 				continue
 			}
 			settings, readErr := row.InterfaceLUID.IPInterface(family)
@@ -233,8 +246,9 @@ func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
 				return 0, 0, readErr
 			}
 			metric := uint64(row.Metric) + uint64(settings.Metric)
-			if metric < best {
-				best, selected = metric, iface.Index
+			luid := uint64(row.InterfaceLUID)
+			if PreferDefaultRoute(metric, luid, best, selectedLUID, preferred) {
+				best, selected, selectedLUID = metric, iface.Index, luid
 			}
 		}
 		if family == windows.AF_INET {
@@ -247,15 +261,6 @@ func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
 		return 0, 0, errors.New("no active physical IPv4 or IPv6 default route")
 	}
 	return ipv4, ipv6, nil
-}
-
-func IsTunnelInterfaceName(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.Contains(lower, "wintun") ||
-		strings.Contains(lower, "dobby") ||
-		strings.Contains(lower, "wireguard") ||
-		strings.Contains(lower, "tap") ||
-		strings.Contains(lower, "tun")
 }
 
 func onInterfaceChange(callerContext unsafe.Pointer, _ *windows.MibIpInterfaceRow, _ uint32) uintptr {

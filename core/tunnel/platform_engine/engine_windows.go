@@ -60,9 +60,6 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 		return false, fmt.Errorf("restore prior Windows session state: %w", err)
 	}
 	log.Debugf(Category, "[Engine][Windows] proxy_ready=true uplink_iface=%s", uplinkIface)
-	if routing.IsTunnelInterfaceName(uplinkIface) {
-		return false, fmt.Errorf("refusing to use tunnel interface %q as Windows uplink", uplinkIface)
-	}
 	adapterName, err := newWindowsAdapterName()
 	if err != nil {
 		return false, fmt.Errorf("create owned Wintun identity: %w", err)
@@ -93,6 +90,7 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 		return true, (fmt.Errorf("resolve interface %q LUID: %w", ifName, err))
 	}
 	adapter.luidKnown = true
+	routing.SetWindowsOwnedLUID(uint64(adapter.lastLUID))
 	if err := acquireWindowsNetworkGuard(uint64(adapter.lastLUID)); err != nil {
 		return true, err
 	}
@@ -166,10 +164,10 @@ func resetTun2SocksInterfaceBinding() {
 	dialer.DefaultDialer.InterfaceIndex.Store(0)
 }
 
-func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
+func stopPlatformEngine(ctx context.Context, stopDevice func(context.Context) error) error {
 	adapterName := adapter.ownedAdapterName
 	configurationErr := cleanupWindowsState()
-	stopDevice()
+	stopErr := stopDevice(ctx)
 	removalErr := waitForWindowsAdapterRemoval(ctx, adapterName)
 	var guardCloseErr error
 	if removalErr == nil && adapter.networkGuard != nil {
@@ -184,7 +182,7 @@ func stopPlatformEngine(ctx context.Context, stopDevice func()) error {
 	} else if removalErr != nil && adapter.networkGuard != nil {
 		log.Errorf(Category, "[Engine][Windows] retaining network guard until owned adapter removal is confirmed iface=%s err=%v", adapter.lastIface, removalErr)
 	}
-	err := errors.Join(configurationErr, removalErr, guardCloseErr)
+	err := errors.Join(configurationErr, stopErr, removalErr, guardCloseErr)
 	if err != nil {
 		log.Errorf(Category, "[Engine][Windows] platform cleanup: %v", err)
 	}
@@ -301,7 +299,10 @@ func cleanupWindowsState() error {
 	return errors.Join(errs...)
 }
 
-func resetWindowsState() { adapter = windowsAdapterState{} }
+func resetWindowsState() {
+	routing.SetWindowsOwnedLUID(0)
+	adapter = windowsAdapterState{}
+}
 
 func newWindowsAdapterName() (string, error) {
 	random := make([]byte, windowsAdapterRandomBytes)

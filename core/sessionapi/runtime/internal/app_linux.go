@@ -102,7 +102,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	if _, err := plan.AcquireLinuxResolvedDNS(ctx, config.TunDeviceName, config.DNSServers); err != nil {
 		return fail(err)
 	}
-	log.Infof(Category, "Linux network acquired interface=%s physical=%s mark=%d IPv4=true IPv6=true protection=owned-output-filter", config.TunDeviceName, iface.Name, config.RoutingTableID)
+	readyFields := retainedNetworkReadyFields(app.NetworkRef, config.TunDeviceName)
+	readyFields["physical"] = iface.Name
+	readyFields["mark"] = config.RoutingTableID
+	readyFields["ipv4"] = true
+	readyFields["ipv6"] = true
+	readyFields["protection"] = "owned-output-filter"
+	log.Info(Category, "Linux retained network ready", readyFields)
 	signalInit(initResult, nil)
 	return maintainLinuxResolver(ctx, capture)
 }

@@ -1,0 +1,134 @@
+import AppKit
+import Foundation
+import DobbyDiagnosticFiles
+import Network
+
+/// Reports system wake and network-path changes to the Go service so it
+/// can run a connected-health check after a short debounce instead of waiting
+/// for the next 10 s timer. The service decides whether to reconnect and applies its own
+/// automatic-recovery limit; this class only forwards events.
+final class MacSystemEventMonitor {
+    private let client: MacDesktopSessionClient
+    private let queue = DispatchQueue(label: "vpn.dobby.system-events")
+    private let pathMonitor = NWPathMonitor()
+    private var observers: [NSObjectProtocol] = []
+    private var pathEvents = MacPathEvents()
+    private var pendingEvent: DispatchWorkItem?
+    private var debounce = MacEventDebounce()
+
+    init(client: MacDesktopSessionClient) {
+        self.client = client
+    }
+
+    func start() {
+        startWorkspaceNotifications()
+        pathMonitor.pathUpdateHandler = { [weak self] path in self?.pathChanged(path) }
+        pathMonitor.start(queue: queue)
+    }
+
+    func startWorkspaceNotifications() {
+        let center = NSWorkspace.shared.notificationCenter
+        observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.schedule("wake")
+        })
+    }
+
+    private func pathChanged(_ path: NWPath) {
+        // NWPath can change gateways or DNS while interface names and status stay
+        // the same. Each subsequent satisfied update can warrant a probe.
+        let shouldDispatch = pathEvents.update(satisfied: path.status == .satisfied)
+        if shouldDispatch {
+            scheduleOnQueue("network_path_changed")
+        } else if debounce.cancelPath() {
+            pendingEvent?.cancel()
+            pendingEvent = nil
+        }
+    }
+
+    private func schedule(_ reason: String) {
+        queue.async { [weak self] in self?.scheduleOnQueue(reason) }
+    }
+
+    // Wake wins over path changes in the same burst so the reported reason is
+    // stable even when the network monitor reports the wake's path changes.
+    private func scheduleOnQueue(_ reason: String) {
+        let generation = debounce.schedule(reason)
+        pendingEvent?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, let reason = self.debounce.take(generation) else { return }
+            self.pendingEvent = nil
+            self.send(reason)
+        }
+        pendingEvent = work
+        queue.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    private func send(_ reason: String) {
+        queue.async { [client] in
+            let response = client.call("NetworkEvent", parameters: ["reason": reason])
+            guard let data = response.data(using: .utf8),
+                  let envelope = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  envelope["ok"] as? Bool == true else {
+                do {
+                    try DiagnosticFiles.append(
+                        "Network event dispatch failed", event: "network.event-dispatch-failed",
+                        level: "ERROR", source: "native-ui", to: client.uiDiagnosticPath,
+                        fields: ["reason": reason, "response": response], legacyDesktop: true
+                    )
+                } catch {
+                    FileHandle.standardError.write(Data("Network event diagnostic write failed: \(error)\n".utf8))
+                }
+                return
+            }
+        }
+    }
+
+    deinit {
+        pathMonitor.cancel()
+        observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+    }
+}
+
+// The monitor invokes this for every NWPath update, even when interface names
+// are unchanged. An unsatisfied update also cancels a pending dispatch.
+struct MacPathEvents {
+    private var initialized = false
+
+    mutating func update(satisfied: Bool) -> Bool {
+        guard initialized else {
+            initialized = true
+            return false
+        }
+        return satisfied
+    }
+}
+
+// Fences superseded or cancelled callbacks even if a dispatch work item has
+// already become runnable. All access remains on the monitor's serial queue.
+struct MacEventDebounce {
+    private var generation: UInt64 = 0
+    private var pendingWake = false
+    private var pending = false
+
+    mutating func schedule(_ reason: String) -> UInt64 {
+        generation &+= 1
+        pending = true
+        pendingWake = pendingWake || reason == "wake"
+        return generation
+    }
+
+    mutating func cancelPath() -> Bool {
+        guard !pendingWake else { return false }
+        generation &+= 1
+        pending = false
+        return true
+    }
+
+    mutating func take(_ candidate: UInt64) -> String? {
+        guard pending, generation == candidate else { return nil }
+        pending = false
+        let reason = pendingWake ? "wake" : "network_path_changed"
+        pendingWake = false
+        return reason
+    }
+}

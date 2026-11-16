@@ -45,11 +45,7 @@ func explicitLocalLogPaths() (logRoot, logPath string, resultErr error) {
 	requested := strings.TrimSpace(os.Getenv("DOBBY_LOG_PATH"))
 	root := strings.TrimSpace(os.Getenv("DOBBY_LOG_ROOT"))
 	if requested == "" {
-		var pathErr error
-		root, requested, pathErr = defaultDesktopLogPath()
-		if pathErr != nil {
-			return "", "", pathErr
-		}
+		root, requested = defaultDesktopLogPath()
 	} else if root == "" {
 		var rootErr error
 		root, rootErr = explicitLogRoot()
@@ -129,21 +125,12 @@ func prepareUnmanagedLocalLog(root, path string) error {
 	return nil
 }
 
-func defaultDesktopLogPath() (root, path string, err error) {
-	switch {
-	case runtime.GOOS == "darwin" && os.Getuid() == 0:
+func defaultDesktopLogPath() (root, path string) {
+	root = "/var/log/dobbyvpn"
+	if runtime.GOOS == darwinPlatform {
 		root = "/Library/Logs/DobbyVPN"
-	case os.Getuid() == 0:
-		root = "/var/log/dobbyvpn"
-	default:
-		var base string
-		base, err = os.UserConfigDir()
-		if err != nil {
-			return "", "", err
-		}
-		root = filepath.Join(base, "DobbyVPN", "Logs")
 	}
-	return root, filepath.Join(root, "backend.jsonl"), nil
+	return root, filepath.Join(root, "backend.jsonl")
 }
 
 func run() {
@@ -169,14 +156,18 @@ func run() {
 	log.Debugf(desktopLogCategory, "desktop JSON control socket ready")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(signals)
 	var serveErr error
 	select {
 	case <-signals:
 	case serveErr = <-serveDone:
 	}
-	if err := shutdownDesktop(listener.Close, serveErr, desktopProcessBinding()); err != nil {
-		panic(fmt.Sprintf("desktop shutdown failed: %v", err))
+	// Keep the signal handler installed while cleanup runs, so a second signal
+	// cannot kill the process mid-cleanup. It is released explicitly because the
+	// failure path below exits without running deferred calls.
+	shutdownErr := shutdownDesktop(listener.Close, serveErr, desktopProcessBinding())
+	signal.Stop(signals)
+	if shutdownErr != nil {
+		exitWithShutdownError(shutdownErr)
 	}
 }
 
@@ -187,4 +178,12 @@ func (c *Executor) Execute(mode string) {
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
 	}
+}
+
+// Keep the ordinary failure path callable by subprocess regressions: os.Exit
+// must preserve the cleanup error and nonzero status without a panic trace.
+func exitWithShutdownError(err error) {
+	log.Errorf(desktopLogCategory, "desktop shutdown failed: %v", err)
+	fmt.Fprintf(os.Stderr, "desktop shutdown failed: %v\n", err)
+	os.Exit(1)
 }

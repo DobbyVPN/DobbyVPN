@@ -59,6 +59,8 @@ func newNativeRuntime(dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *na
 	return c
 }
 
+func (c *nativeRuntime) setNetworkRef(ref sessionapi.SessionRef) { c.app.NetworkRef = ref }
+
 func (c *nativeRuntime) Connect(ctx context.Context) error {
 	if c == nil {
 		return errors.New("desktop session runtime is not initialized")

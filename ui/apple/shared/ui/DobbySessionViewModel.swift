@@ -55,9 +55,21 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
+    #if os(macOS)
+    private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
+    var macLogCaptureDiagnosticNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    #endif
     @Published var clearRevision = 0
     @Published public private(set) var logsError = ""
     @Published public private(set) var exportingLogs = false
+    @Published var uploadStatus = ""
+    @Published var uploadError = ""
+    @Published var latestUpload: DobbyUploadReference?
+    private var uploadTask: Task<Void, Never>?
+    private var uploadCancellation: DobbyUploadCancellation?
+    private let uploadReferenceKey = "DobbyVPN.latestLogUpload"
+    private static var cleanedUploadDirectories = false
+
     @Published public var sourceText = "" {
         didSet {
             sourceIsDirty = sourceText != acceptedSource
@@ -87,6 +99,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private var logsRefreshPending = false
     private var logsClearInFlight = false
     private var logsRevision = 0
+    private let logViewCache = LogViewCache()
     private var lastFailure = ""
     private var errorOrigin: DobbySessionErrorOrigin?
     private var lastSourceErrorIdentity: DobbySourceErrorIdentity?
@@ -109,7 +122,16 @@ public final class DobbySessionViewModel: ObservableObject {
     ) {
         self.client = client
         self.debounceScheduler = debounceScheduler
+        if let data = UserDefaults.standard.data(forKey: uploadReferenceKey) {
+            latestUpload = try? JSONDecoder().decode(DobbyUploadReference.self, from: data)
+        }
+        if !Self.cleanedUploadDirectories {
+            Self.cleanedUploadDirectories = true
+            do { try DobbyUploadDirectory.removeAbandoned() }
+            catch { uploadError = "Could not clean abandoned uploads: \(String(reflecting: error))" }
+        }
         recordAppStarted()
+        if !uploadError.isEmpty { recordError(uploadError) }
         refreshSnapshot()
         refreshOnDemandPreference()
         if automaticallyPoll {
@@ -492,9 +514,10 @@ public final class DobbySessionViewModel: ObservableObject {
         level: String = "ERROR"
     ) {
         let path = client.uiDiagnosticPath
+        let excludedPaths = client.diagnosticPaths
         logWorker.async { [weak self] in
             do {
-                try appendUIDiagnostic(message, to: path, event: event, level: level)
+                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
                 Task { @MainActor [weak self] in
                     guard let self, self.logsVisible else { return }
                     self.refreshLogs()
@@ -512,6 +535,11 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
+    func recordLogsShare(kind: String, phase: String, context: String = "") {
+        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
+                         event: "ui.logs_share", level: "INFO")
+    }
+
     public func refreshLogs() {
         guard !logsInFlight else { logsRefreshPending = true; return }
         logsInFlight = true
@@ -519,14 +547,17 @@ public final class DobbySessionViewModel: ObservableObject {
         let revision = logsRevision
         let paths = client.diagnosticPaths
         let boundary = client.uiDiagnosticPath.appendingPathExtension("view")
-        logWorker.async { [weak self] in
-            let result = structuredPreview(paths: paths, boundary: boundary)
+        let cache = logViewCache
+        logWorker.async { [weak self, cache] in
+            let result = cache.preview(paths: paths, boundary: boundary)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.logsInFlight = false
                 if revision == self.logsRevision && !self.logsClearInFlight {
-                    self.logEntries = result.entries.filter(isShownOnScreen)
-                    self.logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
+                    // Publish only real changes so an idle log view is not redrawn.
+                    if self.logEntries != result.entries { self.logEntries = result.entries }
+                    let logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
+                    if self.logsError != logsError { self.logsError = logsError }
                 } else {
                     self.logsRefreshPending = true
                 }
@@ -557,6 +588,72 @@ public final class DobbySessionViewModel: ObservableObject {
                 case let .failure(error): self.reportLogsError(error.localizedDescription)
                 }
                 self.refreshLogs()
+            }
+        }
+    }
+}
+
+extension DobbySessionViewModel {
+    func cancelLogsUpload() { uploadCancellation?.cancel(); uploadTask?.cancel() }
+
+    func startLogsUpload() {
+        guard uploadTask == nil, snapshot.logsUploadAvailable else { return }
+        let client = client
+        let sessionID = snapshot.sessionID
+        let digest = snapshot.digest
+        let writeError = diagnosticWriteError
+        uploadError = ""
+        uploadStatus = "Preparing logs…"
+        let cancellation = DobbyUploadCancellation()
+        uploadCancellation = cancellation
+        uploadTask = Task { [weak self] in
+            guard let self else { return }
+            var directory: DobbyUploadDirectory?
+            defer {
+                if let directory {
+                    do { try directory.remove() }
+                    catch {
+                        let cleanup = "Could not remove upload temporary: \(String(reflecting: error))"
+                        self.uploadError = [self.uploadError, cleanup].filter { !$0.isEmpty }.joined(separator: "\n")
+                        self.recordError(cleanup)
+                    }
+                }
+                self.uploadTask = nil
+                self.uploadCancellation = nil
+                self.uploadStatus = ""
+            }
+            do {
+                let preparation = try await Task.detached {
+                    try DobbyResponse.result(from: client.call("PrepareLogUpload", parameters: ["session_id": sessionID, "digest": digest]), as: DobbyUploadPreparation.self)
+                }.value
+                try Task.checkCancellation()
+                let dir = try DobbyUploadDirectory()
+                directory = dir
+                let file = dir.url.appendingPathComponent(preparation.reference + ".gz")
+                let header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\nCaptured: \(ISO8601DateFormatter().string(from: Date()))\n\n" + writeError
+                let issues = try await withTaskCancellationHandler {
+                    try await Task.detached {
+                        try exportDiagnostics(paths: client.diagnosticPaths, to: file, header: header, checkCancellation: cancellation.check)
+                    }.value
+                } onCancel: {
+                    cancellation.cancel()
+                }
+                guard issues.isEmpty else { throw DobbyClientError.diagnostics(issues) }
+                try Task.checkCancellation()
+                self.uploadStatus = "Uploading logs…"
+                try await uploadDiagnostics(preparation, file: file)
+                let result = DobbyUploadReference(reference: preparation.reference, completed: Date(), provider: preparation.provider)
+                self.latestUpload = result
+                UserDefaults.standard.set(try JSONEncoder().encode(result), forKey: self.uploadReferenceKey)
+            } catch is CancellationError {
+                self.uploadError = "Log upload cancelled"
+            } catch {
+                if Task.isCancelled {
+                    self.uploadError = "Log upload cancelled"
+                } else {
+                    self.uploadError = "Log upload failed: \(error.localizedDescription)"
+                    self.recordError(self.uploadError)
+                }
             }
         }
     }
@@ -789,10 +886,33 @@ extension DobbySessionViewModel {
 private struct ConfigurationReceipt: Decodable { let sequence: Int64 }
 
 #if os(macOS)
+private let macLogCaptureDiagnosticInterval: TimeInterval = 1
+
 extension DobbySessionViewModel {
+    func recordMacLogAccessibility(_ observation: MacLogAccessibilityObservation) {
+        recordDiagnostic(
+            "parent_role=\(observation.parentRole) visible_count=\(observation.visibleCount) " +
+            "first_id=\(observation.firstID) first_role=\(observation.firstRole) " +
+            "first_frame=\(NSStringFromRect(observation.firstFrame))",
+            event: "logs.accessibility-children", level: "DEBUG"
+        )
+    }
+
+    func recordMacLogCapture(_ anchor: MacLogReadingAnchor) {
+        let now = macLogCaptureDiagnosticNow()
+        if let last = lastMacLogCaptureDiagnosticUptime, now - last < macLogCaptureDiagnosticInterval { return }
+        lastMacLogCaptureDiagnosticUptime = now
+        recordDiagnostic(
+            "record_id=\(anchor.recordID) character_offset=\(anchor.characterOffset) " +
+            "anchor_viewport_y=\(anchor.viewportY)",
+            event: "logs.frozen-position-captured", level: "DEBUG"
+        )
+    }
+
     func recordMacLogRestore(_ observation: MacLogRestoreObservation) {
         recordDiagnostic(
-            "character_index=\(observation.anchor.characterIndex) anchor_viewport_y=\(observation.anchor.viewportY) " +
+            "record_id=\(observation.anchor.recordID) character_offset=\(observation.anchor.characterOffset) " +
+            "anchor_viewport_y=\(observation.anchor.viewportY) " +
             "previous_origin=\(observation.previousOrigin) restored_origin=\(observation.restoredOrigin) " +
             "viewport_size=\(observation.viewportSize) content_size=\(observation.contentSize)",
             event: "logs.frozen-position-restored", level: "DEBUG"
