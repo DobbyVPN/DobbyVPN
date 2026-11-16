@@ -339,6 +339,7 @@ public sealed partial class MainWindow : Window
             {
                 await RefreshSnapshotAsync(cancellationToken);
                 if (cancellationToken.IsCancellationRequested) return;
+                if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized }) continue;
                 await RefreshLogsAsync(cancellationToken);
             }
         }
