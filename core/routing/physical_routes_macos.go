@@ -74,6 +74,7 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 			}
 		}
 		if same {
+			p.identity = physical.Identity
 			return nil
 		}
 	}
