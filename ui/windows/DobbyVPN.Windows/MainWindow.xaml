@@ -77,16 +77,17 @@
                     HorizontalAlignment="Left" VerticalAlignment="Top" AutomationProperties.AccessibilityView="Raw" />
 
     <Grid x:Name="Column" MaxWidth="480">
+      <UserControl IsTabStop="False" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                   AutomationProperties.AutomationId="Connection controls" AutomationProperties.Name="Connection controls">
+      <Grid>
       <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
         <RowDefinition Height="2*" />
         <RowDefinition Height="Auto" />
         <RowDefinition Height="Auto" />
         <RowDefinition Height="*" MinHeight="120" />
       </Grid.RowDefinitions>
-      <UserControl IsTabStop="False" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
-                   AutomationProperties.AutomationId="Connection controls" AutomationProperties.Name="Connection controls">
-      <Grid Padding="9,6,9,9" RowDefinitions="Auto,*">
-      <StackPanel Spacing="6">
+      <StackPanel Padding="9,6,9,0" Spacing="6">
         <Border x:Name="SourceField" MinHeight="33" Padding="9,0,9,0" CornerRadius="6" BorderThickness="1.5"
                 BorderBrush="{StaticResource Ink}" Background="{StaticResource Surface}">
           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
@@ -137,7 +138,7 @@
 
         </StackPanel>
 
-        <Border x:Name="ConnectionsTray" Grid.Row="1" Margin="0,6,0,0" MinHeight="54" CornerRadius="10.5" Background="{StaticResource Tray}">
+        <Border x:Name="ConnectionsTray" Grid.Row="1" Margin="9,6,9,9" MinHeight="54" CornerRadius="10.5" Background="{StaticResource Tray}">
           <Grid>
             <local:SockIcon x:Name="EmptySock" Width="30" Height="37.5"
                             AutomationProperties.Name="No subscription yet" AutomationProperties.AccessibilityView="Content" />
@@ -154,12 +155,10 @@
             </ScrollViewer>
           </Grid>
         </Border>
-      </Grid>
-      </UserControl>
 
-      <Rectangle Grid.Row="1" Height="1.5" Fill="{StaticResource Ink}" />
+      <Rectangle Grid.Row="2" Height="1.5" Fill="{StaticResource Ink}" />
 
-      <ScrollViewer Grid.Row="3" x:Name="LogsScroll" Background="{StaticResource Surface}" Padding="9,4.5,9,4.5"
+      <ScrollViewer Grid.Row="4" x:Name="LogsScroll" Background="{StaticResource Surface}" Padding="9,4.5,9,4.5"
                     VerticalScrollBarVisibility="Auto" Loaded="LogsText_Loaded"
                     AutomationProperties.AutomationId="Connection logs">
         <ScrollViewer.ContextFlyout>
@@ -179,7 +178,7 @@
         </ScrollViewer.ContextFlyout>
         <StackPanel x:Name="LogEntries" />
       </ScrollViewer>
-      <Border x:Name="UploadStatusPanel" Grid.Row="2" Background="{StaticResource Surface}" Padding="9,6" Visibility="Collapsed">
+      <Border x:Name="UploadStatusPanel" Grid.Row="3" Background="{StaticResource Surface}" Padding="9,6" Visibility="Collapsed">
         <StackPanel Spacing="4">
           <TextBlock x:Name="UploadStatusText" TextWrapping="Wrap" AutomationProperties.AutomationId="logs.upload.status" />
           <StackPanel Orientation="Horizontal" Spacing="8">
@@ -191,6 +190,8 @@
           </StackPanel>
         </StackPanel>
       </Border>
+      </Grid>
+      </UserControl>
     </Grid>
 
     <Grid x:Name="ErrorOverlay" Background="{StaticResource Scrim}" Visibility="Collapsed" Tapped="ErrorOverlay_Tapped"
