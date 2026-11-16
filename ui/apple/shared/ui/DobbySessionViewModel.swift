@@ -194,8 +194,8 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func actionTitle(_ index: Int? = nil) -> String {
-        if isStopTarget(index) { return snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Disconnect" : "Stop" }
-        return index == nil ? "Auto connect" : "Connect"
+        if isStopTarget(index) { return snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Connected" : "Stop" }
+        return index == nil ? "Auto connect" : connected ? "Switch" : "Connect"
     }
 
     public func canAct(_ index: Int? = nil) -> Bool {

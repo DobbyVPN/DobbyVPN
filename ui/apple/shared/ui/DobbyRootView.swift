@@ -327,24 +327,26 @@ public struct DobbyRootView: View {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: pt(8)) {
                         if let orphan {
+                            let orphanConnected = snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil
                             ConnectionButton(
                                 name: orphan.name,
                                 details: [protocolName(orphan.protocolName), model.sessionStatus?.rawValue, "not in subscription"],
                                 on: isOn(model.sessionStatus),
-                                action: model.mainActionTitle
+                                action: orphanConnected ? "Connected" : model.mainActionTitle
                             ) { sourceFocused = false; model.mainAction() }
-                            .disabled(!model.mainActionEnabled)
+                            .disabled(!model.mainActionEnabled || orphanConnected)
                             .accessibilityIdentifier("profile.active")
                         }
                         ForEach(snapshot.profiles) { profile in
                             let status = model.profileStatus(profile.index)
+                            let title = model.profileActionTitle(profile.index)
                             ConnectionButton(
                                 name: profile.name,
                                 details: [protocolName(profile.protocolName), status?.rawValue],
                                 on: isOn(status),
-                                action: model.profileActionTitle(profile.index)
+                                action: title
                             ) { sourceFocused = false; model.performPrimaryAction(profile.index) }
-                            .disabled(!model.canAct(profile.index))
+                            .disabled(!model.canAct(profile.index) || title == "Connected")
                             .accessibilityIdentifier("profile.\(snapshot.digest).\(profile.index).action")
                         }
                     }
