@@ -175,27 +175,42 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         accessibilityLabel = NSLocalizedString("Connection logs", comment: "")
     }
 
-    override var accessibilityElements: [Any]? {
-        get {
-            var visible: [String: IOSLogRecordAccessibilityElement] = [:]
-            let elements = visibleIOSLogRecordFragments(in: self).map { fragment in
-                let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)" +
-                    (fragment.isFullyVisible ? "" : ".partial")
-                let identifier = "logs.record." + fragment.recordID + suffix
-                let element = recordElements[identifier] ?? IOSLogRecordAccessibilityElement(accessibilityContainer: self)
-                element.logView = self
-                element.accessibilityIdentifier = identifier
-                element.accessibilityLabel = fragment.text
-                element.accessibilityTraits = .staticText
-                element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(fragment.frame, in: self)
-                element.accessibilityCustomActions = accessibilityCustomActions
-                visible[identifier] = element
-                return element
-            }
-            recordElements = visible
-            return elements
+    private func logRecordAccessibilityElements() -> [IOSLogRecordAccessibilityElement] {
+        var visible: [String: IOSLogRecordAccessibilityElement] = [:]
+        let elements = visibleIOSLogRecordFragments(in: self).map { fragment in
+            let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)" +
+                (fragment.isFullyVisible ? "" : ".partial")
+            let identifier = "logs.record." + fragment.recordID + suffix
+            let element = recordElements[identifier] ?? IOSLogRecordAccessibilityElement(accessibilityContainer: self)
+            element.logView = self
+            element.accessibilityIdentifier = identifier
+            element.accessibilityLabel = fragment.text
+            element.accessibilityTraits = .staticText
+            element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(fragment.frame, in: self)
+            element.accessibilityCustomActions = accessibilityCustomActions
+            visible[identifier] = element
+            return element
         }
+        recordElements = visible
+        return elements
+    }
+
+    // Every container entry point serves the record elements; UIKit's own
+    // paragraph elements lay out the whole text on the main thread per query.
+    override var accessibilityElements: [Any]? {
+        get { logRecordAccessibilityElements() }
         set { super.accessibilityElements = newValue }
+    }
+
+    override func accessibilityElementCount() -> Int { logRecordAccessibilityElements().count }
+
+    override func accessibilityElement(at index: Int) -> Any? {
+        let elements = logRecordAccessibilityElements()
+        return index >= 0 && index < elements.count ? elements[index] : nil
+    }
+
+    override func index(ofAccessibilityElement element: Any) -> Int {
+        logRecordAccessibilityElements().firstIndex { $0 === element as AnyObject } ?? NSNotFound
     }
 
     var accessibilityViewportText: String {
