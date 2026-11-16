@@ -129,8 +129,13 @@
 
         <Border x:Name="ConnectionsTray" Margin="0,6,0,0" CornerRadius="10.5" Background="{StaticResource Tray}">
           <Grid>
-            <local:SockIcon x:Name="EmptySock" Width="30" Height="37.5"
-                            AutomationProperties.Name="No subscription yet" AutomationProperties.AccessibilityView="Content" />
+            <StackPanel x:Name="EmptyState" Spacing="7.5" HorizontalAlignment="Center" VerticalAlignment="Center">
+              <local:SockIcon Width="30" Height="37.5"
+                              AutomationProperties.Name="No subscription yet" AutomationProperties.AccessibilityView="Content" />
+              <TextBlock Text="Paste the subscription link from your VPN provider above." FontSize="12.75"
+                         Foreground="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center"
+                         TextWrapping="Wrap" Margin="12,0" AutomationProperties.AutomationId="tray.empty-hint" />
+            </StackPanel>
             <StackPanel x:Name="LoadFailed" Spacing="7.5" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
               <local:HoleySockIcon Width="30" Height="37.5" HorizontalAlignment="Center" AutomationProperties.AccessibilityView="Raw" />
               <TextBlock Text="Couldn't load the subscription" FontSize="12.75" FontWeight="Medium"

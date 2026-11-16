@@ -632,7 +632,7 @@ public sealed partial class MainWindow : Window
         var empty = (current?.Profiles.Length ?? 0) == 0 && orphan is null;
         var failed = empty && _loadError.Length > 0;
         LoadFailed.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
-        EmptySock.Visibility = empty && !failed ? Visibility.Visible : Visibility.Collapsed;
+        EmptyState.Visibility = empty && !failed ? Visibility.Visible : Visibility.Collapsed;
         ProfilesScroll.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         if (current is null) return;
 
