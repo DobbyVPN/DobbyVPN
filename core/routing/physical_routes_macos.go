@@ -22,6 +22,7 @@ type MacOSPhysicalRoutes struct {
 	sessionID string
 	current   *Plan
 	routes    []macOSRoute
+	identity  string
 	complete  bool
 	closed    bool
 }
@@ -45,6 +46,11 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// The identity covers gateways and DNS of the physical services, so an
+	// unchanged one needs no routing table dump.
+	if physical.Identity != "" && p.complete && p.identity == physical.Identity {
+		return nil
 	}
 	routes, err := macOSPhysicalScopedDefaults(physical)
 	if err != nil {
@@ -87,6 +93,7 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 		}
 	}
 	p.complete = true
+	p.identity = physical.Identity
 	for _, route := range routes {
 		log.Info(Category, "macOS physical scoped default retained", map[string]any{
 			"network_identity": physical.Identity, "prefix": route.prefix.String(),
