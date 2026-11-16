@@ -49,11 +49,15 @@ func startupFailureMessage(stage string, cause error) string {
 }
 
 // reportStartupFailure records a failure that happened before or outside the
-// service control dispatcher and returns the process exit code. Failing to
-// write the event never hides the cause: it is also printed to stderr.
-func reportStartupFailure(stage string, cause error) int {
+// service control dispatcher and returns the process exit code. The cause is
+// always printed to stderr; only service-style runs also write it to the Event
+// Log, and a failed write never hides the cause.
+func reportStartupFailure(stage string, cause error, toEventLog bool) int {
 	message := startupFailureMessage(stage, cause)
 	_, _ = fmt.Fprintln(diagnostics.Stderr, message)
+	if !toEventLog {
+		return 1
+	}
 	if err := writeStartupFailureEvent(message); err != nil {
 		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to write startup failure to the Windows Event Log: %v\n", err)
 	}

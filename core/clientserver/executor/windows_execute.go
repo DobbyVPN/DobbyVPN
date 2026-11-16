@@ -225,7 +225,7 @@ func (c *Executor) Execute(mode string) {
 // the SCM handler are non-zero.
 func executeWith(mode string, initLog func() error, runNormal func(), runServiceMode func() error) int {
 	if err := initLog(); err != nil {
-		return reportStartupFailure("initialize local logging", err)
+		return reportStartupFailure("initialize local logging", err, mode == "service")
 	}
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)
 
@@ -235,11 +235,11 @@ func executeWith(mode string, initLog func() error, runNormal func(), runService
 	case "service":
 		if err := runServiceMode(); err != nil {
 			log.Errorf(desktopLogCategory, "Go backend service failed: %v", err)
-			return reportStartupFailure("service", err)
+			return reportStartupFailure("service", err, true)
 		}
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
-		return reportStartupFailure("select run mode", fmt.Errorf("invalid run mode %q", mode))
+		return reportStartupFailure("select run mode", fmt.Errorf("invalid run mode %q", mode), true)
 	}
 	return 0
 }
