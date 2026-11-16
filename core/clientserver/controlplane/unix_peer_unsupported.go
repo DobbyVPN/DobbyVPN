@@ -10,7 +10,7 @@ import (
 
 func peerUID(net.Conn) (int, error) { return 0, errWrongLocalConnection }
 
-var currentUID = func() int { return os.Getuid() }
+var currentUID = os.Getuid
 
 func privilegedDefaultPeerUID() (int, error) {
 	return 0, errors.New("privileged peer discovery is unsupported on this platform")
@@ -29,4 +29,4 @@ func authorizePrivilegedPeer(uid int) error {
 
 func privilegedListenOwnerUID() (int, error) { return privilegedPeerUID() }
 
-func privilegedSocketModes() (os.FileMode, os.FileMode) { return 0o711, 0o600 }
+func privilegedSocketModes() (dirMode, socketMode os.FileMode) { return 0o711, 0o600 }

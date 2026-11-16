@@ -221,7 +221,7 @@ func listenOwnerUID() (int, error) {
 }
 
 // socketModes reports the directory and socket modes for an ownership plan.
-func socketModes(ownerUID int, supervisedUnprivileged bool) (os.FileMode, os.FileMode) {
+func socketModes(ownerUID int, supervisedUnprivileged bool) (dirMode, socketMode os.FileMode) {
 	if supervisedUnprivileged {
 		return 0o711, 0o622
 	}

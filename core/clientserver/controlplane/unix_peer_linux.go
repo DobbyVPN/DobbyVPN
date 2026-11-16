@@ -38,7 +38,7 @@ func peerUID(conn net.Conn) (int, error) {
 	return uid, nil
 }
 
-var currentUID = func() int { return os.Getuid() }
+var currentUID = os.Getuid
 
 // privilegedDefaultPeerUID is unused on Linux: the service authorizes regular
 // local accounts per connection and never pins a desktop UID.
@@ -56,4 +56,4 @@ func authorizePrivilegedPeer(uid int) error {
 // connection is authenticated by peer credentials instead.
 func privilegedListenOwnerUID() (int, error) { return -1, nil }
 
-func privilegedSocketModes() (os.FileMode, os.FileMode) { return 0o755, 0o666 }
+func privilegedSocketModes() (dirMode, socketMode os.FileMode) { return 0o755, 0o666 }

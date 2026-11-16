@@ -37,7 +37,7 @@ func peerUID(conn net.Conn) (int, error) {
 	return uid, nil
 }
 
-var currentUID = func() int { return os.Getuid() }
+var currentUID = os.Getuid
 
 func privilegedDefaultPeerUID() (int, error) {
 	return 0, errors.New("the macOS installer must configure its desktop UID")
@@ -58,4 +58,4 @@ func authorizePrivilegedPeer(uid int) error {
 // privilegedListenOwnerUID keeps the macOS socket owned by the installer's UID.
 func privilegedListenOwnerUID() (int, error) { return privilegedPeerUID() }
 
-func privilegedSocketModes() (os.FileMode, os.FileMode) { return 0o711, 0o600 }
+func privilegedSocketModes() (dirMode, socketMode os.FileMode) { return 0o711, 0o600 }
