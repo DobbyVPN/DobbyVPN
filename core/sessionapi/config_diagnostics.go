@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"core/log"
 )
@@ -39,7 +38,6 @@ const (
 	logCategoryConfig    = "CONFIGURATION"
 
 	maxUnknownFieldWarnings = 20
-	maxSuggestionDistance   = 2
 	maxDescriptionInError   = 40
 	minBase64Payload        = 24
 )
@@ -169,11 +167,7 @@ func unknownOutlineFieldWarnings(block map[string]interface{}) []profileWarning 
 			continue
 		}
 		name := truncateRunes(key, maxDescriptionInError)
-		message := fmt.Sprintf("unknown field %q", name)
-		if suggestion := suggestField(key, knownOutlineFields); suggestion != "" {
-			message += fmt.Sprintf(", did you mean %q?", suggestion)
-		}
-		warnings = append(warnings, profileWarning{field: name, message: message})
+		warnings = append(warnings, profileWarning{field: name, message: fmt.Sprintf("unknown field %q", name)})
 	}
 	if unlisted > 0 {
 		warnings = append(warnings, profileWarning{field: "unknown", message: fmt.Sprintf("%d more unknown fields not listed", unlisted)})
@@ -197,52 +191,6 @@ func sortedKeys(block map[string]interface{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func suggestField(key string, candidates []string) string {
-	keyLength := utf8.RuneCountInString(key)
-	if keyLength < 4 {
-		return ""
-	}
-	for _, candidate := range candidates {
-		if strings.EqualFold(key, candidate) {
-			return candidate
-		}
-	}
-	lowered := strings.ToLower(key)
-	best, bestDistance := "", maxSuggestionDistance+1
-	for _, candidate := range candidates {
-		// A length difference above the threshold already rules the candidate
-		// out, so a huge field name never reaches the quadratic comparison.
-		if diff := keyLength - utf8.RuneCountInString(candidate); diff > maxSuggestionDistance || -diff > maxSuggestionDistance {
-			continue
-		}
-		if d := editDistance(lowered, strings.ToLower(candidate)); d < bestDistance {
-			best, bestDistance = candidate, d
-		}
-	}
-	return best
-}
-
-func editDistance(a, b string) int {
-	ar, br := []rune(a), []rune(b)
-	prev := make([]int, len(br)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-	for i := 1; i <= len(ar); i++ {
-		cur := make([]int, len(br)+1)
-		cur[0] = i
-		for j := 1; j <= len(br); j++ {
-			cost := 1
-			if ar[i-1] == br[j-1] {
-				cost = 0
-			}
-			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
-		}
-		prev = cur
-	}
-	return prev[len(br)]
 }
 
 // withFormatPointer keeps the parser error in the chain and appends the pointer
