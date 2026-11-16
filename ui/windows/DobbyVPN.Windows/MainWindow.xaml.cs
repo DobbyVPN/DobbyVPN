@@ -687,7 +687,7 @@ public sealed partial class MainWindow : Window
         var description = new TextBlock
         {
             Text = name, FontSize = 14.45, FontWeight = FontWeights.Medium, Foreground = Palette("Ink"),
-            TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis
+            TextWrapping = TextWrapping.Wrap, MaxLines = 2, TextTrimming = TextTrimming.CharacterEllipsis
         };
         var protocol = new TextBlock
         {
