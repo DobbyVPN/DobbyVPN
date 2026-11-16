@@ -23,7 +23,6 @@ internal static class StaActivationRedirect
     /// <summary>Shown when a link or second launch cannot be handed to a running instance.</summary>
     internal const string NotRespondingMessage = "DobbyVPN is not responding. Close it and open the link again.";
 
-    private const uint WaitForever = 0xFFFFFFFF;
     private const int RpcSCallPending = unchecked((int)0x80010115);
     private const int WaitTimeout = 0x102;
 
@@ -77,8 +76,6 @@ internal static class StaActivationRedirect
     {
         ArgumentNullException.ThrowIfNull(redirect);
         var limit = timeout ?? DefaultTimeout;
-        if (limit <= TimeSpan.Zero || limit.TotalMilliseconds >= WaitForever)
-            throw new ArgumentOutOfRangeException(nameof(timeout), limit, "The activation redirect timeout must be positive and finite.");
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
             throw new InvalidOperationException("Windows activation redirection must be waited on from an STA thread.");
 

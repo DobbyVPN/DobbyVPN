@@ -24,10 +24,7 @@ internal sealed class WindowLifetime
 
     public WindowLifetime(TimeSpan? drainTimeout = null)
     {
-        var limit = drainTimeout ?? DefaultDrainTimeout;
-        if (limit <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(drainTimeout), limit, "The drain timeout must be positive.");
-        _drainTimeout = limit;
+        _drainTimeout = drainTimeout ?? DefaultDrainTimeout;
         _shutdownToken = _shutdown.Token;
     }
 
