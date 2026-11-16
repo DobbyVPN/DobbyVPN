@@ -474,8 +474,8 @@ public sealed partial class MainWindow : Window
     private bool ShowSeparateStop => HasUnfinishedActiveVpn(_snapshot) && _snapshot?.PrimaryAction != "STOP";
 
     private string ActionTitle(int? index) => IsStopTarget(index)
-        ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Disconnect" : "Stop")
-        : (index is null ? "Auto connect" : "Connect");
+        ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Connected" : "Stop")
+        : (index is null ? "Auto connect" : Connected ? "Switch" : "Connect");
 
     private bool Busy => _busy || _stopInFlight;
     private bool Connected => _snapshot is { PrimaryAction: "STOP" } active && active.State != "FAILED";
@@ -667,15 +667,19 @@ public sealed partial class MainWindow : Window
         _trayKey = trayKey;
         ProfileList.Children.Clear();
         if (orphan is not null)
+        {
+            var orphanConnected = current.State == "CONNECTED" && current.PendingTarget is null;
             ProfileList.Children.Add(CreateRow("profile.active", ProfileName(orphan),
                 [ProtocolName(orphan.Protocol), SessionStatus, "not in subscription"],
-                IsOn(SessionStatus), MainTitle, MainEnabled, MainActionAsync));
+                IsOn(SessionStatus), orphanConnected ? "Connected" : MainTitle, MainEnabled && !orphanConnected, MainActionAsync));
+        }
         foreach (var profile in current.Profiles)
         {
             var index = profile.Index;
             var status = ProfileStatus(index);
+            var title = ProfileTitle(index);
             ProfileList.Children.Add(CreateRow(ProfileAutomationIds.Create(current.Digest, index, "action"), ProfileName(profile),
-                [ProtocolName(profile.Protocol), status], IsOn(status), ProfileTitle(index), CanAct(index),
+                [ProtocolName(profile.Protocol), status], IsOn(status), title, CanAct(index) && title != "Connected",
                 token => PerformActionAsync(index, false, token)));
         }
     }
