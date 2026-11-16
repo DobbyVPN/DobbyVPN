@@ -18,9 +18,6 @@ from bounded_process import run_streamed
 from dependency_fetch import MAX_ATTEMPTS, RETRY_DELAYS, retryable_transport_failure
 
 
-HOST_FAILED = "fixture-host-failed"
-
-
 def remaining() -> float:
     value = os.environ.get("RUN_DEADLINE_EPOCH", "")
     if not re.fullmatch(r"[0-9]+", value):
@@ -216,15 +213,28 @@ def stop(root: Path) -> None:
         raise RuntimeError(f"fixture service failed: {result.read_text()}")
 
 
+def service_stopped(root: Path) -> bool:
+    """The service wrote its result, or its process is gone without writing one."""
+    if (root / "public" / "result.json").exists():
+        return True
+    try:
+        os.kill(int((root / "pid").read_text()), 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
 def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = None) -> None:
     if not names or len(names) != len(set(names)) or any(not isinstance(n, str) or not n for n in names):
         raise ValueError("consumer_names must contain unique exact job names")
     _, _, attempt = identity()
     try:
         while True:
-            if (root / "public" / "result.json").exists():
+            if service_stopped(root):
                 # The fixture host itself died; this is not a consumer failure.
-                message = f"fixture service stopped while consumers were active [fixture_status={HOST_FAILED}]"
+                message = "fixture service stopped while consumers were active [fixture_status=fixture-host-failed]"
                 print(f"::error title=Fixture host failed::{message}", flush=True)
                 raise RuntimeError(message)
             jobs = jobs_snapshot()
