@@ -1178,7 +1178,7 @@ internal class SessionController(
     fun setVisible(value: Boolean) {
         visible = value
         if (value) {
-            worker.execute { refreshSnapshot() }
+            worker.execute { if (visible) refreshSnapshot() }
             refreshClipboard()
         }
     }
