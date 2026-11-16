@@ -213,25 +213,27 @@ def stop(root: Path) -> None:
         raise RuntimeError(f"fixture service failed: {result.read_text()}")
 
 
-def service_stopped(root: Path) -> bool:
-    """The service wrote its result, or its process is gone without writing one."""
+def service_state(root: Path) -> str:
+    """"stopped" (result written or process gone), "running", or "unknown" (no usable pid)."""
     if (root / "public" / "result.json").exists():
-        return True
+        return "stopped"
     try:
         os.kill(int((root / "pid").read_text()), 0)
     except ProcessLookupError:
-        return True
+        return "stopped"
     except (OSError, ValueError):
-        return False
-    return False
+        return "unknown"
+    return "running"
 
 
-def fail_if_service_stopped(root: Path) -> None:
-    if service_stopped(root):
+def checked_service_state(root: Path) -> str:
+    state = service_state(root)
+    if state == "stopped":
         # The fixture host itself died; this is not a consumer failure.
         message = "fixture service stopped while consumers were active [fixture_status=fixture-host-failed]"
         print(f"::error title=Fixture host failed::{message}", flush=True)
         raise RuntimeError(message)
+    return state
 
 
 def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = None) -> None:
@@ -240,17 +242,18 @@ def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = Non
     _, _, attempt = identity()
     try:
         while True:
-            fail_if_service_stopped(root)
+            checked_service_state(root)
             jobs = jobs_snapshot()
             require_current = any(jobs.get(name, {}).get("run_attempt") == attempt
                                   for name in (freshness_jobs or []))
             complete, success = consumers_complete(jobs, names, attempt, require_current)
             if complete:
                 if not success:
-                    fail_if_service_stopped(root)  # it may have stopped while the job list was read
+                    state = checked_service_state(root)  # it may have stopped while the job list was read
                     # The job still fails so that "Re-run failed jobs" restarts this host with the consumer.
                     raise RuntimeError("one or more fixture consumers failed; retain this host for failed-job recovery. "
-                                       "This job mirrors the consumer result; the fixture host service is still running")
+                                       "This job mirrors the consumer result; the fixture host service is "
+                                       + ("still running" if state == "running" else "in an unknown state"))
                 return
             pause(30)
     finally:
