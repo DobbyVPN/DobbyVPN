@@ -9,42 +9,27 @@ import (
 )
 
 const (
-	// RestoreRetryInterval is the pause between restore attempts after a service
-	// start. The network is often not up yet when the service starts at boot.
-	RestoreRetryInterval = 10 * time.Second
-	// RestoreRetryWindow is how long after the first attempt restoring is retried.
-	RestoreRetryWindow = 2 * time.Minute
+	// The network is often not up yet when the service starts at boot, so a
+	// restore that cannot reach its source is retried for a short window.
+	restoreRetryInterval = 10 * time.Second
+	restoreRetryWindow   = 2 * time.Minute
+
+	// SubscriptionUnreachableMessage is shown in the snapshot when the startup
+	// restore ran out of retries because the subscription server did not answer.
+	SubscriptionUnreachableMessage = "Could not reach the subscription server"
 )
 
-// SubscriptionUnreachableMessage is shown in the snapshot when the startup
-// restore ran out of retries because the subscription server did not answer.
-const SubscriptionUnreachableMessage = "Could not reach the subscription server"
+// errSourceUnreachable marks a failed source request (no route, DNS failure,
+// timeout). Any other loading failure, such as an oversized response, is final.
+var errSourceUnreachable = errors.New("configuration source is unreachable")
 
-// RestoreRetryPolicy bounds the retry window. Now and Sleep exist so tests
-// can drive the window without real waiting; zero values use the real clock.
-type RestoreRetryPolicy struct {
-	Interval time.Duration
-	Window   time.Duration
-	Now      func() time.Time
-	Sleep    func(context.Context, time.Duration) error
+// restoreClock is replaced by tests so the window runs without real waiting.
+type restoreClock struct {
+	now   func() time.Time
+	sleep func(context.Context, time.Duration) error
 }
 
-// DefaultRestoreRetryPolicy is the policy used by the desktop service.
-func DefaultRestoreRetryPolicy() RestoreRetryPolicy {
-	return RestoreRetryPolicy{Interval: RestoreRetryInterval, Window: RestoreRetryWindow}
-}
-
-func (p RestoreRetryPolicy) now() time.Time {
-	if p.Now != nil {
-		return p.Now()
-	}
-	return time.Now()
-}
-
-func (p RestoreRetryPolicy) sleep(ctx context.Context, d time.Duration) error {
-	if p.Sleep != nil {
-		return p.Sleep(ctx, d)
-	}
+var realRestoreClock = restoreClock{now: time.Now, sleep: func(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
@@ -53,73 +38,65 @@ func (p RestoreRetryPolicy) sleep(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
+}}
 
-// RestoreAtServiceStart restores a previously active session after the service
-// starts. Failures before a connection attempt exists (the saved source cannot
-// be loaded yet) are retried every policy.Interval for policy.Window. It stops
-// at once on success, on a failure that cannot be transient (no saved
-// activation, a disabled one, a broken saved selection or configuration), and
-// when the user starts, stops or configures a session. Once the window is
-// exhausted, the last error becomes the idle session's last failure, shown in
-// the snapshot until the next Start. A failed connection attempt is not retried
-// here; the session's ordinary failure handling owns it.
-func (m *Manager) RestoreAtServiceStart(ctx context.Context, policy RestoreRetryPolicy) (StartResult, error) {
+// PrepareRestoreAtServiceStart fixes the user-intent epoch now, before the
+// control channel accepts commands, and returns the restore to run afterwards.
+// A Configure, Start or Stop accepted in between supersedes the restore.
+//
+// The restore retries only while the saved source cannot be reached, every
+// restoreRetryInterval for restoreRetryWindow. It stops at once on success, on
+// any other failure, and when the user acts. A failed connection attempt is not
+// retried here; the session's ordinary failure handling owns it. When the
+// window runs out, or a final failure other than "nothing saved" occurs, the
+// error becomes the idle session's last failure, shown in the snapshot until
+// the next Start.
+func (m *Manager) PrepareRestoreAtServiceStart() func(context.Context) error {
 	s := m.session
 	s.mu.Lock()
 	epoch := s.restoreEpoch
 	s.mu.Unlock()
-	deadline := policy.now().Add(policy.Window)
+	return func(ctx context.Context) error {
+		_, err := m.restoreWithRetries(ctx, epoch, realRestoreClock)
+		return err
+	}
+}
+
+func (m *Manager) restoreWithRetries(ctx context.Context, epoch uint64, clock restoreClock) (StartResult, error) {
+	deadline := clock.now().Add(restoreRetryWindow)
 	for attempt := 1; ; attempt++ {
 		result, phase, err := m.restoreAttempt(ctx, true, &epoch)
 		if err == nil {
 			return result, nil
 		}
-		if phase != restorePhaseLoad || !transientRestoreFailure(ctx, err) {
-			m.reportStartupRestoreFailure(ctx, epoch, err, false)
+		retry := phase == restorePhaseLoad && errors.Is(err, errSourceUnreachable) && ctx.Err() == nil
+		if !retry || clock.now().Add(restoreRetryInterval).After(deadline) {
+			log.Error("sessionapi", "automatic restore failed", map[string]any{"attempts": attempt, "failure_code": string(CodeOf(err))})
+			m.reportStartupRestoreFailure(ctx, epoch, err)
 			return result, err
 		}
-		if policy.now().Add(policy.Interval).After(deadline) {
-			log.Error("sessionapi", "automatic restore gave up", map[string]any{"attempts": attempt, "failure_code": string(CodeOf(err))})
-			m.reportStartupRestoreFailure(ctx, epoch, err, true)
-			return result, err
-		}
-		log.Info("sessionapi", "automatic restore will be retried", map[string]any{"attempt": attempt, "failure_code": string(CodeOf(err))})
-		if sleepErr := policy.sleep(ctx, policy.Interval); sleepErr != nil {
+		if sleepErr := clock.sleep(ctx, restoreRetryInterval); sleepErr != nil {
 			return result, errors.Join(err, sleepErr)
 		}
 	}
 }
 
-// A CANCELED failure is transient when only one source fetch timed out
-// (its own request deadline); it is final when the restore's own context ended.
-func transientRestoreFailure(ctx context.Context, err error) bool {
-	code := CodeOf(err)
-	if code == FailureCanceled {
-		return ctx.Err() == nil
-	}
-	return code != FailureNotConfigured && code != FailureMalformedConfig && code != FailureConflict && code != FailureUnsupported
-}
-
 // reportStartupRestoreFailure shows a failed restore in the idle session's
 // last failure, the field the snapshot already reports before the first Start.
 // It is skipped when the user acted meanwhile, when a failure is already
-// shown, and for "nothing saved", which is the normal state of a fresh install.
-func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64, err error, exhausted bool) {
+// shown, when the restore itself was canceled, and for "nothing saved", which
+// is the normal state of a fresh install.
+func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64, err error) {
 	code := CodeOf(err)
-	if code == FailureNotConfigured || code == FailureCanceled && ctx.Err() != nil {
+	if code == FailureNotConfigured || ctx.Err() != nil {
 		return
 	}
-	message := errorMessage(err)
+	text := "automatic restore failed: " + errorMessage(err)
 	var domain *Error
 	if errors.As(err, &domain) {
-		message = domain.Message
+		text = "automatic restore failed: " + domain.Message
 	}
-	text := "automatic restore failed: " + message
-	if exhausted && (code == FailureInvalidArgument || code == FailureCanceled) {
-		// Retries ran out while the subscription source could not be fetched
-		// (no network yet, or the fetch timed out): say so plainly. CANCELED
-		// stays reserved for a restore that was really canceled.
+	if errors.Is(err, errSourceUnreachable) {
 		code, text = FailurePlatform, SubscriptionUnreachableMessage
 	}
 	s := m.session

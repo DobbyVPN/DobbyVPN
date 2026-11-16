@@ -62,11 +62,12 @@ func closePipeAfterStartupFailure(listener net.Listener, startupErr error) error
 }
 
 func serveDesktopControl(listener net.Listener) (func() error, <-chan error) {
+	startRestore := prepareDesktopRestore(desktopProcessBinding())
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, nil)
 	}()
-	restoreDesktopSession(desktopProcessBinding())
+	startRestore()
 	return listener.Close, serveDone
 }
 

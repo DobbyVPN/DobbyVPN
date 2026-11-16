@@ -120,20 +120,19 @@ func (b *Binding) Restore(onlyPreviouslyEnabled bool) string {
 	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
 }
 
-// RestoreAtServiceStart is used only by the desktop service at startup. It
-// retries within the bounded window of sessionapi.DefaultRestoreRetryPolicy.
-func (b *Binding) RestoreAtServiceStart() string {
+// PrepareServiceRestore is used only by the desktop service at startup. It
+// fixes the user-intent epoch now and returns the bounded-retry restore to run
+// once the control channel is serving.
+func (b *Binding) PrepareServiceRestore() func(context.Context) error {
 	owner, ok := b.manager.(interface {
-		RestoreAtServiceStart(context.Context, sessionapi.RestoreRetryPolicy) (sessionapi.StartResult, error)
+		PrepareRestoreAtServiceStart() func(context.Context) error
 	})
 	if !ok {
-		return failed(&sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "automatic startup owner is unavailable"})
+		return func(context.Context) error {
+			return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "automatic startup owner is unavailable"}
+		}
 	}
-	result, err := owner.RestoreAtServiceStart(context.Background(), sessionapi.DefaultRestoreRetryPolicy())
-	if err != nil {
-		return failed(err)
-	}
-	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
+	return owner.PrepareRestoreAtServiceStart()
 }
 
 func (b *Binding) AttachSourceStore() {

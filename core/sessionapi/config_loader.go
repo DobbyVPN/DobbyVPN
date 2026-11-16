@@ -129,7 +129,7 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	response, err := client.Do(request)
 	if err != nil {
 		trace.record("request failed", map[string]any{configLogError: err.Error(), configLogContextError: errorText(requestCtx.Err())})
-		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
+		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", fmt.Errorf("%w: %w", errSourceUnreachable, err))
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		drainedBytes, drainErr := io.Copy(io.Discard, io.LimitReader(response.Body, maxConfigBytes+1))

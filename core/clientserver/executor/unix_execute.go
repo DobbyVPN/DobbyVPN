@@ -149,12 +149,13 @@ func run() {
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
 	}
+	startRestore := prepareDesktopRestore(desktopProcessBinding())
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, controlplane.AuthenticateLocalPeer)
 	}()
 	log.Debugf(desktopLogCategory, "desktop JSON control socket ready")
-	restoreDesktopSession(desktopProcessBinding())
+	startRestore()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	var serveErr error
