@@ -296,14 +296,13 @@ private fun Connections(controller: SessionController, modifier: Modifier) {
 @Composable
 private fun ConnectionRow(controller: SessionController, profile: ProfileData, digest: String) {
     val status = controller.profileStatus(profile.index)
+    val title = controller.actionTitle(profile.index)
     ConnectionButton(
         name = profile.name,
         details = listOfNotNull(protocolName(profile.protocol), status?.label),
         status = status,
-        action = controller.actionTitle(profile.index).let {
-            if (status == ProfileStatus.CONNECTING || it == "Stop") "Connecting…" else it
-        },
-        enabled = controller.canAct(profile.index),
+        action = if (title == "Disconnect") "Connected" else if (status == ProfileStatus.CONNECTING || title == "Stop") "Connecting…" else title,
+        enabled = title != "Disconnect" && controller.canAct(profile.index),
         onClick = { controller.connectOrDisconnect(profile.index) },
         modifier = Modifier.testTag("profile.$digest.index.${profile.index}.role.action")
             .semantics { contentDescription = "Profile ${profile.index + 1} action" },
@@ -317,8 +316,8 @@ private fun OrphanRow(controller: SessionController, profile: ProfileData) {
         name = profile.name,
         details = listOfNotNull(protocolName(profile.protocol), status?.label, "not in subscription"),
         status = status,
-        action = controller.mainActionTitle,
-        enabled = controller.mainActionEnabled,
+        action = if (controller.mainActionTitle == "Disconnect") "Connected" else controller.mainActionTitle,
+        enabled = controller.mainActionTitle != "Disconnect" && controller.mainActionEnabled,
         onClick = controller::mainAction,
         modifier = Modifier.testTag("profile.active"),
     )
