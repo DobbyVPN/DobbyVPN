@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,8 @@ from dependency_fetch import MAX_ATTEMPTS, RETRY_DELAYS, retryable_transport_fai
 
 START_ATTEMPTS = 3
 START_RETRY_PAUSE_SECONDS = 5
+# A fixture sample older than this is too old to describe the moment of a failure.
+HEALTH_MAX_AGE_SECONDS = 120
 
 # Machine-readable statuses. They only label where a failure came from; the job
 # conclusion stays "failure" so that "Re-run failed jobs" restarts this host
@@ -43,56 +46,54 @@ def announce(status: str, title: str, message: str, level: str = "error") -> Non
             stream.write(f"### {title}\n\n{text}\n\n")
 
 
-def summarize_health(path: Path) -> dict | None:
-    """Read the fixture's public-ingress probes; None when there is no usable sample."""
+def last_probe_before(path: Path, moment: float) -> dict | None:
+    """The newest well-formed health record written at or before ``moment``."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return None
-    samples = unhealthy = errors = 0
-    first_unhealthy = None
-    targets: set[str] = set()
+    latest = None
     for line in lines:
         try:
             record = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(record, dict) or type(record.get("epoch")) not in (int, float):
+        if (not isinstance(record, dict) or type(record.get("epoch")) not in (int, float)
+                or record.get("ok") not in (True, False, None) or record["epoch"] > moment):
             continue
-        ok = record.get("ok")
-        if ok is None:
-            errors += 1
-            continue
-        if type(ok) is not bool:
-            continue
-        samples += 1
-        if not ok:
-            unhealthy += 1
-            failed = record.get("failed")
-            if isinstance(failed, list):
-                targets.update(item for item in failed if isinstance(item, str))
-            if first_unhealthy is None:
-                first_unhealthy = record["epoch"]
-    if samples == 0:
-        return None
-    return {"samples": samples, "unhealthy": unhealthy, "probe_errors": errors,
-            "first_unhealthy_epoch": first_unhealthy, "failed_targets": sorted(targets)}
+        if latest is None or record["epoch"] >= latest["epoch"]:
+            latest = record
+    return latest
 
 
-def classify_consumer_failure(health: dict | None) -> tuple[str, str]:
-    if health is None:
-        return UNKNOWN, "no public-ingress health samples were recorded"
-    unrun = (f"; {health['probe_errors']} more probes could not run"
-             if health["probe_errors"] else "")
-    if health["unhealthy"] == 0:
-        if health["probe_errors"]:
-            # Probes that could not run say nothing about the ingress.
-            return UNKNOWN, (f"public ingress was healthy in {health['samples']} probes{unrun}, "
-                             "so its health during the failure is not established")
-        return HEALTHY, f"public ingress was healthy in {health['samples']} of {health['samples']} probes"
-    when = time.strftime("%H:%M:%SZ", time.gmtime(health["first_unhealthy_epoch"]))
-    return DEGRADED, (f"public ingress was unhealthy in {health['unhealthy']} of {health['samples']} probes "
-                      f"(first at {when}; targets: {', '.join(health['failed_targets']) or 'unknown'}){unrun}")
+def first_failure_epoch(jobs: dict[str, dict], names: list[str]) -> float | None:
+    """When the earliest failed consumer finished; None if that cannot be read."""
+    moments = []
+    for name in names:
+        if jobs.get(name, {}).get("conclusion") != "success":
+            try:
+                moments.append(datetime.fromisoformat(jobs[name]["completed_at"]).timestamp())
+            except (KeyError, TypeError, ValueError):
+                return None
+    return min(moments) if moments else None
+
+
+def classify_consumer_failure(probe: dict | None, failed_at: float | None) -> tuple[str, str]:
+    """Judge the fixture only by its last probe before the consumer failed."""
+    if failed_at is None:
+        return UNKNOWN, "the time of the consumer failure is not known"
+    if probe is None:
+        return UNKNOWN, "no public-ingress probe was recorded before the consumer failed"
+    age = failed_at - probe["epoch"]
+    if age > HEALTH_MAX_AGE_SECONDS:
+        return UNKNOWN, f"the last public-ingress probe was {age:.0f} s before the consumer failed"
+    if probe["ok"] is None:
+        return UNKNOWN, "the last public-ingress probe before the consumer failed could not run"
+    if probe["ok"]:
+        return HEALTHY, f"the last probe, {age:.0f} s before the consumer failed, found public ingress healthy"
+    targets = ", ".join(t for t in probe.get("failed", []) if isinstance(t, str)) or "unknown"
+    return DEGRADED, (f"the last probe, {age:.0f} s before the consumer failed, found public ingress "
+                      f"unhealthy (targets: {targets})")
 
 
 def remaining() -> float:
@@ -358,7 +359,10 @@ def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = Non
             complete, success = consumers_complete(jobs, names, attempt, require_current)
             if complete:
                 if not success:
-                    status, detail = classify_consumer_failure(summarize_health(root / "public" / "health.jsonl"))
+                    failed_at = first_failure_epoch(jobs, names)
+                    probe = (last_probe_before(root / "public" / "health.jsonl", failed_at)
+                             if failed_at is not None else None)
+                    status, detail = classify_consumer_failure(probe, failed_at)
                     message = ("one or more fixture consumers failed; retain this host for failed-job recovery. "
                                f"This job mirrors the consumer result; the fixture host itself: {detail}")
                     announce(status, "Consumer failed; fixture host status", message,
@@ -381,7 +385,6 @@ def main() -> None:
     producer.add_argument("--root", type=Path, required=True)
     producer.add_argument("--tools", type=Path, required=True)
     producer.add_argument("--tests", type=Path, required=True)
-    producer.add_argument("--attempts", type=int, default=START_ATTEMPTS)
     watch = commands.add_parser("monitor")
     watch.add_argument("--root", type=Path, required=True)
     watch.add_argument("--consumers", required=True)
@@ -392,7 +395,7 @@ def main() -> None:
     if args.command == "ready":
         ready(args.key, args.producer_name, args.output)
     elif args.command == "start":
-        start(args.root, args.tools, args.tests, args.attempts)
+        start(args.root, args.tools, args.tests)
     elif args.command == "monitor":
         monitor(args.root, json.loads(args.consumers), json.loads(args.freshness_jobs))
     else:

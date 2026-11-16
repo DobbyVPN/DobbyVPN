@@ -22,7 +22,7 @@ TESTS_REPOSITORY = "DobbyVPN/Torturer"
 SCHEMA = 1
 PAGE_SIZE = 100
 # Offset pagination can shift while other jobs create deployments, so a record
-# may appear on two pages. Only that read-only observation is re-read.
+# may appear on two pages. Only the deployment list is re-read for that.
 PAGINATION_READ_ATTEMPTS = 3
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -198,23 +198,6 @@ def _validate_repository(repository: Any) -> str:
 
 
 def _paged(api: Any, endpoint: str, **filters: str) -> list[Any]:
-    """Read a whole list, re-reading it from page one if the list shifted.
-
-    Only GET reads are repeated, and only after a duplicate record ID; a missing
-    or malformed ID, an API failure, or a persistent duplicate still fails closed.
-    """
-    for attempt in range(1, PAGINATION_READ_ATTEMPTS + 1):
-        try:
-            return _paged_once(api, endpoint, **filters)
-        except PaginationShiftError as error:
-            if attempt == PAGINATION_READ_ATTEMPTS:
-                raise
-            print(f"[release-guard] {error}; re-reading list, attempt {attempt + 1}/{PAGINATION_READ_ATTEMPTS}",
-                  file=sys.stderr, flush=True)
-    raise AssertionError("pagination retry loop exhausted unexpectedly")
-
-
-def _paged_once(api: Any, endpoint: str, **filters: str) -> list[Any]:
     records: list[Any] = []
     seen_ids: set[int] = set()
     page = 1
@@ -236,6 +219,19 @@ def _paged_once(api: Any, endpoint: str, **filters: str) -> list[Any]:
         if len(response) < PAGE_SIZE:
             return records
         page += 1
+
+
+def _paged_deployments(api: Any, repository: str, **filters: str) -> list[Any]:
+    """Read the deployment list again from page one if it shifted while being read."""
+    for attempt in range(1, PAGINATION_READ_ATTEMPTS + 1):
+        try:
+            return _paged(api, f"repos/{repository}/deployments", **filters)
+        except PaginationShiftError as error:
+            if attempt == PAGINATION_READ_ATTEMPTS:
+                raise
+            print(f"[release-guard] {error}; re-reading list, attempt {attempt + 1}/{PAGINATION_READ_ATTEMPTS}",
+                  file=sys.stderr, flush=True)
+    raise AssertionError("pagination retry loop exhausted unexpectedly")
 
 
 def _deployment_url(repository: str, deployment_id: int) -> str:
@@ -283,7 +279,7 @@ def _all_deployments(api: Any, repository: str) -> list[dict[str, Any]]:
     # these records, while malformed task/environment combinations still fail.
     target: dict[int, dict[str, Any]] = {}
     for filters in ({"task": TASK}, {"environment": ENVIRONMENT}):
-        for item in _paged(api, f"repos/{repository}/deployments", **filters):
+        for item in _paged_deployments(api, repository, **filters):
             checked = _checked_deployment(item)
             prior = target.get(checked["id"])
             if prior is not None and (prior["_candidate"] != checked["_candidate"]
