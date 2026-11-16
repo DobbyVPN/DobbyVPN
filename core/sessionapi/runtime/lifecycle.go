@@ -409,6 +409,9 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 			return fail(fmt.Errorf("extend bypass policy with numeric protocol upstreams: %w", err))
 		}
 	}
+	if capability, ok := device.(interface{ IPv6Unavailable() bool }); ok {
+		bypass = bypass.WithIPv6Availability(capability.IPv6Unavailable)
+	}
 	owned.proxyAddr, owned.bypass = device.GetProxyAddr(), bypass
 	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {
 		owned.waitReady = ready.WaitReady

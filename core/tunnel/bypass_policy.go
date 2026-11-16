@@ -17,6 +17,20 @@ import (
 type BypassPolicy struct {
 	cidrs      []*net.IPNet
 	entryCount int
+	// ipv6Unavailable reports, without blocking, that the attempt's transport
+	// cannot reach IPv6 destinations. Nil means IPv6 is never refused.
+	ipv6Unavailable func() bool
+}
+
+// WithIPv6Availability returns a copy that refuses IPv6 connections while
+// unavailable reports true.
+func (p *BypassPolicy) WithIPv6Availability(unavailable func() bool) *BypassPolicy {
+	if p == nil {
+		return nil
+	}
+	policy := *p
+	policy.ipv6Unavailable = unavailable
+	return &policy
 }
 
 func (p *BypassPolicy) IsBypass(metadata *M.Metadata) bool {
@@ -82,8 +96,9 @@ func (p *BypassPolicy) WithNumericIPs(ips []net.IP) (*BypassPolicy, error) {
 		cidrs = append(cidrs, &net.IPNet{IP: normalized, Mask: mask})
 	}
 	policy := &BypassPolicy{
-		cidrs:      cidrs,
-		entryCount: p.entryCount,
+		cidrs:           cidrs,
+		entryCount:      p.entryCount,
+		ipv6Unavailable: p.ipv6Unavailable,
 	}
 	policy.recordResolved()
 	return policy, nil

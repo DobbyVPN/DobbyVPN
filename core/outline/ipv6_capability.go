@@ -11,32 +11,30 @@ import (
 const (
 	// ipv6ProbeTimeout bounds one end-to-end probe through the profile.
 	ipv6ProbeTimeout = 4 * time.Second
-	// ipv6UnsupportedRetry is how long a failed probe is trusted. The server's
-	// IPv6 egress rarely changes inside a session, but a probe can fail for a
-	// transient reason, so IPv6 is tried again after this interval.
+	// ipv6UnsupportedRetry is how long a "no IPv6" result is trusted before the
+	// profile is probed again; the last result stays in force meanwhile.
 	ipv6UnsupportedRetry = time.Minute
 	ipv6ProbeRequest     = "HEAD / HTTP/1.0\r\n\r\n"
 )
 
-// ipv6ProbeTargets are plain HTTP endpoints that answer any request over IPv6.
-// A reply proves that the server forwards IPv6 destinations; a successful
-// stream dial alone does not, because Shadowsocks only connects to the server.
-var ipv6ProbeTargets = []string{
-	"[2606:4700:4700::1111]:80",
-	"[2606:4700:4700::1001]:80",
-}
+// A reply from an IPv6 target proves that the server forwards IPv6; a stream
+// dial alone does not, because Shadowsocks only connects to the server. The
+// IPv4 target is the control: when it is silent too, the profile itself is
+// unreachable and the probe says nothing about IPv6.
+var (
+	ipv6ProbeTargets = []string{"[2606:4700:4700::1111]:80", "[2606:4700:4700::1001]:80"}
+	ipv4ProbeTarget  = "1.1.1.1:80"
+)
 
-type ipv6ProbeKey struct{}
-
-// ipv6Capability remembers whether the profile's server can reach IPv6
-// destinations. The zero value is ready to use and starts as unknown.
+// ipv6Capability remembers whether the profile's server forwards IPv6. It never
+// blocks: an unknown or stale answer starts a background probe, and IPv6 counts
+// as available until a conclusive probe shows otherwise.
 type ipv6Capability struct {
-	mu        sync.Mutex
-	known     bool
-	supported bool
-	checkedAt time.Time
-	inflight  chan struct{}
-	now       func() time.Time
+	mu          sync.Mutex
+	unsupported bool
+	checkedAt   time.Time
+	probing     bool
+	now         func() time.Time
 }
 
 func (c *ipv6Capability) clock() time.Time {
@@ -46,68 +44,60 @@ func (c *ipv6Capability) clock() time.Time {
 	return time.Now()
 }
 
-// usable reports whether IPv6 destinations should be dialed through the
-// profile. The first caller runs probe; concurrent callers wait for its result.
-// A caller whose context ends while waiting gets false without recording
-// anything.
-func (c *ipv6Capability) usable(ctx context.Context, probe func() bool) bool {
-	for {
-		c.mu.Lock()
-		if c.known && (c.supported || c.clock().Sub(c.checkedAt) < ipv6UnsupportedRetry) {
-			supported := c.supported
-			c.mu.Unlock()
-			return supported
-		}
-		if wait := c.inflight; wait != nil {
-			c.mu.Unlock()
-			select {
-			case <-wait:
-				continue
-			case <-ctx.Done():
-				return false
-			}
-		}
-		done := make(chan struct{})
-		c.inflight = done
-		c.mu.Unlock()
+// unavailable reports whether IPv6 is known not to work through the profile.
+// probe returns whether IPv6 works and whether the answer is conclusive.
+func (c *ipv6Capability) unavailable(probe func() (supported, conclusive bool)) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	stale := c.checkedAt.IsZero() || (c.unsupported && c.clock().Sub(c.checkedAt) >= ipv6UnsupportedRetry)
+	if stale && !c.probing {
+		c.probing = true
+		go c.run(probe)
+	}
+	return c.unsupported
+}
 
-		supported := probe()
-
-		c.mu.Lock()
-		c.inflight = nil
-		// A probe interrupted by shutdown says nothing about the server.
-		if ctx.Err() == nil {
-			c.known = true
-			c.supported = supported
-			c.checkedAt = c.clock()
-		}
-		c.mu.Unlock()
-		close(done)
-		return supported
+func (c *ipv6Capability) run(probe func() (supported, conclusive bool)) {
+	supported, conclusive := probe()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.probing = false
+	if conclusive {
+		c.unsupported, c.checkedAt = !supported, c.clock()
 	}
 }
 
-// probeIPv6 sends a request to each target through the profile and reports
-// whether any of them answered.
-func (d *OutlineDevice) probeIPv6() bool {
-	ctx, cancel := context.WithTimeout(context.WithValue(d.ctx, ipv6ProbeKey{}, true), ipv6ProbeTimeout)
+// IPv6Unavailable tells the packet stack to refuse IPv6 connections at once,
+// so applications fall back to IPv4 instead of waiting on a server that
+// cannot reach IPv6 (issue #341).
+func (d *OutlineDevice) IPv6Unavailable() bool {
+	return d.ipv6.unavailable(d.probeIPv6)
+}
+
+func (d *OutlineDevice) probeIPv6() (supported, conclusive bool) {
+	ctx, cancel := context.WithTimeout(d.ctx, ipv6ProbeTimeout)
 	defer cancel()
 
 	results := make(chan bool, len(ipv6ProbeTargets))
 	for _, target := range ipv6ProbeTargets {
-		go func(target string) { results <- d.probeIPv6Target(ctx, target) }(target)
+		go func(target string) { results <- d.probeTarget(ctx, target) }(target)
 	}
+	control := d.probeTarget(ctx, ipv4ProbeTarget)
 	for range ipv6ProbeTargets {
 		if <-results {
 			log.Debugf(Category, "[SOCKS5 IPv6] profile forwards IPv6 destinations")
-			return true
+			return true, true
 		}
 	}
-	log.Infof(Category, "[SOCKS5 IPv6] profile does not forward IPv6 destinations; answering IPv6 connects immediately so applications use IPv4")
-	return false
+	if !control {
+		log.Debugf(Category, "[SOCKS5 IPv6] probe inconclusive: IPv4 control target did not answer either")
+		return false, false
+	}
+	log.Infof(Category, "[SOCKS5 IPv6] profile does not forward IPv6 destinations; refusing IPv6 connections so applications use IPv4")
+	return false, true
 }
 
-func (d *OutlineDevice) probeIPv6Target(ctx context.Context, target string) bool {
+func (d *OutlineDevice) probeTarget(ctx context.Context, target string) bool {
 	conn, err := d.handleDial(ctx, networkTCP, target)
 	if err != nil {
 		return false
