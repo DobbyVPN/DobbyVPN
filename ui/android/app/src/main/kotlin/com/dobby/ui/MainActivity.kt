@@ -1247,9 +1247,15 @@ internal class SessionController(
     }
 
 
+    private var logStamp: List<Long>? = null
+    private var logStampRetained: Any? = null
+
     private fun readLogs() {
         val retained = retainedLogViewState
+        val stamp = diagnosticView.stamp()
+        if (stamp == logStamp && retained === logStampRetained) return
         val result = diagnosticView.readWithRetainedBoundary(retained?.entries, retained?.clearBoundary)
+        if (result.error.isEmpty()) { logStamp = stamp; logStampRetained = retained }
         post {
             latestClearBoundary = result.clearBoundary
             if (retained != null && retainedLogViewState === retained) {

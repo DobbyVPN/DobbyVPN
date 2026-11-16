@@ -35,6 +35,9 @@ internal class StructuredLogs(private val paths: List<String>, private val bound
         catch (failure: Exception) { atomic.failWrite(output); throw failure }
     }
 
+    // Changes whenever any log file or the clear boundary changes on disk.
+    fun stamp(): List<Long> = (names().map(::File) + boundary).flatMap { listOf(it.length(), it.lastModified()) }
+
     fun read(): Pair<List<LogEntry>, String> = readWithRetainedBoundary(null, null).let { it.entries to it.error }
 
     fun readWithRetainedBoundary(
