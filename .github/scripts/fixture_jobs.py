@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -22,78 +21,44 @@ from dependency_fetch import MAX_ATTEMPTS, RETRY_DELAYS, retryable_transport_fai
 
 START_ATTEMPTS = 3
 START_RETRY_PAUSE_SECONDS = 5
-# A fixture sample older than this is too old to describe the moment of a failure.
-HEALTH_MAX_AGE_SECONDS = 120
 
-# Machine-readable statuses. They only label where a failure came from; the job
-# conclusion stays "failure" so that "Re-run failed jobs" restarts this host
-# together with a failed consumer.
+# Machine-readable labels for failures of the fixture host itself. A failed
+# consumer is not labelled: the job stays "failure" so that "Re-run failed jobs"
+# restarts this host together with the consumer.
 HOST_FAILED = "fixture-host-failed"
 START_FAILED = "fixture-start-failed"
-HEALTHY = "fixture-healthy"
-DEGRADED = "fixture-ingress-degraded"
-UNKNOWN = "fixture-health-unknown"
 
 
-def announce(status: str, title: str, message: str, level: str = "error") -> None:
+def announce(title: str, message: str, level: str = "error") -> None:
     """Make the failure origin visible as an annotation and in the job summary."""
-    text = f"{message} [fixture_status={status}]"
-    print(f"::{level} title={title}::{text.replace('%', '%25').replace(chr(13), '%0D').replace(chr(10), '%0A')}",
+    print(f"::{level} title={title}::{message.replace('%', '%25').replace(chr(13), '%0D').replace(chr(10), '%0A')}",
           flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as stream:
-            stream.write(f"### {title}\n\n{text}\n\n")
+            stream.write(f"### {title}\n\n{message}\n\n")
 
 
-def last_probe_before(path: Path, moment: float) -> dict | None:
-    """The newest well-formed health record written at or before ``moment``."""
+def probe_stats(path: Path) -> str:
+    """Count the fixture's public-ingress probes for this run (ok / failed / could not run)."""
+    counts = {True: 0, False: 0, None: 0}
+    last = None
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return None
-    latest = None
+        lines = []
     for line in lines:
         try:
             record = json.loads(line)
         except ValueError:
             continue
-        if (not isinstance(record, dict) or type(record.get("epoch")) not in (int, float)
-                or record.get("ok") not in (True, False, None) or record["epoch"] > moment):
-            continue
-        if latest is None or record["epoch"] >= latest["epoch"]:
-            latest = record
-    return latest
-
-
-def first_failure_epoch(jobs: dict[str, dict], names: list[str]) -> float | None:
-    """When the earliest failed consumer finished; None if that cannot be read."""
-    moments = []
-    for name in names:
-        if jobs.get(name, {}).get("conclusion") != "success":
-            try:
-                moments.append(datetime.fromisoformat(jobs[name]["completed_at"]).timestamp())
-            except (KeyError, TypeError, ValueError):
-                return None
-    return min(moments) if moments else None
-
-
-def classify_consumer_failure(probe: dict | None, failed_at: float | None) -> tuple[str, str]:
-    """Judge the fixture only by its last probe before the consumer failed."""
-    if failed_at is None:
-        return UNKNOWN, "the time of the consumer failure is not known"
-    if probe is None:
-        return UNKNOWN, "no public-ingress probe was recorded before the consumer failed"
-    age = failed_at - probe["epoch"]
-    if age > HEALTH_MAX_AGE_SECONDS:
-        return UNKNOWN, f"the last public-ingress probe was {age:.0f} s before the consumer failed"
-    if probe["ok"] is None:
-        return UNKNOWN, "the last public-ingress probe before the consumer failed could not run"
-    if probe["ok"]:
-        return HEALTHY, f"the last probe, {age:.0f} s before the consumer failed, found public ingress healthy"
-    targets = ", ".join(t for t in probe.get("failed", []) if isinstance(t, str)) or "unknown"
-    return DEGRADED, (f"the last probe, {age:.0f} s before the consumer failed, found public ingress "
-                      f"unhealthy (targets: {targets})")
+        if isinstance(record, dict) and type(record.get("epoch")) in (int, float) and record.get("ok") in counts:
+            counts[record["ok"]] += 1
+            last = record["epoch"] if last is None else max(last, record["epoch"])
+    if last is None:
+        return "no public-ingress probes were recorded"
+    return (f"public-ingress probes this run: ok {counts[True]} / failed {counts[False]} / errors {counts[None]}, "
+            f"last at {time.strftime('%H:%M:%SZ', time.gmtime(last))}")
 
 
 def remaining() -> float:
@@ -298,7 +263,7 @@ def start(root: Path, tools: Path, tests: Path, attempts: int = START_ATTEMPTS) 
         except RuntimeError as error:
             if attempt == attempts:
                 message = f"{error} (fixture start attempt {attempt}/{attempts})"
-                announce(START_FAILED, "Fixture host failed to start", message)
+                announce("Fixture host failed to start", f"{message} [fixture_status={START_FAILED}]")
                 raise RuntimeError(f"fixture_status={START_FAILED}: {message}") from error
             print(f"::warning title=Fixture start retry::fixture start attempt {attempt}/{attempts} failed: {error}",
                   flush=True)
@@ -351,7 +316,7 @@ def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = Non
         while True:
             if (root / "public" / "result.json").exists():
                 message = "fixture service stopped while consumers were active"
-                announce(HOST_FAILED, "Fixture host failed", message)
+                announce("Fixture host failed", f"{message} [fixture_status={HOST_FAILED}]")
                 raise RuntimeError(f"fixture_status={HOST_FAILED}: {message}")
             jobs = jobs_snapshot()
             require_current = any(jobs.get(name, {}).get("run_attempt") == attempt
@@ -359,15 +324,11 @@ def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = Non
             complete, success = consumers_complete(jobs, names, attempt, require_current)
             if complete:
                 if not success:
-                    failed_at = first_failure_epoch(jobs, names)
-                    probe = (last_probe_before(root / "public" / "health.jsonl", failed_at)
-                             if failed_at is not None else None)
-                    status, detail = classify_consumer_failure(probe, failed_at)
                     message = ("one or more fixture consumers failed; retain this host for failed-job recovery. "
-                               f"This job mirrors the consumer result; the fixture host itself: {detail}")
-                    announce(status, "Consumer failed; fixture host status", message,
-                             "warning" if status == HEALTHY else "error")
-                    raise RuntimeError(f"fixture_status={status}: {message}")
+                               "This job mirrors the consumer result; the fixture host service is still running. "
+                               + probe_stats(root / "public" / "health.jsonl"))
+                    announce("Consumer failed; fixture host service is running", message, "warning")
+                    raise RuntimeError(message)
                 return
             pause(30)
     finally:

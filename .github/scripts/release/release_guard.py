@@ -223,15 +223,13 @@ def _paged(api: Any, endpoint: str, **filters: str) -> list[Any]:
 
 def _paged_deployments(api: Any, repository: str, **filters: str) -> list[Any]:
     """Read the deployment list again from page one if it shifted while being read."""
-    for attempt in range(1, PAGINATION_READ_ATTEMPTS + 1):
+    for attempt in range(1, PAGINATION_READ_ATTEMPTS):
         try:
             return _paged(api, f"repos/{repository}/deployments", **filters)
         except PaginationShiftError as error:
-            if attempt == PAGINATION_READ_ATTEMPTS:
-                raise
             print(f"[release-guard] {error}; re-reading list, attempt {attempt + 1}/{PAGINATION_READ_ATTEMPTS}",
                   file=sys.stderr, flush=True)
-    raise AssertionError("pagination retry loop exhausted unexpectedly")
+    return _paged(api, f"repos/{repository}/deployments", **filters)
 
 
 def _deployment_url(repository: str, deployment_id: int) -> str:
