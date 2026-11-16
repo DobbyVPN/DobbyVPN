@@ -55,7 +55,7 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
-    private var lastLoggedLogSize: (entries: Int, characters: Int)?
+    private var lastLoggedLogSize: String?
     #if os(macOS)
     private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
     var macLogCaptureDiagnosticNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -514,11 +514,10 @@ public final class DobbySessionViewModel: ObservableObject {
     /// Each write re-triggers a log parse, so unchanged sizes stay silent.
     private func recordLogViewSize(_ entries: [DobbyLogEntry]) {
         let characters = entries.reduce(0) { $0 + $1.message.utf16.count }
-        let size = (entries: entries.count, characters: characters)
-        guard size != lastLoggedLogSize else { return }
-        recordDiagnostic("entries=\(size.entries) characters=\(size.characters)",
-                         event: "ui.log_view_size", level: "DEBUG")
-        lastLoggedLogSize = size
+        let message = "entries=\(entries.count) characters=\(characters)"
+        guard message != lastLoggedLogSize else { return }
+        recordDiagnostic(message, event: "ui.log_view_size", level: "DEBUG")
+        lastLoggedLogSize = message
     }
 
     private func recordDiagnostic(
