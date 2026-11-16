@@ -475,7 +475,7 @@ public sealed partial class MainWindow : Window
 
     private string ActionTitle(int? index) => IsStopTarget(index)
         ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Connected" : "Stop")
-        : (index is null ? "Auto connect" : Connected ? "Switch" : "Connect");
+        : (index is null ? "Auto connect" : _snapshot is { State: "CONNECTED", PendingTarget: null } ? "Switch" : "Connect");
 
     private bool Busy => _busy || _stopInFlight;
     private bool Connected => _snapshot is { PrimaryAction: "STOP" } active && active.State != "FAILED";
