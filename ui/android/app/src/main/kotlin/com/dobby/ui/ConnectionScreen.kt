@@ -126,7 +126,7 @@ internal fun DobbyApp(controller: SessionController) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SubscriptionField(controller)
-                    if (controller.state.source.isEmpty() && !controller.state.loading) {
+                    if (controller.state.source.isEmpty()) {
                         Text("Enter a subscription URL to connect.", color = Muted, fontSize = 13.sp)
                     }
                     MainActions(controller)
