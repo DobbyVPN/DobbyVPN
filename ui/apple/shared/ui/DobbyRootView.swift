@@ -637,11 +637,12 @@ private struct ConnectionButton: View {
                     Text(name)
                         .dobbyFont(17, .medium)
                         .foregroundColor(.ink)
+                        .lineLimit(2)
                     Text(details.compactMap { $0 }.joined(separator: " · "))
                         .dobbyFont(13, on ? .semibold : .regular)
                         .foregroundColor(on ? .ink : .muted)
+                        .lineLimit(1)
                 }
-                .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Text(action)
                     .dobbyFont(15, .semibold)
