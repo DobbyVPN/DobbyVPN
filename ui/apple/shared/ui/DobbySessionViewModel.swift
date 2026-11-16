@@ -55,6 +55,7 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
+    private var lastLoggedLogSize: (entries: Int, characters: Int)?
     #if os(macOS)
     private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
     var macLogCaptureDiagnosticNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -131,6 +132,7 @@ public final class DobbySessionViewModel: ObservableObject {
             catch { uploadError = "Could not clean abandoned uploads: \(String(reflecting: error))" }
         }
         recordAppStarted()
+        recordLogViewSize(logEntries)
         if !uploadError.isEmpty { recordError(uploadError) }
         refreshSnapshot()
         refreshOnDemandPreference()
@@ -508,6 +510,17 @@ public final class DobbySessionViewModel: ObservableObject {
         recordDiagnostic(message)
     }
 
+    /// Ties a UI hang to the log length: one DEBUG record per distinct size.
+    /// Each write re-triggers a log parse, so unchanged sizes stay silent.
+    private func recordLogViewSize(_ entries: [DobbyLogEntry]) {
+        let characters = entries.reduce(0) { $0 + $1.message.utf16.count }
+        let size = (entries: entries.count, characters: characters)
+        guard size != lastLoggedLogSize else { return }
+        recordDiagnostic("entries=\(size.entries) characters=\(size.characters)",
+                         event: "ui.log_view_size", level: "DEBUG")
+        lastLoggedLogSize = size
+    }
+
     private func recordDiagnostic(
         _ message: String,
         event: String = "ui.failure",
@@ -556,6 +569,7 @@ public final class DobbySessionViewModel: ObservableObject {
                 if revision == self.logsRevision && !self.logsClearInFlight {
                     // Publish only real changes so an idle log view is not redrawn.
                     if self.logEntries != result.entries { self.logEntries = result.entries }
+                    self.recordLogViewSize(result.entries)
                     let logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
                     if self.logsError != logsError { self.logsError = logsError }
                 } else {
