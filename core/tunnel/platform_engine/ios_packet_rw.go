@@ -9,15 +9,14 @@ import "io"
 // returns header+packet, which made the endpoint drop IP packets of
 // mtu-header+1 .. mtu bytes and hand the stack header-many trailing zero
 // bytes. Read keeps the raw layout in p (header first, packet at p[offset:])
-// but reports only the packet length. Packets longer than the MTU are
-// reported as mtu+1 so the endpoint drops them instead of seeing a truncated
-// read. Writes pass through unchanged.
+// but reports only the packet length. scratch holds one byte more than
+// header+MTU, so a longer packet is read as mtu+1 and the endpoint's own MTU
+// check drops it. Writes pass through unchanged.
 //
 // Read is not safe for concurrent use: iobased runs a single reader.
 type headerStrippedRW struct {
 	rw      io.ReadWriter
 	offset  int
-	mtu     int
 	scratch []byte
 }
 
@@ -25,7 +24,6 @@ func newHeaderStrippedRW(rw io.ReadWriter, mtu uint32, offset int) *headerStripp
 	return &headerStrippedRW{
 		rw:     rw,
 		offset: offset,
-		mtu:    int(mtu),
 		// One byte beyond header+MTU tells an oversize packet from a full one.
 		scratch: make([]byte, offset+int(mtu)+1),
 	}
@@ -39,15 +37,8 @@ func (r *headerStrippedRW) Read(p []byte) (int, error) {
 	if n <= r.offset {
 		return 0, nil // header only or empty: nothing for the endpoint to inject
 	}
-	packetLen := n - r.offset
-	if packetLen > r.mtu {
-		return r.mtu + 1, nil // endpoint drops n > mtu
-	}
-	if len(p) < n {
-		return 0, io.ErrShortBuffer
-	}
 	copy(p, r.scratch[:n])
-	return packetLen, nil
+	return n - r.offset, nil
 }
 
 func (r *headerStrippedRW) Write(p []byte) (int, error) { return r.rw.Write(p) }
