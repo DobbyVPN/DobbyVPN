@@ -239,7 +239,7 @@ func executeWith(mode string, initLog func() error, runNormal func(), runService
 		}
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
-		return reportStartupFailure("select run mode", fmt.Errorf("invalid run mode %q", mode), true)
+		return reportStartupFailure("select run mode", fmt.Errorf("invalid run mode %q", mode), false)
 	}
 	return 0
 }
