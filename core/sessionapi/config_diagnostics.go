@@ -50,9 +50,8 @@ var shareLinkSchemes = []string{
 }
 
 var (
-	profileHeaderRE = regexp.MustCompile(`(?m)^\s*\[\[\s*(Outline|Xray|TrustTunnel)\s*\]\]`)
-	yamlKeyLineRE   = regexp.MustCompile(`^["']?[A-Za-z0-9_.-][^=:]*["']?:(\s|$)`)
-	base64BodyRE    = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
+	yamlKeyLineRE = regexp.MustCompile(`^["']?[A-Za-z0-9_.-][^=:]*["']?:(\s|$)`)
+	base64BodyRE  = regexp.MustCompile(`^[A-Za-z0-9+/_-]+={0,2}$`)
 )
 
 // profileRef identifies a profile the way the client lists show it: the
@@ -85,10 +84,10 @@ func protocolDisplayName(protocol Protocol) string {
 }
 
 func truncateRunes(text string, limit int) string {
-	if utf8.RuneCountInString(text) <= limit {
+	runes := []rune(text)
+	if len(runes) <= limit {
 		return text
 	}
-	runes := []rune(text)
 	return string(runes[:limit]) + "..."
 }
 
@@ -268,11 +267,10 @@ func notDobbySubscription(what string) error {
 }
 
 // detectForeignFormat names a well-known non-DobbyVPN body. It is consulted
-// only after TOML decoding failed, and never for text that contains a
-// DobbyVPN profile header (that is a broken subscription, not a foreign one).
+// only after TOML decoding failed.
 func detectForeignFormat(raw []byte) (string, bool) {
 	text := strings.TrimSpace(strings.TrimPrefix(string(raw), "\ufeff"))
-	if text == "" || profileHeaderRE.MatchString(text) {
+	if text == "" {
 		return "", false
 	}
 	if strings.HasPrefix(text, "<") {
@@ -294,28 +292,25 @@ func detectForeignFormat(raw []byte) (string, bool) {
 }
 
 func describeShareLinks(text string) (string, bool) {
-	var lines []string
+	count, first := 0, ""
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		lines = append(lines, line)
-	}
-	if len(lines) == 0 {
-		return "", false
-	}
-	first := ""
-	for _, line := range lines {
 		scheme, ok := shareLinkScheme(line)
 		if !ok {
 			return "", false
 		}
-		if first == "" {
+		if count == 0 {
 			first = scheme
 		}
+		count++
 	}
-	if len(lines) == 1 {
+	switch count {
+	case 0:
+		return "", false
+	case 1:
 		return "a " + first + ":// share link", true
 	}
 	return "a list of share links", true
