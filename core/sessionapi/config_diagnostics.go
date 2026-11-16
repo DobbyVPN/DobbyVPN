@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -159,7 +160,7 @@ func unknownOutlineFieldWarnings(block map[string]interface{}) []profileWarning 
 	var warnings []profileWarning
 	unlisted := 0
 	for _, key := range sortedKeys(block) {
-		if isKnownOutlineField(key) {
+		if slices.Contains(knownOutlineFields, key) {
 			continue
 		}
 		if len(warnings) >= maxUnknownFieldWarnings {
@@ -173,15 +174,6 @@ func unknownOutlineFieldWarnings(block map[string]interface{}) []profileWarning 
 		warnings = append(warnings, profileWarning{field: "unknown", message: fmt.Sprintf("%d more unknown fields not listed", unlisted)})
 	}
 	return warnings
-}
-
-func isKnownOutlineField(key string) bool {
-	for _, known := range knownOutlineFields {
-		if key == known {
-			return true
-		}
-	}
-	return false
 }
 
 func sortedKeys(block map[string]interface{}) []string {
