@@ -326,11 +326,8 @@ func normalizeOutlineURL(block map[string]interface{}) (string, error) {
 // value that is not a string is rejected.
 func outlineMethod(block map[string]interface{}) (string, error) {
 	value, present := block[fieldMethod]
-	if !present {
-		return defaultOutlineMethod, nil
-	}
 	text, ok := value.(string)
-	if !ok {
+	if present && !ok {
 		return "", invalidField(fieldMethod, reasonString)
 	}
 	if trimmed := strings.TrimSpace(text); trimmed != "" {
