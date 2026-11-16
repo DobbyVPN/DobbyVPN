@@ -226,23 +226,28 @@ def service_stopped(root: Path) -> bool:
     return False
 
 
+def fail_if_service_stopped(root: Path) -> None:
+    if service_stopped(root):
+        # The fixture host itself died; this is not a consumer failure.
+        message = "fixture service stopped while consumers were active [fixture_status=fixture-host-failed]"
+        print(f"::error title=Fixture host failed::{message}", flush=True)
+        raise RuntimeError(message)
+
+
 def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = None) -> None:
     if not names or len(names) != len(set(names)) or any(not isinstance(n, str) or not n for n in names):
         raise ValueError("consumer_names must contain unique exact job names")
     _, _, attempt = identity()
     try:
         while True:
-            if service_stopped(root):
-                # The fixture host itself died; this is not a consumer failure.
-                message = "fixture service stopped while consumers were active [fixture_status=fixture-host-failed]"
-                print(f"::error title=Fixture host failed::{message}", flush=True)
-                raise RuntimeError(message)
+            fail_if_service_stopped(root)
             jobs = jobs_snapshot()
             require_current = any(jobs.get(name, {}).get("run_attempt") == attempt
                                   for name in (freshness_jobs or []))
             complete, success = consumers_complete(jobs, names, attempt, require_current)
             if complete:
                 if not success:
+                    fail_if_service_stopped(root)  # it may have stopped while the job list was read
                     # The job still fails so that "Re-run failed jobs" restarts this host with the consumer.
                     raise RuntimeError("one or more fixture consumers failed; retain this host for failed-job recovery. "
                                        "This job mirrors the consumer result; the fixture host service is still running")
