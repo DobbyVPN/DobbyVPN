@@ -236,14 +236,14 @@ func (capture *rawCapture) monitor() {
 	}
 }
 
-// rotationRetryDelayTicks returns how many monitor ticks to skip after the
-// given number of consecutive failures: 10, 20, 40, ... capped at 300.
+// rotationRetryDelayTicks returns how many 1 s monitor ticks to skip after
+// the given number of consecutive failures: 1 s, 2 s, 4 s, ... capped at 30 s.
 func rotationRetryDelayTicks(failures int) int {
-	const maxTicks = 300
+	const maxTicks = 30
 	if failures >= 6 {
 		return maxTicks
 	}
-	return 10 << (failures - 1)
+	return 1 << (failures - 1)
 }
 
 func (capture *rawCapture) rotate() error {
