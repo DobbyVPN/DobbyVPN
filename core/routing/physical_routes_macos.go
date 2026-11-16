@@ -89,7 +89,6 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 	// retained for cleanup, including a successful native write followed by error.
 	p.current = NewPlan(p.sessionID)
 	p.routes = routes
-	p.complete = false
 	for _, route := range routes {
 		if _, err := p.current.acquireMacOSRoute(ctx, route); err != nil {
 			return err
