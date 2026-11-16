@@ -88,6 +88,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.ViewCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 
 internal val Paper = Color(0xFFD9D2C9)
 internal val Ink = Color(0xFF141414)
@@ -104,6 +106,8 @@ private val ControlsHeight = 180.dp
 @Composable
 internal fun DobbyApp(controller: SessionController) {
     val focus = LocalFocusManager.current
+    // A field left focused would bring the keyboard back when the app returns.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { focus.clearFocus() }
     MaterialTheme(colorScheme = lightColorScheme(primary = Ink, background = Paper)) {
         BoxWithConstraints(
             Modifier.fillMaxSize()
