@@ -144,9 +144,7 @@ func run() {
 	}
 	// A failed recovery must not stop the service: the control socket opens,
 	// clients see the error, and every Connect retries the recovery.
-	if err := recoverInterruptedState(); err != nil {
-		startupFailure = err
-	}
+	startupFailure = recoverInterruptedState()
 	listener, err := controlplane.ListenControlSocket()
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
