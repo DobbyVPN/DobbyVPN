@@ -14,7 +14,10 @@ const (
 	// ipv6UnsupportedRetry is how long a "no IPv6" result is trusted before the
 	// profile is probed again; the last result stays in force meanwhile.
 	ipv6UnsupportedRetry = time.Minute
-	ipv6ProbeRequest     = "HEAD / HTTP/1.0\r\n\r\n"
+	// ipv6InconclusiveRetry spaces probes while the profile itself is
+	// unreachable, so a stream of IPv6 connects does not keep dialing it.
+	ipv6InconclusiveRetry = 15 * time.Second
+	ipv6ProbeRequest      = "HEAD / HTTP/1.0\r\n\r\n"
 )
 
 // A reply from an IPv6 target proves that the server forwards IPv6; a stream
@@ -33,6 +36,7 @@ type ipv6Capability struct {
 	mu          sync.Mutex
 	unsupported bool
 	checkedAt   time.Time
+	retryAfter  time.Time
 	probing     bool
 	now         func() time.Time
 }
@@ -50,7 +54,7 @@ func (c *ipv6Capability) unavailable(probe func() (supported, conclusive bool)) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	stale := c.checkedAt.IsZero() || (c.unsupported && c.clock().Sub(c.checkedAt) >= ipv6UnsupportedRetry)
-	if stale && !c.probing {
+	if stale && !c.probing && !c.clock().Before(c.retryAfter) {
 		c.probing = true
 		go c.run(probe)
 	}
@@ -64,6 +68,8 @@ func (c *ipv6Capability) run(probe func() (supported, conclusive bool)) {
 	c.probing = false
 	if conclusive {
 		c.unsupported, c.checkedAt = !supported, c.clock()
+	} else {
+		c.retryAfter = c.clock().Add(ipv6InconclusiveRetry)
 	}
 }
 

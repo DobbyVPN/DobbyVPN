@@ -91,7 +91,7 @@ func (p *switchingProxy) RejectTCP(dst netip.Addr) bool {
 	if target == nil || target.bypass == nil || target.bypass.ipv6Unavailable == nil {
 		return false
 	}
-	if target.bypass.IsBypass(&M.Metadata{DstIP: dst}) || !target.bypass.ipv6Unavailable() {
+	if !target.bypass.ipv6Unavailable() || target.bypass.IsBypass(&M.Metadata{DstIP: dst}) {
 		return false
 	}
 	log.Debugf(Category, "[Router] IPv6 refused, transport has no IPv6 dst=%s", dst)
