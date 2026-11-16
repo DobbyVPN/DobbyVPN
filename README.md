@@ -21,8 +21,10 @@ Android 8–14 are not currently tested or supported.
 
 After installing a desktop package, `dobby-cli snapshot` connects to the
 installed background service. On macOS it uses the packaged socket without
-an environment override. `DOBBYVPN_CONTROL_SOCKET` can still select an
-alternative Unix socket when needed.
+an environment override; on Linux the service socket lives in the system
+runtime directory `/run/dobbyvpn/control.sock` and works without a desktop
+session. `DOBBYVPN_CONTROL_SOCKET` can still select an alternative Unix
+socket when needed.
 
 Linux DEB installation starts the service when system policy permits. Upgrades
 preserve disabled and masked services. The first upgrade from the older 1.5.4
