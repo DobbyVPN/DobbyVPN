@@ -319,10 +319,18 @@ public struct DobbyRootView: View {
                     .accessibilityIdentifier("tray.retry")
                 }
             } else if snapshot.profiles.isEmpty && orphan == nil {
-                SockIcon(holey: false)
-                    .frame(width: pt(40), height: pt(50))
-                    .accessibilityElement()
-                    .accessibilityLabel("No subscription yet")
+                VStack(spacing: pt(10)) {
+                    SockIcon(holey: false)
+                        .frame(width: pt(40), height: pt(50))
+                        .accessibilityElement()
+                        .accessibilityLabel("No subscription yet")
+                    Text("Paste the subscription link from your VPN provider above.")
+                        .dobbyFont(15)
+                        .foregroundColor(.muted)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, pt(16))
+                        .accessibilityIdentifier("tray.empty-hint")
+                }
             } else {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: pt(8)) {
