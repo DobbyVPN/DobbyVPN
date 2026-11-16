@@ -4,7 +4,6 @@ package controlplane
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"os"
 )
@@ -23,7 +22,7 @@ func authorizePrivilegedPeer(uid int) error {
 		return err
 	}
 	if uid != expected {
-		return fmt.Errorf("control peer UID is not the installed user")
+		return errPeerUIDNotInstalled
 	}
 	return nil
 }

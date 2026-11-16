@@ -18,7 +18,6 @@ const controlSocketRebindInterval = 2 * time.Second
 // for example when a session runtime directory is cleaned up after logout.
 type rebindListener struct {
 	path string
-	bind func(string) (net.Listener, error)
 
 	mu        sync.Mutex
 	inner     net.Listener
@@ -27,14 +26,13 @@ type rebindListener struct {
 	watchDone chan struct{}
 }
 
-func newRebindListener(path string, bind func(string) (net.Listener, error)) (*rebindListener, error) {
-	inner, err := bind(path)
+func newRebindListener(path string) (*rebindListener, error) {
+	inner, err := listenControlSocket(path)
 	if err != nil {
 		return nil, err
 	}
 	listener := &rebindListener{
 		path:      path,
-		bind:      bind,
 		inner:     inner,
 		done:      make(chan struct{}),
 		watchDone: make(chan struct{}),
@@ -106,7 +104,7 @@ func (l *rebindListener) rebindIfRemoved() {
 	if _, err := os.Lstat(l.path); !errors.Is(err, os.ErrNotExist) {
 		return
 	}
-	fresh, err := l.bind(l.path)
+	fresh, err := listenControlSocket(l.path)
 	if err != nil {
 		log.Debugf("controlplane", "control socket path %s was removed; recreation failed: %v", l.path, err)
 		return

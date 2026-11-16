@@ -20,6 +20,8 @@ import (
 
 var errWrongLocalConnection = errors.New("control plane accepted a non-Unix connection")
 
+var errPeerUIDNotInstalled = errors.New("control peer UID is not the installed user")
+
 // configuredPeerUID reports the peer UID pinned by the service environment.
 func configuredPeerUID() (uid int, pinned bool, err error) {
 	value := os.Getenv("DOBBYVPN_CONTROL_PEER_UID")
@@ -74,7 +76,7 @@ func authorizePeer(uid int) error {
 	}
 	if pinned {
 		if uid != expected {
-			return fmt.Errorf("control peer UID is not the installed user")
+			return errPeerUIDNotInstalled
 		}
 		return nil
 	}
@@ -179,7 +181,7 @@ func ListenControlSocket() (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	listener, err := newRebindListener(path, listenControlSocket)
+	listener, err := newRebindListener(path)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +343,7 @@ func removeUnservedControlSocket(path string) {
 	if statErr != nil || info.Mode()&os.ModeSocket == 0 {
 		return
 	}
-	probe, dialErr := net.DialTimeout("unix", path, 200*time.Millisecond)
+	probe, dialErr := (&net.Dialer{Timeout: 200 * time.Millisecond}).DialContext(context.Background(), "unix", path)
 	if dialErr == nil {
 		_ = probe.Close()
 		return
