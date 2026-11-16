@@ -126,6 +126,9 @@ internal fun DobbyApp(controller: SessionController) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SubscriptionField(controller)
+                    if (controller.state.source.isEmpty() && !controller.state.loading) {
+                        Text("Enter a subscription URL to connect.", color = Muted, fontSize = 13.sp)
+                    }
                     MainActions(controller)
                     Connections(controller, Modifier.padding(top = 8.dp).height(trayHeight))
                 }
