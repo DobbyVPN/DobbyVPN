@@ -727,8 +727,10 @@ internal class SessionController(
         clipboard.addPrimaryClipChangedListener(clipboardListener)
         if (backendAvailable) {
             worker.scheduleWithFixedDelay({
-                refreshSnapshot()
-                if (visible) refreshClipboard()
+                if (visible) {
+                    refreshSnapshot()
+                    refreshClipboard()
+                }
             }, 0, 500, TimeUnit.MILLISECONDS)
         } else {
             post {
@@ -1173,7 +1175,13 @@ internal class SessionController(
         }
     }
 
-    fun setVisible(value: Boolean) { visible = value; if (value) refreshClipboard() }
+    fun setVisible(value: Boolean) {
+        visible = value
+        if (value) {
+            worker.execute { refreshSnapshot() }
+            refreshClipboard()
+        }
+    }
 
     private fun refreshClipboard() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
