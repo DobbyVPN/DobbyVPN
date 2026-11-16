@@ -22,11 +22,18 @@ const (
 
 // A reply from an IPv6 target proves that the server forwards IPv6; a stream
 // dial alone does not, because Shadowsocks only connects to the server. The
-// IPv4 target is the control: when it is silent too, the profile itself is
-// unreachable and the probe says nothing about IPv6.
+// targets are several independent public IPv6 endpoints of different operators,
+// on ports 80 and 443, so IPv6 counts as missing only when none of them answers
+// while the IPv4 control does. When the control is silent too, the profile
+// itself is unreachable and the probe says nothing about IPv6.
 var (
-	ipv6ProbeTargets = []string{"[2606:4700:4700::1111]:80", "[2606:4700:4700::1001]:80"}
-	ipv4ProbeTarget  = "1.1.1.1:80"
+	ipv6ProbeTargets = []string{
+		"[2606:4700:4700::1111]:80", "[2606:4700:4700::1111]:443",
+		"[2001:4860:4860::8888]:80", "[2001:4860:4860::8888]:443",
+		"[2620:fe::fe]:80", "[2620:fe::fe]:443",
+		"[2620:119:35::35]:80", "[2620:119:35::35]:443",
+	}
+	ipv4ProbeTarget = "1.1.1.1:80"
 )
 
 // ipv6Capability remembers whether the profile's server forwards IPv6. It never
@@ -49,14 +56,15 @@ func (c *ipv6Capability) clock() time.Time {
 }
 
 // unavailable reports whether IPv6 is known not to work through the profile.
-// probe returns whether IPv6 works and whether the answer is conclusive.
-func (c *ipv6Capability) unavailable(probe func() (supported, conclusive bool)) bool {
+// probe returns whether IPv6 works and whether the answer is conclusive; it runs
+// through submit so the device waits for it on close.
+func (c *ipv6Capability) unavailable(submit func(func()) error, probe func() (supported, conclusive bool)) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	stale := c.checkedAt.IsZero() || (c.unsupported && c.clock().Sub(c.checkedAt) >= ipv6UnsupportedRetry)
 	if stale && !c.probing && !c.clock().Before(c.retryAfter) {
 		c.probing = true
-		go c.run(probe)
+		_ = submit(func() { c.run(probe) })
 	}
 	return c.unsupported
 }
@@ -77,7 +85,7 @@ func (c *ipv6Capability) run(probe func() (supported, conclusive bool)) {
 // so applications fall back to IPv4 instead of waiting on a server that
 // cannot reach IPv6 (issue #341).
 func (d *OutlineDevice) IPv6Unavailable() bool {
-	return d.ipv6.unavailable(d.probeIPv6)
+	return d.ipv6.unavailable(d.Submit, d.probeIPv6)
 }
 
 func (d *OutlineDevice) probeIPv6() (supported, conclusive bool) {
@@ -86,7 +94,7 @@ func (d *OutlineDevice) probeIPv6() (supported, conclusive bool) {
 
 	results := make(chan bool, len(ipv6ProbeTargets))
 	for _, target := range ipv6ProbeTargets {
-		go func(target string) { results <- d.probeTarget(ctx, target) }(target)
+		_ = d.Submit(func() { results <- d.probeTarget(ctx, target) })
 	}
 	control := d.probeTarget(ctx, ipv4ProbeTarget)
 	for range ipv6ProbeTargets {

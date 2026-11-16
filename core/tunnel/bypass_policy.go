@@ -25,9 +25,6 @@ type BypassPolicy struct {
 // WithIPv6Availability returns a copy that refuses IPv6 connections while
 // unavailable reports true.
 func (p *BypassPolicy) WithIPv6Availability(unavailable func() bool) *BypassPolicy {
-	if p == nil {
-		return nil
-	}
 	policy := *p
 	policy.ipv6Unavailable = unavailable
 	return &policy
