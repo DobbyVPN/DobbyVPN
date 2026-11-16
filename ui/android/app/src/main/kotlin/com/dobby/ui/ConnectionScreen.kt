@@ -317,8 +317,8 @@ private fun OrphanRow(controller: SessionController, profile: ProfileData) {
         details = listOfNotNull(protocolName(profile.protocol), status?.label, "not in subscription"),
         status = status,
         action = if (controller.mainActionTitle == "Disconnect") "Connected" else controller.mainActionTitle,
-        enabled = false,
-        onClick = {},
+        enabled = controller.mainActionTitle != "Disconnect" && controller.mainActionEnabled,
+        onClick = controller::mainAction,
         modifier = Modifier.testTag("profile.active"),
     )
 }
