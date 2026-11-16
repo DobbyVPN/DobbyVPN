@@ -30,7 +30,6 @@ import com.dobby.nativebridge.LogUploader
 import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.presentation.ConsentRecovery
-import com.dobby.presentation.ConsentRecoveryOutcome
 import com.dobby.presentation.LoadTrigger
 import com.dobby.presentation.PendingConsent
 import com.dobby.presentation.LogFollowState
@@ -268,7 +267,7 @@ class MainActivity : ComponentActivity() {
                     savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
                     retainedLogViewModel,
                     savedInstanceState?.getStringArrayList(DISMISSED_ERRORS).orEmpty().toSet(),
-                    restoredConsent = PendingConsent.decode(savedInstanceState?.getString(PENDING_CONSENT)),
+                    restoredConsent = savedInstanceState?.getBundle(PENDING_CONSENT)?.toPendingConsent(),
                     backendAvailable = backendFailure == null,
                     backendUnavailableMessage = backendFailure?.message.orEmpty(),
                 )
@@ -297,7 +296,7 @@ class MainActivity : ComponentActivity() {
             controller.saveSourceEditorState()?.let { outState.putBundle(SOURCE_EDITOR_STATE, it) }
                 ?: outState.remove(SOURCE_EDITOR_STATE)
             outState.putStringArrayList(DISMISSED_ERRORS, ArrayList(controller.dismissedErrors))
-            controller.pendingConsent()?.let { outState.putString(PENDING_CONSENT, it.encode()) }
+            controller.pendingConsent()?.let { outState.putBundle(PENDING_CONSENT, it.toBundle()) }
                 ?: outState.remove(PENDING_CONSENT)
         }
     }
@@ -588,6 +587,25 @@ internal enum class ProfileStatus(val label: String) {
     CONNECTING("connecting"), CONNECTED("connected"), RECONNECTING("reconnecting"), STOPPING("stopping"), FAILED("failed")
 }
 
+// Profile indexes are never negative; -1 stands for auto-select.
+private fun PendingConsent.toBundle() = Bundle().apply {
+    putInt("index", index ?: -1)
+    putBoolean("retry", retry)
+    putString("sessionId", sessionId)
+    putString("digest", digest)
+    putLong("generation", generation)
+    putBoolean("granted", granted)
+}
+
+private fun Bundle.toPendingConsent() = PendingConsent(
+    index = getInt("index", -1).takeIf { it >= 0 },
+    retry = getBoolean("retry"),
+    sessionId = getString("sessionId").orEmpty(),
+    digest = getString("digest").orEmpty(),
+    generation = getLong("generation"),
+    granted = getBoolean("granted"),
+)
+
 private data class PendingPermissionAction(
     val session: SessionData,
     val selection: SelectionData,
@@ -670,7 +688,12 @@ internal class SessionController(
     backendUnavailableMessage: String = "",
     restoredConsent: PendingConsent? = null,
 ) {
-    private val consentRecovery = ConsentRecovery(restoredConsent)
+    private val consentRecovery = ConsentRecovery(
+        restoredConsent,
+        enqueue = { task -> worker.execute { refreshSnapshot(); post { task.run() } } },
+        resume = ::resumeConnection,
+        refuse = { report("VPN permission was not granted") },
+    )
     private var consentAwaiting = false
     @Volatile private var backendAvailable = backendAvailable
     @Volatile private var backendUnavailableMessage = backendUnavailableMessage
@@ -754,7 +777,7 @@ internal class SessionController(
         }
         NativeVpnBridge.recordDiagnostic(activity, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
-        consentRecovery.interruptedHandoff()?.let(::startResume)
+        consentRecovery.resumeInterrupted()
     }
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
@@ -1110,20 +1133,7 @@ internal class SessionController(
     }
 
     /** Continues the connection saved by a previous Activity instance, or reports a refusal. */
-    fun consentReturned(granted: Boolean) {
-        when (val outcome = consentRecovery.result(granted)) {
-            ConsentRecoveryOutcome.NotRestored -> Unit
-            ConsentRecoveryOutcome.Refused -> report("VPN permission was not granted")
-            is ConsentRecoveryOutcome.Resume -> startResume(outcome.intent)
-        }
-    }
-
-    private fun startResume(intent: PendingConsent) {
-        worker.execute {
-            refreshSnapshot()
-            post { resumeConnection(intent) }
-        }
-    }
+    fun consentReturned(granted: Boolean) = consentRecovery.result(granted)
 
     /**
      * The recovery state stays saved until the start command was issued (or the attempt ended),
