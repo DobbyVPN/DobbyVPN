@@ -124,7 +124,7 @@ func (d *OutlineDevice) probeTarget(ctx context.Context, target string) bool {
 	if strings.HasSuffix(target, ":443") {
 		// Only reachability matters, not the certificate: a finished handshake
 		// means the endpoint answered through the profile.
-		return tls.Client(conn, &tls.Config{InsecureSkipVerify: true}).HandshakeContext(ctx) == nil //nolint:gosec
+		return tls.Client(conn, &tls.Config{InsecureSkipVerify: true}).HandshakeContext(ctx) == nil //nolint:gosec // reachability probe, the certificate is not needed
 	}
 	if _, err := conn.Write([]byte(ipv6ProbeRequest)); err != nil {
 		return false
