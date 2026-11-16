@@ -56,7 +56,6 @@ public sealed partial class MainWindow : Window
     private string _errorDetailOriginal = "";
     private string _lastSourceError = "";
     private bool _canPaste;
-    private double _rowHeight;
     private string _loadError = "";
     private string _restoredLoad = "";
     private CancellationTokenSource? _debounce;
@@ -105,9 +104,6 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         RestoreLogUpload();
         SizeWindow();
-        Column.SizeChanged += (_, _) => UpdateTrayHeight();
-        Controls.SizeChanged += (_, _) => UpdateTrayHeight();
-        UploadStatusPanel.SizeChanged += (_, _) => UpdateTrayHeight();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
         Root.Loaded += (_, _) =>
         {
@@ -291,23 +287,6 @@ public sealed partial class MainWindow : Window
         AppWindow.ResizeClient(new SizeInt32((int)(380 * scale), (int)(680 * scale)));
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + (area.Height - AppWindow.Size.Height) / 2));
-    }
-
-    // Four connections when there is room. Reserve the log viewport itself,
-    // separately from an upload reference and the measured, text-scaled controls.
-    private void UpdateTrayHeight()
-    {
-        if (_lifetime.IsClosing) return;
-        var height = Column.ActualHeight;
-        if (height <= 0) return;
-        var fourRows = 4 * Math.Max(_rowHeight, 42) + 5 * 6;
-        var controlsHeight = Math.Max(0, Controls.ActualHeight - ConnectionsTray.ActualHeight);
-        var uploadHeight = UploadStatusPanel.Visibility == Visibility.Visible ? UploadStatusPanel.ActualHeight : 0;
-        var logHeight = Math.Max(120, height / 4);
-        var available = height - controlsHeight - uploadHeight - 1.5 - logHeight;
-        var trayHeight = Math.Min(Math.Max(available, 54), fourRows);
-        if (Math.Abs(ConnectionsTray.Height - trayHeight) > 0.5 || double.IsNaN(ConnectionsTray.Height))
-            ConnectionsTray.Height = trayHeight;
     }
 
     private void RecordAppStarted()
@@ -731,12 +710,6 @@ public sealed partial class MainWindow : Window
         row.Click += (_, _) =>
         {
             if (!ErrorShown) StartWindowWork(click);
-        };
-        row.SizeChanged += (_, _) =>
-        {
-            if (row.ActualHeight <= _rowHeight) return;
-            _rowHeight = row.ActualHeight;
-            UpdateTrayHeight();
         };
         return row;
     }
