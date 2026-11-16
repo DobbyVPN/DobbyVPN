@@ -217,7 +217,7 @@ func run() {
 
 func (c *Executor) Execute(mode string) {
 	if code := executeWith(mode, initExplicitLocalLog, run, runService); code != 0 {
-		exitProcess(code)
+		os.Exit(code)
 	}
 }
 

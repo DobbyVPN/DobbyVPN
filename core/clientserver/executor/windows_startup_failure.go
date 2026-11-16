@@ -4,7 +4,6 @@ package executor
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"core/diagnostics"
@@ -17,15 +16,11 @@ import (
 const (
 	startupFailureEventSource = "DobbyVPN Go backend"
 	startupFailureEventID     = 1
-	startupFailureExitCode    = 1
 	maxStartupFailureRunes    = 2000
 )
 
-// Replaced by tests; production writes to the Windows Event Log and exits.
-var (
-	writeStartupFailureEvent = writeEventLog
-	exitProcess              = os.Exit
-)
+// Replaced by tests; production writes to the Windows Event Log.
+var writeStartupFailureEvent = writeEventLog
 
 func writeEventLog(message string) error {
 	logger, err := eventlog.Open(startupFailureEventSource)
@@ -62,5 +57,5 @@ func reportStartupFailure(stage string, cause error) int {
 	if err := writeStartupFailureEvent(message); err != nil {
 		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to write startup failure to the Windows Event Log: %v\n", err)
 	}
-	return startupFailureExitCode
+	return 1
 }
