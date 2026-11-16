@@ -3,6 +3,8 @@ package sessionapi
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"time"
 
 	"core/log"
@@ -19,9 +21,10 @@ const (
 	SubscriptionUnreachableMessage = "Could not reach the subscription server"
 )
 
-// errSourceUnreachable marks a failed source request (no route, DNS failure,
-// timeout). Any other loading failure, such as an oversized response, is final.
-var errSourceUnreachable = errors.New("configuration source is unreachable")
+// errRestoreLoad marks a restore that failed while loading its saved source,
+// before any connection attempt exists. A started connection is owned by the
+// session's ordinary failure handling and is never retried here.
+var errRestoreLoad = errors.New("saved source could not be loaded")
 
 // restoreClock is replaced by tests so the window runs without real waiting.
 type restoreClock struct {
@@ -44,9 +47,10 @@ var realRestoreClock = restoreClock{now: time.Now, sleep: func(ctx context.Conte
 // control channel accepts commands, and returns the restore to run afterwards.
 // A Configure, Start or Stop accepted in between supersedes the restore.
 //
-// The restore retries only while the saved source cannot be reached, every
+// The restore retries any failure to load the saved source, every
 // restoreRetryInterval for restoreRetryWindow. It stops at once on success, on
-// any other failure, and when the user acts. A failed connection attempt is not
+// a final failure (nothing saved, activation disabled, configuration or saved
+// selection unusable), and when the user acts or the restore is canceled. A failed connection attempt is not
 // retried here; the session's ordinary failure handling owns it. When the
 // window runs out, or a final failure other than "nothing saved" occurs, the
 // error becomes the idle session's last failure, shown in the snapshot until
@@ -65,11 +69,11 @@ func (m *Manager) PrepareRestoreAtServiceStart() func(context.Context) error {
 func (m *Manager) restoreWithRetries(ctx context.Context, epoch uint64, clock restoreClock) (StartResult, error) {
 	deadline := clock.now().Add(restoreRetryWindow)
 	for attempt := 1; ; attempt++ {
-		result, phase, err := m.restoreAttempt(ctx, true, &epoch)
+		result, err := m.restoreAttempt(ctx, true, &epoch)
 		if err == nil {
 			return result, nil
 		}
-		retry := phase == restorePhaseLoad && errors.Is(err, errSourceUnreachable) && ctx.Err() == nil
+		retry := errors.Is(err, errRestoreLoad) && ctx.Err() == nil && !finalRestoreFailure(err)
 		if !retry || clock.now().Add(restoreRetryInterval).After(deadline) {
 			log.Error("sessionapi", "automatic restore failed", map[string]any{"attempts": attempt, "failure_code": string(CodeOf(err))})
 			m.reportStartupRestoreFailure(ctx, epoch, err)
@@ -79,6 +83,19 @@ func (m *Manager) restoreWithRetries(ctx context.Context, epoch uint64, clock re
 			return result, errors.Join(err, sleepErr)
 		}
 	}
+}
+
+func finalRestoreFailure(err error) bool {
+	code := CodeOf(err)
+	return code == FailureNotConfigured || code == FailureMalformedConfig || code == FailureConflict || code == FailureUnsupported
+}
+
+// unreachableSource reports a network failure or timeout, including one while
+// the response body is read, as opposed to a server that answered.
+func unreachableSource(err error) bool {
+	var op *net.OpError
+	var dns *net.DNSError
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &op) || errors.As(err, &dns)
 }
 
 // reportStartupRestoreFailure shows a failed restore in the idle session's
@@ -96,7 +113,7 @@ func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64,
 	if errors.As(err, &domain) {
 		text = "automatic restore failed: " + domain.Message
 	}
-	if errors.Is(err, errSourceUnreachable) {
+	if unreachableSource(err) {
 		code, text = FailurePlatform, SubscriptionUnreachableMessage
 	}
 	s := m.session
