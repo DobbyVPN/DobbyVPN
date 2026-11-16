@@ -2,6 +2,8 @@ package outline
 
 import (
 	"context"
+	"crypto/tls"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,6 +121,11 @@ func (d *OutlineDevice) probeTarget(ctx context.Context, target string) bool {
 	defer func() { _ = conn.Close() }()
 	deadline, _ := ctx.Deadline()
 	_ = conn.SetDeadline(deadline)
+	if strings.HasSuffix(target, ":443") {
+		// Only reachability matters, not the certificate: a finished handshake
+		// means the endpoint answered through the profile.
+		return tls.Client(conn, &tls.Config{InsecureSkipVerify: true}).HandshakeContext(ctx) == nil //nolint:gosec
+	}
 	if _, err := conn.Write([]byte(ipv6ProbeRequest)); err != nil {
 		return false
 	}

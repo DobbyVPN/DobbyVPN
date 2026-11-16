@@ -92,13 +92,10 @@ func (p *BypassPolicy) WithNumericIPs(ips []net.IP) (*BypassPolicy, error) {
 		}
 		cidrs = append(cidrs, &net.IPNet{IP: normalized, Mask: mask})
 	}
-	policy := &BypassPolicy{
-		cidrs:           cidrs,
-		entryCount:      p.entryCount,
-		ipv6Unavailable: p.ipv6Unavailable,
-	}
+	policy := *p
+	policy.cidrs = cidrs
 	policy.recordResolved()
-	return policy, nil
+	return &policy, nil
 }
 
 func (p *BypassPolicy) recordResolved() {
