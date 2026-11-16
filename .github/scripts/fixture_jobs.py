@@ -240,6 +240,7 @@ def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = Non
     if not names or len(names) != len(set(names)) or any(not isinstance(n, str) or not n for n in names):
         raise ValueError("consumer_names must contain unique exact job names")
     _, _, attempt = identity()
+    failure = None
     try:
         while True:
             checked_service_state(root)
@@ -256,8 +257,18 @@ def monitor(root: Path, names: list[str], freshness_jobs: list[str] | None = Non
                                        + ("still running" if state == "running" else "in an unknown state"))
                 return
             pause(30)
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        stop(root)
+        try:
+            stop(root)
+        except Exception as cleanup:
+            if failure is None:
+                raise
+            # Keep the primary failure; report the cleanup failure on its own.
+            print(f"::warning title=Fixture cleanup failed::{type(cleanup).__name__}: {cleanup}", flush=True)
+            traceback.print_exception(cleanup, file=sys.stderr)
 
 
 def main() -> None:
