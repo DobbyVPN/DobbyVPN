@@ -2061,10 +2061,13 @@ public sealed partial class MainWindow : Window
         {
             Directory.CreateDirectory(LogUploadDirectory);
             using var cleanupGate = new Mutex(false, @"Local\DobbyVPN.LogUploadCleanup");
-            cleanupGate.WaitOne();
+            bool acquired;
+            try { acquired = cleanupGate.WaitOne(TimeSpan.FromSeconds(5)); }
+            catch (AbandonedMutexException) { acquired = true; }
+            if (!acquired) _diagnostics.Record("Log upload cleanup skipped: the cleanup lock is busy.", "logs.upload.cleanup.skipped");
             try
             {
-                foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
+                if (acquired) foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
                 {
                     FileStream lease;
                     try { lease = new FileStream(Path.Combine(directory, ".lease"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
@@ -2080,7 +2083,7 @@ public sealed partial class MainWindow : Window
                     catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup.directory"); }
                 }
             }
-            finally { cleanupGate.ReleaseMutex(); }
+            finally { if (acquired) cleanupGate.ReleaseMutex(); }
             var metadata = Path.Combine(LogUploadDirectory, "latest.json");
             if (!File.Exists(metadata)) return;
             var latest = JsonSerializer.Deserialize<LastLogUpload>(File.ReadAllText(metadata));
