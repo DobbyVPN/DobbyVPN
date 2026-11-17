@@ -1,8 +1,8 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Fragment>
-    <!-- The installer sends a close message to DobbyVPN.exe and waits 10 seconds; it never terminates the process (TerminateProcess="0").
-         This is meant for the installing user's session. A window in another session (RDP, fast user switching) may not receive the message
-         and keep the files locked; close it before installing. The window is not restarted after the update (MSIDISABLERMRESTART). -->
+    <!-- The installer asks DobbyVPN.exe to close and waits 10 seconds; if it is still running, the process is terminated with exit code 0
+         (the TerminateProcess attribute is the exit code, not a switch). How an instance in another session (RDP, fast user switching)
+         is handled was not verified. The window is not restarted after the update (MSIDISABLERMRESTART). -->
     <util:CloseApplication Id="CloseDobbyFrontend" Target="DobbyVPN.exe" CloseMessage="yes" Timeout="10" ElevatedCloseMessage="yes" RebootPrompt="no" TerminateProcess="0" />
     <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
 		<!-- The v1.5.1 executable path changed; this needs a new MSI component identity. -->
