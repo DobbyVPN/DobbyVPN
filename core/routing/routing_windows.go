@@ -19,6 +19,8 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
+const windowsOnLinkNextHop = "0.0.0.0"
+
 var (
 	windowsRouteRead      = readWindowsRoute
 	windowsRouteCreate    = (*winipcfg.MibIPforwardRow2).Create
