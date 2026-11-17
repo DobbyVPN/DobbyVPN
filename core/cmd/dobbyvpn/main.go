@@ -70,7 +70,7 @@ func run(args []string) int {
 	applicationlog.Info("CLI", "dobby-cli command started", map[string]any{"command": args[0]})
 	client := dialService()
 	timeout := 30 * time.Second
-	if args[0] == "start" {
+	if args[0] == startCommand {
 		timeout = 2 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -141,7 +141,7 @@ func serviceArgsError(args []string) string {
 		if len(args) != 2 {
 			return "configure requires a source"
 		}
-	case "start":
+	case startCommand:
 		_, message := parseStartOptions(args[1:])
 		return message
 	case "stop":
@@ -165,7 +165,7 @@ func runServiceCommand(ctx context.Context, client controljson.Client, args []st
 			return usage("configure requires a source")
 		}
 		return configureJSON(ctx, client, args[1])
-	case "start":
+	case startCommand:
 		return startJSON(ctx, client, args[1:])
 	case "stop":
 		return stopJSON(ctx, client, args[1:])
@@ -556,7 +556,10 @@ func failureError(failure *wire.Failure) error {
 // configureStdin is the reader behind `dobby-cli configure -`.
 var configureStdin io.Reader = os.Stdin
 
-const stdinSource = "-"
+const (
+	stdinSource  = "-"
+	startCommand = "start"
+)
 
 func readSource(source string) (data []byte, resultErr error) {
 	const limit = 1 << 20
