@@ -11,6 +11,7 @@ public partial class App : Application
         UnhandledException += (_, args) => NativeDiagnostics.Current.Record(args.Exception.ToString(), "app.unhandled");
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
             NativeDiagnostics.Current.Record(args.ExceptionObject.ToString() ?? "Unknown unhandled failure", "process.unhandled");
+        TaskScheduler.UnobservedTaskException += (_, args) => NativeDiagnostics.Current.Record(args.Exception.ToString(), "task.unobserved");
         try
         {
             InitializeComponent();
