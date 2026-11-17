@@ -15,7 +15,7 @@ public partial class App : Application
         {
             // Runs on the finalizer thread; the log write can wait on a lock, so do it elsewhere.
             var text = args.Exception.ToString();
-            _ = Task.Run(() => NativeDiagnostics.Current.Record(text, "task.unobserved"));
+            _ = Task.Run(() => { try { NativeDiagnostics.Current.Record(text, "task.unobserved"); } catch { } });
         };
         try
         {
