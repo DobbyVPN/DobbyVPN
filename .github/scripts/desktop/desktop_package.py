@@ -824,6 +824,10 @@ def _verify_pkg(package: Path, version: str, work: Path) -> None:
     actual = ET.parse(records[0]).getroot().get("version")
     if actual != version:
         _fail(f"macOS package version {actual!r} does not match {version!r}")
+    link = expanded / "Payload" / "usr" / "local" / "bin" / "dobby-cli"
+    expected_target = "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
+    if not link.is_symlink() or os.readlink(link) != expected_target:
+        _fail(f"macOS package must link /usr/local/bin/dobby-cli to {expected_target!r}")
 
 
 def _verify_deb(package: Path, version: str, work: Path) -> None:

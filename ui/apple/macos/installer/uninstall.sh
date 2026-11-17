@@ -39,6 +39,7 @@ APP_BUNDLE="/Applications/Dobby VPN.app"
 CONTROL_SOCKET="/var/run/dobbyvpn/control.sock"
 CONTROL_DIRECTORY="/var/run/dobbyvpn"
 UNINSTALLER="/usr/local/libexec/dobbyvpn-uninstall"
+CLI_LINK="/usr/local/bin/dobby-cli"
 
 capture_command launchctl-print launchctl print system/com.dobby.vpnservice
 service_state="$CAPTURE_OUTPUT"
@@ -102,6 +103,11 @@ if [ "$pkgutil_status" -ne 0 ]; then
         *"No receipt"*|*"not found"*|*"No such file"*) ;;
         *) printf 'Package receipt removal failed (status %s)\n' "$pkgutil_status" >&2; exit "$pkgutil_status" ;;
     esac
+fi
+# Remove the PATH link only while it still points at this application; a link
+# that another tool re-pointed is not ours to delete.
+if [ -L "$CLI_LINK" ] && [ "$(readlink "$CLI_LINK")" = "$APP_BUNDLE/Contents/Resources/dobby-cli" ]; then
+    rm -f "$CLI_LINK"
 fi
 rm -rf "$APP_BUNDLE"
 rm -f "$UNINSTALLER"
