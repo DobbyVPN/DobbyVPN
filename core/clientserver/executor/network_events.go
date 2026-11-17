@@ -5,6 +5,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"core/log"
@@ -12,59 +13,60 @@ import (
 )
 
 const (
-	// The same window the macOS app uses: one network change produces a burst
-	// of OS notifications that should reach the core as a single event.
+	// One network change produces a burst of OS notifications that should reach
+	// the core as a single event.
 	networkEventDebounce = time.Second
 	eventWake            = "wake"
 	eventNetworkChanged  = "network_path_changed"
 )
 
-// newNetworkEvents returns a non-blocking emit function. Events within one
-// debounce window reach the core as a single call; "wake" wins over a network
-// change reported in the same burst.
+// networkEvents holds one pending reason. The first event arms a timer; events
+// that arrive before it fires only upgrade the reason, and "wake" wins over a
+// network change.
+type networkEvents struct {
+	mu       sync.Mutex
+	pending  string
+	debounce time.Duration
+	send     func(reason string)
+}
+
+// newNetworkEvents returns the emit function for OS watchers; it never blocks.
 func newNetworkEvents() func(reason string) {
-	events := make(chan string, 16)
-	go forwardNetworkEvents(events, networkEventDebounce, sendNetworkEvent)
-	return func(reason string) {
-		select {
-		case events <- reason:
-		default:
-		}
+	return (&networkEvents{debounce: networkEventDebounce, send: sendNetworkEvent}).emit
+}
+
+func (e *networkEvents) emit(reason string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pending == "" {
+		e.pending = reason
+		time.AfterFunc(e.debounce, e.flush)
+	} else if reason == eventWake {
+		e.pending = eventWake
 	}
 }
 
-func forwardNetworkEvents(events <-chan string, debounce time.Duration, send func(reason string)) {
-	var pending string
-	var window <-chan time.Time
-	for {
-		select {
-		case reason, ok := <-events:
-			if !ok {
-				return
-			}
-			if pending != eventWake {
-				pending = reason
-			}
-			if window == nil {
-				window = time.After(debounce)
-			}
-		case <-window:
-			send(pending)
-			pending, window = "", nil
-		}
-	}
+func (e *networkEvents) flush() {
+	e.mu.Lock()
+	reason := e.pending
+	e.pending = ""
+	e.mu.Unlock()
+	e.send(reason)
 }
 
 func sendNetworkEvent(reason string) {
 	log.Infof(desktopLogCategory, "system event: %s", reason)
-	// The binding logs a failed call; an empty session ID means the process-owned session.
-	callNetworkEvent(desktopProcessBinding(), reason)
+	// An empty session ID means the process-owned session.
+	response := callNetworkEvent(desktopProcessBinding(), reason)
+	var envelope struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal([]byte(response), &envelope); err != nil || !envelope.OK {
+		log.Errorf(desktopLogCategory, "system event %s was not accepted: %s", reason, response)
+	}
 }
 
 func callNetworkEvent(binding *mobilebinding.Binding, reason string) string {
-	params, err := json.Marshal(map[string]string{"reason": reason})
-	if err != nil {
-		return ""
-	}
+	params, _ := json.Marshal(map[string]string{"reason": reason}) // a string map always encodes
 	return binding.CallJSON(context.Background(), "NetworkEvent", params)
 }

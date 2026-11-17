@@ -156,7 +156,7 @@ func run() {
 	log.Debugf(desktopLogCategory, "desktop JSON control socket ready")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	startSystemEvents()
+	go watchNetworkChanges(newNetworkEvents())
 	var serveErr error
 	select {
 	case <-signals:
