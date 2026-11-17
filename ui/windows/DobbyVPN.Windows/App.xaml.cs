@@ -11,7 +11,12 @@ public partial class App : Application
         UnhandledException += (_, args) => NativeDiagnostics.Current.Record(args.Exception.ToString(), "app.unhandled");
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
             NativeDiagnostics.Current.Record(args.ExceptionObject.ToString() ?? "Unknown unhandled failure", "process.unhandled");
-        TaskScheduler.UnobservedTaskException += (_, args) => NativeDiagnostics.Current.Record(args.Exception.ToString(), "task.unobserved");
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            // Runs on the finalizer thread; the log write can wait on a lock, so do it elsewhere.
+            var text = args.Exception.ToString();
+            _ = Task.Run(() => NativeDiagnostics.Current.Record(text, "task.unobserved"));
+        };
         try
         {
             InitializeComponent();
