@@ -156,6 +156,7 @@ func recoverLinuxNetworkFamilyRules(family, priority, tableID int, mark uint32) 
 		if deleteErr := linuxRuleOperation("delete", &rule, linuxRuleDel); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
 			return deleteErr
 		}
+		log.Info(Category, "stale retained VPN routing rule found and removed", map[string]any{"family": family, "priority": rule.Priority})
 	}
 	return nil
 }
