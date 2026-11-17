@@ -8,5 +8,5 @@ import (
 )
 
 func dialService() controljson.Client {
-	return controljson.Client{Dial: controlplane.DialDesktopControl}
+	return withUnavailableDial(controljson.Client{Dial: controlplane.DialDesktopControl})
 }
