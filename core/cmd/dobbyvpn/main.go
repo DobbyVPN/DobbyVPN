@@ -68,7 +68,7 @@ func run(args []string) int {
 		return exitRuntime
 	}
 	applicationlog.Info("CLI", "dobby-cli command started", map[string]any{"command": args[0]})
-	client := withUnavailableDial(dialService())
+	client := dialService()
 	timeout := 30 * time.Second
 	if args[0] == "start" {
 		timeout = 2 * time.Minute
