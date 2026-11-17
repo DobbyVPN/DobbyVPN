@@ -48,26 +48,57 @@ func isNetworkChangeMessage(message []byte) bool {
 	return false
 }
 
+// The destination, gateway and netmask sockaddrs follow the header in that
+// order, each padded to 4 bytes. Only a zero destination with a zero-length
+// mask is a default route: DobbyVPN's own 0.0.0.0/1 and ::/1 are not.
 func isDefaultDestination(message []byte) bool {
-	const header = unix.SizeofRtMsghdr
-	if len(message) < header+2 || message[12]&unix.RTA_DST == 0 {
+	if len(message) < unix.SizeofRtMsghdr {
 		return false
 	}
-	var address []byte
-	switch message[header+1] {
-	case unix.AF_INET:
-		if len(message) >= header+8 {
-			address = message[header+4 : header+8]
+	addrs := message[12]
+	var destination, mask []byte
+	offset := unix.SizeofRtMsghdr
+	for _, bit := range []byte{unix.RTA_DST, unix.RTA_GATEWAY, unix.RTA_NETMASK} {
+		if addrs&bit == 0 {
+			continue
 		}
-	case unix.AF_INET6:
-		if len(message) >= header+24 {
-			address = message[header+8 : header+24]
+		if offset >= len(message) {
+			return false
 		}
+		size := 4
+		if length := int(message[offset]); length > 0 {
+			size = (length + 3) &^ 3
+		}
+		end := min(offset+size, len(message))
+		switch bit {
+		case unix.RTA_DST:
+			destination = message[offset:end]
+		case unix.RTA_NETMASK:
+			mask = message[offset:end]
+		}
+		offset += size
 	}
-	if address == nil {
+	if destination == nil || !zeroAddress(destination) {
 		return false
 	}
-	for _, b := range address {
+	if mask == nil {
+		return message[8]&unix.RTF_HOST == 0
+	}
+	return allZero(mask[min(2, len(mask)):])
+}
+
+func zeroAddress(sockaddr []byte) bool {
+	switch {
+	case len(sockaddr) >= 8 && sockaddr[1] == unix.AF_INET:
+		return allZero(sockaddr[4:8])
+	case len(sockaddr) >= 24 && sockaddr[1] == unix.AF_INET6:
+		return allZero(sockaddr[8:24])
+	}
+	return false
+}
+
+func allZero(data []byte) bool {
+	for _, b := range data {
 		if b != 0 {
 			return false
 		}
