@@ -2064,7 +2064,7 @@ public sealed partial class MainWindow : Window
             bool acquired;
             try { acquired = cleanupGate.WaitOne(TimeSpan.FromSeconds(5)); }
             catch (AbandonedMutexException) { acquired = true; }
-            if (!acquired) _diagnostics.Record("Log upload cleanup skipped: the cleanup lock is busy.", "logs.upload.cleanup.skipped");
+            if (!acquired) _ = Task.Run(() => { try { _diagnostics.Record("Log upload cleanup skipped: the cleanup lock is busy.", "logs.upload.cleanup.skipped"); } catch { } });
             try
             {
                 if (acquired) foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
