@@ -117,14 +117,39 @@ func runLogs(args []string) int {
 	return exitOK
 }
 
-// permissionHint names the service log when it cannot be opened, so the user
-// sees what to change instead of a bare "permission denied" on its lock file.
 func permissionHint(err error, backend string) string {
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrPermission) && strings.HasPrefix(pathErr.Path, backend) {
-		return fmt.Sprintf("dobby-cli: the service log %s is readable only by root; run this command with sudo", backend)
+	absolute, absErr := filepath.Abs(backend)
+	if absErr != nil {
+		return ""
+	}
+	ours := map[string]bool{
+		absolute:                              true,
+		absolute + ".lock":                    true,
+		absolute + diagnostics.PreviousSuffix: true,
+	}
+	if deniedPath(err, ours) {
+		return fmt.Sprintf("dobby-cli: the service log %s is readable only by root; run this command with sudo", absolute)
 	}
 	return ""
+}
+
+// deniedPath reports whether any joined error is a permission denial on one of paths.
+func deniedPath(err error, paths map[string]bool) bool {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrPermission) && paths[pathErr.Path] {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, inner := range joined.Unwrap() {
+			if deniedPath(inner, paths) {
+				return true
+			}
+		}
+	}
+	if wrapped := errors.Unwrap(err); wrapped != nil {
+		return deniedPath(wrapped, paths)
+	}
+	return false
 }
 
 func reportLogsFailure(err error, backend string) int {
