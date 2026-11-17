@@ -272,17 +272,6 @@ func uploadDiagnostics(ctx context.Context, client controljson.Client, paths []s
 }
 
 func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, paths []string, transport *http.Client) (resultErr error) {
-	snapshot, snapshotErr := callSnapshot(ctx, client, "")
-	if snapshotErr != nil {
-		return snapshotErr
-	}
-	var prepared sessionapi.LogUploadPreparation
-	if err := client.Call(ctx, "PrepareLogUpload", struct {
-		SessionID string `json:"session_id"`
-		Digest    string `json:"digest"`
-	}{snapshot.SessionID, snapshot.Digest}, &prepared); err != nil {
-		return err
-	}
 	logPath, pathErr := cliLogPath()
 	if pathErr != nil {
 		return pathErr
@@ -303,6 +292,17 @@ func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, p
 		return fmt.Errorf("lock upload directory: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, releaseUploadLock(lock)) }()
+	snapshot, snapshotErr := callSnapshot(ctx, client, "")
+	if snapshotErr != nil {
+		return snapshotErr
+	}
+	var prepared sessionapi.LogUploadPreparation
+	if err := client.Call(ctx, "PrepareLogUpload", struct {
+		SessionID string `json:"session_id"`
+		Digest    string `json:"digest"`
+	}{snapshot.SessionID, snapshot.Digest}, &prepared); err != nil {
+		return err
+	}
 	if err := cleanupUploadTemps(tempDir); err != nil {
 		return err
 	}
