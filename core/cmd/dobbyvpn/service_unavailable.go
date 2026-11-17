@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"syscall"
 
 	"core/clientserver/controljson"
 )
@@ -46,20 +47,24 @@ func serviceHint(goos string) string {
 	}
 }
 
-// withUnavailableDial marks every failure to open the control connection as
-// serviceUnavailableError, whatever the platform-specific cause (missing
-// socket or pipe, refused connection, denied access, busy pipe).
+// serviceAbsent reports whether a dial failure means that nobody serves the
+// control endpoint for this user: the socket or pipe is missing, the connection
+// is refused, or access is denied. Timeouts, a busy pipe and other failures say
+// nothing about the service being absent and stay ordinary operation errors.
+func serviceAbsent(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
+// withUnavailableDial marks a dial failure caused by an absent service as
+// serviceUnavailableError. The client's Dial must be set.
 func withUnavailableDial(client controljson.Client) controljson.Client {
 	dial := client.Dial
-	if dial == nil {
-		return client
-	}
 	client.Dial = func(ctx context.Context) (net.Conn, error) {
 		conn, err := dial(ctx)
-		if err != nil {
+		if err != nil && serviceAbsent(err) {
 			return nil, &serviceUnavailableError{cause: err}
 		}
-		return conn, nil
+		return conn, err
 	}
 	return client
 }
