@@ -397,6 +397,7 @@ class MainActivity : ComponentActivity() {
     }
 
     internal fun launchVpnConsent(permission: Intent) {
+        if (::controller.isInitialized) controller.consentLaunched()
         vpnConsentLauncher.launch(permission)
     }
 
@@ -694,7 +695,6 @@ internal class SessionController(
         resume = ::resumeConnection,
         refuse = { report("VPN permission was not granted") },
     )
-    private var consentAwaiting = false
     @Volatile private var backendAvailable = backendAvailable
     @Volatile private var backendUnavailableMessage = backendUnavailableMessage
 
@@ -723,7 +723,7 @@ internal class SessionController(
     /** A user-initiated cancel ends a resumed request; recreation (close) and a new preparation keep it. */
     private fun cancelPreparation(keepRecovery: Boolean = false) {
         if (!keepRecovery) consentRecovery.cancel()
-        preparation?.cancel(); preparation = null; consentAwaiting = false
+        preparation?.cancel(); preparation = null; consentRecovery.dialogClosed()
     }
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
@@ -1101,7 +1101,6 @@ internal class SessionController(
                 NativeVpnBridge.PreparationResult.Ready -> { preparation = null; continuePermission(true) }
                 NativeVpnBridge.PreparationResult.PermissionRequired -> {
                     consentRecovery.handoffComplete()
-                    consentAwaiting = true
                     state = state.copy(busy = false, error = "Approve the Android VPN permission to connect")
                 }
                 NativeVpnBridge.PreparationResult.Cancelled -> { consentRecovery.handoffComplete(); selectionAdmission.invalidate(target); preparation = null; permissionTarget = null; state = state.copy(busy = false) }
@@ -1121,23 +1120,21 @@ internal class SessionController(
     }
 
     /** The connection the user asked for, from the click until the start command is issued. */
-    fun pendingConsent(): PendingConsent? = permissionTarget?.let { pendingOf(it, granted = !consentAwaiting) }
+    fun pendingConsent(): PendingConsent? = permissionTarget?.let { consentRecovery.save(pendingOf(it)) }
         ?: consentRecovery.pending
 
-    private fun pendingOf(target: PendingPermissionAction, granted: Boolean) = PendingConsent(
+    private fun pendingOf(target: PendingPermissionAction) = PendingConsent(
         index = if (target.selection.mode == "PROFILE_INDEX") target.selection.index else null,
         retry = target.retry,
         sessionId = target.fence.sessionId,
         digest = target.fence.digest,
         generation = target.fence.generation,
-        granted = granted,
     )
 
     /** Continues the connection saved by a previous Activity instance, or reports a refusal. */
-    fun consentReturned(granted: Boolean) {
-        if (granted) consentAwaiting = false
-        consentRecovery.result(granted)
-    }
+    fun consentReturned(granted: Boolean) = consentRecovery.result(granted)
+
+    fun consentLaunched() = consentRecovery.dialogLaunched()
 
     /**
      * The recovery state stays saved until the start command was issued (or the attempt ended),
@@ -1165,7 +1162,7 @@ internal class SessionController(
 
     private fun continuePermission(granted: Boolean) {
         val target = permissionTarget ?: return
-        if (granted) consentRecovery.hold(pendingOf(target, granted = true))
+        if (granted) consentRecovery.hold(pendingOf(target))
         permissionTarget = null
         if (!granted) { consentRecovery.handoffComplete(); selectionAdmission.invalidate(target); report("VPN permission was not granted"); return }
         val selected = target.session

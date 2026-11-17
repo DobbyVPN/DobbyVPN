@@ -34,6 +34,15 @@ class ConsentRecovery(
     // Written by the controller's worker and main threads, read by the state save.
     @Volatile private var restored: PendingConsent? = restored
 
+    // The system consent dialog was launched and has not answered yet.
+    @Volatile private var dialogOpen = false
+
+    fun dialogLaunched() { dialogOpen = true }
+    fun dialogClosed() { dialogOpen = false }
+
+    /** A live request as saved: awaiting the open dialog, or granted (a restore re-runs the permission check). */
+    fun save(intent: PendingConsent): PendingConsent = intent.copy(granted = !dialogOpen)
+
     /** The intent that must be saved again by the next state save. */
     val pending: PendingConsent? get() = restored
 
@@ -44,6 +53,7 @@ class ConsentRecovery(
 
     /** Consent result for a restored intent; a result without one belongs to the live request. */
     fun result(granted: Boolean) {
+        if (granted) dialogOpen = false
         val intent = restored?.takeIf { !it.granted } ?: return
         if (!granted) {
             restored = null
