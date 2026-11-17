@@ -44,6 +44,9 @@ func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
 	if isHelpCommand(args) {
+		if len(args) > 1 {
+			return usage("help accepts no arguments")
+		}
 		printHelp()
 		return exitOK
 	}
@@ -152,27 +155,25 @@ func serviceArgsError(args []string) string {
 			return "snapshot accepts no options"
 		}
 	case "external-ip":
+		if len(args) != 1 {
+			return "external-ip accepts no options"
+		}
 	default:
 		return "unknown command"
 	}
 	return ""
 }
 
+// runServiceCommand runs a command line already accepted by serviceArgsError.
 func runServiceCommand(ctx context.Context, client controljson.Client, args []string) int {
 	switch args[0] {
 	case "configure":
-		if len(args) != 2 {
-			return usage("configure requires a source")
-		}
 		return configureJSON(ctx, client, args[1])
 	case startCommand:
 		return startJSON(ctx, client, args[1:])
 	case "stop":
 		return stopJSON(ctx, client, args[1:])
 	case "snapshot":
-		if len(args) != 1 {
-			return usage("snapshot accepts no options")
-		}
 		return snapshotJSON(ctx, client)
 	case "external-ip":
 		return externalIP()
