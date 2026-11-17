@@ -38,11 +38,6 @@ func newTunDevice(name, ip string, mtu int) (d network.IPDevice, err error) {
 		log.Errorf(Category, "[TUN][Init] %v", err)
 		return nil, err
 	}
-	if mtu <= 0 {
-		err = fmt.Errorf("positive MTU is required for TUN/TAP device, got %d", mtu)
-		log.Errorf(Category, "[TUN][Init] %v", err)
-		return nil, err
-	}
 
 	log.Debugf(Category, "[TUN][Create] Calling water.New()...")
 	tun, err := water.New(water.Config{
