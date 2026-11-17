@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -78,7 +79,7 @@ func runLogs(args []string) int {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		if err := uploadDiagnostics(ctx, dialService(), paths); err != nil {
-			return reportFailure(err)
+			return reportLogsFailure(err, paths[0])
 		}
 		return exitOK
 	}
@@ -93,7 +94,7 @@ func runLogs(args []string) int {
 	}
 	if export {
 		if err := exportDiagnostics(args[1], paths); err != nil {
-			return reportFailure(err)
+			return reportLogsFailure(err, paths[0])
 		}
 		fmt.Println(args[1])
 		return exitOK
@@ -111,9 +112,28 @@ func runLogs(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := streamDiagnostics(ctx, os.Stdout, paths, follow); err != nil {
-		return reportFailure(err)
+		return reportLogsFailure(err, paths[0])
 	}
 	return exitOK
+}
+
+// permissionHint names the service log when it cannot be opened, so the user
+// sees what to change instead of a bare "permission denied" on its lock file.
+func permissionHint(err error, backend string) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrPermission) && strings.HasPrefix(pathErr.Path, backend) {
+		return fmt.Sprintf("dobby-cli: the service log %s is readable only by root; run this command with sudo", backend)
+	}
+	return ""
+}
+
+func reportLogsFailure(err error, backend string) int {
+	if runtime.GOOS == "linux" {
+		if hint := permissionHint(err, backend); hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+		}
+	}
+	return reportFailure(err)
 }
 
 func diagnosticHeader() string {
