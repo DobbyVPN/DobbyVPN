@@ -16,7 +16,7 @@ func watchNetworkChanges(emit func(reason string)) {
 		log.Errorf(desktopLogCategory, "network change watcher unavailable: %v", err)
 		return
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	buf := make([]byte, 1<<16)
 	for {
 		n, err := unix.Read(fd, buf)

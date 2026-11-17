@@ -16,7 +16,7 @@ func watchNetworkChanges(emit func(reason string)) {
 		log.Errorf(desktopLogCategory, "network change watcher unavailable: %v", err)
 		return
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	groups := uint32(unix.RTMGRP_LINK | unix.RTMGRP_IPV4_IFADDR | unix.RTMGRP_IPV6_IFADDR)
 	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK, Groups: groups}); err != nil {
 		log.Errorf(desktopLogCategory, "network change watcher unavailable: %v", err)
