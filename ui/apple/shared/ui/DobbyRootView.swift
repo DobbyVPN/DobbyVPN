@@ -319,18 +319,7 @@ public struct DobbyRootView: View {
                     .accessibilityIdentifier("tray.retry")
                 }
             } else if snapshot.profiles.isEmpty && orphan == nil {
-                VStack(spacing: pt(10)) {
-                    SockIcon(holey: false)
-                        .frame(width: pt(40), height: pt(50))
-                        .accessibilityElement()
-                        .accessibilityLabel("No subscription yet")
-                    Text("Paste the subscription link from your VPN provider above.")
-                        .dobbyFont(15)
-                        .foregroundColor(.muted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, pt(16))
-                        .accessibilityIdentifier("tray.empty-hint")
-                }
+                EmptyTray()
             } else {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: pt(8)) {
@@ -630,6 +619,24 @@ private struct PlainPasteButton: View {
                 .background(Color.ink, in: RoundedRectangle(cornerRadius: pt(6)))
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// What the list area shows before any subscription is loaded.
+private struct EmptyTray: View {
+    var body: some View {
+        VStack(spacing: pt(10)) {
+            SockIcon(holey: false)
+                .frame(width: pt(40), height: pt(50))
+                .accessibilityElement()
+                .accessibilityLabel("No subscription yet")
+            Text("Paste the subscription link from your VPN provider above.")
+                .dobbyFont(15)
+                .foregroundColor(.muted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, pt(16))
+                .accessibilityIdentifier("tray.empty-hint")
+        }
     }
 }
 
