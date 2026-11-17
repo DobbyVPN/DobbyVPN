@@ -19,7 +19,6 @@ import (
 	"core/log"
 
 	"github.com/google/nftables"
-	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	nl "github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
@@ -255,7 +254,7 @@ func matchEstablishedTo(network *net.IPNet) []expr.Any {
 			mask = mask[12:]
 		}
 	}
-	state := binaryutil.NativeEndian.PutUint32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED)
+	state := native32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED)
 	return []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{family}},
 		&expr.Ct{Key: expr.CtKeySTATE, Register: 1},
