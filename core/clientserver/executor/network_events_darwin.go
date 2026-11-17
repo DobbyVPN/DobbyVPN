@@ -78,7 +78,7 @@ func isDefaultDestination(message []byte) bool {
 		}
 		offset += size
 	}
-	if destination == nil || !zeroAddress(destination) {
+	if !zeroAddress(destination) {
 		return false
 	}
 	if mask == nil {
