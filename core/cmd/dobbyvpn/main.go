@@ -25,11 +25,16 @@ import (
 	"core/sessionapi"
 )
 
+// Exit codes. Scripts may rely on these values.
 const (
-	exitOK                   = 0
-	exitArgs                 = 2
-	exitConnect              = 3
-	exitRuntime              = 4
+	exitOK = 0
+	// exitArgs: wrong command line or a rejected configuration source.
+	exitArgs = 2
+	// exitConnect: the Dobby VPN service could not be reached.
+	exitConnect = 3
+	// exitRuntime: the operation failed (including a timeout).
+	exitRuntime = 4
+	// exitConflict: the accepted configuration or session generation changed.
 	exitConflict             = 8
 	stderrLabel              = "stderr"
 	sessionIDRequiredMessage = "--session-id requires one value"
@@ -41,6 +46,13 @@ func run(args []string) int {
 	if isHelpCommand(args) {
 		printHelp()
 		return exitOK
+	}
+	// Reject malformed service commands before any side effect: no upload
+	// cleanup, log file or service connection for a typo.
+	if args[0] != "logs" {
+		if message := serviceArgsError(args); message != "" {
+			return usage(message)
+		}
 	}
 	if err := cleanupAbandonedUploads(); err != nil {
 		fmt.Fprintf(os.Stderr, "dobby-cli: upload temporary cleanup: %v\n", err)
@@ -56,7 +68,7 @@ func run(args []string) int {
 		return exitRuntime
 	}
 	applicationlog.Info("CLI", "dobby-cli command started", map[string]any{"command": args[0]})
-	client := dialService()
+	client := withUnavailableDial(dialService())
 	timeout := 30 * time.Second
 	if args[0] == "start" {
 		timeout = 2 * time.Minute
@@ -118,7 +130,32 @@ func prepareCLIHistory() error {
 }
 
 func isHelpCommand(args []string) bool {
-	return len(args) == 0 || args[0] == "--help" || args[0] == "-h"
+	return len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help"
+}
+
+// serviceArgsError returns the usage message for an invalid service command
+// line, or "" when the command line is acceptable.
+func serviceArgsError(args []string) string {
+	switch args[0] {
+	case "configure":
+		if len(args) != 2 {
+			return "configure requires a source"
+		}
+	case "start":
+		_, message := parseStartOptions(args[1:])
+		return message
+	case "stop":
+		_, message := parseStopOptions(args[1:])
+		return message
+	case "snapshot":
+		if len(args) != 1 {
+			return "snapshot accepts no options"
+		}
+	case "external-ip":
+	default:
+		return "unknown command"
+	}
+	return ""
 }
 
 func runServiceCommand(ctx context.Context, client controljson.Client, args []string) int {
@@ -158,8 +195,11 @@ func writeJSONFailure(err error) int {
 	code := string(sessionapi.FailureInternal)
 	message := err.Error()
 	var remote *controljson.CallError
+	var unavailable *serviceUnavailableError
 	if errors.As(err, &remote) {
 		code, message = remote.Code, remote.Message
+	} else if errors.As(err, &unavailable) {
+		code = failureServiceUnavailable
 	}
 	if encodeErr := json.NewEncoder(os.Stdout).Encode(wire.Response[any]{
 		Error: &wire.Failure{Code: code, Message: message},
@@ -513,8 +553,16 @@ func failureError(failure *wire.Failure) error {
 	return &controljson.CallError{Code: failure.Code, Message: failure.Message}
 }
 
+// configureStdin is the reader behind `dobby-cli configure -`.
+var configureStdin io.Reader = os.Stdin
+
+const stdinSource = "-"
+
 func readSource(source string) (data []byte, resultErr error) {
 	const limit = 1 << 20
+	if source == stdinSource {
+		return readStdinSource(configureStdin, limit)
+	}
 	cleanPath := filepath.Clean(source)
 	if isInlineTOMLSource(source) {
 		return readInlineTOMLSource(source, cleanPath, limit)
@@ -528,6 +576,32 @@ func readSource(source string) (data []byte, resultErr error) {
 		return sourceURL, nil
 	}
 	return readSourceFile(cleanPath, limit)
+}
+
+// readStdinSource reads a subscription from stdin so that it never appears in
+// the process list or shell history. The text is an HTTPS URL (surrounding
+// whitespace is ignored) or an inline TOML profile; a file path is not accepted.
+// Errors never echo the input, which usually carries a secret token.
+func readStdinSource(input io.Reader, limit int) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(input, int64(limit+1)))
+	if err != nil {
+		return nil, errors.New("cannot read the configuration from stdin")
+	}
+	if len(data) > limit {
+		return nil, errors.New("configuration exceeds the 1 MiB size limit")
+	}
+	text := string(data)
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("stdin is empty; pass an HTTPS subscription URL or TOML profile")
+	}
+	if isInlineTOMLSource(text) {
+		return data, nil
+	}
+	trimmed := strings.TrimSpace(text)
+	if _, isURL, parseErr := parseSourceURL(trimmed); parseErr != nil || !isURL {
+		return nil, errors.New("stdin must contain an HTTPS subscription URL or a TOML profile")
+	}
+	return []byte(trimmed), nil
 }
 
 func readInlineTOMLSource(source, path string, limit int) ([]byte, error) {
@@ -642,6 +716,11 @@ func reportFailure(err error) int {
 	if err == nil {
 		err = errors.New("desktop backend returned no result")
 	}
+	var unavailable *serviceUnavailableError
+	if errors.As(err, &unavailable) {
+		fmt.Fprintf(os.Stderr, "dobby-cli: %v\n", unavailable)
+		return exitConnect
+	}
 	var remote *controljson.CallError
 	if errors.As(err, &remote) {
 		if remote.Code == string(sessionapi.FailureConflict) || remote.Code == string(sessionapi.FailureInvalidArgument) {
@@ -678,5 +757,7 @@ func usage(message string) int {
 }
 
 func printHelp() {
-	fmt.Println("dobby-cli configure <file-or-https-url> | start (--auto | --profile <index>) [--session-id <id> --config-digest <digest>] | stop [--session-id <id> --generation <number>] | snapshot | logs [--follow] | logs export <new-file> | logs upload | logs clear | external-ip")
+	fmt.Println("dobby-cli configure <file-or-https-url|-> | start (--auto | --profile <index>) [--session-id <id> --config-digest <digest>] | stop [--session-id <id> --generation <number>] | snapshot | logs [--follow] | logs export <new-file> | logs upload | logs clear | external-ip")
+	fmt.Println("configure -: read the HTTPS subscription URL or TOML profile from stdin (keeps the URL out of the process list).")
+	fmt.Println("Exit codes: 0 success; 2 invalid command line or rejected configuration source; 3 Dobby VPN service unavailable; 4 operation failed; 8 conflict (state changed, take a new snapshot).")
 }
