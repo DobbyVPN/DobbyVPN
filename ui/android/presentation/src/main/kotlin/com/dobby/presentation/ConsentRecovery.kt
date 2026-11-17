@@ -51,15 +51,17 @@ class ConsentRecovery(
         restored?.takeIf { it.granted }?.let(::schedule)
     }
 
-    /** Consent result for a restored intent; a result without one belongs to the live request. */
+    /** Consent result for a restored intent (an allowed one for an already granted intent changes nothing); a result without one belongs to the live request. */
     fun result(granted: Boolean) {
         if (granted) dialogOpen = false
-        val intent = restored?.takeIf { !it.granted } ?: return
+        val intent = restored ?: return
+        // A refusal counts even for an intent saved as granted: its dialog may have opened after the save.
         if (!granted) {
             restored = null
             refuse()
             return
         }
+        if (intent.granted) return
         restored = intent.copy(granted = true)
         schedule(intent)
     }
