@@ -1120,20 +1120,24 @@ internal class SessionController(
         }
     }
 
-    /** The connection the user asked for, while the system consent dialog is open. */
-    fun pendingConsent(): PendingConsent? {
-        val target = permissionTarget?.takeIf { consentAwaiting } ?: return consentRecovery.pending
-        return PendingConsent(
-            index = if (target.selection.mode == "PROFILE_INDEX") target.selection.index else null,
-            retry = target.retry,
-            sessionId = target.fence.sessionId,
-            digest = target.fence.digest,
-            generation = target.fence.generation,
-        )
-    }
+    /** The connection the user asked for, from the click until the start command is issued. */
+    fun pendingConsent(): PendingConsent? = permissionTarget?.let { pendingOf(it, granted = !consentAwaiting) }
+        ?: consentRecovery.pending
+
+    private fun pendingOf(target: PendingPermissionAction, granted: Boolean) = PendingConsent(
+        index = if (target.selection.mode == "PROFILE_INDEX") target.selection.index else null,
+        retry = target.retry,
+        sessionId = target.fence.sessionId,
+        digest = target.fence.digest,
+        generation = target.fence.generation,
+        granted = granted,
+    )
 
     /** Continues the connection saved by a previous Activity instance, or reports a refusal. */
-    fun consentReturned(granted: Boolean) = consentRecovery.result(granted)
+    fun consentReturned(granted: Boolean) {
+        if (granted) consentAwaiting = false
+        consentRecovery.result(granted)
+    }
 
     /**
      * The recovery state stays saved until the start command was issued (or the attempt ended),
@@ -1161,6 +1165,7 @@ internal class SessionController(
 
     private fun continuePermission(granted: Boolean) {
         val target = permissionTarget ?: return
+        if (granted) consentRecovery.hold(pendingOf(target, granted = true))
         permissionTarget = null
         if (!granted) { consentRecovery.handoffComplete(); selectionAdmission.invalidate(target); report("VPN permission was not granted"); return }
         val selected = target.session

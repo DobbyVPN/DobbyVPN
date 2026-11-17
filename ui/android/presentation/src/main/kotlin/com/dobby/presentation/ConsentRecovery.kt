@@ -57,6 +57,9 @@ class ConsentRecovery(
     /** The user cancelled the request (source change, stop): forget it, allowed or not yet answered. */
     fun cancel() { restored = null }
 
+    /** The live request got its consent and leaves the controller's target: keep it saved until the handoff. */
+    fun hold(intent: PendingConsent) { restored = intent.copy(granted = true) }
+
     fun handoffComplete() {
         if (restored?.granted == true) restored = null
     }
