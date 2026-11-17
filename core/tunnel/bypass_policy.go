@@ -19,6 +19,9 @@ type BypassPolicy struct {
 	entryCount int
 }
 
+// CIDRs returns the resolved bypass networks.
+func (p *BypassPolicy) CIDRs() []*net.IPNet { return p.cidrs }
+
 func (p *BypassPolicy) IsBypass(metadata *M.Metadata) bool {
 	if p == nil {
 		return false
