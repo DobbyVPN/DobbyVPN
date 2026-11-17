@@ -345,11 +345,11 @@ func outlinePassword(block map[string]interface{}) (string, error) {
 	if !ok {
 		return "", invalidField(fieldPassword, reasonString)
 	}
-	// The value is used as is; trimming is only for the emptiness check.
-	if strings.TrimSpace(text) == "" {
+	password := strings.TrimSpace(text)
+	if password == "" {
 		return "", invalidField(fieldPassword, reasonRequired)
 	}
-	return text, nil
+	return password, nil
 }
 
 func outlinePortField(block map[string]interface{}, websocket bool) (string, error) {
