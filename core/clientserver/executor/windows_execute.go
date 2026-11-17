@@ -129,7 +129,13 @@ func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeReq
 		return true, 1
 	}
 	stopControl, serveDone := serveDesktopControl(listener)
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown}
+	emit := newNetworkEvents()
+	if stopWatching, err := watchNetworkChanges(emit); err != nil {
+		log.Errorf(desktopLogCategory, "network change watcher unavailable: %v", err)
+	} else {
+		defer stopWatching()
+	}
+	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown | svc.AcceptPowerEvent}
 	var serveErr error
 running:
 	for {
@@ -142,6 +148,9 @@ running:
 			}
 			if request.Cmd == svc.Interrogate {
 				changes <- request.CurrentStatus
+			}
+			if request.Cmd == svc.PowerEvent {
+				powerEvent(request.EventType, emit)
 			}
 		}
 	}
