@@ -19,38 +19,11 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
-var ipv4Subnets = []string{
-	"0.0.0.0/1",
-	"128.0.0.0/1",
-}
-
-const windowsOnLinkNextHop = "0.0.0.0"
-
-var ipv4ReservedSubnets = []string{
-	"0.0.0.0/8",
-	"10.0.0.0/8",
-	"100.64.0.0/10",
-	"169.254.0.0/16",
-	"172.16.0.0/12",
-	"192.0.0.0/24",
-	"192.0.2.0/24",
-	"192.31.196.0/24",
-	"192.52.193.0/24",
-	"192.88.99.0/24",
-	"192.168.0.0/16",
-	"192.175.48.0/24",
-	"198.18.0.0/15",
-	"198.51.100.0/24",
-	"203.0.113.0/24",
-	"240.0.0.0/4",
-}
-
 var (
 	windowsRouteRead      = readWindowsRoute
 	windowsRouteCreate    = (*winipcfg.MibIPforwardRow2).Create
 	windowsRouteDelete    = (*winipcfg.MibIPforwardRow2).Delete
 	windowsRouteIdentity  = resolveWindowsRoute
-	windowsFirewallAdd    = addWindowsIPv6Rule
 	windowsFirewallRemove = removeWindowsIPv6Rules
 
 	interfaceChangeCallback = windows.NewCallback(onInterfaceChange)
@@ -388,39 +361,4 @@ func selectExactInterface(name string, interfaces []net.Interface) (*net.Interfa
 		}
 	}
 	return nil, fmt.Errorf("interface named %q is not present", name)
-}
-
-func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("error getting network interfaces: %v", err)
-	}
-
-	for _, interf := range interfaces {
-		addrs, err := interf.Addrs()
-		if err != nil {
-			return nil, fmt.Errorf("error getting addresses for interface %v: %v", interf.Name, err)
-		}
-
-		for _, addr := range addrs {
-			ip, _, parseErr := net.ParseCIDR(addr.String())
-			if parseErr == nil && ip.Equal(net.ParseIP(currentIP)) {
-				return &interf, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no interface found with IP: %v", currentIP)
-}
-
-func WaitForInterfaceByIP(ip string, timeout time.Duration) (*net.Interface, error) {
-	startedAt := time.Now()
-	iface, err := waitForInterfaceChange(timeout, "interface with IP "+ip, func() (*net.Interface, error) {
-		return GetNetworkInterfaceByIP(ip)
-	})
-	if err != nil {
-		return nil, err
-	}
-	log.Debugf(Category, "Outline/routing: WaitForInterfaceByIP OK ip=%s iface=%s elapsed=%s", ip, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
-	return iface, nil
 }
