@@ -20,12 +20,13 @@ import (
 type tunDevice struct {
 	*water.Interface
 	link netlink.Link
+	mtu  int
 }
 
 var _ network.IPDevice = (*tunDevice)(nil)
 
-func newTunDevice(name, ip string) (d network.IPDevice, err error) {
-	log.Debugf(Category, "[TUN][Init] Creating TUN device name=%s ip=%s", name, ip)
+func newTunDevice(name, ip string, mtu int) (d network.IPDevice, err error) {
+	log.Debugf(Category, "[TUN][Init] Creating TUN device name=%s ip=%s mtu=%d", name, ip, mtu)
 
 	if name == "" {
 		err = errors.New("name is required for TUN/TAP device")
@@ -34,6 +35,11 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	}
 	if ip == "" {
 		err = errors.New("ip is required for TUN/TAP device")
+		log.Errorf(Category, "[TUN][Init] %v", err)
+		return nil, err
+	}
+	if mtu <= 0 {
+		err = fmt.Errorf("positive MTU is required for TUN/TAP device, got %d", mtu)
 		log.Errorf(Category, "[TUN][Init] %v", err)
 		return nil, err
 	}
@@ -53,7 +59,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	}
 	log.Debugf(Category, "[TUN][Create][OK] Interface created: %s", tun.Name())
 
-	tunDev := &tunDevice{Interface: tun}
+	tunDev := &tunDevice{Interface: tun, mtu: mtu}
 	d = tunDev // Transfer partial acquisition to the one App cleanup owner.
 
 	log.Debugf(Category, "[TUN][Netlink] Resolving link by name: %s", name)
@@ -69,6 +75,13 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 	)
 
 	tunDev.link = tunLink
+
+	log.Debugf(Category, "[TUN][Config] Setting MTU %d...", mtu)
+	if err = netlink.LinkSetMTU(tunLink, mtu); err != nil {
+		err = fmt.Errorf("failed to set TUN/TAP device MTU %d: %w", mtu, err)
+		log.Errorf(Category, "[TUN][Config] %v", err)
+		return d, err
+	}
 
 	log.Debugf(Category, "[TUN][Config] Configuring IP/subnet...")
 	if err = tunDev.configureSubnet(ip); err != nil {
@@ -100,7 +113,7 @@ func newTunDevice(name, ip string) (d network.IPDevice, err error) {
 }
 
 func (d *tunDevice) MTU() int {
-	return 1500
+	return d.mtu
 }
 
 func (d *tunDevice) configureSubnet(ip string) error {

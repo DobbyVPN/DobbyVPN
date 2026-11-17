@@ -212,6 +212,12 @@ func (g *LinuxOutputGuard) UpdateBootstrap(ctx context.Context, identity string,
 				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{255}})
 			g.markTraffic(matches)
 		}
+		// ICMPv6 type 143 (MLDv2 report) keeps multicast membership, and so MLD-snooping
+		// switches, working. Reports are sent with hop limit 1.
+		mld := matchProtocol(unix.IPPROTO_ICMPV6)
+		mld = append(mld, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{143}},
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}})
+		g.markTraffic(mld)
 		return g.conn.Flush()
 	})
 	if err == nil {

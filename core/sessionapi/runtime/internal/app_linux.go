@@ -82,7 +82,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return fail(captureErr)
 	}
 	app.DNSCache.SetResolverSource(capture)
-	tun, err = newTunDevice(config.TunDeviceName, config.TunDeviceIP)
+	tun, err = newTunDevice(config.TunDeviceName, config.TunDeviceIP, config.TunDeviceMTU)
 	if err != nil {
 		return fail(err)
 	}
