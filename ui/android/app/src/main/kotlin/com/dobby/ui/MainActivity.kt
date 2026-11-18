@@ -42,6 +42,7 @@ import com.dobby.presentation.SelectionAdmission
 import com.dobby.presentation.SubscriptionRequest
 import com.dobby.presentation.UiOperationDiagnostics
 import com.dobby.presentation.forgetClearedDismissals
+import com.dobby.presentation.sessionFailureVisible
 import com.dobby.presentation.shownError
 import com.dobby.vpn.BuildConfig
 import com.dobby.vpn.R
@@ -710,10 +711,17 @@ internal class SessionController(
     ))
         private set
 
-    val errors: List<String> get() =
-        listOf(state.loadError, state.error, state.session.failure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
+    private fun errorsWith(sessionFailure: String) =
+        listOf(state.loadError, state.error, sessionFailure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
 
-    /** Messages the user closed; they stay hidden until they clear from the current errors. */
+    val rawErrors: List<String> get() = errorsWith(state.session.failure)
+
+    /** The session failure is hidden while a new attempt starts, including one restored after Activity recreation. */
+    val errors: List<String> get() = errorsWith(
+        state.session.failure.takeIf { sessionFailureVisible(state.session.state, state.busy || permissionTarget != null || consentRecovery.pending != null) }.orEmpty(),
+    )
+
+    /** Messages the user closed; they stay hidden until they clear from the snapshot or the user makes a new attempt. */
     var dismissedErrors by mutableStateOf(restoredDismissedErrors)
         private set
 
@@ -1004,7 +1012,7 @@ internal class SessionController(
     fun dismissError(message: String) { dismissedErrors = dismissedErrors + message }
 
     fun forgetClearedErrors() {
-        if (latest.sessionId.isNotEmpty()) dismissedErrors = forgetClearedDismissals(dismissedErrors, errors)
+        if (latest.sessionId.isNotEmpty()) dismissedErrors = forgetClearedDismissals(dismissedErrors, rawErrors)
     }
 
     fun copyToClipboard(text: String) {
@@ -1035,6 +1043,7 @@ internal class SessionController(
         }
         if (!allowed) return
         if (isStopTarget(index)) { stop(); return }
+        dismissedErrors = emptySet()
         val current = latest
         state = state.copy(busy = true, error = "")
         permissionTarget = PendingPermissionAction(
@@ -1060,6 +1069,7 @@ internal class SessionController(
             worker.execute { refreshSnapshot(clearBusy = true) }
             return
         }
+        dismissedErrors = emptySet()
         state = state.copy(busy = true, error = "")
         permissionTarget = PendingPermissionAction(
             session = current,
