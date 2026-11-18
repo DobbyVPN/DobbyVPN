@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+# dpkg runs "preinst upgrade <old-version> <new-version>" (and "install <old>
+# <new>" over a package that was removed but not purged). Installing an older
+# version over a newer one is allowed, but it is probably a mistake: say so.
+case "${1:-}" in
+    upgrade|install) ;;
+    *) exit 0 ;;
+esac
+
+old=${2:-}
+new=${3:-}
+if [ -n "$old" ] && [ -n "$new" ] && dpkg --compare-versions "$old" gt "$new"; then
+    echo "Warning: DobbyVPN $old is installed and this package is the older $new. Installing it replaces the newer version." >&2
+fi

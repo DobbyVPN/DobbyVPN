@@ -147,7 +147,7 @@ def write_linux_control(debian: Path, version: str) -> None:
         required(LINUX_INSTALLER / "control").read_text(encoding="utf-8").replace("@VERSION@", version),
         encoding="utf-8",
     )
-    for name in ("postinst", "prerm", "postrm"):
+    for name in ("preinst", "postinst", "prerm", "postrm"):
         copy_file(LINUX_INSTALLER / name, debian / name, executable=True)
 
 
