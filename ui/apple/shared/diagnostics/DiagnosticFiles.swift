@@ -22,6 +22,10 @@ public enum DiagnosticFiles {
         processLock.lock()
         defer { processLock.unlock() }
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // A failed migration must not stop the record from being written; it is reported after the write.
+        // Exception: once a commit marker exists, finishing the migration replaces the log with the staged
+        // copy, so a record written now could be lost; keep failing before the write in that case.
+        var migrationError: Error?
         try withLock(path, writing: true) {
 #if os(macOS)
             if rotating && !initialized.contains(path.path) {
@@ -29,8 +33,14 @@ public enum DiagnosticFiles {
                 let configured = ProcessInfo.processInfo.environment["DOBBY_UI_LOG_PATH"].flatMap { $0.isEmpty ? nil : $0 }
                     ?? home.appendingPathComponent("Library/Logs/DobbyVPN/ui_diagnostics.jsonl").path
                 let ownsLegacy = legacyDesktop && (legacyHome != nil || path.standardizedFileURL.path == URL(fileURLWithPath: configured).standardizedFileURL.path)
-                try migrateDesktopLegacy(path, includeLegacy: ownsLegacy, excluding: legacyExcludedPaths, homeDirectory: home)
-                initialized.insert(path.path)
+                do {
+                    try migrateDesktopLegacy(path, includeLegacy: ownsLegacy, excluding: legacyExcludedPaths, homeDirectory: home)
+                    initialized.insert(path.path)
+                } catch {
+                    var marker = stat()
+                    if lstat(path.path + ".legacy-commit", &marker) == 0 || errno != ENOENT { throw error }
+                    migrationError = error
+                }
             }
 #endif
             sequence += 1
@@ -56,6 +66,7 @@ public enum DiagnosticFiles {
             }
             try withFile(try open(path, flags: O_WRONLY | O_CREAT | O_APPEND)) { try $0.write(contentsOf: data) }
         }
+        if let migrationError { throw migrationError }
     }
 
     private static func previous(_ path: URL) -> URL { URL(fileURLWithPath: path.path + ".previous") }
