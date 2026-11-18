@@ -18,6 +18,7 @@ import (
 	"core/log"
 	"core/routing"
 
+	"github.com/miekg/dns"
 	"golang.org/x/sys/windows"
 )
 
@@ -30,19 +31,36 @@ type windowsResolver struct {
 }
 
 func (c *Cache) UseInterface(index int) error {
-	if _, _, _, err := CaptureWindowsInterface(context.Background(), index); err != nil {
+	capture := func(ctx context.Context) (string, Resolver, error) {
+		ipv4, ipv6, err := routing.WindowsPhysicalInterfaces()
+		if err != nil {
+			return "", nil, err
+		}
+		identity, _, resolver, err := CaptureWindowsInterface(ctx, index, ipv4 != 0, ipv6 != 0)
+		return identity, resolver, err
+	}
+	if _, _, err := capture(context.Background()); err != nil {
 		return err
 	}
-	c.SetResolverSource(func(ctx context.Context) (string, Resolver, error) {
-		identity, _, resolver, err := CaptureWindowsInterface(ctx, index)
-		return identity, resolver, err
-	})
+	c.SetResolverSource(capture)
 	return nil
 }
 
 // CaptureWindowsInterface freezes an interface's native resolver configuration.
 // Each answer is fenced against changes to both its addresses and DNS servers.
-func CaptureWindowsInterface(ctx context.Context, index int) (string, []netip.Addr, Resolver, error) {
+// Endpoint record families come from the caller's physical route inventory:
+// an IPv4 DNS server can still answer AAAA, independently of its transport.
+func CaptureWindowsInterface(ctx context.Context, index int, ipv4Available, ipv6Available bool) (string, []netip.Addr, Resolver, error) {
+	var queryTypes []uint16
+	if ipv4Available {
+		queryTypes = append(queryTypes, dns.TypeA)
+	}
+	if ipv6Available {
+		queryTypes = append(queryTypes, dns.TypeAAAA)
+	}
+	if len(queryTypes) == 0 {
+		return "", nil, nil, errors.New("physical Windows network has no endpoint address family")
+	}
 	if err := ctx.Err(); err != nil {
 		return "", nil, nil, err
 	}
@@ -69,7 +87,7 @@ func CaptureWindowsInterface(ctx context.Context, index int) (string, []netip.Ad
 		if before.identity != resolver.identity {
 			return nil, errors.New("underlying DNS configuration changed before lookup")
 		}
-		addresses, err := resolver.lookup(ctx, host)
+		addresses, err := resolver.lookupRecordTypes(ctx, host, queryTypes)
 		after, inspectErr := captureWindowsResolver(resolver.index)
 		if inspectErr != nil {
 			return nil, errors.Join(err, inspectErr)
@@ -79,7 +97,7 @@ func CaptureWindowsInterface(ctx context.Context, index int) (string, []netip.Ad
 		}
 		return addresses, err
 	}
-	return resolver.identity, servers, lookup, nil
+	return fmt.Sprintf("%s:record_types=%v", resolver.identity, queryTypes), servers, lookup, nil
 }
 
 func captureWindowsResolver(index uint32) (*windowsResolver, error) {
@@ -131,7 +149,7 @@ func captureWindowsResolver(index uint32) (*windowsResolver, error) {
 // The shared DNS Client service sends DnsQueryEx traffic under its own identity.
 // Query from backend-owned sockets so the retained guard can authorize only this
 // resolver's captured servers, without permitting other applications' DNS.
-func (r *windowsResolver) lookup(ctx context.Context, host string) ([]net.IPAddr, error) {
+func (r *windowsResolver) lookupRecordTypes(ctx context.Context, host string, queryTypes []uint16) ([]net.IPAddr, error) {
 	servers := make([]string, 0, len(r.servers))
 	for _, server := range r.servers {
 		servers = append(servers, net.JoinHostPort(server.String(), "53"))
@@ -173,7 +191,7 @@ func (r *windowsResolver) lookup(ctx context.Context, host string) ([]net.IPAddr
 		}
 		return bindErr
 	}}
-	addresses, err := resolveCapturedDNSServers(ctx, host, servers, dialer, fmt.Sprintf("windows:%d", r.index))
+	addresses, err := resolveCapturedDNSServers(ctx, host, servers, dialer, fmt.Sprintf("windows:%d", r.index), queryTypes)
 	routeErr := routes.verify(func(address string, preferred uint64) (string, error) {
 		destination, parseErr := routing.UnderlayDestination(address)
 		if parseErr != nil {

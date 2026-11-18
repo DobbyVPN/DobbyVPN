@@ -106,6 +106,8 @@ public sealed partial class MainWindow : Window
         RestoreLogUpload();
         SizeWindow();
         Column.SizeChanged += (_, _) => UpdateTrayHeight();
+        Controls.SizeChanged += (_, _) => UpdateTrayHeight();
+        UploadStatusPanel.SizeChanged += (_, _) => UpdateTrayHeight();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
         Root.Loaded += (_, _) =>
         {
@@ -291,14 +293,21 @@ public sealed partial class MainWindow : Window
         AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + (area.Height - AppWindow.Size.Height) / 2));
     }
 
-    // Four connections when there is room; on short windows the logs keep a quarter of the height.
+    // Four connections when there is room. Reserve the log viewport itself,
+    // separately from an upload reference and the measured, text-scaled controls.
     private void UpdateTrayHeight()
     {
         if (_lifetime.IsClosing) return;
         var height = Column.ActualHeight;
         if (height <= 0) return;
         var fourRows = 4 * Math.Max(_rowHeight, 42) + 5 * 6;
-        ConnectionsTray.Height = Math.Min(Math.Max(height - 135 - height / 4, 54), fourRows);
+        var controlsHeight = Math.Max(0, Controls.ActualHeight - ConnectionsTray.ActualHeight);
+        var uploadHeight = UploadStatusPanel.Visibility == Visibility.Visible ? UploadStatusPanel.ActualHeight : 0;
+        var logHeight = Math.Max(120, height / 4);
+        var available = height - controlsHeight - uploadHeight - 1.5 - logHeight;
+        var trayHeight = Math.Min(Math.Max(available, 54), fourRows);
+        if (Math.Abs(ConnectionsTray.Height - trayHeight) > 0.5 || double.IsNaN(ConnectionsTray.Height))
+            ConnectionsTray.Height = trayHeight;
     }
 
     private void RecordAppStarted()
@@ -1341,6 +1350,28 @@ public sealed partial class MainWindow : Window
                 _diagnostics.Record(error.ToString(), "logs.pointer-entry.failure");
             }
         }), true);
+        // Observe context input and popup lifetime without changing the native
+        // ContextFlyout routing. This distinguishes input that never opens a
+        // menu from a menu that opens and closes during a later log update.
+        LogsScroll.AddHandler(UIElement.RightTappedEvent, new RightTappedEventHandler((_, args) =>
+        {
+            try
+            {
+                var position = args.GetPosition(LogsScroll);
+                RecordLogMenuObservation("right-tap", new
+                {
+                    source_type = args.OriginalSource?.GetType().FullName,
+                    handled = args.Handled,
+                    x = position.X,
+                    y = position.Y,
+                });
+            }
+            catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.menu-observation.failure"); }
+        }), true);
+        LogsMenu.Opening += (_, _) => RecordLogMenuObservation("opening");
+        LogsMenu.Opened += (_, _) => RecordLogMenuObservation("opened");
+        LogsMenu.Closing += (_, _) => RecordLogMenuObservation("closing");
+        LogsMenu.Closed += (_, _) => RecordLogMenuObservation("closed");
         LogsScroll.AddHandler(UIElement.DoubleTappedEvent, new DoubleTappedEventHandler((_, args) =>
         {
             var scrollbarSource = FindLogVerticalScrollBar(args.OriginalSource) is not null;
@@ -1763,6 +1794,25 @@ public sealed partial class MainWindow : Window
             if (_logPresentation.FollowsTail) RenderLogs();
         }
         catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _logsError = error.Message; RenderError(); }
+    }
+
+    private void RecordLogMenuObservation(string stage, object? gesture = null)
+    {
+        try
+        {
+            var target = LogsMenu.Target;
+            _diagnostics.RecordDebug("logs.menu-" + stage, "Observed log context menu", new
+            {
+                gesture,
+                target_type = target?.GetType().FullName,
+                target_id = target is null ? null : AutomationProperties.GetAutomationId(target),
+                target_is_viewport = ReferenceEquals(target, LogsScroll),
+                is_open = LogsMenu.IsOpen,
+                rendered_rows = _renderedLogRows.Count,
+                state = CaptureLogScrollDiagnosticState(),
+            });
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.menu-observation.failure"); }
     }
 
     private static List<NativeDiagnostics.Entry> Shown(IEnumerable<NativeDiagnostics.Entry> entries) =>

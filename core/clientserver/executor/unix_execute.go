@@ -145,6 +145,10 @@ func run() {
 	// A failed recovery must not stop the service: the control socket opens,
 	// clients see the error, and every Connect retries the recovery.
 	startupFailure = recoverInterruptedState()
+	controlPath, pathErr := controlplane.ControlSocketPath()
+	if pathErr != nil {
+		panic(fmt.Sprintf("failed to listen for desktop control: %v", pathErr))
+	}
 	listener, err := controlplane.ListenControlSocket()
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
@@ -153,7 +157,7 @@ func run() {
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, controlplane.AuthenticateLocalPeer)
 	}()
-	log.Debugf(desktopLogCategory, "desktop JSON control socket ready")
+	log.Debugf(desktopLogCategory, "desktop JSON control socket ready at %s", controlPath)
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	var serveErr error
