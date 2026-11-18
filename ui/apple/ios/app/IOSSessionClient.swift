@@ -1,7 +1,7 @@
 import Foundation
 import IOSIntegration
 
-final class IOSSessionClient: DobbyOnDemandClient, @unchecked Sendable {
+final class IOSSessionClient: DobbySessionClient, @unchecked Sendable {
     private let shell = IOSAppCompositionRoot.sessionShell
 
     var diagnosticPaths: [URL] { IOSAppCompositionRoot.diagnosticPaths() }
@@ -15,13 +15,5 @@ final class IOSSessionClient: DobbyOnDemandClient, @unchecked Sendable {
 
     func call(_ method: String, parameters: [String: Any]) -> String {
         shell.call(method: method, parameters: parameters)
-    }
-
-    func onDemandEnabled() async throws -> Bool {
-        try await IOSAppCompositionRoot.vpnManager.onDemandEnabled()
-    }
-
-    func setOnDemandEnabled(_ enabled: Bool) async throws {
-        try await IOSAppCompositionRoot.vpnManager.setOnDemandEnabled(enabled)
     }
 }

@@ -215,5 +215,3 @@ func withSnapshotLock(path string, operation func() error) (resultErr error) {
 	defer func() { resultErr = errors.Join(resultErr, unlockFile(lock)) }()
 	return operation()
 }
-
-func (w *Writer) Path() string { return w.path }
