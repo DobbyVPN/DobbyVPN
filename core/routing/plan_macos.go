@@ -13,9 +13,9 @@ import (
 
 var ipv4DefaultSubnets = []string{"0.0.0.0/1", "128.0.0.0/1"}
 
-// ErrForeignDefaultRoutes reports that another VPN already owns one of the
-// default-route halves this session needs. The text is shown to the user.
-var ErrForeignDefaultRoutes = errors.New("another VPN is already managing network routes; disconnect it and connect again")
+// ErrForeignDefaultRoutes reports a route using a default-route half this
+// session needs. The route may come from a VPN or another configuration.
+var ErrForeignDefaultRoutes = errors.New("network routes needed by DobbyVPN are already in use; disconnect any other VPN or adjust the conflicting network settings, then try again")
 
 func isDefaultSplitPrefix(prefix netip.Prefix) bool {
 	for _, subnet := range append(append([]string{}, ipv4DefaultSubnets...), ipv6DefaultSubnets...) {
