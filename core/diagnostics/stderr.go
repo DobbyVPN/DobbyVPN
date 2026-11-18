@@ -222,16 +222,15 @@ func (capture *rawCapture) monitor() {
 func (capture *rawCapture) watch(ticks <-chan time.Time) {
 	failures := 0
 	var retryAt time.Time
-	for at := range ticks {
-		// The back-off runs from the end of the failed attempt, not from its
-		// tick: a slow attempt must not shorten it. The slack absorbs ticker
-		// jitter.
-		if at.Add(rotationTickSlack).Before(retryAt) {
+	for range ticks {
+		// The back-off runs from the actual end of the failed attempt, not
+		// from its tick: a late or slow attempt must not shorten it. The slack
+		// absorbs ticker jitter.
+		if capture.clock().Add(rotationTickSlack).Before(retryAt) {
 			continue
 		}
-		started := capture.clock()
 		err := capture.rotate()
-		took := capture.clock().Sub(started)
+		failedAt := capture.clock()
 		if err == nil {
 			if failures > 0 {
 				_, _ = fmt.Fprintf(Stderr, "stderr rotation recovered after %d failed attempts\n", failures)
@@ -249,7 +248,7 @@ func (capture *rawCapture) watch(ticks <-chan time.Time) {
 			// Direct stderr only: never recurse through the structured sink.
 			_, _ = fmt.Fprintf(Stderr, "stderr rotation failed (attempt %d), will retry: %v\n", failures, err)
 		}
-		retryAt = at.Add(took + time.Duration(rotationRetryDelayTicks(failures))*time.Second)
+		retryAt = failedAt.Add(time.Duration(rotationRetryDelayTicks(failures)) * time.Second)
 	}
 }
 
