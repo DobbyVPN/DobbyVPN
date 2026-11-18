@@ -410,7 +410,7 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing)
         {
             _snapshot = null;
-            if (_errors.FailSnapshot("VPN service is unavailable. See logs for details."))
+            if (_errors.FailSnapshot(error is ProtocolMismatchException ? RestartMessage : "VPN service is unavailable. See logs for details."))
                 RecordError(error.ToString());
             Render();
         }
@@ -420,20 +420,29 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private const int ExpectedProtocolVersion = 1;
+    private const string RestartMessage = "The app and the VPN service are different versions. Restart the app.";
+
+    private sealed class ProtocolMismatchException : Exception { }
+
     private async Task<Snapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
     {
         var sessionId = _snapshot?.SessionId ?? "";
+        Snapshot snapshot;
         try
         {
-            return await CallAsync<Snapshot>("Snapshot", new { session_id = sessionId }, cancellationToken);
+            snapshot = await CallAsync<Snapshot>("Snapshot", new { session_id = sessionId }, cancellationToken);
         }
         catch (BackendCommandException error) when (error.Code == "NOT_FOUND" && !string.IsNullOrEmpty(sessionId))
         {
             // The Go backend owns session state. A replacement backend has a
             // new session ID, so reattach through its owner-independent
             // Snapshot entry point and let it restore the saved configuration URL.
-            return await CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
+            snapshot = await CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
         }
+        // A service that predates the field has no value, which is also a mismatch.
+        if (snapshot.ProtocolVersion != ExpectedProtocolVersion) throw new ProtocolMismatchException();
+        return snapshot;
     }
 
     private bool IsStopTarget(int? index)
@@ -2280,6 +2289,8 @@ public sealed partial class MainWindow : Window
 
     private sealed class Snapshot
     {
+        [JsonPropertyName("protocol_version")] public int ProtocolVersion { get; init; }
+        [JsonPropertyName("service_version")] public string ServiceVersion { get; init; } = "";
         [JsonPropertyName("session_id")] public string SessionId { get; init; } = "";
         [JsonPropertyName("sequence")] public long Sequence { get; init; }
         [JsonPropertyName("generation")] public long Generation { get; init; }
