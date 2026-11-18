@@ -46,6 +46,10 @@ public sealed partial class MainWindow : Window
     private string _status = "";
     private readonly WindowErrorState _errors = new();
     private string _importError = "";
+    // An import link waits here until the user confirms that it may replace the saved subscription.
+    private string? _pendingImport;
+    private ContentDialog? _importDialog;
+    private bool _importWaitsForLoad;
     private string _logsError = "";
     private string _exportError = "";
     private string _clearLogsError = "";
@@ -1085,12 +1089,73 @@ public sealed partial class MainWindow : Window
             var query = uri.Query.TrimStart('?').Split('&');
             var pair = query[0].Split('=', 2);
             if (query.Length != 1 || pair.Length != 2 || pair[0] != "url") throw new FormatException("The import link requires one url parameter");
-            ImportSubscription(Uri.UnescapeDataString(pair[1]), SubscriptionInputKind.Import);
+            var source = Uri.UnescapeDataString(pair[1]);
+            if (!ValidSubscription(source)) throw new FormatException("The import link requires an HTTPS subscription URL with a host");
+            _pendingImport = source;
+            ShowImportDialog();
         }
         catch (Exception error)
         {
             SetError(error.ToString(), "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL");
             _importError = _errors.Operation;
+            Render();
+        }
+    }
+
+    private static TextBlock ImportPrompt(string source) => new()
+    {
+        Text = $"{new Uri(source).Host}\n\n{source}\n\nThe saved subscription and the log upload address will be replaced.",
+        TextWrapping = TextWrapping.Wrap,
+        IsTextSelectionEnabled = true,
+    };
+
+    private async void ShowImportDialog()
+    {
+        if (_pendingImport is null || _lifetime.IsClosing) return;
+        if (_importDialog is not null)
+        {
+            _importDialog.Content = ImportPrompt(_pendingImport);
+            return;
+        }
+        if (Root.XamlRoot is null)
+        {
+            if (_importWaitsForLoad) return;
+            _importWaitsForLoad = true;
+            void OnRootLoaded(object sender, RoutedEventArgs args)
+            {
+                Root.Loaded -= OnRootLoaded;
+                _importWaitsForLoad = false;
+                ShowImportDialog();
+            }
+            Root.Loaded += OnRootLoaded;
+            return;
+        }
+        try
+        {
+            _importDialog = new ContentDialog
+            {
+                XamlRoot = Root.XamlRoot,
+                Style = (Style)Application.Current.Resources["DefaultContentDialogStyle"],
+                Title = "Replace subscription?",
+                Content = ImportPrompt(_pendingImport),
+                PrimaryButtonText = "Replace",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            AutomationProperties.SetAutomationId(_importDialog, "import.confirm");
+            var result = await _importDialog.ShowAsync();
+            _importDialog = null;
+            var source = _pendingImport;
+            _pendingImport = null;
+            if (result == ContentDialogResult.Primary && source is not null && !_lifetime.IsClosing)
+                ImportSubscription(source, SubscriptionInputKind.Import);
+        }
+        catch (Exception error)
+        {
+            _importDialog = null;
+            _pendingImport = null;
+            if (_lifetime.IsClosing) return;
+            SetError(error.ToString(), error.Message);
             Render();
         }
     }

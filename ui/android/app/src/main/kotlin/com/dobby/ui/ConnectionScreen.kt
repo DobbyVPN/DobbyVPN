@@ -141,7 +141,21 @@ internal fun DobbyApp(controller: SessionController) {
             }
         }
         ErrorDialog(controller)
+        ImportDialog(controller)
     }
+}
+
+@Composable
+private fun ImportDialog(controller: SessionController) {
+    val source = controller.state.pendingImport ?: return
+    val host = runCatching { java.net.URI(source).host }.getOrNull().orEmpty()
+    AlertDialog(
+        onDismissRequest = { controller.cancelImport() },
+        title = { Text("Replace subscription?") },
+        text = { Text("$host\n\n$source\n\nThe saved subscription and the log upload address will be replaced.") },
+        confirmButton = { TextButton(onClick = { controller.confirmImport() }) { Text("Replace") } },
+        dismissButton = { TextButton(onClick = { controller.cancelImport() }) { Text("Cancel") } },
+    )
 }
 
 @Composable
