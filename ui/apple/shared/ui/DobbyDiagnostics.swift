@@ -92,6 +92,12 @@ enum DobbyLatestUploadFile {
 
     static func url(forLog uiLog: URL) -> URL { URL(fileURLWithPath: uiLog.path + ".upload") }
 
+    /// True if something is at the path, even if it is unreadable or damaged.
+    static func exists(forLog uiLog: URL) -> Bool {
+        var info = stat()
+        return lstat(url(forLog: uiLog).path, &info) == 0
+    }
+
     static func read(forLog uiLog: URL) -> DobbyUploadReference? {
         guard let data = try? Data(contentsOf: url(forLog: uiLog)),
               let record = try? JSONDecoder().decode(Record.self, from: data), !record.reference.isEmpty,

@@ -125,8 +125,12 @@ public final class DobbySessionViewModel: ObservableObject {
 #if os(macOS)
         // Same file as dobby-cli, so an upload made in either place is visible in both.
         latestUpload = DobbyLatestUploadFile.read(forLog: client.uiDiagnosticPath)
+        // The old UserDefaults value is used only when there is no file; a damaged file must not bring it back.
+        let useDefaults = latestUpload == nil && !DobbyLatestUploadFile.exists(forLog: client.uiDiagnosticPath)
+#else
+        let useDefaults = true
 #endif
-        if latestUpload == nil, let data = UserDefaults.standard.data(forKey: uploadReferenceKey) {
+        if useDefaults, let data = UserDefaults.standard.data(forKey: uploadReferenceKey) {
             latestUpload = try? JSONDecoder().decode(DobbyUploadReference.self, from: data)
         }
         if !Self.cleanedUploadDirectories {
