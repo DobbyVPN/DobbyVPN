@@ -714,6 +714,8 @@ internal class SessionController(
     private fun errorsWith(sessionFailure: String) =
         listOf(state.loadError, state.error, sessionFailure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
 
+    val rawErrors: List<String> get() = errorsWith(state.session.failure)
+
     /** The session failure is hidden while a new attempt starts, including one restored after Activity recreation. */
     val errors: List<String> get() = errorsWith(
         state.session.failure.takeIf { sessionFailureVisible(state.session.state, state.busy || permissionTarget != null || consentRecovery.pending != null) }.orEmpty(),
@@ -1010,7 +1012,7 @@ internal class SessionController(
     fun dismissError(message: String) { dismissedErrors = dismissedErrors + message }
 
     fun forgetClearedErrors() {
-        if (latest.sessionId.isNotEmpty()) dismissedErrors = forgetClearedDismissals(dismissedErrors, errorsWith(state.session.failure))
+        if (latest.sessionId.isNotEmpty()) dismissedErrors = forgetClearedDismissals(dismissedErrors, rawErrors)
     }
 
     fun copyToClipboard(text: String) {
