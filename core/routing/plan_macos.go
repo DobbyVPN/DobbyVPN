@@ -13,6 +13,19 @@ import (
 
 var ipv4DefaultSubnets = []string{"0.0.0.0/1", "128.0.0.0/1"}
 
+// ErrForeignDefaultRoutes reports that another VPN already owns one of the
+// default-route halves this session needs. The text is shown to the user.
+var ErrForeignDefaultRoutes = errors.New("another VPN is already managing network routes; disconnect it and connect again")
+
+func isDefaultSplitPrefix(prefix netip.Prefix) bool {
+	for _, subnet := range append(append([]string{}, ipv4DefaultSubnets...), ipv6DefaultSubnets...) {
+		if prefix == netip.MustParsePrefix(subnet) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Plan) AcquireMacOSIPv4Default(ctx context.Context, tunName string) error {
 	return p.acquireMacOSInterfaceRoutes(ctx, ipv4DefaultSubnets, tunName)
 }
@@ -52,6 +65,9 @@ func findMacOSRoute(want macOSRoute) (*macOSRoute, error) {
 			continue
 		}
 		if !want.same(row) {
+			if isDefaultSplitPrefix(want.prefix) {
+				return nil, fmt.Errorf("%w (route %s gateway=%s interface=%d flags=%#x)", ErrForeignDefaultRoutes, row.prefix, row.gateway, row.index, row.flags)
+			}
 			return nil, fmt.Errorf("conflicting route %s gateway=%s interface=%d flags=%#x", row.prefix, row.gateway, row.index, row.flags)
 		}
 		copy := row

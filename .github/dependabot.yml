@@ -12,6 +12,12 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
 
+  - package-ecosystem: nuget
+    directory: /ui/windows/DobbyVPN.Windows
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
