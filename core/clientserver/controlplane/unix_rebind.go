@@ -27,7 +27,7 @@ type rebindListener struct {
 }
 
 func newRebindListener(path string) (*rebindListener, error) {
-	inner, err := listenControlSocket(path)
+	inner, err := listenControlSocket(path, true)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func (l *rebindListener) rebindIfRemoved() {
 	if _, err := os.Lstat(l.path); !errors.Is(err, os.ErrNotExist) {
 		return
 	}
-	fresh, err := listenControlSocket(l.path)
+	fresh, err := listenControlSocket(l.path, false)
 	if err != nil {
 		log.Debugf("controlplane", "control socket path %s was removed; recreation failed: %v", l.path, err)
 		return
