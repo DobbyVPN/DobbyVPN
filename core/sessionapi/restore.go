@@ -101,6 +101,12 @@ func (m *Manager) stopActivationLocked(ctx context.Context) error {
 // Manual selections require the exact inventory, so a changed subscription
 // can never silently connect a different profile at the same numeric index.
 func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (StartResult, error) {
+	return m.restoreAttempt(ctx, onlyPreviouslyEnabled, nil)
+}
+
+// restoreAttempt is one restore. A non-nil fixedEpoch pins the user-intent
+// epoch of a first attempt, so a retry never overrides a later user action.
+func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool, fixedEpoch *uint64) (StartResult, error) {
 	s := m.session
 	s.mu.Lock()
 	if s.vpnActive && !s.stopRequested && !s.closing {
@@ -114,6 +120,9 @@ func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (Star
 	}
 	store, ok := m.sourceStore.(ActivationStore)
 	sessionID, sequence, epoch := s.id, s.sequence, s.restoreEpoch
+	if fixedEpoch != nil {
+		epoch = *fixedEpoch
+	}
 	s.mu.Unlock()
 	if !ok {
 		return StartResult{}, failure(FailureNotConfigured, "automatic startup storage is unavailable")
@@ -131,7 +140,8 @@ func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (Star
 	}
 	configured, err := m.configure(ctx, sessionID, sequence, []byte(saved.Source), &epoch)
 	if err != nil {
-		return StartResult{}, err
+		// Marks a failure before any connection attempt exists, the only kind a startup retry may repeat.
+		return StartResult{}, fmt.Errorf("%w: %w", errRestoreLoad, err)
 	}
 	if saved.Mode == ProfileIndex && configured.Digest != saved.Digest {
 		return StartResult{}, failure(FailureConflict, "saved profile inventory changed; select the profile again")
