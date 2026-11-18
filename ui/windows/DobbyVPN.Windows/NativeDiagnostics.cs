@@ -400,7 +400,8 @@ internal static class NativeLogFiles
         });
     }
 
-    private static void Rotate(string path) { File.Delete(path + ".previous"); File.Move(path, path + ".previous"); }
+    // Replace atomically: deleting .previous first would lose it if the move fails (as in Go).
+    private static void Rotate(string path) => File.Move(path, path + ".previous", true);
 
     private sealed record LegacySource(string Path, string Label);
     private sealed record LegacyCommit(LegacySource[]? Sources, bool Previous);
