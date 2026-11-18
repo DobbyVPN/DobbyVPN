@@ -14,7 +14,6 @@ final class VPNPreferenceCoordinator {
     private let reload: Operation
     private let status: (NETunnelProviderManager) -> NEVPNStatus
     private let bind: (NETunnelProviderManager) -> Void
-    private let hasActivation: () -> Bool
     private let log: (String, String) -> Void
     private let describeError: (Error) -> String
     private let preferenceQueue: DispatchQueue
@@ -31,7 +30,6 @@ final class VPNPreferenceCoordinator {
          create: (() -> NETunnelProviderManager)? = nil,
          apply: ((NETunnelProviderManager) -> Void)? = nil,
          bind: @escaping (NETunnelProviderManager) -> Void,
-         hasActivation: @escaping () -> Bool,
          log: @escaping (String, String) -> Void,
          describeError: @escaping (Error) -> String) {
         self.preferenceQueue = queue
@@ -43,23 +41,12 @@ final class VPNPreferenceCoordinator {
         self.reload = reload
         self.status = status
         self.bind = bind
-        self.hasActivation = hasActivation
         self.log = log
         self.describeError = describeError
         self.createManager = { NETunnelProviderManager() }
         self.applyDefaults = { _ in }
         self.createManager = create ?? { [unowned self] in self.makeManager() }
         self.applyDefaults = apply ?? { [unowned self] in self.applyProtocolDefaults(manager: $0) }
-    }
-
-    func onDemandEnabled(completion: @escaping (Bool?, Error?) -> Void) {
-        withPreferences { finished in
-            self.loadInventory { managers, error in
-                defer { finished() }
-                if let error { completion(nil, error); return }
-                completion(self.matchingManagers(managers ?? []).contains { $0.isOnDemandEnabled }, nil)
-            }
-        }
     }
 
     /// Preference failure/delay cannot gate the Go command. Both use the caller's deadline.
@@ -161,6 +148,7 @@ final class VPNPreferenceCoordinator {
         manager.localizedDescription = name
         manager.protocolConfiguration = makeDefaultProtocol()
         manager.isEnabled = true
+        applyOnDemandRules(manager)
         return manager
     }
 
@@ -204,11 +192,6 @@ final class VPNPreferenceCoordinator {
     }
 
     private func performOnDemandChange(_ enabled: Bool, completion: @escaping (Error?) -> Void) {
-        if enabled && !hasActivation() {
-            completion(NSError(domain: "DobbyVPN.OnDemand", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Connect once before enabling On Demand."]))
-            return
-        }
         self.loadInventory { [weak self] managers, error in
             guard let self else { completion(error); return }
             if let error { completion(error); return }
@@ -226,12 +209,16 @@ final class VPNPreferenceCoordinator {
                 }
                 manager = selected
             } catch { completion(error); return }
-            let connect = NEOnDemandRuleConnect()
-            connect.interfaceTypeMatch = .any
-            manager.onDemandRules = [connect]
-            manager.isOnDemandEnabled = true
+            self.applyOnDemandRules(manager)
             self.saveOnDemand(manager, enabled: true, completion: completion)
         }
+    }
+
+    private func applyOnDemandRules(_ manager: NETunnelProviderManager) {
+        let connect = NEOnDemandRuleConnect()
+        connect.interfaceTypeMatch = .any
+        manager.onDemandRules = [connect]
+        manager.isOnDemandEnabled = true
     }
 
     private func saveOnDemand(_ manager: NETunnelProviderManager, enabled: Bool,
