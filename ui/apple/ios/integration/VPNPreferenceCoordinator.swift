@@ -49,15 +49,16 @@ final class VPNPreferenceCoordinator {
         self.applyDefaults = apply ?? { [unowned self] in self.applyProtocolDefaults(manager: $0) }
     }
 
-    /// Preference failure/delay cannot gate the Go command. Both use the caller's deadline.
+    /// On Demand is saved off before Go Stop, so a tunnel that ends during Stop
+    /// is not restarted by the OS. The wait takes at most half of the remaining
+    /// deadline; a failed or slow save is reported but Go Stop is still sent.
     func performStop<T>(until deadline: TimeInterval, stopGo: () throws -> T) rethrows -> (T, String?) {
         log("INFO", "[provider] Stop On Demand disable begin deadline=\(deadline)")
-        let preferenceCompletion = beginDisableOnDemandForStop(until: deadline)
-        let response = try stopGo()
-        log("INFO", "[provider] Stop On Demand wait begin")
-        let failure = preferenceCompletion()
+        let now = ProcessInfo.processInfo.systemUptime
+        let waitDeadline = now + max(0, deadline - now) / 2
+        let failure = beginDisableOnDemandForStop(until: waitDeadline)()
         log(failure == nil ? "INFO" : "ERROR", "[provider] Stop On Demand wait end error=\(failure ?? "none")")
-        return (response, failure)
+        return (try stopGo(), failure)
     }
 
     // A load/save/reload is one preference operation. Serializing only the

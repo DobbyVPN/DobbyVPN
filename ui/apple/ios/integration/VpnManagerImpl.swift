@@ -142,7 +142,7 @@ public final class VpnManagerImpl: NSObject {
                 if commandMethod == "Stop" {
                     stopPreferenceStarted = true
                     (response, onDemandFailure) = try preferences.performStop(until: deadline) {
-                        try sendOnce(messageData, timeout: timeout)
+                        try sendOnce(messageData, timeout: remaining(until: deadline) ?? 0.1)
                     }
                 } else {
                     // Connect re-arms the On Demand that an earlier Stop turned off.
