@@ -23,6 +23,6 @@
 
   <ItemGroup>
     <AssemblyMetadata Include="DobbySourceCommit" Value="$(SourceCommit)" />
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.7.0" />
   </ItemGroup>
 </Project>
