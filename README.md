@@ -19,10 +19,25 @@ Android permits installation on Android 8.0 (API 26) and later. Current testing
 uses Android 15 (API 35), and support is limited to Android 15 and later.
 Android 8–14 are not currently tested or supported.
 
+Where `dobby-cli` is installed:
+
+- **macOS:** the package links `/usr/local/bin/dobby-cli` to the copy inside
+  the app, on both Intel and Apple silicon, so `dobby-cli` works from a new
+  terminal. The linked file is
+  `/Applications/Dobby VPN.app/Contents/Resources/dobby-cli`.
+- **Linux:** the DEB links `/usr/local/bin/dobby-cli` to
+  `/opt/dobbyvpn/bin/dobby-cli`.
+- **Windows:** the installer does not change `PATH`. Run the command by its
+  full path, normally `"C:\Program Files\DobbyVPN\bin\dobby-cli.exe"`
+  (use `& "C:\Program Files\DobbyVPN\bin\dobby-cli.exe" snapshot` in
+  PowerShell).
+
 After installing a desktop package, `dobby-cli snapshot` connects to the
 installed background service. On macOS it uses the packaged socket without
-an environment override. `DOBBYVPN_CONTROL_SOCKET` can still select an
-alternative Unix socket when needed.
+an environment override; on Linux the service socket lives in the system
+runtime directory `/run/dobbyvpn/control.sock` and works without a desktop
+session. `DOBBYVPN_CONTROL_SOCKET` can still select an alternative Unix
+socket when needed.
 
 Linux DEB installation starts the service when system policy permits. Upgrades
 preserve disabled and masked services. The first upgrade from the older 1.5.4
@@ -122,6 +137,8 @@ certificate verification is required, so keep `skip_verification = false`
 (or omit it). This setting is valid only inside `[TrustTunnel.endpoint]`; a
 profile-level `skip_verification` key is rejected.
 
+If a subscription is rejected, the error names the profile (its position in the file, counted from 1) and the field. A response that is not a DobbyVPN subscription (HTML, JSON, YAML, a base64 list or a single share link such as `vless://`) is reported as such; it is not converted. Unknown `[[Outline]]` fields, a non-string `DisguisePrefix`, and a `WebSocketPath` without `WebSocket = true` do not reject the subscription; they are written to the service log as warnings.
+
 **Connection variants** (automatic first-working selection and failover)
 ```toml
 [[Outline]] # First variant
@@ -169,9 +186,27 @@ subscription URL and returns the ordered backend profile inventory as JSON.
 It also accepts a raw TOML value as its source argument; quote that argument
 using your shell's syntax and begin it with a `[[Outline]]`, `[[Xray]]`, or
 `[[TrustTunnel]]` profile table. All three forms are parsed and validated by Go.
+`dobby-cli configure -` reads the HTTPS subscription URL (or a TOML profile)
+from standard input instead, so the URL does not appear in the process list or
+shell history: `printf '%s\n' "$SUBSCRIPTION_URL" | dobby-cli configure -`.
+Stdin accepts a URL or TOML only, never a file path; to configure from a file
+whose name is `-`, write `./-`.
 `dobby-cli start --profile <index> --session-id <id> --config-digest <digest>`
 starts one accepted profile; `stop --session-id <id> --generation <number>`
 ends that generation. Session commands always emit JSON.
+
+`dobby-cli` exits with one of these codes, so scripts can tell the cases apart:
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Success. |
+| 2 | Wrong command line or options, or a rejected configuration source. |
+| 3 | The Dobby VPN service is unavailable: it is stopped, not installed, or access to it was denied. The message names the check to run, and JSON commands print the failure code `SERVICE_UNAVAILABLE`. |
+| 4 | The operation failed, including timeouts and failures reported by the service. |
+| 8 | Conflict: the accepted configuration or the session generation changed; take a new `snapshot` and retry. |
+
+The command line is checked before anything is written or connected, so a typo
+exits with 2 even when the service is down.
 
 After an automatically selected connection becomes unhealthy, DobbyVPN allows
 up to three automatic recovery attempts. If another health failure occurs

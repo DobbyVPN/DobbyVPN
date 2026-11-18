@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/xjasonlyu/tun2socks/v2/core"
 	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
@@ -75,7 +74,7 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 	if handler == nil {
 		handler = tunnel.T()
 	}
-	ownedStack, err = core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: handler})
+	ownedStack, err = createStack(dev, handler)
 	if err == nil {
 		log.Infof(Category, "packet stack ready interface=%s mtu=%d ipv4=true ipv6=true", dev.Name(), dev.MTU())
 	}
