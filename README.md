@@ -123,9 +123,13 @@ Any other root section or key rejects the whole configuration. TrustTunnel
 certificate verification is required, so keep `skip_verification = false`
 (or omit it). This setting is valid only inside `[TrustTunnel.endpoint]`; a
 profile-level `skip_verification` key is rejected. In `[[Xray]]`, the first
-outbound carries all traffic and must not be `freedom`; `routing`, `inbounds`,
-`api`, `metrics`, `log.access` and `log.error` are ignored. `ExcludeIPs`
-rejects ranges wider than `/8`, such as `0.0.0.0/0` or `::/0`.
+outbound carries all traffic and must not be `freedom`. Only `outbounds`, `dns`,
+`policy` and `log` (`loglevel`, `dnsLog`, `maskAddress`) are passed to Xray;
+other Xray settings are ignored. Each `ExcludeIPs` entry may cover at most a
+`/8` for IPv4, unique local (`fc00::/7`) and link-local (`fe80::/10`) IPv6, or a
+`/32` for other IPv6. Together, the IPv4 entries may cover at most two `/8`
+networks and the other IPv6 entries at most two `/32` networks. Wider ranges
+such as `0.0.0.0/0` or `::/0` are rejected.
 
 If a subscription is rejected, the error names the profile (its position in the file, counted from 1) and the field. A response that is not a DobbyVPN subscription (HTML, JSON, YAML, a base64 list or a single share link such as `vless://`) is reported as such; it is not converted. Unknown `[[Outline]]` fields, a non-string `DisguisePrefix`, and a `WebSocketPath` without `WebSocket = true` do not reject the subscription; they are written to the service log as warnings.
 
