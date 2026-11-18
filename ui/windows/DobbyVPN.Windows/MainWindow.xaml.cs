@@ -423,7 +423,7 @@ public sealed partial class MainWindow : Window
     private const int ExpectedProtocolVersion = 1;
     private const string RestartMessage = "The app and the VPN service are different versions. Restart the app.";
 
-    private sealed class ProtocolMismatchException : Exception { }
+    private sealed class ProtocolMismatchException() : Exception(RestartMessage);
 
     private async Task<Snapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
     {
@@ -2290,7 +2290,6 @@ public sealed partial class MainWindow : Window
     private sealed class Snapshot
     {
         [JsonPropertyName("protocol_version")] public int ProtocolVersion { get; init; }
-        [JsonPropertyName("service_version")] public string ServiceVersion { get; init; } = "";
         [JsonPropertyName("session_id")] public string SessionId { get; init; } = "";
         [JsonPropertyName("sequence")] public long Sequence { get; init; }
         [JsonPropertyName("generation")] public long Generation { get; init; }

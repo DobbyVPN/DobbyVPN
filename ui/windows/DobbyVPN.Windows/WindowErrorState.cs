@@ -9,7 +9,7 @@ internal sealed class WindowErrorState
 
     internal bool FailSnapshot(string message)
     {
-        if (SnapshotFailed) return false;
+        if (Snapshot == message) return false;
         Snapshot = message;
         return true;
     }
