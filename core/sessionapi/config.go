@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -44,10 +45,18 @@ const (
 	configSectionXray        = "Xray"
 	configSectionTrustTunnel = "TrustTunnel"
 	maxConfigBytes           = 1 << 20
-	// minExcludePrefix keeps private ranges such as 10.0.0.0/8 and fd00::/8
-	// working while rejecting default routes and wider ranges.
-	minExcludePrefix = 8
+	// ExcludeIPs limits: one IPv4 or local IPv6 entry may cover at most a /8
+	// (10.0.0.0/8, fd00::/8), any other IPv6 entry at most a /32, and the
+	// entries of one family together at most two such networks.
+	minExcludePrefix       = 8
+	minGlobalExcludePrefix = 32
 )
+
+// localIPv6 lists the unique local and link-local IPv6 ranges.
+var localIPv6 = []*net.IPNet{
+	{IP: net.ParseIP("fc00::"), Mask: net.CIDRMask(7, 128)},
+	{IP: net.ParseIP("fe80::"), Mask: net.CIDRMask(10, 128)},
+}
 
 func parseConfig(raw []byte) (parsedConfig, error) {
 	root, protocols, err := decodeConfig(raw)
@@ -92,24 +101,69 @@ func validateLogsEndpoint(endpoint string) error {
 	return nil
 }
 
-// validateExcludeIPs rejects CIDR entries that would send most traffic
-// outside the tunnel. Host names resolve to single addresses later.
+// validateExcludeIPs rejects CIDR entries that would send a large part of the
+// traffic outside the tunnel. Host names resolve to single addresses later.
 func validateExcludeIPs(entries []string) error {
+	var ipv4, globalIPv6 []*net.IPNet
 	for _, entry := range entries {
 		_, network, err := net.ParseCIDR(strings.TrimSpace(entry))
 		if err != nil {
 			continue
 		}
 		ones, bits := network.Mask.Size()
-		if bits == 128 && network.IP.To4() != nil {
+		limit := minExcludePrefix
+		if ip := network.IP.To4(); ip != nil {
 			// An IPv4-mapped prefix matches IPv4 destinations.
-			ones -= 96
+			ones -= bits - 32
+			network = &net.IPNet{IP: ip, Mask: net.CIDRMask(max(ones, 0), 32)}
+			ipv4 = append(ipv4, network)
+		} else if !insideAny(localIPv6, network) {
+			limit = minGlobalExcludePrefix
+			globalIPv6 = append(globalIPv6, network)
 		}
-		if ones < minExcludePrefix {
-			return failure(FailureMalformedConfig, fmt.Sprintf("ExcludeIPs entry %q is too broad; use a prefix of /%d or longer", entry, minExcludePrefix))
+		if ones < limit {
+			return failure(FailureMalformedConfig, fmt.Sprintf("ExcludeIPs entry %q is too broad; use a prefix of /%d or longer", entry, limit))
 		}
 	}
+	if coveredAddresses(ipv4) > math.Ldexp(2, 32-minExcludePrefix) {
+		return failure(FailureMalformedConfig, fmt.Sprintf("ExcludeIPs entries together cover more than two /%d IPv4 networks", minExcludePrefix))
+	}
+	if coveredAddresses(globalIPv6) > math.Ldexp(2, 128-minGlobalExcludePrefix) {
+		return failure(FailureMalformedConfig, fmt.Sprintf("ExcludeIPs entries together cover more than two /%d IPv6 networks", minGlobalExcludePrefix))
+	}
 	return nil
+}
+
+func insideAny(parents []*net.IPNet, network *net.IPNet) bool {
+	ones, _ := network.Mask.Size()
+	for _, parent := range parents {
+		if parentOnes, _ := parent.Mask.Size(); ones >= parentOnes && parent.Contains(network.IP) {
+			return true
+		}
+	}
+	return false
+}
+
+// coveredAddresses counts the addresses the networks cover, counting nested
+// networks once. CIDR networks either nest or do not overlap.
+func coveredAddresses(networks []*net.IPNet) float64 {
+	sort.Slice(networks, func(i, j int) bool {
+		if order := bytes.Compare(networks[i].IP, networks[j].IP); order != 0 {
+			return order < 0
+		}
+		return bytes.Compare(networks[i].Mask, networks[j].Mask) < 0
+	})
+	total := 0.0
+	var last *net.IPNet
+	for _, network := range networks {
+		if last != nil && last.Contains(network.IP) {
+			continue
+		}
+		ones, bits := network.Mask.Size()
+		total += math.Ldexp(1, bits-ones)
+		last = network
+	}
+	return total
 }
 
 func decodeConfig(raw []byte) (configRoot, []string, error) {
@@ -300,23 +354,25 @@ func normalizeProfile(kind Protocol, block map[string]any) (protocolconfig.Confi
 	}
 }
 
-// xrayFields drops the Xray settings the client replaces or does not need:
-// routing, inbounds, the API and metrics listeners and log file paths. Xray
-// decodes JSON keys case-insensitively, so every spelling is removed.
+// xrayFields keeps only the Xray settings the client needs; the client adds
+// its own inbound. Keys must match exactly: Xray decodes JSON keys
+// case-insensitively, so another spelling would bypass the list.
 func xrayFields(block map[string]any) map[string]any {
-	fields := protocolconfig.CloneFields(block)
-	for key, value := range fields {
-		switch strings.ToLower(key) {
-		case "routing", "inbounds", "api", "metrics":
-			delete(fields, key)
-		case "log":
-			logConfig, _ := value.(map[string]any)
-			for name := range logConfig {
-				if lower := strings.ToLower(name); lower == "access" || lower == "error" {
-					delete(logConfig, name)
-				}
+	cloned := protocolconfig.CloneFields(block)
+	fields := map[string]any{}
+	for _, key := range []string{"outbounds", "dns", "policy"} {
+		if value, ok := cloned[key]; ok {
+			fields[key] = value
+		}
+	}
+	if logConfig, ok := cloned["log"].(map[string]any); ok {
+		kept := map[string]any{}
+		for _, key := range []string{"loglevel", "dnsLog", "maskAddress"} {
+			if value, ok := logConfig[key]; ok {
+				kept[key] = value
 			}
 		}
+		fields["log"] = kept
 	}
 	return fields
 }
