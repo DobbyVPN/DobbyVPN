@@ -149,7 +149,8 @@ final class VPNPreferenceCoordinator {
         manager.localizedDescription = name
         manager.protocolConfiguration = makeDefaultProtocol()
         manager.isEnabled = true
-        applyOnDemandRules(manager)
+        // Rules are stored now; the first Connect turns On Demand on.
+        applyOnDemandRules(manager, enabled: false)
         return manager
     }
 
@@ -210,16 +211,16 @@ final class VPNPreferenceCoordinator {
                 }
                 manager = selected
             } catch { completion(error); return }
-            self.applyOnDemandRules(manager)
+            self.applyOnDemandRules(manager, enabled: true)
             self.saveOnDemand(manager, enabled: true, completion: completion)
         }
     }
 
-    private func applyOnDemandRules(_ manager: NETunnelProviderManager) {
+    private func applyOnDemandRules(_ manager: NETunnelProviderManager, enabled: Bool) {
         let connect = NEOnDemandRuleConnect()
         connect.interfaceTypeMatch = .any
         manager.onDemandRules = [connect]
-        manager.isOnDemandEnabled = true
+        manager.isOnDemandEnabled = enabled
     }
 
     private func saveOnDemand(_ manager: NETunnelProviderManager, enabled: Bool,
