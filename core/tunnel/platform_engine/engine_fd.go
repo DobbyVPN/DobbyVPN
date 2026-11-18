@@ -52,7 +52,7 @@ func openOwnedFileDevice(fd int, mtu uint32, offset int) (device.Device, error) 
 		return nil, fmt.Errorf("open packet-flow descriptor %d", fd)
 	}
 	dev := &ownedFileDevice{file: file, name: name}
-	endpoint, err := iobased.New(file, mtu, offset)
+	endpoint, err := iobased.New(newHeaderStrippedRW(file, mtu, offset), mtu, offset)
 	if err != nil {
 		return dev, fmt.Errorf("create packet endpoint: %w", err)
 	}
