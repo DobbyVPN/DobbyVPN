@@ -33,6 +33,11 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 PLATFORMS = ("linux", "windows", "macos")
 NATIVE_UI_REQUIREMENTS = SCRIPT_DIR.parent / "requirements-native-ui.txt"
 WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS = 180
+# Must equal the UpgradeCode of every released 1.5.x MSI (read from v1.5.0, v1.5.6 and
+# v1.5.13); changing it makes MajorUpgrade miss the installed package. The debug MSI has
+# its own identity so it never replaces the release build.
+WINDOWS_RELEASE_UPGRADE_CODE = "{AC1AE299-9E08-57FF-A64E-70B0AC9ADB9B}"
+WINDOWS_DEBUG_UPGRADE_CODE = "{5C16B3D0-831C-4024-AB10-A76DA27D14FB}"
 WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS = 30
 WINDOWS_TEMP_PATH_BUFFER_CAPACITY = 32768
 WIX_VERSION = "6.0.0"
@@ -516,7 +521,7 @@ def _build(args: argparse.Namespace) -> int:
             target = output / "dobbyVPN-linux.deb"
         elif platform == "windows":
             archive = archives / f"dobby-vpn-{version}-windows-amd64.zip"
-            produced = _build_windows_msi(archive, service_directory, version, source_sha, work, build_environment)
+            produced = _build_windows_msi(archive, service_directory, version, source_sha, work, build_environment, args.debug)
             target = output / "dobbyVPN-windows-amd64.msi"
         else:
             archive_arch = "aarch64" if architecture == "arm64" else "amd64"
@@ -682,8 +687,11 @@ def _build_windows_msi(
     source_sha: str,
     work: Path,
     environment: dict[str, str],
+    debug: bool = False,
 ) -> Path:
     env = environment.copy()
+    if debug:
+        env["DOBBYVPN_DEBUG"] = "1"
     installer = work / "windows-installer"
     installer.mkdir()
     source_installer = ROOT / "ui" / "windows" / "installer"
@@ -737,26 +745,35 @@ def _build_windows_msi(
     package = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi"
     log_path = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi.log"
     try:
-        _verify_msi(package, version, env)
+        _verify_msi(package, version, env, debug)
     finally:
         if log_path.exists():
             _emit_file("Windows MSI build log", log_path)
     return package
 
 
-def _verify_msi(package: Path, version: str, env: dict[str, str]) -> None:
+def _verify_msi(package: Path, version: str, env: dict[str, str], debug: bool = False) -> None:
     script = r'''
 $ErrorActionPreference = "Stop"
 $msi = (Resolve-Path $env:DOBBYVPN_PACKAGE).Path
 $installer = New-Object -ComObject WindowsInstaller.Installer
 $database = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @($msi, 0))
-$view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, "SELECT Value FROM Property WHERE Property = 'ProductVersion'")
-$view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
-$record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
-if ($null -eq $record) { throw "MSI ProductVersion property is missing" }
-$actual = $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+function Get-MsiProperty($name) {
+  $view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, "SELECT Value FROM Property WHERE Property = '$name'")
+  $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
+  $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+  if ($null -eq $record) { throw "MSI $name property is missing" }
+  return $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+}
+$actual = Get-MsiProperty "ProductVersion"
 Write-Output "MSI ProductVersion=$actual"
 if ($actual -ne $env:DOBBYVPN_EXPECTED_VERSION) { throw "MSI version mismatch" }
+$upgradeCode = Get-MsiProperty "UpgradeCode"
+Write-Output "MSI UpgradeCode=$upgradeCode"
+if ($upgradeCode -ne $env:DOBBYVPN_EXPECTED_UPGRADE_CODE) { throw "MSI UpgradeCode mismatch: expected $env:DOBBYVPN_EXPECTED_UPGRADE_CODE" }
+$productName = Get-MsiProperty "ProductName"
+Write-Output "MSI ProductName=$productName"
+if ($productName -ne $env:DOBBYVPN_EXPECTED_PRODUCT_NAME) { throw "MSI ProductName mismatch: expected $env:DOBBYVPN_EXPECTED_PRODUCT_NAME" }
 $view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, 'SELECT `FileName` FROM `File`')
 $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
 $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -773,6 +790,8 @@ foreach ($required in @("dobbyvpn-backend.exe", "dobby_bridge.dll", "wintun.dll"
     verify_env = env.copy()
     verify_env["DOBBYVPN_PACKAGE"] = str(package)
     verify_env["DOBBYVPN_EXPECTED_VERSION"] = version
+    verify_env["DOBBYVPN_EXPECTED_UPGRADE_CODE"] = WINDOWS_DEBUG_UPGRADE_CODE if debug else WINDOWS_RELEASE_UPGRADE_CODE
+    verify_env["DOBBYVPN_EXPECTED_PRODUCT_NAME"] = "DobbyVPN Debug" if debug else "DobbyVPN"
     _run(
         "Windows MSI content and version check",
         ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
