@@ -73,7 +73,7 @@ type relayDNSDialer func(context.Context, string, string) (net.Conn, error)
 
 func resolveRelayDNS(
 	parent context.Context, dial relayDNSDialer, destination string, query *dns.Msg, payload []byte, limit int,
-) ([]byte, string, error) {
+) (wire []byte, network string, err error) {
 	ctx, cancel := context.WithTimeout(parent, dnscache.ServerResolveTimeout)
 	results := make(chan relayDNSResult, 2)
 	var workers sync.WaitGroup
