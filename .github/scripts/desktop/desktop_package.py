@@ -885,6 +885,7 @@ def _verify_deb(package: Path, version: str, work: Path) -> None:
     control = work / "expanded-deb-control"
     _run("expand Linux package maintainer scripts", ["dpkg-deb", "-e", str(package), str(control)])
     expected_script_fragments = {
+        "preinst": ('dpkg --compare-versions "$old" gt "$new"',),
         "postinst": (
             'case "${1:-}" in\n    configure)',
             "admin_masked() {",
