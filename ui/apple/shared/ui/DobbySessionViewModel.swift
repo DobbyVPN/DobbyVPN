@@ -49,9 +49,6 @@ public enum DobbyProfileStatus: String {
 public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
     @Published public private(set) var busy = false
-    @Published public private(set) var onDemandEnabled = false
-    @Published public private(set) var onDemandBusy = false
-    private var onDemandRefreshPending = false
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
@@ -133,7 +130,6 @@ public final class DobbySessionViewModel: ObservableObject {
         recordAppStarted()
         if !uploadError.isEmpty { recordError(uploadError) }
         refreshSnapshot()
-        refreshOnDemandPreference()
         if automaticallyPoll {
             timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.refreshForTimerTick() }
@@ -438,7 +434,6 @@ public final class DobbySessionViewModel: ObservableObject {
                     self.dismissedFailures.remove(message)
                     self.setError(message, origin: .other)
                 }
-                if stopping { self.refreshOnDemandPreference() }
                 self.refreshSnapshot()
             }
         }
@@ -685,53 +680,6 @@ extension DobbySessionViewModel {
         }
     }
 
-}
-
-extension DobbySessionViewModel {
-    public var supportsOnDemand: Bool {
-        client is any DobbyOnDemandClient
-    }
-
-    public func refreshOnDemandPreference() {
-        guard let onDemandClient = client as? any DobbyOnDemandClient else { return }
-        guard !onDemandBusy else {
-            onDemandRefreshPending = true
-            return
-        }
-        onDemandBusy = true
-        Task { @MainActor [weak self, onDemandClient] in
-            guard let self else { return }
-            defer { self.finishOnDemandOperation() }
-            do {
-                self.onDemandEnabled = try await onDemandClient.onDemandEnabled()
-            } catch {
-                self.setError("Could not read Connect on demand preference: \(error.localizedDescription)", origin: .other)
-            }
-        }
-    }
-
-    public func setOnDemandEnabled(_ enabled: Bool) {
-        guard !onDemandBusy, let onDemandClient = client as? any DobbyOnDemandClient else { return }
-        onDemandBusy = true
-        Task { @MainActor [weak self, onDemandClient] in
-            guard let self else { return }
-            defer { self.finishOnDemandOperation() }
-            do {
-                try await onDemandClient.setOnDemandEnabled(enabled)
-                self.onDemandEnabled = try await onDemandClient.onDemandEnabled()
-            } catch {
-                self.setError("Could not update Connect on demand preference: \(error.localizedDescription)", origin: .other)
-            }
-        }
-    }
-
-    private func finishOnDemandOperation() {
-        onDemandBusy = false
-        if onDemandRefreshPending {
-            onDemandRefreshPending = false
-            refreshOnDemandPreference()
-        }
-    }
 }
 
 extension DobbySessionViewModel {

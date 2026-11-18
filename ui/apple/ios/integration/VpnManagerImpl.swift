@@ -32,7 +32,6 @@ public final class VpnManagerImpl: NSObject {
                 self.condition.broadcast()
                 self.condition.unlock()
             },
-            hasActivation: { SharedKeychainSecretStore.shared.string(for: SharedKeychainSecretStore.activationKey) != nil },
             log: { [weak self] level, message in self?.logs.writeLog(level: level, log: message) },
             describeError: diagnosticErrorDescription
         )
@@ -146,6 +145,15 @@ public final class VpnManagerImpl: NSObject {
                         try sendOnce(messageData, timeout: timeout)
                     }
                 } else {
+                    // Connect re-arms the On Demand that an earlier Stop turned off.
+                    // It never gates the Go command; a failure is only logged.
+                    if commandMethod == "Start" {
+                        preferences.changeOnDemand(true) { [weak self] error in
+                            if let error {
+                                self?.logs.writeLog(level: "ERROR", log: "[provider] Start could not enable On Demand:\n\(diagnosticErrorDescription(error))")
+                            }
+                        }
+                    }
                     response = try sendOnce(messageData, timeout: timeout)
                     onDemandFailure = nil
                 }

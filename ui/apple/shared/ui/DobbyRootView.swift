@@ -102,12 +102,6 @@ public struct DobbyRootView: View {
                 VStack(spacing: pt(8)) {
                     subscriptionField
                     mainButton
-                    if model.supportsOnDemand {
-                        Toggle("Connect on demand", isOn: onDemandBinding)
-                            .dobbyFont(14, .medium)
-                            .accessibilityIdentifier("connection.on-demand")
-                            .disabled(model.onDemandBusy || model.busy)
-                    }
                     connections
                         .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))
                         .padding(.top, pt(8))
@@ -139,13 +133,12 @@ public struct DobbyRootView: View {
         .frame(minWidth: 320, minHeight: 460)
         .navigationTitle("doBBYVPN")
 #endif
-        .onAppear { model.setLogsVisible(true); model.refreshOnDemandPreference(); refreshClipboard() }
+        .onAppear { model.setLogsVisible(true); refreshClipboard() }
         .onDisappear { model.setLogsVisible(false) }
         .onChange(of: model.status) { announceStatus($0) }
         .onChange(of: showingError) { if $0 { sourceFocused = false } }
         .onChange(of: scenePhase) { phase in
             model.setLogsVisible(phase == .active)
-            if phase == .active { model.refreshOnDemandPreference() }
             refreshClipboard()
         }
 #if os(macOS)
@@ -258,10 +251,6 @@ public struct DobbyRootView: View {
 
     private var sourceBinding: Binding<String> {
         Binding(get: { model.sourceText }, set: { model.sourceChanged($0) })
-    }
-
-    private var onDemandBinding: Binding<Bool> {
-        Binding(get: { model.onDemandEnabled }, set: { model.setOnDemandEnabled($0) })
     }
 
     private var mainButton: some View {
