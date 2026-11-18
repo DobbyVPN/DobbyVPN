@@ -15,6 +15,16 @@ DobbyVPN has native apps for Windows, macOS, Android and iOS. Linux uses the
 command-line interface. Desktop installations include a background VPN service
 and the `dobby-cli` command.
 
+### Supported platforms
+
+| Platform | Minimum version | Architectures | Package |
+|---|---|---|---|
+| Windows | Windows 10 version 1809 (build 17763) | x64 | MSI |
+| macOS | macOS 12 | Apple silicon (arm64), Intel (x86_64) | PKG |
+| Linux | Debian/Ubuntu-based systems; requires `init-system-helpers` 1.54 or later | amd64 | DEB |
+| Android | Android 8.0 (API 26) | arm64-v8a, x86_64 | APK |
+| iOS | iOS 15.6 | arm64 | App Store |
+
 Android permits installation on Android 8.0 (API 26) and later. Current testing
 uses Android 15 (API 35), and support is limited to Android 15 and later.
 Android 8–14 are not currently tested or supported.
@@ -44,6 +54,19 @@ preserve disabled and masked services. The first upgrade from the older 1.5.4
 package may re-enable a disabled, unmasked service because that package did
 not retain enablement history; later upgrades preserve the administrator's
 choice. Removing or purging the package preserves subscription data.
+
+### Uninstalling on macOS
+
+```sh
+sudo /usr/local/libexec/dobbyvpn-uninstall
+```
+
+The script must run as root. It stops and unregisters the
+`com.dobby.vpnservice` background service, then removes
+`/Library/LaunchDaemons/com.dobby.vpnservice.plist`, the control socket
+`/var/run/dobbyvpn/control.sock` (and its directory if empty), the
+`com.dobby.pkg` package receipt, `/Applications/Dobby VPN.app` and the script
+itself. Logs in `/Library/Logs/DobbyVPN` are not removed.
 
 Enter or paste an HTTPS subscription URL to load its profiles automatically.
 Choose **Auto connect** to try profiles in subscription order, or **Connect**
