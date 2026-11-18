@@ -2053,7 +2053,12 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("max_bytes")] public long MaxBytes { get; init; }
     }
 
-    private sealed record LastLogUpload(string Reference, string Provider, DateTimeOffset Time);
+    // Same file and JSON as dobby-cli (`<ui log>.upload`), so an upload made in either place is visible in both.
+    private sealed record LastLogUpload(
+        [property: JsonPropertyName("reference")] string Reference,
+        [property: JsonPropertyName("provider")] string Provider,
+        [property: JsonPropertyName("time")] DateTimeOffset Time);
+    private static string LatestUploadPath => NativeDiagnostics.Current.UiPath + ".upload";
     private static string LogUploadDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "LogUploads");
     private void RestoreLogUpload()
     {
@@ -2081,7 +2086,7 @@ public sealed partial class MainWindow : Window
                 }
             }
             finally { cleanupGate.ReleaseMutex(); }
-            var metadata = Path.Combine(LogUploadDirectory, "latest.json");
+            var metadata = LatestUploadPath;
             if (!File.Exists(metadata)) return;
             var latest = JsonSerializer.Deserialize<LastLogUpload>(File.ReadAllText(metadata));
             if (latest is null) return;
@@ -2197,7 +2202,8 @@ public sealed partial class MainWindow : Window
             CopyUploadItem.Text = $"Copy upload {latest.Reference} ({latest.Time.LocalDateTime:g})";
             CopyUploadItem.Visibility = Visibility.Visible;
             ShareUploadItem.Visibility = Visibility.Visible;
-            var metadata = Path.Combine(directory, "latest.json");
+            var metadata = LatestUploadPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(metadata)!);
             var staging = metadata + ".tmp";
             await File.WriteAllTextAsync(staging, JsonSerializer.Serialize(latest));
             File.Move(staging, metadata, true);
