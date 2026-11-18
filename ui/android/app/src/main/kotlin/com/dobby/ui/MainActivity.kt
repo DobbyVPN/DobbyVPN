@@ -810,8 +810,7 @@ internal class SessionController(
         restoredPendingSource = null
         if (trigger != LoadTrigger.RESTORE && trigger != LoadTrigger.TYPED) dismissedErrors = emptySet()
         val source = value.trim()
-        val uri = runCatching { java.net.URI(source) }.getOrNull()
-        val valid = uri?.scheme?.lowercase() == "https" && !uri.host.isNullOrEmpty()
+        val valid = isHttpsSubscription(source)
         val alreadyAccepted = trigger == LoadTrigger.TYPED && valid &&
             state.loadError.isEmpty() && !sourceLoads.inFlight &&
             sourceLoads.isAlreadyAccepted(source, latest.configured, latest.sourceUrl)
@@ -1328,8 +1327,7 @@ internal class SessionController(
     }
 
     private fun importSubscription(value: String, trigger: LoadTrigger) {
-        val uri = runCatching { java.net.URI(value) }.getOrNull()
-        if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrEmpty()) { report("Paste an HTTPS subscription URL with a host"); return }
+        if (!isHttpsSubscription(value)) { report("Paste an HTTPS subscription URL with a host"); return }
         val source = value.trim()
         if (source == state.source && sourceLoads.hasOutstanding(source)) return
         val noOutstandingLoad = !sourceLoads.hasWork
@@ -1342,6 +1340,9 @@ internal class SessionController(
         sourceChanged(value, trigger)
     }
 
+    private fun isHttpsSubscription(value: String) =
+        runCatching { java.net.URI(value) }.getOrNull().let { it?.scheme?.lowercase() == "https" && !it.host.isNullOrEmpty() }
+
     fun importLink(value: String) {
         if (value.equals("dobbyvpn://", ignoreCase = true)) return
         try {
@@ -1352,8 +1353,7 @@ internal class SessionController(
             val pair = query.single().split('=', limit = 2)
             require(pair.size == 2 && pair[0] == "url")
             val source = java.net.URLDecoder.decode(pair[1].replace("+", "%2B"), "UTF-8")
-            val target = runCatching { java.net.URI(source) }.getOrNull()
-            if (target?.scheme?.lowercase() == "https" && !target.host.isNullOrEmpty()) state = state.copy(pendingImport = source)
+            if (isHttpsSubscription(source)) state = state.copy(pendingImport = source)
             else importSubscription(source, LoadTrigger.IMPORT)
         } catch (failure: Exception) { report("Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL", failure) }
     }
