@@ -21,6 +21,19 @@ on:
       retention_days:
         default: 1
         type: number
+    secrets:
+      MACOS_DEVELOPER_ID_APP_P12:
+        required: false
+      MACOS_DEVELOPER_ID_INSTALLER_P12:
+        required: false
+      MACOS_DEVELOPER_ID_P12_PASSWORD:
+        required: false
+      APP_STORE_API_KEY:
+        required: false
+      APP_STORE_KEY_ID:
+        required: false
+      APP_STORE_ISSUER_ID:
+        required: false
 
 permissions:
   contents: read
@@ -40,6 +53,20 @@ jobs:
         uses: ./.github/actions/dependency-cache
         with:
           pinned-tools: ${{ inputs.platform == 'linux' || inputs.platform == 'windows' }}
+
+      # Release packages only: hardened runtime blocks debugger attachment
+      # without get-task-allow, and notarization rejects get-task-allow.
+      - name: Prepare macOS Developer ID signing
+        id: macos_signing
+        if: ${{ inputs.platform == 'macos' && !inputs.debug }}
+        env:
+          MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
+          MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bash .github/scripts/desktop/macos_signing.sh prepare
 
       - name: Build package with the local platform command
         id: build
@@ -71,6 +98,19 @@ jobs:
           test -s "$output/$package"
           printf 'package=%s\n' "$output/$package" >> "$GITHUB_OUTPUT"
           printf 'artifact=%s\n' "$package" >> "$GITHUB_OUTPUT"
+
+      - name: Sign, notarize and verify macOS package
+        if: ${{ steps.macos_signing.outputs.enabled == 'true' }}
+        env:
+          PACKAGE: ${{ steps.build.outputs.package }}
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
+
+      - name: Remove macOS signing keychain
+        if: ${{ always() && inputs.platform == 'macos' && !inputs.debug }}
+        run: bash .github/scripts/desktop/macos_signing.sh cleanup
 
       - name: Upload exact package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

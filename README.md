@@ -266,5 +266,55 @@ Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nic
 Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
 supported.
 
+## macOS package signing
+
+The Build workflow signs and notarizes the release macOS packages
+(`dobbyVPN-macos-aarch64.pkg`, `dobbyVPN-macos-amd64.pkg`) before it uploads
+them, so the Test and Release workflows use the signed files. On the macOS
+runner, `.github/scripts/desktop/macos_signing.sh`:
+
+1. creates a temporary keychain and imports both `.p12` files into it;
+2. selects the identities by certificate type (`Developer ID Application`,
+   `Developer ID Installer`) from that keychain;
+3. signs `dobbyvpn-backend`, `dobby-cli` and then the app bundle with hardened
+   runtime and a secure timestamp, before `pkgbuild` packs the app;
+4. signs the package with `productsign`, submits it with
+   `xcrun notarytool submit --wait` and staples the ticket;
+5. fails the job unless `pkgutil --check-signature`,
+   `codesign --verify --strict --deep`, `spctl -a -vv -t install` (package)
+   and `spctl -a -vv` (app) all accept the result;
+6. deletes the keychain and the key material at the end of the job, also after
+   a failure.
+
+Repository secrets:
+
+| Secret | Contents |
+| ------ | -------- |
+| `MACOS_DEVELOPER_ID_APP_P12` | Base64 of a `.p12` with the "Developer ID Application" certificate and its private key. |
+| `MACOS_DEVELOPER_ID_INSTALLER_P12` | Base64 of a `.p12` with the "Developer ID Installer" certificate and its private key. |
+| `MACOS_DEVELOPER_ID_P12_PASSWORD` | Export password shared by both `.p12` files. |
+| `APP_STORE_API_KEY` | Contents of the App Store Connect API key file (`AuthKey_<key id>.p8`, PEM text, not Base64). Also used by the iOS release. |
+| `APP_STORE_KEY_ID` | ID of that API key. |
+| `APP_STORE_ISSUER_ID` | Issuer ID of the App Store Connect team that owns the key. |
+
+When none of these secrets is available (forks, pull requests from forks), the
+signing steps are skipped with a log line and the packages stay unsigned. When
+only some of them are set, the job fails.
+
+Debug packages (`*-debug.pkg`) stay unsigned: hardened runtime blocks
+debugger attachment unless the binaries carry `get-task-allow`, and Apple
+rejects notarization of binaries with that entitlement. A signed but
+unnotarized package would still be blocked by Gatekeeper.
+
+To re-issue a `.p12` (for example when a certificate expires), the owner of the
+private key opens Keychain Access on the Mac that holds it, selects the
+"Developer ID Application" (or "Developer ID Installer") certificate together
+with its private key under **My Certificates**, chooses **File > Export
+Items**, saves it as Personal Information Exchange (`.p12`) with a strong
+password, and stores `base64 -i <file>.p12` in the matching secret. Both files
+must use the password stored in `MACOS_DEVELOPER_ID_P12_PASSWORD`. If the key
+is lost, create a new certificate of the same type in the Apple Developer
+account and export it the same way.
+
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)

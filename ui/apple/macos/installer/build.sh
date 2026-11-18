@@ -70,6 +70,10 @@ build_package() {
     cp ../../uninstall.sh Payload/usr/local/libexec/dobbyvpn-uninstall
     chmod 755 Payload/usr/local/libexec/dobbyvpn-uninstall
     write_fixed_payload_component_plist
+    # Release CI sets this after preparing Developer ID signing; local builds stay unsigned.
+    if [[ -n "${MACOS_SIGNING_SCRIPT:-}" ]]; then
+      /bin/bash "$MACOS_SIGNING_SCRIPT" sign-app "Payload/Applications/$APP_BUNDLE"
+    fi
     pkgbuild --root Payload \
              --component-plist component.plist \
              --scripts Scripts \
