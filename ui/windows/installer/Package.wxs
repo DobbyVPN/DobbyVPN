@@ -1,7 +1,5 @@
 ﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-	<!-- The release UpgradeCode must stay equal to the one in every released 1.5.x MSI,
-	     otherwise MajorUpgrade cannot find the installed package. The debug build has its
-	     own name and code, so the two never replace each other. -->
+	<!-- Release UpgradeCode: same as in released 1.5.x MSIs (see desktop_package.py). Debug has its own. -->
 	<?ifdef DOBBYVPN_DEBUG?>
 		<?define ProductName="DobbyVPN Debug"?>
 		<?define UpgradeCode="5C16B3D0-831C-4024-AB10-A76DA27D14FB"?>

@@ -690,8 +690,11 @@ def _build_windows_msi(
     debug: bool = False,
 ) -> Path:
     env = environment.copy()
+    # build.bat reads DOBBYVPN_DEBUG: set it for debug, never inherit it for release.
     if debug:
         env["DOBBYVPN_DEBUG"] = "1"
+    else:
+        env.pop("DOBBYVPN_DEBUG", None)
     installer = work / "windows-installer"
     installer.mkdir()
     source_installer = ROOT / "ui" / "windows" / "installer"
