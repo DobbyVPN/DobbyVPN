@@ -85,6 +85,48 @@ struct DobbyUploadReference: Codable, Sendable {
     var shareText: String { "DobbyVPN logs: \(reference)" }
 }
 
+/// The "latest upload" result shared with dobby-cli: `<ui log>.upload`, JSON `{"reference","time","provider"}`
+/// (the file and format written by `dobby-cli logs upload`). Used on macOS; iOS has no CLI and keeps UserDefaults.
+enum DobbyLatestUploadFile {
+    private struct Record: Codable { let reference: String; let time: String; let provider: String }
+
+    static func url(forLog uiLog: URL) -> URL { URL(fileURLWithPath: uiLog.path + ".upload") }
+
+    static func read(forLog uiLog: URL) -> DobbyUploadReference? {
+        guard let data = try? Data(contentsOf: url(forLog: uiLog)),
+              let record = try? JSONDecoder().decode(Record.self, from: data), !record.reference.isEmpty,
+              let time = parse(record.time) else { return nil }
+        return DobbyUploadReference(reference: record.reference, completed: time, provider: record.provider)
+    }
+
+    static func write(_ upload: DobbyUploadReference, forLog uiLog: URL) throws {
+        let destination = url(forLog: uiLog)
+        let directory = destination.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let data = try JSONEncoder().encode(Record(reference: upload.reference, time: formatter.string(from: upload.completed), provider: upload.provider))
+        let temporary = directory.appendingPathComponent(".upload-preference-" + UUID().uuidString)
+        guard FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        if Darwin.rename(temporary.path, destination.path) != 0 {
+            let code = errno
+            try? FileManager.default.removeItem(at: temporary)
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+        }
+    }
+
+    // Go writes RFC 3339 with a variable number of fractional digits.
+    private static func parse(_ text: String) -> Date? {
+        let plain = ISO8601DateFormatter()
+        if let date = plain.date(from: text) { return date }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text)
+    }
+}
+
 private final class DobbyNoUploadRedirect: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
