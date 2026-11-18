@@ -26,11 +26,9 @@ const (
 	wfpUint8              = 1
 	wfpUint16             = 2
 	wfpUint64             = 4
-	wfpByteBlobType       = 12
 	wfpFilterWeightMax    = 15
-	wfpFilterWeight       = wfpFilterWeightMax
+	wfpByteBlobType       = 12
 	wfpMatchEqual         = 0
-	wfpMatchNotEqual      = 10
 	wfpActionBlock        = 0x1001
 	wfpProtocolTCP        = 6
 	wfpProtocolUDP        = 17

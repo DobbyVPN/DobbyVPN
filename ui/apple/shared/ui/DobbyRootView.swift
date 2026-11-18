@@ -102,12 +102,6 @@ public struct DobbyRootView: View {
                 VStack(spacing: pt(8)) {
                     subscriptionField
                     mainButton
-                    if model.supportsOnDemand {
-                        Toggle("Connect on demand", isOn: onDemandBinding)
-                            .dobbyFont(14, .medium)
-                            .accessibilityIdentifier("connection.on-demand")
-                            .disabled(model.onDemandBusy || model.busy)
-                    }
                     connections
                         .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))
                         .padding(.top, pt(8))
@@ -139,13 +133,12 @@ public struct DobbyRootView: View {
         .frame(minWidth: 320, minHeight: 460)
         .navigationTitle("doBBYVPN")
 #endif
-        .onAppear { model.setLogsVisible(true); model.refreshOnDemandPreference(); refreshClipboard() }
+        .onAppear { model.setLogsVisible(true); refreshClipboard() }
         .onDisappear { model.setLogsVisible(false) }
         .onChange(of: model.status) { announceStatus($0) }
         .onChange(of: showingError) { if $0 { sourceFocused = false } }
         .onChange(of: scenePhase) { phase in
             model.setLogsVisible(phase == .active)
-            if phase == .active { model.refreshOnDemandPreference() }
             refreshClipboard()
         }
 #if os(macOS)
@@ -260,10 +253,6 @@ public struct DobbyRootView: View {
         Binding(get: { model.sourceText }, set: { model.sourceChanged($0) })
     }
 
-    private var onDemandBinding: Binding<Bool> {
-        Binding(get: { model.onDemandEnabled }, set: { model.setOnDemandEnabled($0) })
-    }
-
     private var mainButton: some View {
         let title = model.mainActionTitle
         let enabled = model.mainActionEnabled
@@ -319,32 +308,31 @@ public struct DobbyRootView: View {
                     .accessibilityIdentifier("tray.retry")
                 }
             } else if snapshot.profiles.isEmpty && orphan == nil {
-                SockIcon(holey: false)
-                    .frame(width: pt(40), height: pt(50))
-                    .accessibilityElement()
-                    .accessibilityLabel("No subscription yet")
+                EmptyTray()
             } else {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: pt(8)) {
                         if let orphan {
+                            let orphanConnected = snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil
                             ConnectionButton(
                                 name: orphan.name,
                                 details: [protocolName(orphan.protocolName), model.sessionStatus?.rawValue, "not in subscription"],
                                 on: isOn(model.sessionStatus),
-                                action: model.mainActionTitle
+                                action: orphanConnected ? "Connected" : model.mainActionTitle
                             ) { sourceFocused = false; model.mainAction() }
-                            .disabled(!model.mainActionEnabled)
+                            .disabled(!model.mainActionEnabled || orphanConnected)
                             .accessibilityIdentifier("profile.active")
                         }
                         ForEach(snapshot.profiles) { profile in
                             let status = model.profileStatus(profile.index)
+                            let title = model.profileActionTitle(profile.index)
                             ConnectionButton(
                                 name: profile.name,
                                 details: [protocolName(profile.protocolName), status?.rawValue],
                                 on: isOn(status),
-                                action: model.profileActionTitle(profile.index)
+                                action: title
                             ) { sourceFocused = false; model.performPrimaryAction(profile.index) }
-                            .disabled(!model.canAct(profile.index))
+                            .disabled(!model.canAct(profile.index) || title == "Connected")
                             .accessibilityIdentifier("profile.\(snapshot.digest).\(profile.index).action")
                         }
                     }
@@ -623,6 +611,24 @@ private struct PlainPasteButton: View {
     }
 }
 
+/// What the list area shows before any subscription is loaded.
+private struct EmptyTray: View {
+    var body: some View {
+        VStack(spacing: pt(10)) {
+            SockIcon(holey: false)
+                .frame(width: pt(40), height: pt(50))
+                .accessibilityElement()
+                .accessibilityLabel("No subscription yet")
+            Text("Paste the subscription link from your VPN provider above.")
+                .dobbyFont(15)
+                .foregroundColor(.muted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, pt(16))
+                .accessibilityIdentifier("tray.empty-hint")
+        }
+    }
+}
+
 private struct ConnectionButton: View {
     let name: String
     let details: [String?]
@@ -637,11 +643,12 @@ private struct ConnectionButton: View {
                     Text(name)
                         .dobbyFont(17, .medium)
                         .foregroundColor(.ink)
+                        .lineLimit(2)
                     Text(details.compactMap { $0 }.joined(separator: " · "))
                         .dobbyFont(13, on ? .semibold : .regular)
                         .foregroundColor(on ? .ink : .muted)
+                        .lineLimit(1)
                 }
-                .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Text(action)
                     .dobbyFont(15, .semibold)

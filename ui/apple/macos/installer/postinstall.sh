@@ -16,8 +16,13 @@ if [ -z "$CONSOLE_UID" ]; then
     CONSOLE_STATE="$(/usr/sbin/scutil <<'EOF'
 show State:/Users/ConsoleUser
 EOF
-)"
+)" || CONSOLE_STATE=""  # no console user is handled below, not fatal here
     CONSOLE_UID="$(printf '%s\n' "$CONSOLE_STATE" | /usr/bin/awk '/kCGSSessionUserIDKey[[:space:]]*:/ { sub(/.*:[[:space:]]*/, ""); print; exit }')"
+fi
+if ! [[ "$CONSOLE_UID" =~ ^[0-9]+$ ]] || [ "$CONSOLE_UID" -eq 0 ]; then
+    # No logged-in user (ssh, MDM, login window): keep the owner of the service
+    # that is already installed. This must be read before the plist is replaced.
+    CONSOLE_UID="$(/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:DOBBYVPN_CONTROL_PEER_UID" "$PLIST_DEST" 2>/dev/null || true)"
 fi
 if ! [[ "$CONSOLE_UID" =~ ^[0-9]+$ ]] || [ "$CONSOLE_UID" -eq 0 ]; then
     echo "Unable to identify the installed desktop user" >&2
