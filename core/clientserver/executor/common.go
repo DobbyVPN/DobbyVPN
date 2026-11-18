@@ -16,9 +16,8 @@ const darwinPlatform = "darwin"
 type Executor struct {
 }
 
-func recoverInterruptedState() error {
-	return sessionruntime.RecoverInterruptedState()
-}
+// recoverInterruptedState is a seam for the startup-path test.
+var recoverInterruptedState = sessionruntime.RecoverInterruptedState
 
 // Capture raw output before opening the structured sink so its own startup
 // failures survive. Validate the supervisor's path before creating the destination.
