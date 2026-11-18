@@ -12,7 +12,8 @@ PLIST_DEST="${DOBBYVPN_DAEMON_PLIST:-/Library/LaunchDaemons/com.dobby.vpnservice
 SCUTIL="${DOBBYVPN_SCUTIL:-/usr/sbin/scutil}"
 PKGUTIL="${DOBBYVPN_PKGUTIL:-/usr/sbin/pkgutil}"
 
-# 1. The package must match the CPU. sysctl reports Apple silicon even when the
+# 1. An arm64 package cannot run on an Intel Mac. An x86_64 package is fine on
+#    Apple silicon (Rosetta). sysctl reports Apple silicon even when the
 #    installer itself runs under Rosetta, where uname would say x86_64.
 HOST_ARCH="${DOBBYVPN_HOST_ARCH:-}"
 if [ -z "$HOST_ARCH" ]; then
@@ -22,7 +23,7 @@ if [ -z "$HOST_ARCH" ]; then
         HOST_ARCH="x86_64"
     fi
 fi
-if [ "$PACKAGE_ARCH" != "$HOST_ARCH" ]; then
+if [ "$PACKAGE_ARCH" = "arm64" ] && [ "$HOST_ARCH" != "arm64" ]; then
     echo "This DobbyVPN package is built for $PACKAGE_ARCH, but this Mac is $HOST_ARCH." >&2
     echo "Download the package for this Mac (arm64 for Apple silicon, x86_64 for Intel) and run it again. Nothing was installed." >&2
     exit 1
