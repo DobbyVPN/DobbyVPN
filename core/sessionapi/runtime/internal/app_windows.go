@@ -48,7 +48,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	if resolverIndex == 0 {
 		resolverIndex = ipv6
 	}
-	if _, _, _, err = dnscache.CaptureWindowsInterface(ctx, resolverIndex); err != nil {
+	if _, _, _, err = dnscache.CaptureWindowsInterface(ctx, resolverIndex, ipv4 != 0, ipv6 != 0); err != nil {
 		signalInit(initResult, err)
 		return err
 	}
@@ -111,7 +111,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		if index == 0 {
 			index = v6
 		}
-		identity, servers, resolve, err := dnscache.CaptureWindowsInterface(queryCtx, index)
+		identity, servers, resolve, err := dnscache.CaptureWindowsInterface(queryCtx, index, v4 != 0, v6 != 0)
 		if err != nil {
 			return "", nil, errors.Join(err, guard.UpdateBootstrap(queryCtx, "unavailable", nil))
 		}
