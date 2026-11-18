@@ -10,6 +10,7 @@ PACKAGE_ARCH="${DOBBYVPN_PACKAGE_ARCH:-@PACKAGE_ARCH@}"
 PACKAGE_VERSION="${DOBBYVPN_PACKAGE_VERSION:-@PACKAGE_VERSION@}"
 PLIST_DEST="${DOBBYVPN_DAEMON_PLIST:-/Library/LaunchDaemons/com.dobby.vpnservice.plist}"
 SCUTIL="${DOBBYVPN_SCUTIL:-/usr/sbin/scutil}"
+PKGUTIL="${DOBBYVPN_PKGUTIL:-/usr/sbin/pkgutil}"
 
 # 1. The package must match the CPU. sysctl reports Apple silicon even when the
 #    installer itself runs under Rosetta, where uname would say x86_64.
@@ -32,12 +33,13 @@ fi
 uid_is_usable() { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ne 0 ]; }
 OWNER_UID="${DOBBYVPN_CONTROL_PEER_UID:-}"
 if [ -z "$OWNER_UID" ]; then
-    OWNER_UID="$("$SCUTIL" <<'SCUTIL_INPUT' | /usr/bin/awk '/kCGSSessionUserIDKey[[:space:]]*:/ { sub(/.*:[[:space:]]*/, ""); print; exit }'
+    # A failing scutil must lead to the plist fallback, not end the script.
+    OWNER_UID="$("$SCUTIL" <<'SCUTIL_INPUT' | /usr/bin/awk '/kCGSSessionUserIDKey[[:space:]]*:/ { sub(/.*:[[:space:]]*/, ""); print; exit }' || true
 show State:/Users/ConsoleUser
 SCUTIL_INPUT
 )"
 fi
-if ! uid_is_usable "$OWNER_UID" && [ -f "$PLIST_DEST" ]; then
+if ! uid_is_usable "$OWNER_UID"; then
     OWNER_UID="$(/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:DOBBYVPN_CONTROL_PEER_UID" "$PLIST_DEST" 2>/dev/null || true)"
 fi
 if ! uid_is_usable "$OWNER_UID"; then
@@ -47,7 +49,7 @@ if ! uid_is_usable "$OWNER_UID"; then
 fi
 
 # 3. An older package over a newer one is allowed, but it is probably a mistake.
-INSTALLED_VERSION="${DOBBYVPN_INSTALLED_VERSION:-$(/usr/sbin/pkgutil --pkg-info com.dobby.pkg 2>/dev/null | /usr/bin/awk '/^version:/ { print $2 }' || true)}"
+INSTALLED_VERSION="$("$PKGUTIL" --pkg-info com.dobby.pkg 2>/dev/null | /usr/bin/awk '/^version:/ { print $2 }' || true)"
 if [ -n "$INSTALLED_VERSION" ] && /usr/bin/awk -v a="$INSTALLED_VERSION" -v b="$PACKAGE_VERSION" '
     BEGIN {
         na = split(a, x, "."); nb = split(b, y, ".")
