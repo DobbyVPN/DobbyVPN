@@ -16,7 +16,7 @@ if [ -z "$CONSOLE_UID" ]; then
     CONSOLE_STATE="$(/usr/sbin/scutil <<'EOF'
 show State:/Users/ConsoleUser
 EOF
-)"
+)" || CONSOLE_STATE=""  # no console user is handled below, not fatal here
     CONSOLE_UID="$(printf '%s\n' "$CONSOLE_STATE" | /usr/bin/awk '/kCGSSessionUserIDKey[[:space:]]*:/ { sub(/.*:[[:space:]]*/, ""); print; exit }')"
 fi
 if ! [[ "$CONSOLE_UID" =~ ^[0-9]+$ ]] || [ "$CONSOLE_UID" -eq 0 ]; then
