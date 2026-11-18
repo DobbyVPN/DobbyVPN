@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"core/log"
 )
 
 var errWrongLocalConnection = errors.New("control plane accepted a non-Unix connection")
@@ -246,7 +248,11 @@ func listenControlSocket(path string, recoverStale bool) (net.Listener, error) {
 	if lockErr != nil {
 		return nil, lockErr
 	}
-	defer directory.Close()
+	defer func() {
+		if err := directory.Close(); err != nil {
+			log.Warnf("controlplane", "release control socket directory lock for %s: %v", path, err)
+		}
+	}()
 	supervisedUnprivileged, supervisedErr := supervisedUnprivilegedSocket(path, ownerUID)
 	if supervisedErr != nil {
 		return nil, supervisedErr
