@@ -142,9 +142,9 @@ func run() {
 	logrus.StandardLogger().ExitFunc = func(code int) {
 		panic(fmt.Sprintf("fatal error (exit code %d)", code))
 	}
-	if err := recoverInterruptedState(); err != nil {
-		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
-	}
+	// A failed recovery must not stop the service: the control socket opens,
+	// clients see the error, and every Connect retries the recovery.
+	startupFailure = recoverInterruptedState()
 	controlPath, pathErr := controlplane.ControlSocketPath()
 	if pathErr != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", pathErr))

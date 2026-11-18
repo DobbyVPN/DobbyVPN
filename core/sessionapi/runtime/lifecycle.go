@@ -175,6 +175,10 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 	if r.network != nil || r.active {
 		return nil, errors.New("previous network is still owned")
 	}
+	// Retry leftover-state recovery on every Connect; no tunnel on failure.
+	if err := recoverBeforeNetwork(); err != nil {
+		return nil, err
+	}
 	n := &networkOwner{ref: ref, cache: dnscache.New()}
 	r.network = n
 	n.lease.setOnDone(func(error) {
