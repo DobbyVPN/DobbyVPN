@@ -79,47 +79,6 @@ func withFirewallRules(operation func(*ole.IDispatch) error) error {
 	})
 }
 
-func addWindowsIPv6Rule(name string) error {
-	return withFirewallRules(func(rules *ole.IDispatch) error {
-		if err := comEach(rules, func(rule *ole.IDispatch) error {
-			current, err := oleutil.GetProperty(rule, "Name")
-			if err != nil {
-				return err
-			}
-			defer current.Clear()
-			if current.ToString() == name {
-				return fmt.Errorf("firewall rule name %s already exists", name)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		return withCOM("HNetCfg.FWRule", func(rule *ole.IDispatch) error {
-			for _, property := range []struct {
-				name  string
-				value any
-			}{
-				{"Name", name}, {"Description", "DobbyVPN session-owned IPv6 block"},
-				{"Direction", int32(2)}, {"Action", int32(0)}, {"Enabled", true},
-				{"Profiles", int32(0x7fffffff)}, {"Protocol", int32(256)}, {"RemoteAddresses", windowsIPv6Range},
-			} {
-				result, err := oleutil.PutProperty(rule, property.name, property.value)
-				if err != nil {
-					return fmt.Errorf("set firewall %s: %w", property.name, err)
-				}
-				if err := result.Clear(); err != nil {
-					return err
-				}
-			}
-			result, err := oleutil.CallMethod(rules, "Add", rule)
-			if err != nil {
-				return fmt.Errorf("add firewall rule %s: %w", name, err)
-			}
-			return result.Clear()
-		})
-	})
-}
-
 func removeWindowsIPv6Rules(match func(string) bool) error {
 	return withFirewallRules(func(rules *ole.IDispatch) error {
 		var names []string
