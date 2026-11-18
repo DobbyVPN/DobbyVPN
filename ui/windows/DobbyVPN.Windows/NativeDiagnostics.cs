@@ -434,7 +434,8 @@ internal static class NativeLogFiles
         // unsuccessful rename leaves both generations at their existing paths.
         var destination = Encoding.Unicode.GetBytes(Path.GetFullPath(path + ".previous"));
         var nameOffset = Marshal.OffsetOf<RenameInformation>(nameof(RenameInformation.FileName)).ToInt32();
-        var size = Math.Max(Marshal.SizeOf<RenameInformation>(), nameOffset + destination.Length);
+        // Win32 reads a NUL-terminated path. FileNameLength excludes the terminator.
+        var size = Math.Max(Marshal.SizeOf<RenameInformation>(), nameOffset + destination.Length + sizeof(ushort));
         var information = Marshal.AllocHGlobal(size);
         try
         {
@@ -444,6 +445,7 @@ internal static class NativeLogFiles
                 FileNameLength = (uint)destination.Length,
             }, information, false);
             Marshal.Copy(destination, 0, IntPtr.Add(information, nameOffset), destination.Length);
+            Marshal.WriteInt16(information, nameOffset + destination.Length, 0);
             if (!SetFileInformationByHandle(file, FileRenameInfoEx, information, (uint)size))
                 throw new IOException($"Replace previous log during rotation: {path}", new Win32Exception(Marshal.GetLastWin32Error()));
         }
