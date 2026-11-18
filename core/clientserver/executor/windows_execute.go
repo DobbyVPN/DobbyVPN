@@ -19,7 +19,6 @@ import (
 	"core/sessionapi"
 	"core/tunnel/platform_engine"
 
-	"core/diagnostics"
 	"core/log"
 
 	"golang.org/x/sys/windows"
@@ -62,10 +61,12 @@ func closePipeAfterStartupFailure(listener net.Listener, startupErr error) error
 }
 
 func serveDesktopControl(listener net.Listener) (func() error, <-chan error) {
+	startRestore := prepareDesktopRestore(desktopProcessBinding())
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, nil)
 	}()
+	startRestore()
 	return listener.Close, serveDone
 }
 
@@ -129,7 +130,13 @@ func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeReq
 		return true, 1
 	}
 	stopControl, serveDone := serveDesktopControl(listener)
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown}
+	emit := newNetworkEvents()
+	if stopWatching, err := watchNetworkChanges(emit); err != nil {
+		log.Errorf(desktopLogCategory, "network change watcher unavailable: %v", err)
+	} else {
+		defer stopWatching()
+	}
+	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown | svc.AcceptPowerEvent}
 	var serveErr error
 running:
 	for {
@@ -143,6 +150,9 @@ running:
 			if request.Cmd == svc.Interrogate {
 				changes <- request.CurrentStatus
 			}
+			if request.Cmd == svc.PowerEvent {
+				powerEvent(request.EventType, emit)
+			}
 		}
 	}
 	changes <- svc.Status{State: svc.StopPending, WaitHint: uint32(sessionapi.CleanupTimeout / time.Millisecond)}
@@ -154,10 +164,21 @@ running:
 }
 
 func runService() error {
-	if err := configureServiceShutdownBudget(); err != nil {
-		return err
+	return runServiceWith(configureServiceShutdownBudget, func() error {
+		return svc.Run("DobbyVPN Go backend", &managerService{})
+	})
+}
+
+// A nil result from run means the SCM handler ran; failures inside it are
+// reported through the service exit code, not here.
+func runServiceWith(configureBudget, run func() error) error {
+	if err := configureBudget(); err != nil {
+		return fmt.Errorf("configure service shutdown budget: %w", err)
 	}
-	return svc.Run("DobbyVPN Go backend", &managerService{})
+	if err := run(); err != nil {
+		return fmt.Errorf("run service dispatcher: %w", err)
+	}
+	return nil
 }
 
 // Ordinary shutdown notification can force termination before the Go owner's
@@ -206,20 +227,30 @@ func run() {
 }
 
 func (c *Executor) Execute(mode string) {
-	if err := initExplicitLocalLog(); err != nil {
-		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to initialize local logging: %v\n", err)
-		return
+	if code := executeWith(mode, initExplicitLocalLog, run, runService); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// executeWith returns the process exit code. Only failures before or outside
+// the SCM handler are non-zero.
+func executeWith(mode string, initLog func() error, runNormal func(), runServiceMode func() error) int {
+	if err := initLog(); err != nil {
+		return reportStartupFailure("initialize local logging", err, mode == "service")
 	}
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)
 
 	switch mode {
 	case "normal":
-		run()
+		runNormal()
 	case "service":
-		if err := runService(); err != nil {
+		if err := runServiceMode(); err != nil {
 			log.Errorf(desktopLogCategory, "Go backend service failed: %v", err)
+			return reportStartupFailure("service", err, true)
 		}
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
+		return reportStartupFailure("select run mode", fmt.Errorf("invalid run mode %q", mode), false)
 	}
+	return 0
 }

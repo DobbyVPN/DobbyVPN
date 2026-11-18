@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -78,7 +79,7 @@ func runLogs(args []string) int {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		if err := uploadDiagnostics(ctx, dialService(), paths); err != nil {
-			return reportFailure(err)
+			return reportLogsFailure(err, paths[0])
 		}
 		return exitOK
 	}
@@ -93,7 +94,7 @@ func runLogs(args []string) int {
 	}
 	if export {
 		if err := exportDiagnostics(args[1], paths); err != nil {
-			return reportFailure(err)
+			return reportLogsFailure(err, paths[0])
 		}
 		fmt.Println(args[1])
 		return exitOK
@@ -111,9 +112,53 @@ func runLogs(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := streamDiagnostics(ctx, os.Stdout, paths, follow); err != nil {
-		return reportFailure(err)
+		return reportLogsFailure(err, paths[0])
 	}
 	return exitOK
+}
+
+func permissionHint(err error, backend string) string {
+	absolute, absErr := filepath.Abs(backend)
+	if absErr != nil {
+		return ""
+	}
+	ours := map[string]bool{
+		absolute:                              true,
+		absolute + ".lock":                    true,
+		absolute + diagnostics.PreviousSuffix: true,
+	}
+	if deniedPath(err, ours) {
+		return fmt.Sprintf("dobby-cli: the service log %s is readable only by root; run this command with sudo", absolute)
+	}
+	return ""
+}
+
+// deniedPath reports whether any joined error is a permission denial on one of paths.
+func deniedPath(err error, paths map[string]bool) bool {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrPermission) && paths[pathErr.Path] {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, inner := range joined.Unwrap() {
+			if deniedPath(inner, paths) {
+				return true
+			}
+		}
+	}
+	if wrapped := errors.Unwrap(err); wrapped != nil {
+		return deniedPath(wrapped, paths)
+	}
+	return false
+}
+
+func reportLogsFailure(err error, backend string) int {
+	if runtime.GOOS == "linux" {
+		if hint := permissionHint(err, backend); hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+		}
+	}
+	return reportFailure(err)
 }
 
 func diagnosticHeader() string {
