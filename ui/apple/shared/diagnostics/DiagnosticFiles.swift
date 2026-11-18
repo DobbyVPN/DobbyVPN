@@ -22,9 +22,8 @@ public enum DiagnosticFiles {
         processLock.lock()
         defer { processLock.unlock() }
         try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // A failed migration must not stop the record from being written; it is reported after the write.
-        // Exception: once a commit marker exists, finishing the migration replaces the log with the staged
-        // copy, so a record written now could be lost; keep failing before the write in that case.
+        // A failed migration must not stop the record from being written (the error is thrown after the write),
+        // unless a commit marker exists: finishing it replaces the log, which could drop records written meanwhile.
         var migrationError: Error?
         try withLock(path, writing: true) {
 #if os(macOS)
@@ -33,12 +32,14 @@ public enum DiagnosticFiles {
                 let configured = ProcessInfo.processInfo.environment["DOBBY_UI_LOG_PATH"].flatMap { $0.isEmpty ? nil : $0 }
                     ?? home.appendingPathComponent("Library/Logs/DobbyVPN/ui_diagnostics.jsonl").path
                 let ownsLegacy = legacyDesktop && (legacyHome != nil || path.standardizedFileURL.path == URL(fileURLWithPath: configured).standardizedFileURL.path)
+                var before = stat()
+                let markerBefore = lstat(path.path + ".legacy-commit", &before) == 0 || errno != ENOENT
                 do {
                     try migrateDesktopLegacy(path, includeLegacy: ownsLegacy, excluding: legacyExcludedPaths, homeDirectory: home)
                     initialized.insert(path.path)
                 } catch {
-                    var marker = stat()
-                    if lstat(path.path + ".legacy-commit", &marker) == 0 || errno != ENOENT { throw error }
+                    var after = stat()
+                    if markerBefore || lstat(path.path + ".legacy-commit", &after) == 0 || errno != ENOENT { throw error }
                     migrationError = error
                 }
             }
