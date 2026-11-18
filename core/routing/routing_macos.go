@@ -27,11 +27,6 @@ type macOSRoute struct {
 	flags   int
 }
 
-func isLoopbackIP(ip string) bool {
-	parsed := net.ParseIP(ip)
-	return parsed != nil && parsed.IsLoopback()
-}
-
 func routeIP(address route.Addr) netip.Addr {
 	switch a := address.(type) {
 	case *route.Inet4Addr:
