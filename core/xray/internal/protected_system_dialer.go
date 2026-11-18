@@ -29,7 +29,6 @@ type protectedSystemDialer struct {
 	protect      socketProtector
 	applyOptions outboundSocketOptions
 	sockets      *transportSockets
-	afterClose   func()
 }
 
 func newProtectedSystemDialer(
@@ -44,9 +43,6 @@ func (d *protectedSystemDialer) DestIpAddress() net.IP { return nil }
 
 func (d *protectedSystemDialer) Dial(ctx context.Context, source xraynet.Address, destination xraynet.Destination, sockopt *internet.SocketConfig) (net.Conn, error) {
 	if err := d.sockets.begin(); err != nil {
-		if d.afterClose != nil {
-			go d.afterClose() // not inline: the caller may be a gRPC dial goroutine
-		}
 		return nil, err
 	}
 	defer d.sockets.end()

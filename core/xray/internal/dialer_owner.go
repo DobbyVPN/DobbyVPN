@@ -16,21 +16,18 @@ import (
 
 // The protocol owner serializes construction and retirement of these global
 // Xray hooks. Retirement happens only after all instance resources have closed.
-// afterClose runs once the dialer is retired and on every dial it refuses
-// afterwards, so late Xray handlers cannot leave new gRPC clients behind. The
-// retired dialer stays installed (refusing dials) until the next install.
-func InstallProtectedSystemDialer(ctx context.Context, cache *dnscache.Cache, afterClose func()) func(context.Context) error {
+func InstallProtectedSystemDialer(ctx context.Context, cache *dnscache.Cache) func(context.Context) error {
 	dialer := newProtectedSystemDialer(func(network, address string, connection syscall.RawConn) error {
 		return protected_dialer.ProtectRawConnContext(ctx, network, address, connection)
 	}, applyPlatformOutboundSocketOptions)
-	dialer.resolver, dialer.owner, dialer.afterClose = cache, ctx, afterClose
+	dialer.resolver, dialer.owner = cache, ctx
 	internet.UseAlternativeSystemDialer(dialer)
 	return func(cleanup context.Context) error {
 		if err := dialer.sockets.close(cleanup); err != nil {
 			return err
 		}
+		internet.UseAlternativeSystemDialer(nil)
 		internet.InitSystemDialer(nil, nil)
-		afterClose()
 		return nil
 	}
 }

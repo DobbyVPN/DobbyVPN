@@ -6,6 +6,7 @@ import (
 
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
+	_ "github.com/xtls/xray-core/transport/internet/grpc"
 	"google.golang.org/grpc"
 )
 
