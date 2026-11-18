@@ -66,7 +66,9 @@ func (c *ipv6Capability) unavailable(submit func(func()) error, probe func() (su
 	stale := c.checkedAt.IsZero() || (c.unsupported && c.clock().Sub(c.checkedAt) >= ipv6UnsupportedRetry)
 	if stale && !c.probing && !c.clock().Before(c.retryAfter) {
 		c.probing = true
-		_ = submit(func() { c.run(probe) })
+		if err := submit(func() { c.run(probe) }); err != nil {
+			c.probing = false
+		}
 	}
 	return c.unsupported
 }
@@ -96,7 +98,14 @@ func (d *OutlineDevice) probeIPv6() (supported, conclusive bool) {
 
 	results := make(chan bool, len(ipv6ProbeTargets))
 	for _, target := range ipv6ProbeTargets {
-		_ = d.Submit(func() { results <- d.probeTarget(ctx, target) })
+		if err := d.Submit(func() {
+			// Send even when the probe panics, or the receive below never ends.
+			result := false
+			defer func() { results <- result }()
+			result = d.probeTarget(ctx, target)
+		}); err != nil {
+			results <- false
+		}
 	}
 	control := d.probeTarget(ctx, ipv4ProbeTarget)
 	for range ipv6ProbeTargets {
