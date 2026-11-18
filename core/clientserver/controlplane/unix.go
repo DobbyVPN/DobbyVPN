@@ -251,9 +251,6 @@ func listenControlSocket(path string, recoverStale bool) (net.Listener, error) {
 	if supervisedErr != nil {
 		return nil, supervisedErr
 	}
-	if permissionErr := setControlSocketDirectoryPermissions(path, ownerUID, supervisedUnprivileged); permissionErr != nil {
-		return nil, permissionErr
-	}
 	if recoverStale {
 		if cleanupErr := removeStaleControlSocket(path); cleanupErr != nil {
 			return nil, cleanupErr
@@ -268,6 +265,9 @@ func listenControlSocket(path string, recoverStale bool) (net.Listener, error) {
 	socket, statErr := os.Lstat(path)
 	if statErr != nil {
 		return nil, errors.Join(statErr, lis.Close())
+	}
+	if permissionErr := setControlSocketDirectoryPermissions(path, ownerUID, supervisedUnprivileged); permissionErr != nil {
+		return nil, errors.Join(permissionErr, lis.Close(), removeOwnedControlSocket(path, socket))
 	}
 	if permissionErr := setControlSocketPermissions(path, ownerUID, supervisedUnprivileged); permissionErr != nil {
 		return nil, errors.Join(permissionErr, lis.Close(), removeOwnedControlSocket(path, socket))
