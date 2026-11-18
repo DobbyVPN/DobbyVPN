@@ -259,9 +259,9 @@ final class VPNPreferenceCoordinator {
         })
     }
 
-    // Start the preference update alongside Go Stop. A failed or slow OS
-    // preference write must not prevent release of app-owned protection.
-    // Both operations consume the existing command deadline.
+    // Start the preference update; the caller waits for it (bounded by
+    // `deadline`) before sending Go Stop. A failed or slow OS preference write
+    // must not prevent release of app-owned protection, so Go Stop is sent anyway.
     func beginDisableOnDemandForStop(until deadline: TimeInterval) -> () -> String? {
         let completed = DispatchSemaphore(value: 0)
         let lock = NSLock()
