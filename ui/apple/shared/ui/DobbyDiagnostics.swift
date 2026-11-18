@@ -105,6 +105,24 @@ enum DobbyLatestUploadFile {
         return DobbyUploadReference(reference: record.reference, completed: time, provider: record.provider)
     }
 
+    /// macOS: the shared file; the old UserDefaults value only when the file is absent (a damaged file must not bring it back).
+    /// iOS: UserDefaults.
+    static func load(forLog uiLog: URL, defaultsKey: String) -> DobbyUploadReference? {
+        #if os(macOS)
+        if let upload = read(forLog: uiLog) { return upload }
+        if exists(forLog: uiLog) { return nil }
+        #endif
+        return UserDefaults.standard.data(forKey: defaultsKey).flatMap { try? JSONDecoder().decode(DobbyUploadReference.self, from: $0) }
+    }
+
+    static func save(_ upload: DobbyUploadReference, forLog uiLog: URL, defaultsKey: String) throws {
+        #if os(macOS)
+        try write(upload, forLog: uiLog)
+        #else
+        UserDefaults.standard.set(try JSONEncoder().encode(upload), forKey: defaultsKey)
+        #endif
+    }
+
     static func write(_ upload: DobbyUploadReference, forLog uiLog: URL) throws {
         let destination = url(forLog: uiLog)
         let directory = destination.deletingLastPathComponent()

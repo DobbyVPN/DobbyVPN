@@ -122,17 +122,7 @@ public final class DobbySessionViewModel: ObservableObject {
     ) {
         self.client = client
         self.debounceScheduler = debounceScheduler
-#if os(macOS)
-        // Same file as dobby-cli, so an upload made in either place is visible in both.
-        latestUpload = DobbyLatestUploadFile.read(forLog: client.uiDiagnosticPath)
-        // The old UserDefaults value is used only when there is no file; a damaged file must not bring it back.
-        let useDefaults = latestUpload == nil && !DobbyLatestUploadFile.exists(forLog: client.uiDiagnosticPath)
-#else
-        let useDefaults = true
-#endif
-        if useDefaults, let data = UserDefaults.standard.data(forKey: uploadReferenceKey) {
-            latestUpload = try? JSONDecoder().decode(DobbyUploadReference.self, from: data)
-        }
+        latestUpload = DobbyLatestUploadFile.load(forLog: client.uiDiagnosticPath, defaultsKey: uploadReferenceKey)
         if !Self.cleanedUploadDirectories {
             Self.cleanedUploadDirectories = true
             do { try DobbyUploadDirectory.removeAbandoned() }
@@ -652,13 +642,9 @@ extension DobbySessionViewModel {
                 try await uploadDiagnostics(preparation, file: file)
                 let result = DobbyUploadReference(reference: preparation.reference, completed: Date(), provider: preparation.provider)
                 self.latestUpload = result
-#if os(macOS)
                 // The upload already succeeded; failing to save the reference must not be reported as a failed upload.
-                do { try DobbyLatestUploadFile.write(result, forLog: client.uiDiagnosticPath) }
+                do { try DobbyLatestUploadFile.save(result, forLog: client.uiDiagnosticPath, defaultsKey: self.uploadReferenceKey) }
                 catch { self.recordError("Could not save latest upload reference: \(String(reflecting: error))") }
-#else
-                UserDefaults.standard.set(try JSONEncoder().encode(result), forKey: self.uploadReferenceKey)
-#endif
             } catch is CancellationError {
                 self.uploadError = "Log upload cancelled"
             } catch {
