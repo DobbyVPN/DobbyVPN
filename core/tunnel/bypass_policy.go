@@ -16,8 +16,24 @@ import (
 // construction.
 type BypassPolicy struct {
 	cidrs      []*net.IPNet
+	userCIDRs  int // leading cidrs that come from the user's entries
 	entryCount int
+	// ipv6Unavailable reports, without blocking, that the attempt's transport
+	// cannot reach IPv6 destinations. Nil means IPv6 is never refused.
+	ipv6Unavailable func() bool
 }
+
+// WithIPv6Availability returns a copy that refuses IPv6 connections while
+// unavailable reports true.
+func (p *BypassPolicy) WithIPv6Availability(unavailable func() bool) *BypassPolicy {
+	policy := *p
+	policy.ipv6Unavailable = unavailable
+	return &policy
+}
+
+// ExcludedCIDRs returns only the networks resolved from the user's entries,
+// without the numeric protocol upstream addresses added later.
+func (p *BypassPolicy) ExcludedCIDRs() []*net.IPNet { return p.cidrs[:p.userCIDRs] }
 
 func (p *BypassPolicy) IsBypass(metadata *M.Metadata) bool {
 	if p == nil {
@@ -55,7 +71,7 @@ func ResolveBypassPolicyWithResolver(ctx context.Context, entries []string, reso
 	if err != nil {
 		return nil, err
 	}
-	policy := &BypassPolicy{cidrs: cidrs, entryCount: len(entries)}
+	policy := &BypassPolicy{cidrs: cidrs, userCIDRs: len(cidrs), entryCount: len(entries)}
 	policy.recordResolved()
 	return policy, nil
 }
@@ -81,12 +97,10 @@ func (p *BypassPolicy) WithNumericIPs(ips []net.IP) (*BypassPolicy, error) {
 		}
 		cidrs = append(cidrs, &net.IPNet{IP: normalized, Mask: mask})
 	}
-	policy := &BypassPolicy{
-		cidrs:      cidrs,
-		entryCount: p.entryCount,
-	}
+	policy := *p
+	policy.cidrs = cidrs
 	policy.recordResolved()
-	return policy, nil
+	return &policy, nil
 }
 
 func (p *BypassPolicy) recordResolved() {
