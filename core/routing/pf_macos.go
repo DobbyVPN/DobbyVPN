@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"core/log"
+	"core/tunnel/protected_dialer"
 )
 
 // The token lives in /var/run, which macOS clears at boot together with the
@@ -51,11 +52,13 @@ type MacOSKillSwitch struct {
 	tunName        string
 	token          string
 	servers        []netip.Addr
-	excluded       []*net.IPNet
 	attempts       map[uint64]map[PFDestination]struct{}
 	retiredThrough uint64
 	applied        bool
 	closed         bool
+	// stale is set when the loaded rules may differ from the state above, so
+	// the next change reloads even if it changes nothing itself.
+	stale bool
 }
 
 // AcquireMacOSKillSwitch blocks outbound traffic outside tunName with rules in
@@ -85,9 +88,27 @@ func (p *Plan) AcquireMacOSKillSwitch(ctx context.Context, tunName string, serve
 		err = k.reload(ctx)
 	}
 	if err == nil {
+		err = killMacOSPFStates(ctx)
+	}
+	if err == nil {
 		log.Info(Category, "macOS kill switch applied", map[string]any{"anchor": MacOSPFAnchor, "interface": tunName})
 	}
 	return k, err
+}
+
+// A block rule does not stop flows that already have pf state, which exists
+// only if another owner enabled pf with its own pass rules. Kill every state
+// once the anchor is loaded, so existing direct connections must pass the new
+// rules again. This runs before the network is ready, when no VPN transport
+// connection exists yet; later reloads never kill states. Loopback and tunnel
+// rules keep no state, so their flows continue.
+func killMacOSPFStates(ctx context.Context) error {
+	for _, network := range []string{"0.0.0.0/0", "::/0"} {
+		if _, _, err := macOSPFCommand(ctx, "", "-k", network); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // macOSPFEnable adds a pf enable reference, or adopts the one a dead backend
@@ -111,7 +132,8 @@ func macOSPFEnable(ctx context.Context) (string, error) {
 	}
 	// The saved token is the only record a later backend can release; rules
 	// are loaded only after it is written.
-	if err := os.MkdirAll(filepath.Dir(macOSPFTokenPath), 0o755); err == nil {
+	err = os.MkdirAll(filepath.Dir(macOSPFTokenPath), 0o755)
+	if err == nil {
 		err = os.WriteFile(macOSPFTokenPath, []byte(token+"\n"), 0o600)
 	}
 	if err != nil {
@@ -125,12 +147,13 @@ func releaseMacOSPF(ctx context.Context, token string) error {
 	if _, _, err := macOSPFCommand(ctx, "", "-a", MacOSPFAnchor, "-F", "rules"); err != nil {
 		return err
 	}
-	// A token that pf no longer knows cannot be released again; keep going so
-	// cleanup does not stay pending forever.
-	if token != "" {
-		if _, _, err := macOSPFCommand(ctx, "", "-X", token); err != nil {
-			log.Error(Category, "macOS pf enable reference release failed", map[string]any{"cause": err.Error()})
-		}
+	// Only a saved token has a file. It stays until pf accepts the release, so
+	// a retry, the next service start or the uninstall script can repeat it.
+	if token == "" {
+		return nil
+	}
+	if _, _, err := macOSPFCommand(ctx, "", "-X", token); err != nil {
+		return err
 	}
 	if err := os.Remove(macOSPFTokenPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -164,21 +187,29 @@ func (k *MacOSKillSwitch) reload(ctx context.Context) error {
 			destinations = append(destinations, destination)
 		}
 	}
-	rules := MacOSPFRules(k.tunName, k.servers, destinations, k.excluded)
+	rules := MacOSPFRules(k.tunName, k.servers, destinations)
 	if _, _, err := macOSPFCommand(ctx, rules, "-a", MacOSPFAnchor, "-f", "-"); err != nil {
+		k.stale = true
 		return err
 	}
+	k.stale = false
 	log.Debugf(Category, "macOS kill switch rules loaded:\n%s", rules)
 	return nil
 }
 
-func (k *MacOSKillSwitch) update(ctx context.Context, change func() bool) error {
+// update applies change and loads the result in one step under k.mu. A load
+// failure marks the rules stale, so a retried change reloads them.
+func (k *MacOSKillSwitch) update(ctx context.Context, change func() (bool, error)) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.closed {
 		return errors.New("macOS kill switch is closed")
 	}
-	if !change() || !k.applied {
+	changed, err := change()
+	if err != nil {
+		return err
+	}
+	if !k.applied || !changed && !k.stale {
 		return nil
 	}
 	return k.reload(ctx)
@@ -186,17 +217,13 @@ func (k *MacOSKillSwitch) update(ctx context.Context, change func() bool) error 
 
 // SetResolvers admits the backend's queries to the physical DNS servers.
 func (k *MacOSKillSwitch) SetResolvers(ctx context.Context, servers []netip.Addr) error {
-	return k.update(ctx, func() bool {
+	return k.update(ctx, func() (bool, error) {
 		if slices.Equal(k.servers, servers) {
-			return false
+			return false, nil
 		}
 		k.servers = slices.Clone(servers)
-		return true
+		return true, nil
 	})
-}
-
-func (k *MacOSKillSwitch) SetExcluded(ctx context.Context, excluded []*net.IPNet) error {
-	return k.update(ctx, func() bool { k.excluded = excluded; return true })
 }
 
 func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, network, address string) error {
@@ -204,40 +231,38 @@ func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, netw
 	if err != nil {
 		return err
 	}
-	k.mu.Lock()
-	retired := generation == 0 || generation <= k.retiredThrough
-	k.mu.Unlock()
-	if retired {
-		return errors.New("macOS transport owner is retired")
-	}
-	return k.update(ctx, func() bool {
+	destination.Bypass = protected_dialer.IsApplicationBypass(ctx)
+	return k.update(ctx, func() (bool, error) {
+		if generation == 0 || generation <= k.retiredThrough {
+			return false, errors.New("macOS transport owner is retired")
+		}
 		entries := k.attempts[generation]
 		if _, ok := entries[destination]; ok {
-			return false
+			return false, nil
 		}
 		if entries == nil {
 			entries = make(map[PFDestination]struct{})
 			k.attempts[generation] = entries
 		}
 		entries[destination] = struct{}{}
-		return true
+		return true, nil
 	})
 }
 
 func (k *MacOSKillSwitch) Retire(ctx context.Context, generation uint64) error {
 	k.mu.Lock()
-	if generation > k.retiredThrough {
-		k.retiredThrough = generation
-	}
 	closed := k.closed
 	k.mu.Unlock()
 	if closed {
 		return nil
 	}
-	return k.update(ctx, func() bool {
+	return k.update(ctx, func() (bool, error) {
+		if generation > k.retiredThrough {
+			k.retiredThrough = generation
+		}
 		_, ok := k.attempts[generation]
 		delete(k.attempts, generation)
-		return ok
+		return ok, nil
 	})
 }
 

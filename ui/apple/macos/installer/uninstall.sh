@@ -81,19 +81,27 @@ fi
 # A backend that died while connected leaves its kill switch in pf.  Flush
 # only the product anchor and release only the product's enable reference;
 # the main ruleset is untouched and pf stays enabled if another owner uses it.
-# A failure does not stop the uninstall: a reboot clears pf state as well.
+# A failure does not stop the uninstall: the token file stays so the release
+# can be repeated, and a reboot clears pf state and /var/run as well.
 PF_ANCHOR="com.apple/dobbyvpn"
 PF_TOKEN="$CONTROL_DIRECTORY/pf.token"
 capture_command pf-flush /sbin/pfctl -a "$PF_ANCHOR" -F rules
-if [ "$CAPTURE_STATUS" -ne 0 ]; then
-    printf 'pf anchor flush failed (status %s); a reboot removes the rules\n' "$CAPTURE_STATUS" >&2
+pf_flush_status="$CAPTURE_STATUS"
+if [ "$pf_flush_status" -ne 0 ]; then
+    printf 'pf anchor flush failed (status %s); a reboot removes the rules\n' "$pf_flush_status" >&2
 fi
-if [ -f "$PF_TOKEN" ] && [ ! -L "$PF_TOKEN" ]; then
+if [ "$pf_flush_status" -eq 0 ] && [ -f "$PF_TOKEN" ] && [ ! -L "$PF_TOKEN" ]; then
     pf_token="$(tr -cd '0-9' <"$PF_TOKEN")"
+    pf_release_status=0
     if [ -n "$pf_token" ]; then
         capture_command pf-release /sbin/pfctl -X "$pf_token"
+        pf_release_status="$CAPTURE_STATUS"
     fi
-    rm -f "$PF_TOKEN"
+    if [ "$pf_release_status" -eq 0 ]; then
+        rm -f "$PF_TOKEN"
+    else
+        printf 'pf enable reference release failed (status %s); %s is kept\n' "$pf_release_status" "$PF_TOKEN" >&2
+    fi
 fi
 
 # Remove only the product's launchd registration and runtime endpoint.  Do not
