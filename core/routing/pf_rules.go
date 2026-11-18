@@ -3,7 +3,6 @@ package routing
 import (
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -15,25 +14,29 @@ import (
 const MacOSPFAnchor = "com.apple/dobbyvpn"
 
 // PFDestination is one transport destination the backend authorized for an
-// attempt. Port 0 admits every port of the address.
+// attempt. Port 0 admits every port of the address. Bypass marks application
+// traffic sent outside the tunnel (ExcludeIPs) rather than the VPN transport.
 type PFDestination struct {
 	Protocol string // "tcp" or "udp"
 	Addr     netip.Addr
 	Port     uint16
+	Bypass   bool
 }
 
 // MacOSPFRules renders the kill switch anchor. Outbound packets leave only
 // through loopback and the tunnel, except DHCP, IPv6 neighbor discovery, the
 // backend's queries to the physical DNS servers and the backend's authorized
-// transport destinations. Port 53 to an authorized destination inside an
-// excluded network is not admitted, so DNS cannot leave outside the tunnel
-// through ExcludeIPs; the VPN server's own address keeps port 53.
-func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDestination, excluded []*net.IPNet) string {
+// transport destinations. Application traffic outside the tunnel never gets
+// port 53, so DNS cannot bypass the tunnel through ExcludeIPs; the VPN
+// transport keeps port 53 even when the server is inside an excluded range.
+// Loopback and tunnel rules keep no state: connections that existed before
+// the anchor loaded continue there without a state entry.
+func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDestination) string {
 	var b strings.Builder
 	b.WriteString("# DobbyVPN kill switch: outbound traffic leaves only through the tunnel.\n")
-	b.WriteString("pass out quick on lo0 all\n")
+	b.WriteString("pass out quick on lo0 all no state\n")
 	if tunName != "" {
-		fmt.Fprintf(&b, "pass out quick on %s all\n", tunName)
+		fmt.Fprintf(&b, "pass out quick on %s all no state\n", tunName)
 	}
 	b.WriteString("pass out quick inet proto udp from any port 68 to any port 67\n")
 	b.WriteString("pass out quick inet6 proto udp from any port 546 to any port 547\n")
@@ -51,20 +54,26 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDest
 		if c := strings.Compare(a.Protocol, b.Protocol); c != 0 {
 			return c
 		}
-		return int(a.Port) - int(b.Port)
+		if a.Port != b.Port {
+			return int(a.Port) - int(b.Port)
+		}
+		if a.Bypass == b.Bypass {
+			return 0
+		}
+		if a.Bypass {
+			return 1
+		}
+		return -1
 	})
 	for _, d := range slices.Compact(sorted) {
 		port := ""
-		if d.Port != 0 {
+		switch {
+		case d.Bypass && d.Port == 53:
+			continue
+		case d.Bypass && d.Port == 0:
+			port = " port != 53"
+		case d.Port != 0:
 			port = fmt.Sprintf(" port %d", d.Port)
-		}
-		if pfExcluded(d.Addr, excluded) {
-			if d.Port == 53 {
-				continue
-			}
-			if d.Port == 0 {
-				port = " port != 53"
-			}
 		}
 		fmt.Fprintf(&b, "pass out quick %s proto %s from any to %s%s user root\n", pfFamily(d.Addr), d.Protocol, pfAddress(d.Addr), port)
 	}
@@ -81,15 +90,6 @@ func pfFamily(ip netip.Addr) string {
 
 // pf takes no zone in an address; the rule matches the address on any link.
 func pfAddress(ip netip.Addr) string { return ip.Unmap().WithZone("").String() }
-
-func pfExcluded(ip netip.Addr, excluded []*net.IPNet) bool {
-	for _, network := range excluded {
-		if network != nil && network.Contains(ip.Unmap().WithZone("").AsSlice()) {
-			return true
-		}
-	}
-	return false
-}
 
 // PFEvaluatesAnchor reports whether `pfctl -s rules` output of the main
 // ruleset contains the stock wildcard anchor that evaluates MacOSPFAnchor.
