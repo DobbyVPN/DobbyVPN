@@ -28,17 +28,23 @@ func shutdownDesktop(closeControl func() error, serveErr error, owner *mobilebin
 var (
 	processOnce    sync.Once
 	processBinding *mobilebinding.Binding
+	// startupFailure is set before the first desktopProcessBinding call by
+	// platforms whose startup recovery failed without stopping the service.
+	startupFailure error
+	// connectionSourceStore is a seam for the startup-path test.
+	connectionSourceStore = controlplane.ConnectionSourceStore
 )
 
 func desktopProcessBinding() *mobilebinding.Binding {
 	processOnce.Do(func() {
-		sourceStore, err := controlplane.ConnectionSourceStore()
+		sourceStore, err := connectionSourceStore()
 		if err != nil {
 			panic(fmt.Sprintf("failed to locate desktop connection URL storage: %v", err))
 		}
 		manager := sessionapi.NewManager(sessionapi.ManagerOptions{
-			Runtime:     runtimebridge.New(nil),
-			SourceStore: sourceStore,
+			Runtime:        runtimebridge.New(nil),
+			SourceStore:    sourceStore,
+			StartupFailure: startupFailure,
 		})
 		processBinding = mobilebinding.NewForDesktop(manager)
 	})

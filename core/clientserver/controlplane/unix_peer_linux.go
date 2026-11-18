@@ -3,12 +3,9 @@
 package controlplane
 
 import (
-	"fmt"
+	"errors"
 	"net"
 	"os"
-	"path/filepath"
-	"strconv"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -40,33 +37,23 @@ func peerUID(conn net.Conn) (int, error) {
 	}
 	return uid, nil
 }
-func currentUID() int { return os.Getuid() }
 
-// A boot-time system service has no inherited desktop environment. Permit the
-// sole logged-in desktop UID under /run/user; multiple sessions fail closed.
+var currentUID = os.Getuid
+
+// privilegedDefaultPeerUID is unused on Linux: the service authorizes regular
+// local accounts per connection and never pins a desktop UID.
 func privilegedDefaultPeerUID() (int, error) {
-	entries, err := os.ReadDir("/run/user")
-	if err != nil {
-		return 0, err
-	}
-	candidates := make([]int, 0, 1)
-	for _, entry := range entries {
-		uid, err := strconv.Atoi(entry.Name())
-		if err != nil || uid < 1000 || uid >= 60000 {
-			continue
-		}
-		info, err := os.Stat(filepath.Join(string(filepath.Separator), "run", "user", entry.Name()))
-		if err != nil || !info.IsDir() {
-			continue
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || int(stat.Uid) != uid {
-			continue
-		}
-		candidates = append(candidates, uid)
-	}
-	if len(candidates) != 1 {
-		return 0, fmt.Errorf("expected one logged-in desktop UID, found %d", len(candidates))
-	}
-	return candidates[0], nil
+	return 0, errors.New("privileged peer discovery is unused on Linux")
 }
+
+// authorizePrivilegedPeer admits root and resolvable regular local accounts so a
+// headless service serves the machine without a logged-in desktop session.
+func authorizePrivilegedPeer(uid int) error {
+	return authorizeRegularUser(uid, lookupUserID)
+}
+
+// privilegedListenOwnerUID leaves a privileged socket root-owned; every
+// connection is authenticated by peer credentials instead.
+func privilegedListenOwnerUID() (int, error) { return -1, nil }
+
+func privilegedSocketModes() (dirMode, socketMode os.FileMode) { return 0o755, 0o666 }

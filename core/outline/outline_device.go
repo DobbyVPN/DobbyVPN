@@ -44,6 +44,7 @@ type OutlineDevice struct {
 	websocket     bool
 	hasTCPPath    bool
 	hasUDPPath    bool
+	ipv6          ipv6Capability
 }
 
 func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {

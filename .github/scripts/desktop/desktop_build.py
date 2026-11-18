@@ -1241,6 +1241,7 @@ def build_native_ui(
         resources = output / "Contents" / "Resources"
         resources.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / "ui" / "apple" / "macos" / "AppIcon.icns", resources / "AppIcon.icns")
+        shutil.copyfile(ROOT_DIR / "ui" / "apple" / "macos" / "PrivacyInfo.xcprivacy", resources / "PrivacyInfo.xcprivacy")
         info = {
             "CFBundleDisplayName": "Dobby VPN",
             "CFBundleExecutable": "DobbyVPNMacApp",
