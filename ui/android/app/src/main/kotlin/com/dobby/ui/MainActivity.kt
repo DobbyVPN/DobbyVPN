@@ -1085,13 +1085,14 @@ internal class SessionController(
             report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
             return
         }
+        // Read before cancelling: cancelling un-hides the session failure the user has not seen.
+        val displayed = shownError(errors, dismissedErrors)
         selectionAdmission.invalidate()
         cancelPreparation()
         permissionTarget = null
         val current = latest
         if (state.busy || (current.primaryAction != "STOP" && !current.vpnActive)) return
         // Preserve closed errors and acknowledge only the displayed transport failure.
-        val displayed = shownError(errors, dismissedErrors)
         if (!displayed.isNullOrEmpty() && displayed == state.session.failure) dismissError(displayed)
         state = state.copy(busy = true, error = "")
         worker.execute {
