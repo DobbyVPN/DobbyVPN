@@ -78,6 +78,24 @@ else
     esac
 fi
 
+# A backend that died while connected leaves its kill switch in pf.  Flush
+# only the product anchor and release only the product's enable reference;
+# the main ruleset is untouched and pf stays enabled if another owner uses it.
+# A failure does not stop the uninstall: a reboot clears pf state as well.
+PF_ANCHOR="com.apple/dobbyvpn"
+PF_TOKEN="$CONTROL_DIRECTORY/pf.token"
+capture_command pf-flush /sbin/pfctl -a "$PF_ANCHOR" -F rules
+if [ "$CAPTURE_STATUS" -ne 0 ]; then
+    printf 'pf anchor flush failed (status %s); a reboot removes the rules\n' "$CAPTURE_STATUS" >&2
+fi
+if [ -f "$PF_TOKEN" ] && [ ! -L "$PF_TOKEN" ]; then
+    pf_token="$(tr -cd '0-9' <"$PF_TOKEN")"
+    if [ -n "$pf_token" ]; then
+        capture_command pf-release /sbin/pfctl -X "$pf_token"
+    fi
+    rm -f "$PF_TOKEN"
+fi
+
 # Remove only the product's launchd registration and runtime endpoint.  Do not
 # follow symlinks or sweep the parent runtime directory if another owner uses
 # it; an empty product directory is removed as a cosmetic final step.
