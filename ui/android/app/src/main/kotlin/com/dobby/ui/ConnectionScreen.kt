@@ -471,7 +471,7 @@ internal fun displayErrorDetail(raw: String): String {
 @Composable
 private fun ErrorDialog(controller: SessionController) {
     val errors = controller.errors
-    LaunchedEffect(errors) { controller.forgetClearedErrors() }
+    LaunchedEffect(controller.rawErrors) { controller.forgetClearedErrors() }
     val detail = shownError(errors, controller.dismissedErrors) ?: return
     val loadFailed = detail == controller.state.loadError
     val protectedFailure = controller.isProtectedFailure
