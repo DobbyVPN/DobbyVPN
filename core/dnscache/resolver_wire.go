@@ -18,9 +18,9 @@ import (
 
 // resolveCapturedDNSServers uses only the physical network's captured server
 // inventory. It does not consult global DNS configuration or add a TTL cache.
-// Both record families share the caller's deadline. Racing configured servers
+// Available record families share the caller's deadline. Racing configured servers
 // leaves failover inside that budget without an earlier per-server cutoff.
-func resolveCapturedDNSServers(ctx context.Context, host string, servers []string, dialer *net.Dialer, network string) ([]net.IPAddr, error) {
+func resolveCapturedDNSServers(ctx context.Context, host string, servers []string, dialer *net.Dialer, network string, queryTypes []uint16) ([]net.IPAddr, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -35,8 +35,12 @@ func resolveCapturedDNSServers(ctx context.Context, host string, servers []strin
 		addresses []net.IPAddr
 		err       error
 	}
-	families := make(chan result, 2)
-	for _, kind := range []uint16{dns.TypeA, dns.TypeAAAA} {
+	if len(queryTypes) == 0 {
+		return nil, errors.New("physical network has no endpoint address family")
+	}
+	log.Debugf(Category, "captured DNS lookup network=%s host=%s record_types=%v", network, host, queryTypes)
+	families := make(chan result, len(queryTypes))
+	for _, kind := range queryTypes {
 		go func(kind uint16) {
 			familyContext, cancel := context.WithCancel(ctx)
 			var queries sync.WaitGroup
@@ -72,7 +76,7 @@ func resolveCapturedDNSServers(ctx context.Context, host string, servers []strin
 	}
 	var addresses []net.IPAddr
 	var failures []error
-	for range 2 {
+	for range queryTypes {
 		family := <-families
 		addresses = append(addresses, family.addresses...)
 		failures = append(failures, family.err)

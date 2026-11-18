@@ -40,11 +40,19 @@ class ReleaseGuardError(ValueError):
     """A guard record or GitHub response is invalid, ambiguous, or unresolved."""
 
 
+class GitHubHTTPError(ReleaseGuardError):
+    """Confirmed HTTP failure; the original command and bytes remain in the cause."""
+
+    def __init__(self, status: int):
+        super().__init__(f"GitHub API returned HTTP {status}")
+        self.status = status
+
+
 class GitHubAPI:
     """Small gh-api adapter. All state and policy remain in this module."""
 
     def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
-        command = ["gh", "api", path, "--method", method.upper()]
+        command = ["gh", "api", path, "--method", method.upper(), "--include"]
         input_bytes = None
         if payload is not None:
             command.extend(("--input", "-"))
@@ -54,12 +62,24 @@ class GitHubAPI:
         except subprocess.CalledProcessError as error:
             _forward_bytes(sys.stdout, error.stdout)
             _forward_bytes(sys.stderr, error.stderr)
+            # gh --include exposes the actual HTTP status independently of its
+            # human-readable stderr and JSON error message.
+            match = re.match(rb"HTTP/[0-9.]+ ([0-9]{3})(?: |\r?\n)", error.stdout or b"")
+            if match:
+                raise GitHubHTTPError(int(match.group(1))) from error
             raise
         except OSError as error:
             raise ReleaseGuardError("cannot execute gh api") from error
         try:
-            return json.loads(result.stdout.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            body = result.stdout
+            if body.startswith(b"HTTP/"):
+                _headers, separator, body = body.partition(b"\r\n\r\n")
+                if not separator:
+                    _headers, separator, body = result.stdout.partition(b"\n\n")
+                if not separator:
+                    raise ValueError("GitHub API response has no HTTP header boundary")
+            return json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as error:
             _forward_bytes(sys.stdout, result.stdout)
             _forward_bytes(sys.stderr, result.stderr)
             raise
@@ -419,7 +439,17 @@ def _ensure_no_blockers(api: Any, repository: str, *, exclude_id: int | None = N
             continue
         if state == "success":
             run_id = _parse_run_url(latest.get("log_url"), repository)
-            run = _get_run(api, repository, run_id, deployment["_candidate"], allow_retried=True)
+            if _status_attempt(latest) is None:
+                raise ReleaseGuardError("successful guard has invalid attempt metadata")
+            try:
+                run = _get_run(api, repository, run_id, deployment["_candidate"], allow_retried=True)
+            except GitHubHTTPError as error:
+                if error.status != 404:
+                    raise
+                print(f"Historical successful guard {deployment['id']}: Test run {run_id} "
+                      "is unavailable (HTTP 404); retaining its recorded history. "
+                      "Exact selection still requires an available successful run.", file=sys.stderr)
+                continue
             if (run.get("status") != "completed" or run.get("conclusion") != "success"
                     or _status_attempt(latest) != run.get("run_attempt")):
                 blockers.append({"id": deployment["id"], "state": "success-unverified"})
