@@ -39,6 +39,8 @@ import com.dobby.presentation.CallbackLifetime
 import com.dobby.presentation.SelectionAdmission
 import com.dobby.presentation.SubscriptionRequest
 import com.dobby.presentation.UiOperationDiagnostics
+import com.dobby.presentation.forgetClearedDismissals
+import com.dobby.presentation.shownError
 import com.dobby.vpn.BuildConfig
 import com.dobby.vpn.R
 import org.json.JSONObject
@@ -675,7 +677,7 @@ internal class SessionController(
     val errors: List<String> get() =
         listOf(state.loadError, state.error, state.session.failure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
 
-    /** Messages the user closed; they stay hidden until they clear or the user makes a new attempt. */
+    /** Messages the user closed; they stay hidden until they clear from the current errors. */
     var dismissedErrors by mutableStateOf(restoredDismissedErrors)
         private set
 
@@ -959,7 +961,7 @@ internal class SessionController(
     fun dismissError(message: String) { dismissedErrors = dismissedErrors + message }
 
     fun forgetClearedErrors() {
-        if (latest.sessionId.isNotEmpty()) dismissedErrors = dismissedErrors.intersect(errors.toSet())
+        if (latest.sessionId.isNotEmpty()) dismissedErrors = forgetClearedDismissals(dismissedErrors, errors)
     }
 
     fun copyToClipboard(text: String) {
@@ -990,7 +992,6 @@ internal class SessionController(
         }
         if (!allowed) return
         if (isStopTarget(index)) { stop(); return }
-        dismissedErrors = emptySet()
         val current = latest
         state = state.copy(busy = true, error = "")
         permissionTarget = PendingPermissionAction(
@@ -1016,7 +1017,6 @@ internal class SessionController(
             worker.execute { refreshSnapshot(clearBusy = true) }
             return
         }
-        dismissedErrors = emptySet()
         state = state.copy(busy = true, error = "")
         permissionTarget = PendingPermissionAction(
             session = current,
@@ -1038,7 +1038,7 @@ internal class SessionController(
         val current = latest
         if (state.busy || (current.primaryAction != "STOP" && !current.vpnActive)) return
         // Preserve closed errors and acknowledge only the displayed transport failure.
-        val displayed = errors.firstOrNull { it !in dismissedErrors }
+        val displayed = shownError(errors, dismissedErrors)
         if (!displayed.isNullOrEmpty() && displayed == state.session.failure) dismissError(displayed)
         state = state.copy(busy = true, error = "")
         worker.execute {
