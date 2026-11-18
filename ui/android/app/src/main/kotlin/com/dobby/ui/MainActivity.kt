@@ -91,6 +91,7 @@ class MainActivity : ComponentActivity() {
         private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
         private const val DISMISSED_ERRORS = "com.dobby.ui.DISMISSED_ERRORS"
         private const val PENDING_CONSENT = "com.dobby.ui.PENDING_CONSENT"
+        private const val PENDING_IMPORT = "com.dobby.ui.PENDING_IMPORT"
         private const val EXPORT_NAME = "com.dobby.ui.EXPORT_NAME"
         private const val EXPORT_LAUNCHED = "com.dobby.ui.EXPORT_LAUNCHED"
         private const val EXPORT_RETURNED = "com.dobby.ui.EXPORT_RETURNED"
@@ -278,6 +279,7 @@ class MainActivity : ComponentActivity() {
                 if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) {
                     controller.importLink(intent.dataString.orEmpty())
                 }
+                savedInstanceState?.getString(PENDING_IMPORT)?.let(controller::restorePendingImport)
             }
             startupDiagnostics.observe("MainActivity.onCreate.setContent") {
                 setContent { DobbyApp(controller) }
@@ -301,6 +303,7 @@ class MainActivity : ComponentActivity() {
             outState.putStringArrayList(DISMISSED_ERRORS, ArrayList(controller.dismissedErrors))
             controller.pendingConsent()?.let { outState.putBundle(PENDING_CONSENT, it.toBundle()) }
                 ?: outState.remove(PENDING_CONSENT)
+            controller.state.pendingImport?.let { outState.putString(PENDING_IMPORT, it) } ?: outState.remove(PENDING_IMPORT)
         }
     }
 
@@ -680,6 +683,8 @@ internal data class ScreenState(
     val uploadedProvider: String = "",
     val uploadedTime: String = "",
     val showUploadSuccess: Boolean = false,
+    // An import link waits here until the user confirms that it may replace the saved subscription.
+    val pendingImport: String? = null,
 )
 
 internal class SessionController(
@@ -1353,12 +1358,22 @@ internal class SessionController(
             require(query.size == 1)
             val pair = query.single().split('=', limit = 2)
             require(pair.size == 2 && pair[0] == "url")
-            importSubscription(
-                java.net.URLDecoder.decode(pair[1].replace("+", "%2B"), "UTF-8"),
-                LoadTrigger.IMPORT,
-            )
+            val source = java.net.URLDecoder.decode(pair[1].replace("+", "%2B"), "UTF-8")
+            val target = runCatching { java.net.URI(source) }.getOrNull()
+            if (target?.scheme?.lowercase() == "https" && !target.host.isNullOrEmpty()) state = state.copy(pendingImport = source)
+            else importSubscription(source, LoadTrigger.IMPORT)
         } catch (failure: Exception) { report("Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL", failure) }
     }
+
+    fun confirmImport() {
+        val source = state.pendingImport ?: return
+        state = state.copy(pendingImport = null)
+        importSubscription(source, LoadTrigger.IMPORT)
+    }
+
+    fun cancelImport() { state = state.copy(pendingImport = null) }
+
+    fun restorePendingImport(source: String) { state = state.copy(pendingImport = source) }
 
 
     private var logStamp: List<Long>? = null

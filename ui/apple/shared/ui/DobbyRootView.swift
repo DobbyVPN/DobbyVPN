@@ -147,6 +147,17 @@ public struct DobbyRootView: View {
         }
 #endif
         .onOpenURL { model.importLink($0) }
+        .alert("Replace subscription?", isPresented: Binding(
+            get: { model.pendingImport != nil },
+            // Both buttons act on their own, and the binding may be reset before the tapped action runs.
+            set: { _ in }
+        )) {
+            Button("Replace") { model.confirmImport() }
+            Button("Cancel", role: .cancel) { model.cancelImport() }
+        } message: {
+            let source = model.pendingImport ?? ""
+            Text("\(URLComponents(string: source)?.host ?? "")\n\n\(source)\n\nThe saved subscription and the log upload address will be replaced.")
+        }
 #if os(iOS)
         .sheet(isPresented: $showingReferenceShare, onDismiss: {
             model.recordLogsShare(kind: "reference", phase: "dismissed")

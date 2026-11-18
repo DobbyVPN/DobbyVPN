@@ -51,6 +51,8 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var busy = false
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
+    /// An import link waits here until the user confirms that it may replace the saved subscription.
+    @Published public private(set) var pendingImport: String?
     @Published var logEntries: [DobbyLogEntry] = []
     #if os(macOS)
     private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
@@ -271,12 +273,20 @@ public final class DobbySessionViewModel: ObservableObject {
                 if error == importError { setError("", origin: .other) }
                 importError = ""
             }
-            paste(source)
+            pendingImport = source
         } catch {
             importError = error.localizedDescription
             setError(error.localizedDescription, origin: .other)
         }
     }
+
+    public func confirmImport() {
+        guard let source = pendingImport else { return }
+        pendingImport = nil
+        paste(source)
+    }
+
+    public func cancelImport() { pendingImport = nil }
 
     public func retryLoad() {
         resetClosedFailures()
