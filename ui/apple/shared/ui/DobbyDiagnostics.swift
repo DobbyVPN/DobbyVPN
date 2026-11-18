@@ -92,10 +92,10 @@ enum DobbyLatestUploadFile {
 
     static func url(forLog uiLog: URL) -> URL { URL(fileURLWithPath: uiLog.path + ".upload") }
 
-    /// True if something is at the path, even if it is unreadable or damaged.
+    /// False only if the file is absent (ENOENT); any other lstat error counts as present.
     static func exists(forLog uiLog: URL) -> Bool {
         var info = stat()
-        return lstat(url(forLog: uiLog).path, &info) == 0
+        return lstat(url(forLog: uiLog).path, &info) == 0 || errno != ENOENT
     }
 
     static func read(forLog uiLog: URL) -> DobbyUploadReference? {
