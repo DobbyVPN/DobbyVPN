@@ -21,6 +21,10 @@ type serviceRestorer interface {
 // waits for the tunnel. A failure is logged (code only, the message can
 // contain the subscription address) and never stops the service; a failed
 // connection shows in the snapshot like any other failed connection.
+//
+// A macOS kill switch left by a backend that died stays in place while the
+// restore runs. Once the restore ends, it is removed unless a network adopted
+// it, so the user is neither left offline nor exposed before reconnecting.
 func prepareDesktopRestore(owner serviceRestorer) (start func()) {
 	restore := owner.PrepareServiceRestore()
 	return func() {
@@ -32,6 +36,9 @@ func prepareDesktopRestore(owner serviceRestorer) (start func()) {
 			}()
 			if err := restore(context.Background()); err != nil {
 				log.Errorf(desktopLogCategory, "automatic session restore failed: %s", sessionapi.CodeOf(err))
+			}
+			if err := releaseUnadoptedKillSwitch(context.Background()); err != nil {
+				log.Errorf(desktopLogCategory, "leftover kill switch removal failed: %v", err)
 			}
 		}()
 	}
