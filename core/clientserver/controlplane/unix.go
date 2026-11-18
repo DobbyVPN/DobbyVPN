@@ -234,7 +234,7 @@ func socketModes(ownerUID int, supervisedUnprivileged bool) (dirMode, socketMode
 	return 0o700, 0o600
 }
 
-func listenControlSocket(path string) (net.Listener, error) {
+func listenControlSocket(path string, recoverStale bool) (net.Listener, error) {
 	ownerUID, ownerErr := listenOwnerUID()
 	if ownerErr != nil {
 		return nil, ownerErr
@@ -242,6 +242,11 @@ func listenControlSocket(path string) (net.Listener, error) {
 	if directoryErr := ensureControlSocketDirectory(path); directoryErr != nil {
 		return nil, directoryErr
 	}
+	directory, lockErr := lockControlSocketDirectory(path)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer directory.Close()
 	supervisedUnprivileged, supervisedErr := supervisedUnprivilegedSocket(path, ownerUID)
 	if supervisedErr != nil {
 		return nil, supervisedErr
@@ -249,23 +254,37 @@ func listenControlSocket(path string) (net.Listener, error) {
 	if permissionErr := setControlSocketDirectoryPermissions(path, ownerUID, supervisedUnprivileged); permissionErr != nil {
 		return nil, permissionErr
 	}
-	if cleanupErr := removeStaleControlSocket(path); cleanupErr != nil {
-		return nil, cleanupErr
+	if recoverStale {
+		if cleanupErr := removeStaleControlSocket(path); cleanupErr != nil {
+			return nil, cleanupErr
+		}
 	}
-	var listenConfig net.ListenConfig
-	lis, listenErr := listenConfig.Listen(context.Background(), "unix", path)
+	lis, listenErr := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if listenErr != nil {
 		return nil, listenErr
 	}
-	// Removal is decided by removeUnservedControlSocket, never by Close, so a
-	// listener that lost its path cannot unlink a replacement socket.
-	if unixListener, ok := lis.(*net.UnixListener); ok {
-		unixListener.SetUnlinkOnClose(false)
+	// Cleanup owns the socket inode, since the pathname can be rebound.
+	lis.SetUnlinkOnClose(false)
+	socket, statErr := os.Lstat(path)
+	if statErr != nil {
+		return nil, errors.Join(statErr, lis.Close())
 	}
 	if permissionErr := setControlSocketPermissions(path, ownerUID, supervisedUnprivileged); permissionErr != nil {
-		return nil, errors.Join(permissionErr, lis.Close(), os.Remove(path))
+		return nil, errors.Join(permissionErr, lis.Close(), removeOwnedControlSocket(path, socket))
 	}
-	return &removingUnixListener{Listener: lis, path: path}, nil
+	return &removingUnixListener{Listener: lis, path: path, socket: socket}, nil
+}
+
+// Serialize pathname changes by DobbyVPN listeners sharing this runtime directory.
+func lockControlSocketDirectory(path string) (*os.File, error) {
+	directory, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(directory.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, errors.Join(fmt.Errorf("lock control socket directory: %w", err), directory.Close())
+	}
+	return directory, nil
 }
 func ensureControlSocketDirectory(path string) error {
 	directory := filepath.Dir(path)
@@ -306,7 +325,14 @@ func removeStaleControlSocket(path string) error {
 	if info.Mode()&os.ModeSocket == 0 {
 		return fmt.Errorf("control socket path is not a socket")
 	}
-	return os.Remove(path)
+	probe, dialErr := (&net.Dialer{Timeout: 200 * time.Millisecond}).DialContext(context.Background(), "unix", path)
+	if dialErr == nil {
+		return errors.Join(fmt.Errorf("control socket already has a listener: %s", path), probe.Close())
+	}
+	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
+		return fmt.Errorf("check existing control socket: %w", dialErr)
+	}
+	return removeOwnedControlSocket(path, info)
 }
 
 func setControlSocketPermissions(path string, ownerUID int, supervisedUnprivileged bool) error {
@@ -324,29 +350,39 @@ func setControlSocketPermissions(path string, ownerUID int, supervisedUnprivileg
 
 type removingUnixListener struct {
 	net.Listener
-	path string
-	once sync.Once
+	path   string
+	socket os.FileInfo
+	once   sync.Once
+	err    error
 }
 
-// Close removes the socket file only when nothing serves it any more, so a
-// replacement listener that took over the path keeps its socket.
+// Close unlinks only this listener's socket.
 func (l *removingUnixListener) Close() error {
-	err := l.Listener.Close()
-	l.once.Do(func() { removeUnservedControlSocket(l.path) })
-	return err
+	l.once.Do(func() {
+		directory, err := lockControlSocketDirectory(l.path)
+		l.err = l.Listener.Close()
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if err != nil {
+			l.err = errors.Join(l.err, err)
+			return
+		}
+		l.err = errors.Join(l.err, removeOwnedControlSocket(l.path, l.socket), directory.Close())
+	})
+	return l.err
 }
 
-// removeUnservedControlSocket removes a leftover socket file. A live listener
-// accepts the probe connection, and anything that is not a socket is untouched.
-func removeUnservedControlSocket(path string) {
-	info, statErr := os.Lstat(path)
-	if statErr != nil || info.Mode()&os.ModeSocket == 0 {
-		return
+func removeOwnedControlSocket(path string, expected os.FileInfo) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	probe, dialErr := (&net.Dialer{Timeout: 200 * time.Millisecond}).DialContext(context.Background(), "unix", path)
-	if dialErr == nil {
-		_ = probe.Close()
-		return
+	if err != nil {
+		return err
 	}
-	_ = os.Remove(path)
+	if !os.SameFile(info, expected) {
+		return nil
+	}
+	return os.Remove(path)
 }
