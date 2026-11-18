@@ -475,6 +475,10 @@ func callSnapshot(ctx context.Context, client controljson.Client, sessionID stri
 	err := client.Call(ctx, "Snapshot", struct {
 		SessionID string `json:"session_id"`
 	}{SessionID: sessionID}, &snapshot)
+	if err == nil && snapshot.ProtocolVersion != wire.ProtocolVersion {
+		// A service that predates the field reports 0, which is also a mismatch.
+		err = &controljson.CallError{Code: string(sessionapi.FailureConflict), Message: wire.RestartMessage}
+	}
 	return snapshot, err
 }
 

@@ -34,6 +34,9 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let canSwitch: Bool
     public let logsUploadAvailable: Bool
 
+    /// Snapshot schema version this app understands; the Go service sends its own.
+    public static let expectedProtocolVersion = 1
+
     public static let empty = Self(
         sessionID: "", sequence: 0, generation: 0, state: "IDLE", primaryAction: "NONE",
         configured: false, sourceURL: "", sourceError: "", activeProfile: nil,
@@ -41,6 +44,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     )
 
     private enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
         case sessionID = "session_id"
         case sequence, generation, state, configured
         case networkGeneration = "network_generation"
@@ -62,6 +66,10 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        // A service that predates the field has no value, which is also a mismatch.
+        guard try values.decodeIfPresent(Int.self, forKey: .protocolVersion) == Self.expectedProtocolVersion else {
+            throw DobbyClientError.protocolMismatch
+        }
         sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID) ?? ""
         sequence = try values.decodeIfPresent(Int64.self, forKey: .sequence) ?? 0
         generation = try values.decodeIfPresent(Int64.self, forKey: .generation) ?? 0
@@ -188,6 +196,7 @@ public enum DobbyClientError: LocalizedError {
     case command(code: String, message: String)
     case noConfiguration
     case diagnostics(String)
+    case protocolMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -199,6 +208,8 @@ public enum DobbyClientError: LocalizedError {
             return "Enter an HTTPS subscription URL"
         case let .diagnostics(message):
             return message
+        case .protocolMismatch:
+            return "The app and the VPN service are different versions. Restart the app."
         }
     }
 }
