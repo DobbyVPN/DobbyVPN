@@ -88,6 +88,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.ViewCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import com.dobby.presentation.shownError
 
 internal val Paper = Color(0xFFD9D2C9)
 internal val Ink = Color(0xFF141414)
@@ -104,6 +107,8 @@ private val ControlsHeight = 180.dp
 @Composable
 internal fun DobbyApp(controller: SessionController) {
     val focus = LocalFocusManager.current
+    // A field left focused would bring the keyboard back when the app returns.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { focus.clearFocus() }
     MaterialTheme(colorScheme = lightColorScheme(primary = Ink, background = Paper)) {
         BoxWithConstraints(
             Modifier.fillMaxSize()
@@ -126,6 +131,9 @@ internal fun DobbyApp(controller: SessionController) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SubscriptionField(controller)
+                    if (controller.state.source.isEmpty()) {
+                        Text("Enter a subscription URL to connect.", color = Muted, fontSize = 13.sp)
+                    }
                     MainActions(controller)
                     Connections(controller, Modifier.padding(top = 8.dp).height(trayHeight))
                 }
@@ -466,7 +474,7 @@ internal fun displayErrorDetail(raw: String): String {
 private fun ErrorDialog(controller: SessionController) {
     val errors = controller.errors
     LaunchedEffect(errors) { controller.forgetClearedErrors() }
-    val detail = errors.firstOrNull { it !in controller.dismissedErrors } ?: return
+    val detail = shownError(errors, controller.dismissedErrors) ?: return
     val loadFailed = detail == controller.state.loadError
     val protectedFailure = controller.isProtectedFailure
     val showStop = controller.state.session.primaryAction == "STOP" && controller.state.session.vpnActive
