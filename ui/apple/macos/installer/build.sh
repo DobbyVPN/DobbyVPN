@@ -50,7 +50,9 @@ build_package() {
 
     mkdir Scripts
     cp ../../postinstall.sh Scripts/postinstall
-    chmod +x Scripts/postinstall
+    sed -e "s/@PACKAGE_ARCH@/$service_arch/" -e "s/@PACKAGE_VERSION@/$APP_VERSION/" \
+      ../../preinstall.sh > Scripts/preinstall
+    chmod +x Scripts/postinstall Scripts/preinstall
     cp ../../vpnservice.plist "$APP_BUNDLE/Contents/Resources/"
     install_service \
       "$service_path" \
