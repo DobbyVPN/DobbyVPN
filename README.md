@@ -297,9 +297,11 @@ Repository secrets:
 | `APP_STORE_KEY_ID` | ID of that API key. |
 | `APP_STORE_ISSUER_ID` | Issuer ID of the App Store Connect team that owns the key. |
 
-When none of these secrets is available (forks, pull requests from forks), the
-signing steps are skipped with a log line and the packages stay unsigned. When
-only some of them are set, the job fails.
+In a fork or a pull request run without these secrets, the signing steps are
+skipped with a log line and the packages stay unsigned. In this repository a
+Build without them, or with only some of them, fails, so the Release workflow,
+which accepts only a successful Build from `main`, cannot publish unsigned
+macOS packages.
 
 Debug packages (`*-debug.pkg`) stay unsigned: hardened runtime blocks
 debugger attachment unless the binaries carry `get-task-allow`, and Apple
