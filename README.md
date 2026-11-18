@@ -135,7 +135,10 @@ configuration is limited to 1 MiB. Add each connection variant in an ordered
 Any other root section or key rejects the whole configuration. TrustTunnel
 certificate verification is required, so keep `skip_verification = false`
 (or omit it). This setting is valid only inside `[TrustTunnel.endpoint]`; a
-profile-level `skip_verification` key is rejected.
+profile-level `skip_verification` key is rejected. In `[[Xray]]`, the first
+outbound carries all traffic and must not be `freedom`; `routing`, `inbounds`,
+`api`, `metrics`, `log.access` and `log.error` are ignored. `ExcludeIPs`
+rejects ranges wider than `/8`, such as `0.0.0.0/0` or `::/0`.
 
 If a subscription is rejected, the error names the profile (its position in the file, counted from 1) and the field. A response that is not a DobbyVPN subscription (HTML, JSON, YAML, a base64 list or a single share link such as `vless://`) is reported as such; it is not converted. Unknown `[[Outline]]` fields, a non-string `DisguisePrefix`, and a `WebSocketPath` without `WebSocket = true` do not reject the subscription; they are written to the service log as warnings.
 
