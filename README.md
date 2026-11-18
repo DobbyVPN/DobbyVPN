@@ -34,8 +34,10 @@ Where `dobby-cli` is installed:
 
 After installing a desktop package, `dobby-cli snapshot` connects to the
 installed background service. On macOS it uses the packaged socket without
-an environment override. `DOBBYVPN_CONTROL_SOCKET` can still select an
-alternative Unix socket when needed.
+an environment override; on Linux the service socket lives in the system
+runtime directory `/run/dobbyvpn/control.sock` and works without a desktop
+session. `DOBBYVPN_CONTROL_SOCKET` can still select an alternative Unix
+socket when needed.
 
 Linux DEB installation starts the service when system policy permits. Upgrades
 preserve disabled and masked services. The first upgrade from the older 1.5.4
@@ -134,6 +136,8 @@ Any other root section or key rejects the whole configuration. TrustTunnel
 certificate verification is required, so keep `skip_verification = false`
 (or omit it). This setting is valid only inside `[TrustTunnel.endpoint]`; a
 profile-level `skip_verification` key is rejected.
+
+If a subscription is rejected, the error names the profile (its position in the file, counted from 1) and the field. A response that is not a DobbyVPN subscription (HTML, JSON, YAML, a base64 list or a single share link such as `vless://`) is reported as such; it is not converted. Unknown `[[Outline]]` fields, a non-string `DisguisePrefix`, and a `WebSocketPath` without `WebSocket = true` do not reject the subscription; they are written to the service log as warnings.
 
 **Connection variants** (automatic first-working selection and failover)
 ```toml

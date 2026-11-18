@@ -10,11 +10,6 @@ public protocol DobbySessionClient: AnyObject, Sendable {
     var sourceCommit: String { get }
 }
 
-public protocol DobbyOnDemandClient: DobbySessionClient {
-    func onDemandEnabled() async throws -> Bool
-    func setOnDemandEnabled(_ enabled: Bool) async throws
-}
-
 public struct DobbySessionSnapshot: Decodable, Sendable {
     public let sessionID: String
     public let sequence: Int64

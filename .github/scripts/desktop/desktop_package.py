@@ -858,6 +858,8 @@ def _verify_deb(package: Path, version: str, work: Path) -> None:
     unit_text = unit.read_text(encoding="utf-8")
     if "ExecStart=/opt/dobbyvpn/bin/dobbyvpn-backend" not in unit_text:
         _fail("Linux DEB systemd unit does not start the packaged backend")
+    if "RuntimeDirectory=dobbyvpn" not in unit_text:
+        _fail("Linux DEB systemd unit lacks its runtime directory")
     control = work / "expanded-deb-control"
     _run("expand Linux package maintainer scripts", ["dpkg-deb", "-e", str(package), str(control)])
     expected_script_fragments = {
