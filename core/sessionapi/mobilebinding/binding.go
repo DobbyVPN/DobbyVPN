@@ -120,6 +120,21 @@ func (b *Binding) Restore(onlyPreviouslyEnabled bool) string {
 	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
 }
 
+// PrepareServiceRestore is used only by the desktop service at startup. It
+// fixes the user-intent epoch now and returns the bounded-retry restore to run
+// once the control channel is serving.
+func (b *Binding) PrepareServiceRestore() func(context.Context) error {
+	owner, ok := b.manager.(interface {
+		PrepareRestoreAtServiceStart() func(context.Context) error
+	})
+	if !ok {
+		return func(context.Context) error {
+			return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "automatic startup owner is unavailable"}
+		}
+	}
+	return owner.PrepareRestoreAtServiceStart()
+}
+
 func (b *Binding) AttachSourceStore() {
 	manager, ok := b.manager.(interface {
 		AttachSourceStore(context.Context, sessionapi.SourceStore) error
