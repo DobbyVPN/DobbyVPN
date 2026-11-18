@@ -801,7 +801,7 @@ def _build_macos_pkg(
     staging = installer / "services" / aliases[architecture]
     staging.mkdir(parents=True)
     shutil.copyfile(service_directory / "dobbyvpn-backend", staging / "dobbyvpn-backend")
-    for name in ("build.sh", "postinstall.sh", "uninstall.sh", "vpnservice.plist"):
+    for name in ("build.sh", "preinstall.sh", "postinstall.sh", "uninstall.sh", "vpnservice.plist"):
         shutil.copyfile(ROOT / "ui" / "apple" / "macos" / "installer" / name, installer / name)
     shutil.copyfile(archive, installer / f"dobbyVPN-macos-{label}.zip")
     env = environment.copy()
