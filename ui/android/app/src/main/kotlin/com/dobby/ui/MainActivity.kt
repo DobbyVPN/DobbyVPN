@@ -714,9 +714,9 @@ internal class SessionController(
     private fun errorsWith(sessionFailure: String) =
         listOf(state.loadError, state.error, sessionFailure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
 
-    /** The session failure is hidden while a new attempt starts and while one is in progress. */
+    /** The session failure is hidden while a new attempt starts, including one restored after Activity recreation. */
     val errors: List<String> get() = errorsWith(
-        state.session.failure.takeIf { sessionFailureVisible(state.session.state, state.busy || permissionTarget != null) }.orEmpty(),
+        state.session.failure.takeIf { sessionFailureVisible(state.session.state, state.busy || permissionTarget != null || consentRecovery.pending != null) }.orEmpty(),
     )
 
     /** Messages the user closed; they stay hidden until they clear from the snapshot or the user makes a new attempt. */

@@ -6,9 +6,6 @@ fun shownError(errors: List<String>, dismissed: Set<String>): String? = errors.f
 /** Closed errors are forgotten once they disappear from the current errors, so a later repeat shows again. */
 fun forgetClearedDismissals(dismissed: Set<String>, errors: List<String>): Set<String> = dismissed.intersect(errors.toSet())
 
-/** The session failure is shown in FAILED, and in IDLE or CONFIGURED unless a new attempt is starting. */
-fun sessionFailureVisible(state: String, attemptStarting: Boolean): Boolean = when (state) {
-    "FAILED" -> true
-    "IDLE", "CONFIGURED" -> !attemptStarting
-    else -> false
-}
+/** The session failure is shown only in FAILED, IDLE or CONFIGURED, and never while a new attempt is starting. */
+fun sessionFailureVisible(state: String, attemptStarting: Boolean): Boolean =
+    !attemptStarting && (state == "FAILED" || state == "IDLE" || state == "CONFIGURED")
