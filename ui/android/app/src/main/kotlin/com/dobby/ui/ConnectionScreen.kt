@@ -90,6 +90,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.dobby.presentation.shownError
 
 internal val Paper = Color(0xFFD9D2C9)
 internal val Ink = Color(0xFF141414)
@@ -471,7 +472,7 @@ internal fun displayErrorDetail(raw: String): String {
 private fun ErrorDialog(controller: SessionController) {
     val errors = controller.errors
     LaunchedEffect(errors) { controller.forgetClearedErrors() }
-    val detail = errors.firstOrNull { it !in controller.dismissedErrors } ?: return
+    val detail = shownError(errors, controller.dismissedErrors) ?: return
     val loadFailed = detail == controller.state.loadError
     val protectedFailure = controller.isProtectedFailure
     val showStop = controller.state.session.primaryAction == "STOP" && controller.state.session.vpnActive

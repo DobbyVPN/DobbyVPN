@@ -175,6 +175,10 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 	if r.network != nil || r.active {
 		return nil, errors.New("previous network is still owned")
 	}
+	// Retry leftover-state recovery on every Connect; no tunnel on failure.
+	if err := recoverBeforeNetwork(); err != nil {
+		return nil, err
+	}
 	n := &networkOwner{ref: ref, cache: dnscache.New()}
 	r.network = n
 	n.lease.setOnDone(func(error) {
@@ -408,6 +412,9 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		if err != nil {
 			return fail(fmt.Errorf("extend bypass policy with numeric protocol upstreams: %w", err))
 		}
+	}
+	if capability, ok := device.(interface{ IPv6Unavailable() bool }); ok {
+		bypass = bypass.WithIPv6Availability(capability.IPv6Unavailable)
 	}
 	owned.proxyAddr, owned.bypass = device.GetProxyAddr(), bypass
 	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {

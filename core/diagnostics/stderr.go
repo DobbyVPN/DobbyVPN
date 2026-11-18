@@ -206,11 +206,15 @@ func (capture *rawCapture) writeHeader(file *os.File) error {
 }
 
 func (capture *rawCapture) monitor() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	capture.watch(ticker.C)
+}
+
+func (capture *rawCapture) watch(ticks <-chan time.Time) {
 	failures := 0
 	skip := 0
-	for range ticker.C {
+	for range ticks {
 		if skip > 0 {
 			skip--
 			continue
@@ -232,23 +236,28 @@ func (capture *rawCapture) monitor() {
 			// Direct stderr only: never recurse through the structured sink.
 			_, _ = fmt.Fprintf(Stderr, "stderr rotation failed (attempt %d), will retry: %v\n", failures, err)
 		}
-		skip = rotationRetryDelayTicks(failures)
+		skip = rotationRetryDelayTicks(failures) - 1
 	}
 }
 
-// rotationRetryDelayTicks returns how many 100 ms monitor ticks to skip after
-// the given number of consecutive failures: 1 s, 2 s, 4 s, ... capped at 30 s.
+// rotationRetryDelayTicks returns how many 1 s monitor ticks pass until the
+// next attempt after the given number of consecutive failures: 1 s, 2 s, 4 s,
+// ... capped at 30 s.
 func rotationRetryDelayTicks(failures int) int {
-	const maxTicks = 300
+	const maxTicks = 30
 	if failures >= 6 {
 		return maxTicks
 	}
-	return 10 << (failures - 1)
+	return 1 << (failures - 1)
 }
 
 func (capture *rawCapture) rotate() error {
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
+	// Idle ticks only compare the size; the lock file is for an actual rotation.
+	if info, err := capture.file.Stat(); err == nil && !capture.pending && info.Size() < capture.limit {
+		return nil
+	}
 	return withFileLock(capture.path, func() error {
 		info, err := capture.file.Stat()
 		if err != nil {
