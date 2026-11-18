@@ -35,6 +35,9 @@ internal class StructuredLogs(private val paths: List<String>, private val bound
         catch (failure: Exception) { atomic.failWrite(output); throw failure }
     }
 
+    // Length and modification time of each log file and the clear boundary; a change that keeps both is not detected.
+    fun stamp(): List<Long> = (names().map(::File) + boundary).flatMap { listOf(it.length(), it.lastModified()) }
+
     fun read(): Pair<List<LogEntry>, String> = readWithRetainedBoundary(null, null).let { it.entries to it.error }
 
     fun readWithRetainedBoundary(
