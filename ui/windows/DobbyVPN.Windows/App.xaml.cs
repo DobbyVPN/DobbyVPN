@@ -14,8 +14,9 @@ public partial class App : Application
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
             // Runs on the finalizer thread; the log write can wait on a lock, so do it elsewhere.
-            var text = args.Exception.ToString();
-            _ = Task.Run(() => { try { NativeDiagnostics.Current.Record(text, "task.unobserved"); } catch { } });
+            // Formatting can throw too (an inner ToString override), so it stays in the worker.
+            var exception = args.Exception;
+            _ = Task.Run(() => { try { NativeDiagnostics.Current.Record(exception.ToString(), "task.unobserved"); } catch { } });
         };
         try
         {

@@ -15,7 +15,10 @@ import (
 )
 
 type linuxRecoveryRoutes struct {
-	deletes                 []netlink.Route
+	deletes []netlink.Route
+	// gatewayRecords are the marked routes that carry the uplink gateway. They
+	// are removed only after the default route is restored.
+	gatewayRecords          []netlink.Route
 	hasIndependentDefault   bool
 	restoreDefault          *netlink.Route
 	restoreDefaultAmbiguous bool
@@ -105,7 +108,7 @@ func collectLinuxRecoveryRoutes(ipv4Routes, ipv6Routes []netlink.Route, tableID 
 		if !linuxOwnedMarkedGatewayRoute(route, tableID) {
 			continue
 		}
-		recovered.deletes = append(recovered.deletes, linuxRecoveryRouteForDelete(route, netlink.FAMILY_V4))
+		recovered.gatewayRecords = append(recovered.gatewayRecords, linuxRecoveryRouteForDelete(route, netlink.FAMILY_V4))
 		candidate := netlink.Route{
 			Dst:       linuxDefaultIPNet(netlink.FAMILY_V4),
 			Gw:        append(net.IP(nil), route.Gw.To4()...),
@@ -156,11 +159,11 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 			}
 		}
 	}
-	if len(routes.deletes) == 0 && len(ownedRules) == 0 && ruleListErr == nil {
+	if len(routes.deletes) == 0 && len(routes.gatewayRecords) == 0 && len(ownedRules) == 0 && ruleListErr == nil {
 		return nil
 	}
 
-	log.Debugf(Category, "[Linux][Recovery] removing %d tagged route(s) and %d owned rule(s) after process loss", len(routes.deletes), len(ownedRules))
+	log.Debugf(Category, "[Linux][Recovery] removing %d tagged route(s) and %d owned rule(s) after process loss", len(routes.deletes)+len(routes.gatewayRecords), len(ownedRules))
 	var errs []error
 	if ruleListErr != nil {
 		errs = append(errs, fmt.Errorf("inspect owned fwmark rule: %w", ruleListErr))
@@ -174,10 +177,14 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 	// Restore the default route before removing the marked routes that carry
 	// the uplink gateway. If the restore is ambiguous or fails, keep those
 	// routes: they are the only record, so the next recovery reports it again.
+	// Other owned routes, such as the IPv6 blackholes, go either way.
+	toDelete := routes.deletes
 	if restoreErr := restoreLinuxInterruptedDefault(routes); restoreErr != nil {
-		return errors.Join(append(errs, restoreErr)...)
+		errs = append(errs, restoreErr)
+	} else {
+		toDelete = append(append([]netlink.Route(nil), toDelete...), routes.gatewayRecords...)
 	}
-	for _, route := range routes.deletes {
+	for _, route := range toDelete {
 		if deleteErr := linuxRouteOperation("delete", &route, linuxRouteDel); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
 			errs = append(errs, fmt.Errorf("remove owned route %s: %w", route.String(), deleteErr))
 		}

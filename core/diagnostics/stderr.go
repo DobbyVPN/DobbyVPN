@@ -27,6 +27,14 @@ type rawCapture struct {
 	openReplacement     func(string) (*os.File, error)
 	prepareReplacement  func(*os.File, os.FileInfo) error
 	redirectReplacement func(*os.File) error
+	now                 func() time.Time // test seam; nil means time.Now
+}
+
+func (capture *rawCapture) clock() time.Time {
+	if capture.now != nil {
+		return capture.now()
+	}
+	return time.Now()
 }
 
 // Raw descriptors have no whole-record framing. Preserve their file identities;
@@ -213,18 +221,23 @@ func (capture *rawCapture) monitor() {
 
 func (capture *rawCapture) watch(ticks <-chan time.Time) {
 	failures := 0
-	skip := 0
-	for range ticks {
-		if skip > 0 {
-			skip--
+	var retryAt time.Time
+	for at := range ticks {
+		// The back-off runs from the end of the failed attempt, not from its
+		// tick: a slow attempt must not shorten it. The slack absorbs ticker
+		// jitter.
+		if at.Add(rotationTickSlack).Before(retryAt) {
 			continue
 		}
+		started := capture.clock()
 		err := capture.rotate()
+		took := capture.clock().Sub(started)
 		if err == nil {
 			if failures > 0 {
 				_, _ = fmt.Fprintf(Stderr, "stderr rotation recovered after %d failed attempts\n", failures)
 			}
 			failures = 0
+			retryAt = time.Time{}
 			continue
 		}
 		// A transient failure (for example "too many open files") must not
@@ -236,13 +249,17 @@ func (capture *rawCapture) watch(ticks <-chan time.Time) {
 			// Direct stderr only: never recurse through the structured sink.
 			_, _ = fmt.Fprintf(Stderr, "stderr rotation failed (attempt %d), will retry: %v\n", failures, err)
 		}
-		skip = rotationRetryDelayTicks(failures) - 1
+		retryAt = at.Add(took + time.Duration(rotationRetryDelayTicks(failures))*time.Second)
 	}
 }
 
-// rotationRetryDelayTicks returns how many 1 s monitor ticks pass until the
-// next attempt after the given number of consecutive failures: 1 s, 2 s, 4 s,
-// ... capped at 30 s.
+// rotationTickSlack is how early before the retry deadline a tick may still
+// start the attempt.
+const rotationTickSlack = 100 * time.Millisecond
+
+// rotationRetryDelayTicks returns how many seconds pass until the next attempt
+// after the given number of consecutive failures: 1 s, 2 s, 4 s, ... capped
+// at 30 s.
 func rotationRetryDelayTicks(failures int) int {
 	const maxTicks = 30
 	if failures >= 6 {
