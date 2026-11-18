@@ -280,14 +280,6 @@ public final class DobbySessionViewModel: ObservableObject {
         }
     }
 
-    public func confirmImport() {
-        guard let source = pendingImport else { return }
-        pendingImport = nil
-        paste(source)
-    }
-
-    public func cancelImport() { pendingImport = nil }
-
     public func retryLoad() {
         resetClosedFailures()
         sourceChanged(sourceText, immediate: true)
@@ -828,6 +820,16 @@ func subscriptionFromLink(_ value: String) throws -> String? {
           parameters[0].name == "url", let source = parameters[0].value,
           validSubscription(source) else { throw invalid() }
     return source
+}
+
+extension DobbySessionViewModel {
+    public func confirmImport() {
+        guard let source = pendingImport else { return }
+        pendingImport = nil
+        paste(source)
+    }
+
+    public func cancelImport() { pendingImport = nil }
 }
 
 extension DobbySessionViewModel {
