@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/netip"
 	"os"
 	"os/user"
@@ -35,6 +36,8 @@ type LinuxOutputGuard struct {
 	resolverUID       uint32
 	dhcpUIDs          []uint32
 	bootstrapIdentity string
+	servers           []netip.Addr
+	excluded          []*net.IPNet
 	created, closed   bool
 }
 
@@ -171,9 +174,32 @@ func (g *LinuxOutputGuard) UpdateBootstrap(ctx context.Context, identity string,
 			return fmt.Errorf("invalid physical DNS server %s", server)
 		}
 	}
-	err := g.operation(ctx, func() error {
+	g.servers = servers
+	err := g.rebuildBootstrap(ctx)
+	if err == nil {
+		g.bootstrapIdentity = identity
+		log.Infof(Category, "output guard physical resolver updated network=%s servers=%v", identity, servers)
+	}
+	return err
+}
+
+// SetExcluded lets packets of already established connections to the excluded
+// networks (replies to inbound connections) leave outside the tunnel. New
+// connections keep following the normal path.
+func (g *LinuxOutputGuard) SetExcluded(ctx context.Context, excluded []*net.IPNet) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closed {
+		return errors.New("output guard is closed")
+	}
+	g.excluded = excluded
+	return g.rebuildBootstrap(ctx)
+}
+
+func (g *LinuxOutputGuard) rebuildBootstrap(ctx context.Context) error {
+	return g.operation(ctx, func() error {
 		g.conn.FlushChain(g.bootstrap)
-		for _, server := range servers {
+		for _, server := range g.servers {
 			for _, protocol := range []byte{unix.IPPROTO_TCP, unix.IPPROTO_UDP} {
 				for _, port := range []uint16{53, 853} {
 					if protocol == unix.IPPROTO_UDP && port == 853 {
@@ -218,13 +244,32 @@ func (g *LinuxOutputGuard) UpdateBootstrap(ctx context.Context, identity string,
 				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{255}})
 			g.markTraffic(matches)
 		}
+		for _, network := range g.excluded {
+			g.markTraffic(matchEstablishedTo(network))
+		}
 		return g.conn.Flush()
 	})
-	if err == nil {
-		g.bootstrapIdentity = identity
-		log.Infof(Category, "output guard physical resolver updated network=%s servers=%v", identity, servers)
+}
+
+func matchEstablishedTo(network *net.IPNet) []expr.Any {
+	family, offset, length := byte(unix.NFPROTO_IPV6), uint32(24), uint32(net.IPv6len)
+	ip, mask := network.IP.To16(), network.Mask
+	if ip4 := network.IP.To4(); ip4 != nil {
+		family, offset, length, ip = unix.NFPROTO_IPV4, 16, net.IPv4len, ip4
+		if len(mask) == net.IPv6len {
+			mask = mask[12:]
+		}
 	}
-	return err
+	state := native32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED)
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{family}},
+		&expr.Ct{Key: expr.CtKeySTATE, Register: 1},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: state, Xor: make([]byte, 4)},
+		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: make([]byte, 4)},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: offset, Len: length},
+		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: length, Mask: mask, Xor: make([]byte, length)},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ip.Mask(mask)},
+	}
 }
 
 func (g *LinuxOutputGuard) operation(ctx context.Context, fn func() error) error {
