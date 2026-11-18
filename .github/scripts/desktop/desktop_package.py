@@ -846,6 +846,10 @@ def _verify_pkg(package: Path, version: str, work: Path) -> None:
     actual = ET.parse(records[0]).getroot().get("version")
     if actual != version:
         _fail(f"macOS package version {actual!r} does not match {version!r}")
+    link = expanded / "Payload" / "usr" / "local" / "bin" / "dobby-cli"
+    expected_target = "/Applications/Dobby VPN.app/Contents/Resources/dobby-cli"
+    if not link.is_symlink() or os.readlink(link) != expected_target:
+        _fail(f"macOS package must link /usr/local/bin/dobby-cli to {expected_target!r}")
 
 
 def _verify_deb(package: Path, version: str, work: Path) -> None:
@@ -876,6 +880,8 @@ def _verify_deb(package: Path, version: str, work: Path) -> None:
     unit_text = unit.read_text(encoding="utf-8")
     if "ExecStart=/opt/dobbyvpn/bin/dobbyvpn-backend" not in unit_text:
         _fail("Linux DEB systemd unit does not start the packaged backend")
+    if "RuntimeDirectory=dobbyvpn" not in unit_text:
+        _fail("Linux DEB systemd unit lacks its runtime directory")
     control = work / "expanded-deb-control"
     _run("expand Linux package maintainer scripts", ["dpkg-deb", "-e", str(package), str(control)])
     expected_script_fragments = {
