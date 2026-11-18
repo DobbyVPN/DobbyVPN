@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"net"
 	"net/url"
@@ -43,6 +44,9 @@ const (
 	configSectionXray        = "Xray"
 	configSectionTrustTunnel = "TrustTunnel"
 	maxConfigBytes           = 1 << 20
+	// minExcludePrefix keeps private ranges such as 10.0.0.0/8 and fd00::/8
+	// working while rejecting default routes and wider ranges.
+	minExcludePrefix = 8
 )
 
 func parseConfig(raw []byte) (parsedConfig, error) {
@@ -55,6 +59,9 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 		return parsedConfig{}, err
 	}
 	if validateErr := validateLogsEndpoint(root.LogsEndpoint); validateErr != nil {
+		return parsedConfig{}, validateErr
+	}
+	if validateErr := validateExcludeIPs(root.ExcludeIPs.IPs); validateErr != nil {
 		return parsedConfig{}, validateErr
 	}
 	// Warnings are logged only for a subscription that is accepted.
@@ -81,6 +88,26 @@ func validateLogsEndpoint(endpoint string) error {
 	}
 	if u.User != nil && strings.Contains(u.User.Username(), ":") {
 		return failure(FailureMalformedConfig, "logs_endpoint Basic username cannot contain a colon")
+	}
+	return nil
+}
+
+// validateExcludeIPs rejects CIDR entries that would send most traffic
+// outside the tunnel. Host names resolve to single addresses later.
+func validateExcludeIPs(entries []string) error {
+	for _, entry := range entries {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(entry))
+		if err != nil {
+			continue
+		}
+		ones, bits := network.Mask.Size()
+		if bits == 128 && network.IP.To4() != nil {
+			// An IPv4-mapped prefix matches IPv4 destinations.
+			ones -= 96
+		}
+		if ones < minExcludePrefix {
+			return failure(FailureMalformedConfig, fmt.Sprintf("ExcludeIPs entry %q is too broad; use a prefix of /%d or longer", entry, minExcludePrefix))
+		}
 	}
 	return nil
 }
@@ -259,7 +286,10 @@ func normalizeProfile(kind Protocol, block map[string]any) (protocolconfig.Confi
 		default:
 			return protocolconfig.Config{}, invalidField(fieldOutbounds, "must be an array")
 		}
-		return protocolconfig.Config{Xray: protocolconfig.CloneFields(block)}, nil
+		if firstOutboundIsFreedom(outbounds) {
+			return protocolconfig.Config{}, invalidField(fieldOutbounds, "the first outbound carries all traffic and must not use the freedom protocol, which sends it outside the VPN")
+		}
+		return protocolconfig.Config{Xray: xrayFields(block)}, nil
 	case ProtocolOutline:
 		normalized, err := normalizeOutlineURL(block)
 		return protocolconfig.Config{OutlineURL: normalized}, err
@@ -268,6 +298,50 @@ func normalizeProfile(kind Protocol, block map[string]any) (protocolconfig.Confi
 	default:
 		return protocolconfig.Config{}, failure(FailureUnsupported, "unsupported protocol")
 	}
+}
+
+// xrayFields drops the Xray settings the client replaces or does not need:
+// routing, inbounds, the API and metrics listeners and log file paths. Xray
+// decodes JSON keys case-insensitively, so every spelling is removed.
+func xrayFields(block map[string]any) map[string]any {
+	fields := protocolconfig.CloneFields(block)
+	for key, value := range fields {
+		switch strings.ToLower(key) {
+		case "routing", "inbounds", "api", "metrics":
+			delete(fields, key)
+		case "log":
+			logConfig, _ := value.(map[string]any)
+			for name := range logConfig {
+				if lower := strings.ToLower(name); lower == "access" || lower == "error" {
+					delete(logConfig, name)
+				}
+			}
+		}
+	}
+	return fields
+}
+
+// firstOutboundIsFreedom reports whether Xray's default outbound, the first
+// one, sends traffic directly.
+func firstOutboundIsFreedom(outbounds any) bool {
+	var first any
+	switch list := outbounds.(type) {
+	case []any:
+		if len(list) > 0 {
+			first = list[0]
+		}
+	case []map[string]any:
+		if len(list) > 0 {
+			first = list[0]
+		}
+	}
+	outbound, _ := first.(map[string]any)
+	for key, value := range outbound {
+		if protocol, _ := value.(string); strings.EqualFold(key, "protocol") && strings.EqualFold(protocol, "freedom") {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeOutlineURL is the Go equivalent of the legacy shell builder. It is
