@@ -988,6 +988,13 @@ public sealed partial class MainWindow : Window
                 is_loading = _subscriptionLoad.IsLoading,
                 busy = Busy
             });
+        // A duplicate notification did not start a new attempt. Keep any load
+        // error and its Retry action until the editor intent actually changes.
+        if (edit.DuplicateSuppressed)
+        {
+            Render();
+            return;
+        }
         _loadError = "";
         _errors.Operation = "";
         _importError = "";
