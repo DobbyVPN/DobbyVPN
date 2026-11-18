@@ -22,7 +22,7 @@ and the `dobby-cli` command.
 | Windows | Windows 10 version 1809 (build 17763) | x64 | MSI |
 | macOS | macOS 12 | Apple silicon (arm64), Intel (x86_64) | PKG |
 | Linux | Debian/Ubuntu-based systems; requires `init-system-helpers` 1.54 or later | amd64 | DEB |
-| Android | Android 8.0 (API 26) | arm64-v8a, x86_64 | APK |
+| Android | Android 15 (API 35); installs on Android 8.0 (API 26) and later | arm64-v8a, x86_64 | APK |
 | iOS | iOS 15.6 | arm64 | App Store |
 
 Android permits installation on Android 8.0 (API 26) and later. Current testing
