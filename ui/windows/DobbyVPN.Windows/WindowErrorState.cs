@@ -8,6 +8,12 @@ internal sealed class ProtocolMismatchException(int expected, int received)
     internal const string RestartMessage = "The app and the VPN service are different versions. Restart the app.";
 }
 
+internal enum SnapshotFailure
+{
+    ServiceUnavailable,
+    ProtocolMismatch,
+}
+
 /// <summary>Keeps service availability separate from errors in user operations.</summary>
 internal sealed class WindowErrorState
 {
@@ -19,21 +25,28 @@ internal sealed class WindowErrorState
             throw new ProtocolMismatchException(ExpectedProtocolVersion, received);
     }
 
-    internal string Operation { get; set; } = "";
-    internal string Snapshot { get; private set; } = "";
-    internal bool SnapshotFailed => Snapshot.Length > 0;
+    private SnapshotFailure? snapshotFailure;
 
-    internal bool FailSnapshot(string message)
+    internal string Operation { get; set; } = "";
+    internal string Snapshot => snapshotFailure switch
     {
-        if (Snapshot == message) return false;
-        Snapshot = message;
+        SnapshotFailure.ServiceUnavailable => "VPN service is unavailable. See logs for details.",
+        SnapshotFailure.ProtocolMismatch => ProtocolMismatchException.RestartMessage,
+        _ => "",
+    };
+    internal bool SnapshotFailed => snapshotFailure.HasValue;
+
+    internal bool FailSnapshot(SnapshotFailure failure)
+    {
+        if (snapshotFailure == failure) return false;
+        snapshotFailure = failure;
         return true;
     }
 
     internal bool RecoverSnapshot()
     {
         var recovering = SnapshotFailed;
-        Snapshot = "";
+        snapshotFailure = null;
         return recovering;
     }
 }

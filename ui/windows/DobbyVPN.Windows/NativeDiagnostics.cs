@@ -400,8 +400,55 @@ internal static class NativeLogFiles
         });
     }
 
-    // Replace atomically: deleting .previous first would lose it if the move fails (as in Go).
-    private static void Rotate(string path) => File.Move(path, path + ".previous", true);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RenameInformation
+    {
+        internal uint Flags;
+        internal IntPtr RootDirectory;
+        internal uint FileNameLength;
+        internal ushort FileName;
+    }
+
+    private const int FileRenameInfoEx = 22;
+    private const uint RenameReplaceIfExists = 0x1;
+    private const uint RenamePosixSemantics = 0x2;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+    private static extern SafeFileHandle CreateFileW(string name, uint access, FileShare share, IntPtr security,
+        FileMode disposition, uint attributes, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(SafeFileHandle file, int informationClass,
+        IntPtr information, uint size);
+
+    private static void Rotate(string path)
+    {
+        const uint deleteAccess = 0x00010000;
+        using var file = CreateFileW(path, deleteAccess, FileShare.ReadWrite | FileShare.Delete,
+            IntPtr.Zero, FileMode.Open, 0, IntPtr.Zero);
+        if (file.IsInvalid)
+            throw new IOException($"Open log for rotation: {path}", new Win32Exception(Marshal.GetLastWin32Error()));
+
+        // POSIX replacement keeps handles to the old generation readable. An
+        // unsuccessful rename leaves both generations at their existing paths.
+        var destination = Encoding.Unicode.GetBytes(Path.GetFullPath(path + ".previous"));
+        var nameOffset = Marshal.OffsetOf<RenameInformation>(nameof(RenameInformation.FileName)).ToInt32();
+        var size = Math.Max(Marshal.SizeOf<RenameInformation>(), nameOffset + destination.Length);
+        var information = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(new RenameInformation
+            {
+                Flags = RenameReplaceIfExists | RenamePosixSemantics,
+                FileNameLength = (uint)destination.Length,
+            }, information, false);
+            Marshal.Copy(destination, 0, IntPtr.Add(information, nameOffset), destination.Length);
+            if (!SetFileInformationByHandle(file, FileRenameInfoEx, information, (uint)size))
+                throw new IOException($"Replace previous log during rotation: {path}", new Win32Exception(Marshal.GetLastWin32Error()));
+        }
+        finally { Marshal.FreeHGlobal(information); }
+    }
 
     private sealed record LegacySource(string Path, string Label);
     private sealed record LegacyCommit(LegacySource[]? Sources, bool Previous);

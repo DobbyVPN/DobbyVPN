@@ -390,7 +390,9 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing)
         {
             _snapshot = null;
-            if (_errors.FailSnapshot(error is ProtocolMismatchException ? ProtocolMismatchException.RestartMessage : "VPN service is unavailable. See logs for details."))
+            var failure = error is ProtocolMismatchException
+                ? SnapshotFailure.ProtocolMismatch : SnapshotFailure.ServiceUnavailable;
+            if (_errors.FailSnapshot(failure))
                 RecordError(error.ToString());
             Render();
         }
