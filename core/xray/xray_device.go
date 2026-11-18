@@ -165,6 +165,7 @@ func (d *XrayDevice) CloseContext(ctx context.Context) error {
 	}
 	if d.xrayInstance != nil {
 		err := d.xrayInstance.Close()
+		closeXrayGRPCClients()
 		if err != nil {
 			return fmt.Errorf("failed to close xray instance: %w", err)
 		}

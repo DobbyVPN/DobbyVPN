@@ -14,7 +14,6 @@ final class VPNPreferenceCoordinator {
     private let reload: Operation
     private let status: (NETunnelProviderManager) -> NEVPNStatus
     private let bind: (NETunnelProviderManager) -> Void
-    private let hasActivation: () -> Bool
     private let log: (String, String) -> Void
     private let describeError: (Error) -> String
     private let preferenceQueue: DispatchQueue
@@ -31,7 +30,6 @@ final class VPNPreferenceCoordinator {
          create: (() -> NETunnelProviderManager)? = nil,
          apply: ((NETunnelProviderManager) -> Void)? = nil,
          bind: @escaping (NETunnelProviderManager) -> Void,
-         hasActivation: @escaping () -> Bool,
          log: @escaping (String, String) -> Void,
          describeError: @escaping (Error) -> String) {
         self.preferenceQueue = queue
@@ -43,7 +41,6 @@ final class VPNPreferenceCoordinator {
         self.reload = reload
         self.status = status
         self.bind = bind
-        self.hasActivation = hasActivation
         self.log = log
         self.describeError = describeError
         self.createManager = { NETunnelProviderManager() }
@@ -52,25 +49,16 @@ final class VPNPreferenceCoordinator {
         self.applyDefaults = apply ?? { [unowned self] in self.applyProtocolDefaults(manager: $0) }
     }
 
-    func onDemandEnabled(completion: @escaping (Bool?, Error?) -> Void) {
-        withPreferences { finished in
-            self.loadInventory { managers, error in
-                defer { finished() }
-                if let error { completion(nil, error); return }
-                completion(self.matchingManagers(managers ?? []).contains { $0.isOnDemandEnabled }, nil)
-            }
-        }
-    }
-
-    /// Preference failure/delay cannot gate the Go command. Both use the caller's deadline.
+    /// On Demand is saved off before Go Stop, so a tunnel that ends during Stop
+    /// is not restarted by the OS. The wait takes at most half of the remaining
+    /// deadline; a failed or slow save is reported but Go Stop is still sent.
     func performStop<T>(until deadline: TimeInterval, stopGo: () throws -> T) rethrows -> (T, String?) {
         log("INFO", "[provider] Stop On Demand disable begin deadline=\(deadline)")
-        let preferenceCompletion = beginDisableOnDemandForStop(until: deadline)
-        let response = try stopGo()
-        log("INFO", "[provider] Stop On Demand wait begin")
-        let failure = preferenceCompletion()
+        let now = ProcessInfo.processInfo.systemUptime
+        let waitDeadline = now + max(0, deadline - now) / 2
+        let failure = beginDisableOnDemandForStop(until: waitDeadline)()
         log(failure == nil ? "INFO" : "ERROR", "[provider] Stop On Demand wait end error=\(failure ?? "none")")
-        return (response, failure)
+        return (try stopGo(), failure)
     }
 
     // A load/save/reload is one preference operation. Serializing only the
@@ -161,6 +149,8 @@ final class VPNPreferenceCoordinator {
         manager.localizedDescription = name
         manager.protocolConfiguration = makeDefaultProtocol()
         manager.isEnabled = true
+        // Rules are stored now; the first Connect turns On Demand on.
+        applyOnDemandRules(manager, enabled: false)
         return manager
     }
 
@@ -204,11 +194,6 @@ final class VPNPreferenceCoordinator {
     }
 
     private func performOnDemandChange(_ enabled: Bool, completion: @escaping (Error?) -> Void) {
-        if enabled && !hasActivation() {
-            completion(NSError(domain: "DobbyVPN.OnDemand", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Connect once before enabling On Demand."]))
-            return
-        }
         self.loadInventory { [weak self] managers, error in
             guard let self else { completion(error); return }
             if let error { completion(error); return }
@@ -226,12 +211,16 @@ final class VPNPreferenceCoordinator {
                 }
                 manager = selected
             } catch { completion(error); return }
-            let connect = NEOnDemandRuleConnect()
-            connect.interfaceTypeMatch = .any
-            manager.onDemandRules = [connect]
-            manager.isOnDemandEnabled = true
+            self.applyOnDemandRules(manager, enabled: true)
             self.saveOnDemand(manager, enabled: true, completion: completion)
         }
+    }
+
+    private func applyOnDemandRules(_ manager: NETunnelProviderManager, enabled: Bool) {
+        let connect = NEOnDemandRuleConnect()
+        connect.interfaceTypeMatch = .any
+        manager.onDemandRules = [connect]
+        manager.isOnDemandEnabled = enabled
     }
 
     private func saveOnDemand(_ manager: NETunnelProviderManager, enabled: Bool,
@@ -271,9 +260,9 @@ final class VPNPreferenceCoordinator {
         })
     }
 
-    // Start the preference update alongside Go Stop. A failed or slow OS
-    // preference write must not prevent release of app-owned protection.
-    // Both operations consume the existing command deadline.
+    // Start the preference update; the caller waits for it (bounded by
+    // `deadline`) before sending Go Stop. A failed or slow OS preference write
+    // must not prevent release of app-owned protection, so Go Stop is sent anyway.
     func beginDisableOnDemandForStop(until deadline: TimeInterval) -> () -> String? {
         let completed = DispatchSemaphore(value: 0)
         let lock = NSLock()
