@@ -22,7 +22,7 @@ require (
 	golang.getoutline.org/sdk v0.0.23
 	golang.getoutline.org/sdk/x v0.2.2
 	golang.org/x/net v0.62.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	golang.zx2c4.com/wireguard/windows v1.1.1
 	google.golang.org/grpc v1.85.0
 	trusttunnel-go v0.0.0-00010101000000-000000000000
@@ -34,7 +34,7 @@ require (
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
 	github.com/go-gost/relay v0.5.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
@@ -88,5 +88,7 @@ tool golang.org/x/mobile/cmd/gobind
 // Shared DobbyVPN extension; upstream module imports stay unchanged.
 replace golang.getoutline.org/sdk => github.com/DobbyVPN/outline-sdk-fork v0.0.24-0.20261022143006-bace007bdf6f
 
-// SDK/x v0.2.2 with the HTTP/3 API update required by Xray's qpack version.
+// Upstream SDK/x v0.2.2 sources plus the HTTP/3 API update required by Xray's
+// qpack version. The fork history branches from x/v0.2.0, so Go names this
+// commit v0.2.1-0.<date>-<commit>; it does not contain upstream v0.2.1 as an ancestor.
 replace golang.getoutline.org/sdk/x => github.com/DobbyVPN/outline-sdk-fork/x v0.2.1-0.20261022164150-eea55cf572f7
