@@ -19,38 +19,13 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
-var ipv4Subnets = []string{
-	"0.0.0.0/1",
-	"128.0.0.0/1",
-}
-
 const windowsOnLinkNextHop = "0.0.0.0"
-
-var ipv4ReservedSubnets = []string{
-	"0.0.0.0/8",
-	"10.0.0.0/8",
-	"100.64.0.0/10",
-	"169.254.0.0/16",
-	"172.16.0.0/12",
-	"192.0.0.0/24",
-	"192.0.2.0/24",
-	"192.31.196.0/24",
-	"192.52.193.0/24",
-	"192.88.99.0/24",
-	"192.168.0.0/16",
-	"192.175.48.0/24",
-	"198.18.0.0/15",
-	"198.51.100.0/24",
-	"203.0.113.0/24",
-	"240.0.0.0/4",
-}
 
 var (
 	windowsRouteRead      = readWindowsRoute
 	windowsRouteCreate    = (*winipcfg.MibIPforwardRow2).Create
 	windowsRouteDelete    = (*winipcfg.MibIPforwardRow2).Delete
 	windowsRouteIdentity  = resolveWindowsRoute
-	windowsFirewallAdd    = addWindowsIPv6Rule
 	windowsFirewallRemove = removeWindowsIPv6Rules
 
 	interfaceChangeCallback = windows.NewCallback(onInterfaceChange)
@@ -210,6 +185,10 @@ func ConfigureWindowsRouting(plan *Plan, tunDeviceName string) error {
 // route plus interface metric. Gateway-less defaults are valid on a physical
 // point-to-point link. No VPN-owned route participates in selection.
 func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
+	return WindowsPhysicalInterfacesPreferred(0, 0)
+}
+
+func WindowsPhysicalInterfacesPreferred(preferred4, preferred6 uint64) (ipv4, ipv6 int, err error) {
 	for _, family := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
 		rows, readErr := winipcfg.GetIPForwardTable2(family)
 		if readErr != nil {
@@ -217,6 +196,11 @@ func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
 		}
 		best := ^uint64(0)
 		selected := 0
+		var selectedLUID uint64
+		preferred := preferred4
+		if family == windows.AF_INET6 {
+			preferred = preferred6
+		}
 		for _, row := range rows {
 			if row.DestinationPrefix.Prefix().Bits() != 0 {
 				continue
@@ -225,7 +209,11 @@ func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
 			if readErr != nil {
 				return 0, 0, readErr
 			}
-			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || IsTunnelInterfaceName(iface.Name) {
+			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || row.Loopback || uint64(row.InterfaceLUID) == ownedWindowsLUID.Load() {
+				continue
+			}
+			actual, readErr := winipcfg.LUIDFromIndex(row.InterfaceIndex)
+			if readErr != nil || actual != row.InterfaceLUID || (!row.Immortal && row.ValidLifetime == 0) {
 				continue
 			}
 			settings, readErr := row.InterfaceLUID.IPInterface(family)
@@ -233,8 +221,9 @@ func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
 				return 0, 0, readErr
 			}
 			metric := uint64(row.Metric) + uint64(settings.Metric)
-			if metric < best {
-				best, selected = metric, iface.Index
+			luid := uint64(row.InterfaceLUID)
+			if PreferDefaultRoute(metric, luid, best, selectedLUID, preferred) {
+				best, selected, selectedLUID = metric, iface.Index, luid
 			}
 		}
 		if family == windows.AF_INET {
@@ -247,15 +236,6 @@ func WindowsPhysicalInterfaces() (ipv4, ipv6 int, err error) {
 		return 0, 0, errors.New("no active physical IPv4 or IPv6 default route")
 	}
 	return ipv4, ipv6, nil
-}
-
-func IsTunnelInterfaceName(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.Contains(lower, "wintun") ||
-		strings.Contains(lower, "dobby") ||
-		strings.Contains(lower, "wireguard") ||
-		strings.Contains(lower, "tap") ||
-		strings.Contains(lower, "tun")
 }
 
 func onInterfaceChange(callerContext unsafe.Pointer, _ *windows.MibIpInterfaceRow, _ uint32) uintptr {
@@ -383,39 +363,4 @@ func selectExactInterface(name string, interfaces []net.Interface) (*net.Interfa
 		}
 	}
 	return nil, fmt.Errorf("interface named %q is not present", name)
-}
-
-func GetNetworkInterfaceByIP(currentIP string) (*net.Interface, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("error getting network interfaces: %v", err)
-	}
-
-	for _, interf := range interfaces {
-		addrs, err := interf.Addrs()
-		if err != nil {
-			return nil, fmt.Errorf("error getting addresses for interface %v: %v", interf.Name, err)
-		}
-
-		for _, addr := range addrs {
-			ip, _, parseErr := net.ParseCIDR(addr.String())
-			if parseErr == nil && ip.Equal(net.ParseIP(currentIP)) {
-				return &interf, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no interface found with IP: %v", currentIP)
-}
-
-func WaitForInterfaceByIP(ip string, timeout time.Duration) (*net.Interface, error) {
-	startedAt := time.Now()
-	iface, err := waitForInterfaceChange(timeout, "interface with IP "+ip, func() (*net.Interface, error) {
-		return GetNetworkInterfaceByIP(ip)
-	})
-	if err != nil {
-		return nil, err
-	}
-	log.Debugf(Category, "Outline/routing: WaitForInterfaceByIP OK ip=%s iface=%s elapsed=%s", ip, iface.Name, time.Since(startedAt).Truncate(time.Millisecond))
-	return iface, nil
 }

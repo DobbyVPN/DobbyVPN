@@ -21,6 +21,9 @@ TEST_WORKFLOW_FILE = "test.yml"
 TESTS_REPOSITORY = "DobbyVPN/Torturer"
 SCHEMA = 1
 PAGE_SIZE = 100
+# Offset pagination can shift while other jobs create deployments, so a record
+# may appear on two pages. Only the deployment list is re-read for that.
+PAGINATION_READ_ATTEMPTS = 3
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
@@ -40,11 +43,23 @@ class ReleaseGuardError(ValueError):
     """A guard record or GitHub response is invalid, ambiguous, or unresolved."""
 
 
+class GitHubHTTPError(ReleaseGuardError):
+    """Confirmed HTTP failure; the original command and bytes remain in the cause."""
+
+    def __init__(self, status: int):
+        super().__init__(f"GitHub API returned HTTP {status}")
+        self.status = status
+
+
+class PaginationShiftError(ReleaseGuardError):
+    """One record was listed twice, which means the list moved while it was read."""
+
+
 class GitHubAPI:
     """Small gh-api adapter. All state and policy remain in this module."""
 
     def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
-        command = ["gh", "api", path, "--method", method.upper()]
+        command = ["gh", "api", path, "--method", method.upper(), "--include"]
         input_bytes = None
         if payload is not None:
             command.extend(("--input", "-"))
@@ -54,12 +69,24 @@ class GitHubAPI:
         except subprocess.CalledProcessError as error:
             _forward_bytes(sys.stdout, error.stdout)
             _forward_bytes(sys.stderr, error.stderr)
+            # gh --include exposes the actual HTTP status independently of its
+            # human-readable stderr and JSON error message.
+            match = re.match(rb"HTTP/[0-9.]+ ([0-9]{3})(?: |\r?\n)", error.stdout or b"")
+            if match:
+                raise GitHubHTTPError(int(match.group(1))) from error
             raise
         except OSError as error:
             raise ReleaseGuardError("cannot execute gh api") from error
         try:
-            return json.loads(result.stdout.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            body = result.stdout
+            if body.startswith(b"HTTP/"):
+                _headers, separator, body = body.partition(b"\r\n\r\n")
+                if not separator:
+                    _headers, separator, body = result.stdout.partition(b"\n\n")
+                if not separator:
+                    raise ValueError("GitHub API response has no HTTP header boundary")
+            return json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as error:
             _forward_bytes(sys.stdout, result.stdout)
             _forward_bytes(sys.stderr, result.stderr)
             raise
@@ -170,12 +197,12 @@ def _validate_repository(repository: Any) -> str:
     return repository
 
 
-def _paged(api: Any, endpoint: str) -> list[Any]:
+def _paged(api: Any, endpoint: str, **filters: str) -> list[Any]:
     records: list[Any] = []
     seen_ids: set[int] = set()
     page = 1
     while True:
-        path = f"{endpoint}?{urlencode({'per_page': PAGE_SIZE, 'page': page})}"
+        path = f"{endpoint}?{urlencode({'per_page': PAGE_SIZE, 'page': page, **filters})}"
         response = _api_request(api, "GET", path)
         if not isinstance(response, list):
             raise ReleaseGuardError("GitHub API returned an invalid paginated list")
@@ -183,13 +210,26 @@ def _paged(api: Any, endpoint: str) -> list[Any]:
             if not isinstance(item, dict):
                 raise ReleaseGuardError("GitHub API returned a malformed list item")
             identifier = item.get("id")
-            if type(identifier) is not int or identifier <= 0 or identifier in seen_ids:
-                raise ReleaseGuardError("GitHub API returned a missing or duplicate record ID")
+            if type(identifier) is int and identifier > 0 and identifier in seen_ids:
+                raise PaginationShiftError(f"GitHub API returned a missing or duplicate record ID: endpoint={endpoint} page={page} id={identifier!r}")
+            if type(identifier) is not int or identifier <= 0:
+                raise ReleaseGuardError(f"GitHub API returned a missing or duplicate record ID: endpoint={endpoint} page={page} id={identifier!r}")
             seen_ids.add(identifier)
             records.append(item)
         if len(response) < PAGE_SIZE:
             return records
         page += 1
+
+
+def _paged_deployments(api: Any, repository: str, **filters: str) -> list[Any]:
+    """Read the deployment list again from page one if it shifted while being read."""
+    for attempt in range(1, PAGINATION_READ_ATTEMPTS):
+        try:
+            return _paged(api, f"repos/{repository}/deployments", **filters)
+        except PaginationShiftError as error:
+            print(f"[release-guard] {error}; re-reading list, attempt {attempt + 1}/{PAGINATION_READ_ATTEMPTS}",
+                  file=sys.stderr, flush=True)
+    return _paged(api, f"repos/{repository}/deployments", **filters)
 
 
 def _deployment_url(repository: str, deployment_id: int) -> str:
@@ -219,32 +259,41 @@ def _parse_payload(value: Any) -> dict[str, Any]:
     return validate_candidate(value)
 
 
+def _checked_deployment(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        raise ReleaseGuardError("GitHub returned an invalid release-verification deployment")
+    if item.get("task") != TASK or item.get("environment") != ENVIRONMENT:
+        raise ReleaseGuardError("deployment has a malformed release-verification namespace")
+    _positive_int(item.get("id"), "deployment ID")
+    candidate = _parse_payload(item.get("payload"))
+    if item.get("ref") != candidate["product_sha"]:
+        raise ReleaseGuardError("deployment ref does not match its immutable product SHA")
+    return dict(item, _candidate=candidate)
+
+
 def _all_deployments(api: Any, repository: str) -> list[dict[str, Any]]:
-    records = _paged(api, f"repos/{repository}/deployments")
-    target: list[dict[str, Any]] = []
-    for item in records:
-        task, environment = item.get("task"), item.get("environment")
-        if not isinstance(task, str) or not isinstance(environment, str):
-            raise ReleaseGuardError("GitHub returned a deployment without a task or environment")
-        if task == TASK or environment == ENVIRONMENT:
-            if task != TASK or environment != ENVIRONMENT:
-                raise ReleaseGuardError("deployment has a malformed release-verification namespace")
-            deployment_id = _positive_int(item.get("id"), "deployment ID")
-            candidate = _parse_payload(item.get("payload"))
-            if item.get("ref") != candidate["product_sha"]:
-                raise ReleaseGuardError("deployment ref does not match its immutable product SHA")
-            item = dict(item)
-            item["_candidate"] = candidate
-            target.append(item)
-    return target
+    # Platform jobs create unrelated environment deployments while Test starts.
+    # Query both halves of our namespace so their offset pagination cannot move
+    # these records, while malformed task/environment combinations still fail.
+    target: dict[int, dict[str, Any]] = {}
+    for filters in ({"task": TASK}, {"environment": ENVIRONMENT}):
+        for item in _paged_deployments(api, repository, **filters):
+            checked = _checked_deployment(item)
+            prior = target.get(checked["id"])
+            if prior is not None and (prior["_candidate"] != checked["_candidate"]
+                    or prior["ref"] != checked["ref"]):
+                raise ReleaseGuardError("deployment identity changed across filtered inventories")
+            target[checked["id"]] = checked
+    return list(target.values())
 
 
 def _target_deployment(api: Any, repository: str, deployment_id: int) -> dict[str, Any]:
     deployment_id = _positive_int(deployment_id, "deployment ID")
-    matches = [item for item in _all_deployments(api, repository) if item["id"] == deployment_id]
-    if len(matches) != 1:
-        raise ReleaseGuardError("release-verification deployment is missing or ambiguous")
-    return matches[0]
+    item = _api_request(api, "GET", f"repos/{repository}/deployments/{deployment_id}")
+    checked = _checked_deployment(item)
+    if checked["id"] != deployment_id:
+        raise ReleaseGuardError("GitHub returned a different release-verification deployment ID")
+    return checked
 
 
 def _statuses(api: Any, repository: str, deployment: dict[str, Any]) -> list[dict[str, Any]]:
@@ -410,7 +459,17 @@ def _ensure_no_blockers(api: Any, repository: str, *, exclude_id: int | None = N
             continue
         if state == "success":
             run_id = _parse_run_url(latest.get("log_url"), repository)
-            run = _get_run(api, repository, run_id, deployment["_candidate"], allow_retried=True)
+            if _status_attempt(latest) is None:
+                raise ReleaseGuardError("successful guard has invalid attempt metadata")
+            try:
+                run = _get_run(api, repository, run_id, deployment["_candidate"], allow_retried=True)
+            except GitHubHTTPError as error:
+                if error.status != 404:
+                    raise
+                print(f"Historical successful guard {deployment['id']}: Test run {run_id} "
+                      "is unavailable (HTTP 404); retaining its recorded history. "
+                      "Exact selection still requires an available successful run.", file=sys.stderr)
+                continue
             if (run.get("status") != "completed" or run.get("conclusion") != "success"
                     or _status_attempt(latest) != run.get("run_attempt")):
                 blockers.append({"id": deployment["id"], "state": "success-unverified"})

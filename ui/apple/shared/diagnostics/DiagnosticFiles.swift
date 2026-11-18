@@ -14,9 +14,10 @@ public enum DiagnosticFiles {
         init(_ message: String) { description = message }
     }
 
+    // Capture occurrence time before waiting for the writer lock.
     public static func append(
         _ message: String, event: String, level: String, source: String, to path: URL,
-        fields: [String: Any] = [:], rotating: Bool = true, legacyDesktop: Bool = false, legacyExcludedPaths: [String] = [], legacyHome: URL? = nil
+        fields: [String: Any] = [:], rotating: Bool = true, legacyDesktop: Bool = false, legacyExcludedPaths: [String] = [], legacyHome: URL? = nil, timestampDate: Date = Date()
     ) throws {
         processLock.lock()
         defer { processLock.unlock() }
@@ -39,7 +40,7 @@ public enum DiagnosticFiles {
             let configuration = "Release"
 #endif
             let record: [String: Any] = [
-                "schema": "dobby.log/v1", "timestamp": ISO8601DateFormatter().string(from: Date()),
+                "schema": "dobby.log/v1", "timestamp": ISO8601DateFormatter().string(from: timestampDate),
                 "source": source, "level": level, "event": event, "message": message,
                 "process_id": ProcessInfo.processInfo.processIdentifier, "run_id": runID, "process_sequence": sequence,
                 "build": ["version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development",

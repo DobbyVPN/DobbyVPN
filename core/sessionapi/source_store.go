@@ -19,13 +19,26 @@ type SourceStore interface {
 	Clear(context.Context) error
 }
 
+// SourceDirectoryOwner binds desktop state directories to the authenticated peer.
+// Root is the peer's account home, not a configuration-supplied path.
+type SourceDirectoryOwner struct {
+	Root     string
+	UID, GID int
+}
+
 type FileSourceStore struct {
-	Path string
+	Path           string
+	DirectoryOwner *SourceDirectoryOwner
 }
 
 func (s FileSourceStore) Load(ctx context.Context) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if s.DirectoryOwner != nil {
+		if err := prepareSourceDirectory(filepath.Dir(s.Path), s.DirectoryOwner); err != nil {
+			return nil, fmt.Errorf("prepare saved configuration directory: %w", err)
+		}
 	}
 	raw, err := s.read(s.Path)
 	if err == nil {
@@ -51,7 +64,7 @@ func (s FileSourceStore) Save(ctx context.Context, raw []byte) error {
 	if err := validateNoSymlinkAncestors(dir); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := prepareSourceDirectory(dir, s.DirectoryOwner); err != nil {
 		return fmt.Errorf("create saved configuration directory: %w", err)
 	}
 	if err := validateSourcePath(dir, s.Path); err != nil {

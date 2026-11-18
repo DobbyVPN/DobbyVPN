@@ -19,12 +19,15 @@
 		F20000000000000000000002 /* IOSIntegration.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F20000000000000000000003 /* tunnel.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A120139F2D80DE3100D43A3A /* tunnel.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F20000000000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 058557BA273AAA24004C7B11 /* Assets.xcassets */; };
+		F20000000000000000000050 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000050 /* PrivacyInfo.xcprivacy */; };
 		F20000000000000000000005 /* NativeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* NativeApp.swift */; };
 		F20000000000000000000006 /* IOSSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000003 /* IOSSessionClient.swift */; };
 		F20000000000000000000007 /* DobbySessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000004 /* DobbySessionClient.swift */; };
 		F20000000000000000000008 /* DobbySessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000005 /* DobbySessionViewModel.swift */; };
 		F20000000000000000000009 /* DobbyRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000006 /* DobbyRootView.swift */; };
 		F2000000000000000000000A /* DobbyShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* DobbyShareSheet.swift */; };
+		F20000000000000000000047 /* LogRecordRanges.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000047 /* LogRecordRanges.swift */; };
+		F20000000000000000000046 /* IOSLogAccessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000046 /* IOSLogAccessibility.swift */; };
 		C20000000000000000000001 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000001 /* LICENSE */; };
 		C20000000000000000000002 /* THIRD_PARTY_NOTICES in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000002 /* THIRD_PARTY_NOTICES */; };
 		C20000000000000000000003 /* LICENSES in Resources */ = {isa = PBXBuildFile; fileRef = C10000000000000000000003 /* LICENSES */; };
@@ -60,6 +63,7 @@
 		058557BA273AAA24004C7B11 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		058557D8273AAEEB004C7B11 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		7555FF8C242A565B00829871 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F10000000000000000000050 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = ../DobbyVPNRuntime.xcframework; sourceTree = "<group>"; };
 		A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		D7A8C9B0E1F2435A0061FABC /* libresolv.9.tbd */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.text-based-dylib-definition; name = libresolv.9.tbd; path = usr/lib/libresolv.9.tbd; sourceTree = SDKROOT; };
@@ -73,6 +77,8 @@
 		F10000000000000000000005 /* DobbySessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbySessionViewModel.swift; sourceTree = "<group>"; };
 		F10000000000000000000006 /* DobbyRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyRootView.swift; sourceTree = "<group>"; };
 		F10000000000000000000007 /* DobbyShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyShareSheet.swift; sourceTree = "<group>"; };
+		F10000000000000000000047 /* LogRecordRanges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogRecordRanges.swift; sourceTree = "<group>"; };
+		F10000000000000000000046 /* IOSLogAccessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSLogAccessibility.swift; sourceTree = "<group>"; };
 		F10000000000000000000008 /* Dobby-Vpn.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dobby-Vpn.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10000000000000000000001 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../../../LICENSE; sourceTree = "<group>"; };
 		C10000000000000000000002 /* THIRD_PARTY_NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../../../THIRD_PARTY_NOTICES; sourceTree = "<group>"; };
@@ -206,6 +212,7 @@
 				A120131E2D7DB13F00D43A3A /* iosApp.entitlements */,
 				058557BA273AAA24004C7B11 /* Assets.xcassets */,
 				7555FF8C242A565B00829871 /* Info.plist */,
+				F10000000000000000000050 /* PrivacyInfo.xcprivacy */,
 				F10000000000000000000002 /* NativeApp.swift */,
 				F10000000000000000000003 /* IOSSessionClient.swift */,
 				058557D7273AAEEB004C7B11 /* Preview Content */,
@@ -222,6 +229,8 @@
 				F10000000000000000000005 /* DobbySessionViewModel.swift */,
 				F10000000000000000000006 /* DobbyRootView.swift */,
 				F10000000000000000000007 /* DobbyShareSheet.swift */,
+				F10000000000000000000047 /* LogRecordRanges.swift */,
+				F10000000000000000000046 /* IOSLogAccessibility.swift */,
 			);
 			path = ../shared/ui;
 			sourceTree = "<group>";
@@ -389,6 +398,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F20000000000000000000004 /* Assets.xcassets in Resources */,
+				F20000000000000000000050 /* PrivacyInfo.xcprivacy in Resources */,
 				C20000000000000000000001 /* LICENSE in Resources */,
 				C20000000000000000000002 /* THIRD_PARTY_NOTICES in Resources */,
 				C20000000000000000000003 /* LICENSES in Resources */,
@@ -424,6 +434,8 @@
 				F20000000000000000000008 /* DobbySessionViewModel.swift in Sources */,
 				F20000000000000000000009 /* DobbyRootView.swift in Sources */,
 				F2000000000000000000000A /* DobbyShareSheet.swift in Sources */,
+				F20000000000000000000047 /* LogRecordRanges.swift in Sources */,
+				F20000000000000000000046 /* IOSLogAccessibility.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

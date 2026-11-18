@@ -55,6 +55,10 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
     @Published var logEntries: [DobbyLogEntry] = []
+    #if os(macOS)
+    private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
+    var macLogCaptureDiagnosticNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    #endif
     @Published var clearRevision = 0
     @Published public private(set) var logsError = ""
     @Published public private(set) var exportingLogs = false
@@ -882,10 +886,24 @@ extension DobbySessionViewModel {
 private struct ConfigurationReceipt: Decodable { let sequence: Int64 }
 
 #if os(macOS)
+private let macLogCaptureDiagnosticInterval: TimeInterval = 1
+
 extension DobbySessionViewModel {
-    func recordMacLogCapture(_ anchor: MacLogReadingAnchor) {
+    func recordMacLogAccessibility(_ observation: MacLogAccessibilityObservation) {
         recordDiagnostic(
-            "character_index=\(anchor.characterIndex) record_ordinal=\(anchor.recordOrdinal) " +
+            "parent_role=\(observation.parentRole) visible_count=\(observation.visibleCount) " +
+            "first_id=\(observation.firstID) first_role=\(observation.firstRole) " +
+            "first_frame=\(NSStringFromRect(observation.firstFrame))",
+            event: "logs.accessibility-children", level: "DEBUG"
+        )
+    }
+
+    func recordMacLogCapture(_ anchor: MacLogReadingAnchor) {
+        let now = macLogCaptureDiagnosticNow()
+        if let last = lastMacLogCaptureDiagnosticUptime, now - last < macLogCaptureDiagnosticInterval { return }
+        lastMacLogCaptureDiagnosticUptime = now
+        recordDiagnostic(
+            "record_id=\(anchor.recordID) character_offset=\(anchor.characterOffset) " +
             "anchor_viewport_y=\(anchor.viewportY)",
             event: "logs.frozen-position-captured", level: "DEBUG"
         )
@@ -893,7 +911,7 @@ extension DobbySessionViewModel {
 
     func recordMacLogRestore(_ observation: MacLogRestoreObservation) {
         recordDiagnostic(
-            "character_index=\(observation.anchor.characterIndex) record_ordinal=\(observation.anchor.recordOrdinal) " +
+            "record_id=\(observation.anchor.recordID) character_offset=\(observation.anchor.characterOffset) " +
             "anchor_viewport_y=\(observation.anchor.viewportY) " +
             "previous_origin=\(observation.previousOrigin) restored_origin=\(observation.restoredOrigin) " +
             "viewport_size=\(observation.viewportSize) content_size=\(observation.contentSize)",

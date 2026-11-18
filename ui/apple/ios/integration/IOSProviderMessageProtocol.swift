@@ -105,6 +105,14 @@ public struct IOSProviderCommand: Equatable {
         self.params = params
     }
 
+    /// Correlate the native envelope with Go's existing session and generation.
+    public var diagnosticIdentity: String {
+        let object = (try? JSONSerialization.jsonObject(with: params)) as? [String: Any]
+        let session = object?["session_id"] as? String ?? ""
+        let generation = object?["generation"].map { String(describing: $0) } ?? "unavailable"
+        return "request_id=\(requestID) method=\(method) session_id=\(String(reflecting: session)) generation=\(generation)"
+    }
+
     public func encoded() throws -> Data {
         let parameters = try JSONSerialization.jsonObject(with: params, options: [.fragmentsAllowed])
         return try JSONSerialization.data(

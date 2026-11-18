@@ -22,6 +22,7 @@ class SubscriptionLoadCoordinator(
     private data class Timer(val request: SubscriptionRequest, var cancel: () -> Unit = {})
 
     @Volatile private var revisionValue = 0L
+    private var closed = false
     private var timer: Timer? = null
     private var queued: SubscriptionRequest? = null
     private var active: SubscriptionRequest? = null
@@ -38,6 +39,7 @@ class SubscriptionLoadCoordinator(
         valid: Boolean,
         alreadyAccepted: Boolean = false,
     ): Long {
+        if (closed) return revisionValue
         revisionValue++
         timer?.cancel?.invoke()
         timer = null
@@ -68,20 +70,22 @@ class SubscriptionLoadCoordinator(
     fun sessionBecameReady() = startQueued()
 
     fun close() {
+        closed = true
+        active = null
         timer?.cancel?.invoke()
         timer = null
         queued = null
     }
 
     private fun timerElapsed(expected: Timer) {
-        if (timer !== expected) return
+        if (closed || timer !== expected) return
         timer = null
         if (expected.request.revision == revisionValue) queued = expected.request
         startQueued()
     }
 
     private fun startQueued() {
-        if (active != null || !sessionReady()) return
+        if (closed || active != null || !sessionReady()) return
         val next = queued ?: return
         queued = null
         active = next
@@ -96,6 +100,7 @@ class SubscriptionLoadCoordinator(
         succeeded: Boolean = false,
         completed: (current: Boolean) -> Unit,
     ) {
+        if (closed) return
         check(active == request) { "Completed request does not own the active subscription load" }
         active = null
         val current = request.revision == revisionValue

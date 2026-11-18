@@ -25,7 +25,7 @@ func ProtectSocket(fd uintptr, network string) bool {
 	return true
 }
 
-func (a *androidProtector) Protect(fd uintptr, network string) error {
+func (a *androidProtector) Protect(fd uintptr, network string, _ string) error {
 	if !ProtectSocket(fd, network) {
 		return fmt.Errorf("%w: Android VpnService.protect rejected fd=%d", ErrSocketProtectionUnavailable, fd)
 	}

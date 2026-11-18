@@ -14,7 +14,12 @@ func ConnectionSourceStore() (sessionapi.SourceStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	owner, err := controlSourceDirectoryOwner(home)
+	if err != nil {
+		return nil, err
+	}
 	return sessionapi.FileSourceStore{
-		Path: filepath.Join(home, ".dobbyvpn", "configs", "connection-url.txt"),
+		Path:           filepath.Join(home, ".dobbyvpn", "configs", "connection-url.txt"),
+		DirectoryOwner: owner,
 	}, nil
 }

@@ -5,9 +5,9 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.dobby.presentation.PartialTunnelCleanup
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -20,8 +20,11 @@ class DobbyVpnService : VpnService() {
         private const val TAG = "DobbyVpnService"
     }
 
+    @Volatile private var retiring = false
     @Volatile private var shuttingDown = false
+    private var rejectedOwner = false
     @Volatile private var attached = false
+    @Volatile private var foregroundReady = false
     private var goStopConfirmed = false
     @Volatile private var restorationRunning = false
     private var operationFailure: Throwable? = null
@@ -36,6 +39,7 @@ class DobbyVpnService : VpnService() {
     private var activeGeneration: Long = -1
     private var vpnInterface: ParcelFileDescriptor? = null
     private var underlyingNetwork: UnderlyingNetworkOwner? = null
+    private var cleanup: PartialTunnelCleanup? = null
     private var goTunFd: Int = -1
     private var lastClosedSession: String? = null
     private var lastClosedGeneration: Long = -1
@@ -44,13 +48,19 @@ class DobbyVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        if (!NativeVpnBridge.serviceCreated(this)) {
+            rejectedOwner = true
+            stopSelf()
+            return
+        }
         try {
             NativeGoSession.attach(this)
             NativeVpnBridge.attach(this)
             attached = true
         } catch (failure: Throwable) {
-            shuttingDown = true
+            retiring = true
             recordFailure("vpn.service.attach_failed", failure)
+            NativeVpnBridge.serviceFailed(this, failure)
             stopSelf()
             return
         }
@@ -59,14 +69,21 @@ class DobbyVpnService : VpnService() {
     }
 
     @Synchronized
-    internal fun isReadyForTunnel(): Boolean = attached && !shuttingDown
+    internal fun isReadyForTunnel(): Boolean = attached && foregroundReady && !retiring && !shuttingDown
+
+    internal fun isRetiring(): Boolean = retiring
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             ensureForeground()
+            foregroundReady = true
+            NativeVpnBridge.serviceReady(this)
         } catch (failure: Throwable) {
+            retiring = true
             recordFailure("vpn.service.foreground_failed", failure)
-            throw failure
+            NativeVpnBridge.serviceFailed(this, failure)
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
         if (!isReadyForTunnel()) {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -139,6 +156,13 @@ class DobbyVpnService : VpnService() {
             val dnsServers = parseDnsServers(dnsServersJSON)
             activeSession = sessionID
             activeGeneration = generation
+            cleanup = PartialTunnelCleanup(
+                hasDescriptor = { vpnInterface != null },
+                closeDescriptor = { vpnInterface?.close(); vpnInterface = null },
+                hasNetwork = { underlyingNetwork != null },
+                cancelDns = { underlyingNetwork?.cancelQueries() },
+                stopNetwork = { underlyingNetwork?.stop(); underlyingNetwork = null },
+            )
             val owner = UnderlyingNetworkOwner(this) {
                 NativeVpnBridge.recordServiceDiagnostic(this, "vpn.underlying_network", it)
             }
@@ -299,6 +323,7 @@ class DobbyVpnService : VpnService() {
             // and can destroy the service after it accepts the new network.
             // Android still owns termination of the now-background service.
             stopForeground(STOP_FOREGROUND_REMOVE)
+            foregroundReady = false
         }
     }
 
@@ -314,7 +339,8 @@ class DobbyVpnService : VpnService() {
 
     private fun shutdownOwner() {
         val alreadyReleased = synchronized(this) {
-            if (shuttingDown) return
+            if (rejectedOwner || !attached || shuttingDown) return
+            retiring = true
             shuttingDown = true
             goStopConfirmed && vpnInterface == null && underlyingNetwork == null
         }
@@ -348,37 +374,35 @@ class DobbyVpnService : VpnService() {
     }
 
     private fun closeTunnel(): Boolean {
-        if (vpnInterface == null && underlyingNetwork == null) return lastCloseSucceeded ?: true
+        if (activeSession == null && vpnInterface == null && underlyingNetwork == null) return lastCloseSucceeded ?: true
         val closingSession = activeSession
         val closingGeneration = activeGeneration
         val closingFd = goTunFd
-        val closed = try {
-            vpnInterface?.close()
-            underlyingNetwork?.stop()
-            true
-        } catch (failure: Throwable) {
+        val phases = cleanup
+        if (phases == null && (vpnInterface != null || underlyingNetwork != null)) {
+            recordFailure("vpn.service.close_failed", IllegalStateException("VPN cleanup owner is missing"))
+            return false
+        }
+        val failure = phases?.release()
+        if (failure != null) {
             Log.e(TAG, "VPN close failed", failure)
             recordFailure("vpn.service.close_failed", failure)
-            false
+            return false
         }
-        if (!closed) return false
-        vpnInterface = null
-        underlyingNetwork = null
+        cleanup = null
         goTunFd = -1
         activeGeneration = -1
         activeSession = null
         lastClosedSession = closingSession
         lastClosedGeneration = closingGeneration
         lastClosedFd = closingFd
-        lastCloseSucceeded = closed
-        return closed
+        lastCloseSucceeded = true
+        return true
     }
 
     private fun ensureForeground() {
         val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(NotificationChannel(CHANNEL, "Dobby VPN", NotificationManager.IMPORTANCE_LOW))
-        }
+        manager.createNotificationChannel(NotificationChannel(CHANNEL, "Dobby VPN", NotificationManager.IMPORTANCE_LOW))
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
             .setContentTitle("Dobby VPN")

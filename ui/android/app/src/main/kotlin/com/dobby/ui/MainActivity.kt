@@ -35,6 +35,8 @@ import com.dobby.presentation.PermissionSnapshot
 import com.dobby.presentation.PermissionTarget
 import com.dobby.presentation.PermissionTargetFence
 import com.dobby.presentation.SubscriptionLoadCoordinator
+import com.dobby.presentation.CallbackLifetime
+import com.dobby.presentation.SelectionAdmission
 import com.dobby.presentation.SubscriptionRequest
 import com.dobby.presentation.UiOperationDiagnostics
 import com.dobby.vpn.BuildConfig
@@ -117,7 +119,7 @@ class MainActivity : ComponentActivity() {
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        controller.permissionResult(result.resultCode == android.app.Activity.RESULT_OK)
+        NativeVpnBridge.consentResult(result.resultCode == android.app.Activity.RESULT_OK)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -678,6 +680,11 @@ internal class SessionController(
         private set
 
     private val main = Handler(Looper.getMainLooper())
+    private val lifetime = CallbackLifetime { action -> main.post { action() } }
+    private val closed: Boolean get() = lifetime.isClosed
+    private fun post(action: () -> Unit) = lifetime.post(action)
+    private var preparation: NativeVpnBridge.Preparation? = null
+    private fun cancelPreparation() { preparation?.cancel(); preparation = null }
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
     private val uploadWorker = Executors.newSingleThreadExecutor()
@@ -685,6 +692,7 @@ internal class SessionController(
     @Volatile private var visible = false
     @Volatile private var latest = SessionData()
     private var permissionTarget: PendingPermissionAction? = null
+    private val selectionAdmission = SelectionAdmission<PendingPermissionAction>()
     private val loadWorker = Executors.newSingleThreadExecutor()
     private val sourceLoads = SubscriptionLoadCoordinator(
         schedule = { delayMillis, callback ->
@@ -723,7 +731,7 @@ internal class SessionController(
                 if (visible) refreshClipboard()
             }, 0, 500, TimeUnit.MILLISECONDS)
         } else {
-            main.post {
+            post {
                 state = state.copy(error = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
             }
         }
@@ -732,11 +740,15 @@ internal class SessionController(
     }
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
+        selectionAdmission.invalidate()
         if (!backendAvailable) {
-            state = state.copy(source = value, sourceDirty = true, loading = false,
+            cancelPreparation()
+            permissionTarget = null
+            state = state.copy(source = value, sourceDirty = true, loading = false, busy = false,
                 loadError = backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
             return
         }
+        cancelPreparation()
         restoredPendingSource = null
         if (trigger != LoadTrigger.RESTORE && trigger != LoadTrigger.TYPED) dismissedErrors = emptySet()
         val source = value.trim()
@@ -745,7 +757,7 @@ internal class SessionController(
         val alreadyAccepted = trigger == LoadTrigger.TYPED && valid &&
             state.loadError.isEmpty() && !sourceLoads.inFlight &&
             sourceLoads.isAlreadyAccepted(source, latest.configured, latest.sourceUrl)
-        sourceLoads.change(source, trigger, valid, alreadyAccepted)
+        selectionAdmission.sourceChanged { sourceLoads.change(source, trigger, valid, alreadyAccepted) }
         if (alreadyAccepted) {
             if (permissionTarget != null) state = state.copy(busy = false)
             permissionTarget = null
@@ -784,17 +796,18 @@ internal class SessionController(
                 requireOK(configured)
                 configured.getJSONObject("result").getLong("sequence")
             }
-            main.post {
+            val failure = outcome.exceptionOrNull()
+            val currentAtCompletion = !closed && request.revision == sourceLoads.revision
+            val message = "Subscription revision=${request.revision} source=${request.source} " +
+                "current=$currentAtCompletion closed=$closed succeeded=${outcome.isSuccess}"
+            if (!currentAtCompletion && failure != null) {
+                NativeVpnBridge.recordDiagnostic(activity.applicationContext, "subscription.load_completed",
+                    "$message superseded_failure=${failure.stackTraceToString()}")
+            } else {
+                NativeVpnBridge.recordDiagnostic(activity.applicationContext, "subscription.load_completed", message, failure)
+            }
+            post {
                 sourceLoads.complete(request, succeeded = outcome.isSuccess) { current ->
-                    val failure = outcome.exceptionOrNull()
-                    val message = "Subscription revision=${request.revision} source=${request.source} " +
-                        "current=$current succeeded=${outcome.isSuccess}"
-                    if (!current && failure != null) {
-                        NativeVpnBridge.recordDiagnostic(activity, "subscription.load_completed",
-                            "$message superseded_failure=${failure.stackTraceToString()}")
-                    } else {
-                        NativeVpnBridge.recordDiagnostic(activity, "subscription.load_completed", message, failure)
-                    }
                     state = state.copy(loading = false)
                     if (outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
                     if (current) {
@@ -989,13 +1002,7 @@ internal class SessionController(
             ),
             PermissionTarget(current.sessionId, current.digest, current.generation, sourceLoads.revision),
         )
-        worker.execute {
-            when (NativeVpnBridge.prepare(activity)) {
-                1 -> main.post { continuePermission(true) }
-                0 -> main.post { state = state.copy(busy = false, error = "Approve the Android VPN permission to connect") }
-                else -> main.post { permissionTarget = null; report("Android VPN service could not be prepared") }
-            }
-        }
+        preparePermission()
     }
 
     fun retry() {
@@ -1017,13 +1024,7 @@ internal class SessionController(
             fence = PermissionTarget(current.sessionId, current.digest, current.generation, sourceLoads.revision),
             retry = true,
         )
-        worker.execute {
-            when (NativeVpnBridge.prepare(activity)) {
-                1 -> main.post { continuePermission(true) }
-                0 -> main.post { state = state.copy(busy = false, error = "Approve the Android VPN permission to connect") }
-                else -> main.post { permissionTarget = null; report("Android VPN service could not be prepared") }
-            }
-        }
+        preparePermission()
     }
 
     fun stop() {
@@ -1031,6 +1032,8 @@ internal class SessionController(
             report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
             return
         }
+        selectionAdmission.invalidate()
+        cancelPreparation()
         permissionTarget = null
         val current = latest
         if (state.busy || (current.primaryAction != "STOP" && !current.vpnActive)) return
@@ -1045,21 +1048,28 @@ internal class SessionController(
         }
     }
 
-    fun permissionResult(granted: Boolean) {
-        if (!backendAvailable) return
-        if (permissionTarget == null) return
-        if (!granted) { continuePermission(false); return }
-        state = state.copy(busy = true, error = "")
-        // Granting consent only authorizes VpnService. Prepare again off the UI
-        // thread to start it and wait for attachment before Go acquires a TUN.
-        worker.execute {
-            val ready = NativeVpnBridge.prepare(activity)
-            main.post {
-                if (permissionTarget == null) return@post
-                if (ready == 1) continuePermission(true)
-                else {
+    private fun preparePermission() {
+        cancelPreparation()
+        val target = permissionTarget ?: return
+        if (!selectionAdmission.register(target, target.fence.sourceRevision)) return
+        val details = "session_id=${target.session.sessionId} generation=${target.session.generation} " +
+            "source_revision=${target.fence.sourceRevision} selection=${target.selection} retry=${target.retry}"
+        preparation = NativeVpnBridge.prepareForSelection(activity, details) { result ->
+            if (closed || permissionTarget !== target) return@prepareForSelection
+            when (result) {
+                NativeVpnBridge.PreparationResult.Ready -> { preparation = null; continuePermission(true) }
+                NativeVpnBridge.PreparationResult.PermissionRequired ->
+                    state = state.copy(busy = false, error = "Approve the Android VPN permission to connect")
+                NativeVpnBridge.PreparationResult.Cancelled -> { selectionAdmission.invalidate(target); preparation = null; permissionTarget = null; state = state.copy(busy = false) }
+                NativeVpnBridge.PreparationResult.PermissionDenied -> {
+                    preparation = null
+                    continuePermission(false)
+                }
+                is NativeVpnBridge.PreparationResult.Failed -> {
+                    selectionAdmission.invalidate(target)
+                    preparation = null
                     permissionTarget = null
-                    report("Android VPN service could not be prepared after permission approval")
+                    report("Android VPN service could not be prepared: ${result.error.message}", result.error)
                 }
             }
         }
@@ -1068,18 +1078,20 @@ internal class SessionController(
     private fun continuePermission(granted: Boolean) {
         val target = permissionTarget ?: return
         permissionTarget = null
-        if (!granted) { report("VPN permission was not granted"); return }
+        if (!granted) { selectionAdmission.invalidate(target); report("VPN permission was not granted"); return }
         val selected = target.session
         val current = latest
         if (!target.retry && !PermissionTargetFence.stillCurrent(
                 target.fence,
                 current.permissionSnapshot(sourceLoads.revision, state.sourceDirty),
             )) {
+            selectionAdmission.invalidate(target)
             worker.execute { refreshSnapshot(clearBusy = true) }
             return
         }
         state = state.copy(busy = true, error = "")
         worker.execute {
+            var admitted = false
             val command = runCatching {
                 val response = JSONObject(NativeGoSession.snapshot(selected.sessionId))
                 requireOK(response)
@@ -1129,25 +1141,29 @@ internal class SessionController(
                             "fence=${target.fence} snapshot=$freshSnapshot",
                     )
                     null
-                } else if (target.retry) {
-                    NativeGoSession.startSelection(
-                        sessionId,
-                        sequence,
-                        target.selection.mode,
-                        target.selection.index,
-                        target.selection.digest,
-                        false,
-                    )
+                } else if (!selectionAdmission.claim(target, target.fence.sourceRevision)) {
+                    NativeVpnBridge.recordDiagnostic(activity.applicationContext, "ui.permission_selection_discarded",
+                        "reason=admission_invalidated selection=${target.selection} fence=${target.fence}")
+                    null
                 } else {
+                    admitted = true
+                    NativeVpnBridge.recordDiagnostic(activity.applicationContext, "ui.selection_admitted",
+                        "session_id=$sessionId generation=$generation source_revision=${target.fence.sourceRevision} selection=${target.selection} retry=${target.retry}")
                     NativeGoSession.startSelection(
                         sessionId,
                         sequence,
                         target.selection.mode,
                         target.selection.index,
                         target.selection.digest,
-                        true,
+                        !target.retry,
                     )
                 }
+            }
+            if (!admitted) selectionAdmission.invalidate(target)
+            if (admitted) {
+                NativeVpnBridge.recordDiagnostic(activity.applicationContext, "ui.selection_completed",
+                    "session_id=${target.session.sessionId} generation=${target.session.generation} source_revision=${target.fence.sourceRevision} " +
+                        "selection=${target.selection} closed=$closed succeeded=${command.isSuccess}", command.exceptionOrNull())
             }
             command.onSuccess { encoded ->
                 if (encoded == null) refreshSnapshot(clearBusy = true)
@@ -1161,7 +1177,7 @@ internal class SessionController(
 
     private fun refreshClipboard() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            main.post { refreshClipboard() }
+            post { refreshClipboard() }
             return
         }
         val available = runCatching {
@@ -1234,7 +1250,7 @@ internal class SessionController(
     private fun readLogs() {
         val retained = retainedLogViewState
         val result = diagnosticView.readWithRetainedBoundary(retained?.entries, retained?.clearBoundary)
-        main.post {
+        post {
             latestClearBoundary = result.clearBoundary
             if (retained != null && retainedLogViewState === retained) {
                 retainedLogViewValid = result.retainedEntriesVisible == true
@@ -1248,8 +1264,8 @@ internal class SessionController(
             try {
                 diagnosticView.clear()
                 NativeVpnBridge.recordAppStarted(activity)
-                main.post { state = state.copy(logs = emptyList(), clearRevision = state.clearRevision + 1) }
-            } catch (failure: Exception) { main.post { state = state.copy(logsError = failure.stackTraceToString()) } }
+                post { state = state.copy(logs = emptyList(), clearRevision = state.clearRevision + 1) }
+            } catch (failure: Exception) { post { state = state.copy(logsError = failure.stackTraceToString()) } }
         }
     }
 
@@ -1269,7 +1285,7 @@ internal class SessionController(
         if (state.uploadingLogs || !latest.logsUploadAvailable) return
         val selected = latest
         val attempt = LogUploader(activity.applicationContext, phase = { phase ->
-            main.post { if (state.uploadingLogs) state = state.copy(uploadPhase = phase) }
+            post { if (state.uploadingLogs) state = state.copy(uploadPhase = phase) }
         })
         uploader = attempt
         state = state.copy(uploadingLogs = true, uploadPhase = "Preparing logs…", uploadError = "")
@@ -1278,7 +1294,7 @@ internal class SessionController(
             NativeVpnBridge.recordDiagnostic(activity.applicationContext, "logs.upload_completed",
                 if (outcome.isSuccess) "Diagnostic upload completed" else "Diagnostic upload failed",
                 outcome.exceptionOrNull())
-            main.post {
+            post {
                 if (uploader === attempt) {
                     uploader = null
                     state = state.copy(uploadingLogs = false,
@@ -1301,18 +1317,24 @@ internal class SessionController(
     }
 
     fun close() {
+        selectionAdmission.close {
+            lifetime.close()
+            sourceLoads.close()
+        }
+        cancelPreparation()
+        permissionTarget = null
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         uploader?.cancel()
         uploadWorker.shutdownNow()
         worker.shutdownNow()
         logWorker.shutdownNow()
         loadWorker.shutdownNow()
-        sourceLoads.close()
     }
 
     private fun refreshSnapshot(clearBusy: Boolean = false) {
+        if (closed) return
         if (!backendAvailable) {
-            if (clearBusy) main.post { state = state.copy(busy = false) }
+            if (clearBusy) post { state = state.copy(busy = false) }
             return
         }
         try {
@@ -1366,8 +1388,8 @@ internal class SessionController(
             )
             // Command policy consumes only the backend snapshot. The UI projection
             // below preserves inventory while a source edit is still pending.
-            latest = current
-            main.post {
+            post {
+                latest = current
                 if (current.sessionId == state.session.sessionId && current.sequence < maxOf(state.session.sequence, acceptedSequence)) return@post
                 if (current.sessionId != state.session.sessionId) acceptedSequence = 0
                 sourceLoads.snapshotObserved()
@@ -1405,20 +1427,22 @@ internal class SessionController(
         } catch (failure: LinkageError) {
             handleNativeLinkageFailure(failure)
         } catch (failure: Exception) {
-            latest = SessionData()
             val message = commandError(failure)
             NativeVpnBridge.recordDiagnostic(activity, "ui.snapshot_failed", message, failure)
-            main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
+            post { latest = SessionData(); state = state.copy(session = SessionData(), busy = false, error = message) }
         }
     }
 
     internal fun handleNativeLinkageFailure(failure: LinkageError) {
         val message = failure.message?.takeIf(String::isNotBlank) ?: "Go backend is unavailable"
-        backendUnavailableMessage = message
-        backendAvailable = false
-        latest = SessionData()
-        NativeVpnBridge.recordNativeFailure(activity, "go.snapshot_linkage_failed", failure)
-        main.post { state = state.copy(session = SessionData(), busy = false, error = message) }
+        NativeVpnBridge.recordNativeFailure(activity.applicationContext, "go.snapshot_linkage_failed", failure)
+        if (closed) return
+        post {
+            backendUnavailableMessage = message
+            backendAvailable = false
+            latest = SessionData()
+            state = state.copy(session = SessionData(), busy = false, error = message)
+        }
     }
 
     private fun consumeSnapshotCommand(encoded: String, fallback: String) {
@@ -1445,7 +1469,7 @@ internal class SessionController(
 
     private fun report(message: String, failure: Throwable? = null) {
         NativeVpnBridge.recordDiagnostic(activity, "ui.failure", message, failure)
-        main.post {
+        post {
             dismissedErrors = dismissedErrors - message
             state = state.copy(busy = false, error = message)
         }
@@ -1454,7 +1478,7 @@ internal class SessionController(
 
 internal class LiveLogView(context: android.content.Context) : android.widget.ScrollView(context) {
     private val content = android.widget.TextView(context).apply {
-        id = R.id.logs_viewport
+        id = R.id.logs_content
         typeface = android.graphics.Typeface.MONOSPACE
         textSize = 11.5f
         setLineSpacing(0f, 1.25f)
@@ -1482,6 +1506,7 @@ internal class LiveLogView(context: android.content.Context) : android.widget.Sc
     private var restoredVisibleBoundaries: Map<String, Long>? = null
 
     init {
+        id = R.id.logs_viewport
         isFillViewport = true
         addView(content)
         content.setTextColor(Ink.toArgb())

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(DobbyDiagnosticFiles)
+import DobbyDiagnosticFiles
+#endif
 
 /// Small native logger shared by the containing app and Packet Tunnel. Go
 /// owns the VPN log schema; Swift records only native lifecycle diagnostics.

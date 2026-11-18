@@ -9,10 +9,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
+	"core/log"
 	"core/sessionapi"
 	"core/sessionapi/wire"
 )
+
+const snapshotMethod = "Snapshot"
 
 // PlatformCallbacks is implemented by the Android service or iOS extension
 // shell. PublishState synchronizes native tunnel lifecycle state; UI clients
@@ -76,6 +80,23 @@ func (b *Binding) StopAndWait(ctx context.Context) error {
 	return owner.StopAndWait(ctx)
 }
 
+// StopAndWaitWithOperation records one iOS provider lifecycle operation without
+// altering the owner or its cleanup error.
+func (b *Binding) StopAndWaitWithOperation(ctx context.Context, operationID string) error {
+	fields := map[string]any{"operation_id": operationID, "method": "StopAndWait"}
+	started := time.Now()
+	log.Info("SESSION", "mobile operation entered", fields)
+	err := b.StopAndWait(ctx)
+	fields["elapsed_ms"] = time.Since(started).Milliseconds()
+	if err != nil {
+		fields["error"] = err.Error()
+		log.Error("SESSION", "mobile operation failed", fields)
+	} else {
+		log.Info("SESSION", "mobile operation completed", fields)
+	}
+	return err
+}
+
 func (b *Binding) Resume() error {
 	owner, ok := b.manager.(interface{ Resume() error })
 	if !ok {
@@ -97,6 +118,21 @@ func (b *Binding) Restore(onlyPreviouslyEnabled bool) string {
 		return failed(err)
 	}
 	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
+}
+
+// PrepareServiceRestore is used only by the desktop service at startup. It
+// fixes the user-intent epoch now and returns the bounded-retry restore to run
+// once the control channel is serving.
+func (b *Binding) PrepareServiceRestore() func(context.Context) error {
+	owner, ok := b.manager.(interface {
+		PrepareRestoreAtServiceStart() func(context.Context) error
+	})
+	if !ok {
+		return func(context.Context) error {
+			return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "automatic startup owner is unavailable"}
+		}
+	}
+	return owner.PrepareRestoreAtServiceStart()
 }
 
 func (b *Binding) AttachSourceStore() {
@@ -246,6 +282,50 @@ func (b *Binding) CallJSON(ctx context.Context, method string, params json.RawMe
 	return b.CallJSONWithConfiguration(ctx, method, params, nil, false)
 }
 
+// CallJSONWithOperation attaches the provider's operation identity to this
+// invocation only; command parameters and responses retain their existing shape.
+func (b *Binding) CallJSONWithOperation(ctx context.Context, operationID, method string, params json.RawMessage, rawConfiguration []byte, hasConfiguration bool) string {
+	fields := map[string]any{"operation_id": operationID, "method": method}
+	var identity struct {
+		SessionID  string `json:"session_id"`
+		Generation *int64 `json:"generation"`
+	}
+	if json.Unmarshal(params, &identity) == nil {
+		if identity.SessionID != "" {
+			fields["requested_session_id"] = identity.SessionID
+		}
+		if identity.Generation != nil {
+			fields["requested_generation"] = *identity.Generation
+		}
+	}
+	started := time.Now()
+	if method != snapshotMethod {
+		log.Info("SESSION", "mobile operation entered", fields)
+	}
+	response := b.CallJSONWithConfiguration(ctx, method, params, rawConfiguration, hasConfiguration)
+	fields["elapsed_ms"] = time.Since(started).Milliseconds()
+	var outcome struct {
+		OK    bool          `json:"ok"`
+		Error *wire.Failure `json:"error"`
+	}
+	err := json.Unmarshal([]byte(response), &outcome)
+	switch {
+	case err != nil:
+		fields["error"] = err.Error()
+		log.Error("SESSION", "mobile operation failed", fields)
+	case outcome.Error != nil:
+		fields["error"] = outcome.Error.Message
+		fields["error_code"] = outcome.Error.Code
+		log.Error("SESSION", "mobile operation failed", fields)
+	case !outcome.OK:
+		fields["error"] = "command returned failure without details"
+		log.Error("SESSION", "mobile operation failed", fields)
+	case method != snapshotMethod:
+		log.Info("SESSION", "mobile operation completed", fields)
+	}
+	return response
+}
+
 // CallJSONWithConfiguration dispatches the same method/params request used by
 // desktop control. iOS supplies configuration bytes separately because its
 // NetworkExtension message channel must not carry profile secrets. The
@@ -283,7 +363,7 @@ func (b *Binding) CallJSONWithConfiguration(
 			return failed(err)
 		}
 		return success(result)
-	case "Snapshot":
+	case snapshotMethod:
 		return b.SnapshotContext(ctx, value.SessionID)
 	case "Configure":
 		if hasConfiguration {

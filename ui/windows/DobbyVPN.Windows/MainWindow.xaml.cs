@@ -56,7 +56,6 @@ public sealed partial class MainWindow : Window
     private string _errorDetailOriginal = "";
     private string _lastSourceError = "";
     private bool _canPaste;
-    private double _rowHeight;
     private string _loadError = "";
     private string _restoredLoad = "";
     private CancellationTokenSource? _debounce;
@@ -92,6 +91,7 @@ public sealed partial class MainWindow : Window
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
+    private readonly DesktopControlDiagnostics _controlDiagnostics = new();
     private bool _exportingLogs;
     private CancellationTokenSource? _logUploadCancellation;
     private string _lastLogReference = "";
@@ -104,7 +104,6 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         RestoreLogUpload();
         SizeWindow();
-        Column.SizeChanged += (_, _) => UpdateTrayHeight();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
         Root.Loaded += (_, _) =>
         {
@@ -147,7 +146,8 @@ public sealed partial class MainWindow : Window
             // If the dispatcher rejected the programmatic close request, a
             // later user/system close may safely complete the already-drained
             // shutdown instead of leaving the window permanently inert.
-            _allowFinalClose = true;
+            args.Cancel = true;
+            Program.FinalClose(this, () => { _allowFinalClose = true; Close(); });
             return;
         }
         args.Cancel = true;
@@ -193,8 +193,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
-                _allowFinalClose = true;
-                Close();
+                Program.FinalClose(this, () => { _allowFinalClose = true; Close(); });
                 completion.TrySetResult(true);
             }
             catch (Exception error) { completion.TrySetException(error); }
@@ -272,7 +271,7 @@ public sealed partial class MainWindow : Window
         return DispatcherQueue.TryEnqueue(priority, () => _lifetime.TryRunCallback(callback));
     }
 
-    internal bool TryActivate() => _lifetime.TryRunCallback(Activate);
+    internal bool TryAcceptActivation(Action accept) => _lifetime.TryRunCallback(() => { Activate(); accept(); });
 
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr window);
@@ -288,16 +287,6 @@ public sealed partial class MainWindow : Window
         AppWindow.ResizeClient(new SizeInt32((int)(380 * scale), (int)(680 * scale)));
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + (area.Height - AppWindow.Size.Height) / 2));
-    }
-
-    // Four connections when there is room; on short windows the logs keep a quarter of the height.
-    private void UpdateTrayHeight()
-    {
-        if (_lifetime.IsClosing) return;
-        var height = Column.ActualHeight;
-        if (height <= 0) return;
-        var fourRows = 4 * Math.Max(_rowHeight, 42) + 5 * 6;
-        ConnectionsTray.Height = Math.Min(Math.Max(height - 135 - height / 4, 54), fourRows);
     }
 
     private void RecordAppStarted()
@@ -329,6 +318,7 @@ public sealed partial class MainWindow : Window
             {
                 await RefreshSnapshotAsync(cancellationToken);
                 if (cancellationToken.IsCancellationRequested) return;
+                if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized }) continue;
                 await RefreshLogsAsync(cancellationToken);
             }
         }
@@ -378,7 +368,7 @@ public sealed partial class MainWindow : Window
                 _sourceInitialized = true;
             }
             var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (!result.Configured && !_subscriptionLoad.SourceDirty && SourceEditor.Text.Length > 0 && _restoredLoad != restoreKey)
+            if (_subscriptionLoad.CanRestore(SourceEditor.Text, _acceptedInThisWindow, result.Configured) && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
                 await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);
@@ -464,8 +454,8 @@ public sealed partial class MainWindow : Window
     private bool ShowSeparateStop => HasUnfinishedActiveVpn(_snapshot) && _snapshot?.PrimaryAction != "STOP";
 
     private string ActionTitle(int? index) => IsStopTarget(index)
-        ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Disconnect" : "Stop")
-        : (index is null ? "Auto connect" : "Connect");
+        ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Connected" : "Stop")
+        : (index is null ? "Auto connect" : _snapshot is { State: "CONNECTED", PendingTarget: null } ? "Switch" : "Connect");
 
     private bool Busy => _busy || _stopInFlight;
     private bool Connected => _snapshot is { PrimaryAction: "STOP" } active && active.State != "FAILED";
@@ -622,7 +612,7 @@ public sealed partial class MainWindow : Window
         var empty = (current?.Profiles.Length ?? 0) == 0 && orphan is null;
         var failed = empty && _loadError.Length > 0;
         LoadFailed.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
-        EmptySock.Visibility = empty && !failed ? Visibility.Visible : Visibility.Collapsed;
+        EmptyState.Visibility = empty && !failed ? Visibility.Visible : Visibility.Collapsed;
         ProfilesScroll.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         if (current is null) return;
 
@@ -657,15 +647,19 @@ public sealed partial class MainWindow : Window
         _trayKey = trayKey;
         ProfileList.Children.Clear();
         if (orphan is not null)
+        {
+            var orphanConnected = current.State == "CONNECTED" && current.PendingTarget is null;
             ProfileList.Children.Add(CreateRow("profile.active", ProfileName(orphan),
                 [ProtocolName(orphan.Protocol), SessionStatus, "not in subscription"],
-                IsOn(SessionStatus), MainTitle, MainEnabled, MainActionAsync));
+                IsOn(SessionStatus), orphanConnected ? "Connected" : MainTitle, MainEnabled && !orphanConnected, MainActionAsync));
+        }
         foreach (var profile in current.Profiles)
         {
             var index = profile.Index;
             var status = ProfileStatus(index);
+            var title = ProfileTitle(index);
             ProfileList.Children.Add(CreateRow(ProfileAutomationIds.Create(current.Digest, index, "action"), ProfileName(profile),
-                [ProtocolName(profile.Protocol), status], IsOn(status), ProfileTitle(index), CanAct(index),
+                [ProtocolName(profile.Protocol), status], IsOn(status), title, CanAct(index) && title != "Connected",
                 token => PerformActionAsync(index, false, token)));
         }
     }
@@ -677,7 +671,7 @@ public sealed partial class MainWindow : Window
         var description = new TextBlock
         {
             Text = name, FontSize = 14.45, FontWeight = FontWeights.Medium, Foreground = Palette("Ink"),
-            TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis
+            TextWrapping = TextWrapping.Wrap, MaxLines = 2, TextTrimming = TextTrimming.CharacterEllipsis
         };
         var protocol = new TextBlock
         {
@@ -721,12 +715,6 @@ public sealed partial class MainWindow : Window
         row.Click += (_, _) =>
         {
             if (!ErrorShown) StartWindowWork(click);
-        };
-        row.SizeChanged += (_, _) =>
-        {
-            if (row.ActualHeight <= _rowHeight) return;
-            _rowHeight = row.ActualHeight;
-            UpdateTrayHeight();
         };
         return row;
     }
@@ -1037,7 +1025,7 @@ public sealed partial class MainWindow : Window
         _diagnostics.RecordInfo("subscription.paste-click", "Started handling a Paste button click", new { session_id = _snapshot?.SessionId });
         try
         {
-            var pastedText = (await Clipboard.GetContent().GetTextAsync()).Trim();
+            var pastedText = (await ReadClipboardTextAsync(cancellationToken)).Trim();
             if (cancellationToken.IsCancellationRequested) return;
             _diagnostics.RecordInfo("subscription.paste-clipboard-text-returned", "Clipboard text returned to the Paste handler", new { session_id = _snapshot?.SessionId, text_length = pastedText.Length });
             if (!ValidSubscription(pastedText)) throw new InvalidOperationException("Paste an HTTPS subscription URL with a host");
@@ -1045,6 +1033,21 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); Render(); }
     }
+
+    // A clipboard provider can withhold completion indefinitely. Cancelling
+    // the WinRT operation alone would still wait for the provider to report
+    // back, so the wait itself also ends as soon as the window starts closing.
+    private static async Task<string> ReadClipboardTextAsync(CancellationToken cancellationToken)
+    {
+        var operation = Clipboard.GetContent().GetTextAsync();
+        using var cancelOperation = cancellationToken.Register(() =>
+        {
+            try { operation.Cancel(); }
+            catch (Exception) { /* already completed or closed; the wait below ends regardless */ }
+        });
+        return await operation.AsTask().WaitAsync(cancellationToken);
+    }
+
     private void ImportSubscription(string source, SubscriptionInputKind kind)
     {
         if (!ValidSubscription(source)) throw new InvalidOperationException("Enter an HTTPS subscription URL with a host");
@@ -1239,30 +1242,47 @@ public sealed partial class MainWindow : Window
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(2));
-        await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-start", "Started connecting the Configure named pipe", new { method, parameters });
-        await pipe.ConnectAsync(3000, timeout.Token);
-        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-end", "Connected the Configure named pipe", new { method, parameters });
-        await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
-        using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-        var request = JsonSerializer.Serialize(new { method, @params = parameters });
-        await writer.WriteLineAsync(request.AsMemory(), timeout.Token);
-        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-request-written", "Wrote the Configure request to the Go backend", new { method, parameters });
-        var line = await reader.ReadLineAsync(timeout.Token);
-        if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-response-read", "Read the Configure response from the Go backend", new { method, parameters, succeeded = line is not null });
-        if (line is null) throw new IOException("Go backend closed the control connection without a response.");
-        using var response = JsonDocument.Parse(line);
-        if (!response.RootElement.GetProperty("ok").GetBoolean())
+        var operation = _controlDiagnostics.Begin(method, parameters);
+        var started = Stopwatch.GetTimestamp();
+        object fields(string? error = null) => new
         {
-            var failure = response.RootElement.GetProperty("error");
-            var code = failure.GetProperty("code").GetString() ?? "INTERNAL";
-            var message = failure.GetProperty("message").GetString() ?? "Go backend command failed";
-            throw new BackendCommandException(code, message);
+            request_id = operation.Id, method, identity = operation.Identity,
+            elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds, error,
+        };
+        if (operation.Sampled) _diagnostics.RecordInfo("control.command.begin", "Started desktop control command", fields());
+        try
+        {
+            await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-start", "Started connecting the Configure named pipe", new { method, parameters });
+            await pipe.ConnectAsync(3000, timeout.Token);
+            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-end", "Connected the Configure named pipe", new { method, parameters });
+            await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
+            using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+            var request = operation.Encode();
+            await writer.WriteLineAsync(request.AsMemory(), timeout.Token);
+            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-request-written", "Wrote the Configure request to the Go backend", new { method, parameters });
+            var line = await reader.ReadLineAsync(timeout.Token);
+            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-response-read", "Read the Configure response from the Go backend", new { method, parameters, succeeded = line is not null });
+            if (line is null) throw new IOException("Go backend closed the control connection without a response.");
+            using var response = JsonDocument.Parse(line);
+            if (!response.RootElement.GetProperty("ok").GetBoolean())
+            {
+                var failure = response.RootElement.GetProperty("error");
+                var code = failure.GetProperty("code").GetString() ?? "INTERNAL";
+                var message = failure.GetProperty("message").GetString() ?? "Go backend command failed";
+                throw new BackendCommandException(code, message);
+            }
+            var payload = response.RootElement.GetProperty("result");
+            var result = payload.Deserialize<T>(JsonOptions);
+            if (result is null) throw new InvalidDataException("Go backend returned an empty result.");
+            if (operation.Sampled) _diagnostics.RecordInfo("control.command.complete", "Completed desktop control command", fields());
+            return result;
         }
-        var payload = response.RootElement.GetProperty("result");
-        var result = payload.Deserialize<T>(JsonOptions);
-        if (result is null) throw new InvalidDataException("Go backend returned an empty result.");
-        return result;
+        catch (Exception error)
+        {
+            _diagnostics.RecordError("control.command.failure", "Desktop control command failed", fields(error.ToString()));
+            throw;
+        }
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1337,6 +1357,28 @@ public sealed partial class MainWindow : Window
                 _diagnostics.Record(error.ToString(), "logs.pointer-entry.failure");
             }
         }), true);
+        // Observe context input and popup lifetime without changing the native
+        // ContextFlyout routing. This distinguishes input that never opens a
+        // menu from a menu that opens and closes during a later log update.
+        LogsScroll.AddHandler(UIElement.RightTappedEvent, new RightTappedEventHandler((_, args) =>
+        {
+            try
+            {
+                var position = args.GetPosition(LogsScroll);
+                RecordLogMenuObservation("right-tap", new
+                {
+                    source_type = args.OriginalSource?.GetType().FullName,
+                    handled = args.Handled,
+                    x = position.X,
+                    y = position.Y,
+                });
+            }
+            catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.menu-observation.failure"); }
+        }), true);
+        LogsMenu.Opening += (_, _) => RecordLogMenuObservation("opening");
+        LogsMenu.Opened += (_, _) => RecordLogMenuObservation("opened");
+        LogsMenu.Closing += (_, _) => RecordLogMenuObservation("closing");
+        LogsMenu.Closed += (_, _) => RecordLogMenuObservation("closed");
         LogsScroll.AddHandler(UIElement.DoubleTappedEvent, new DoubleTappedEventHandler((_, args) =>
         {
             var scrollbarSource = FindLogVerticalScrollBar(args.OriginalSource) is not null;
@@ -1761,6 +1803,25 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing) { RecordError(error.ToString()); _logsError = error.Message; RenderError(); }
     }
 
+    private void RecordLogMenuObservation(string stage, object? gesture = null)
+    {
+        try
+        {
+            var target = LogsMenu.Target;
+            _diagnostics.RecordDebug("logs.menu-" + stage, "Observed log context menu", new
+            {
+                gesture,
+                target_type = target?.GetType().FullName,
+                target_id = target is null ? null : AutomationProperties.GetAutomationId(target),
+                target_is_viewport = ReferenceEquals(target, LogsScroll),
+                is_open = LogsMenu.IsOpen,
+                rendered_rows = _renderedLogRows.Count,
+                state = CaptureLogScrollDiagnosticState(),
+            });
+        }
+        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.menu-observation.failure"); }
+    }
+
     private static List<NativeDiagnostics.Entry> Shown(IEnumerable<NativeDiagnostics.Entry> entries) =>
         entries.Where(entry => entry.Level is not ("DEBUG" or "TRACE")
             && !entry.Raw.Contains("\"event\":\"logs.backend-ingested\"", StringComparison.Ordinal)).ToList();
@@ -2007,10 +2068,12 @@ public sealed partial class MainWindow : Window
         {
             Directory.CreateDirectory(LogUploadDirectory);
             using var cleanupGate = new Mutex(false, @"Local\DobbyVPN.LogUploadCleanup");
-            cleanupGate.WaitOne();
+            bool acquired;
+            try { acquired = cleanupGate.WaitOne(TimeSpan.FromSeconds(5)); }
+            catch (AbandonedMutexException) { acquired = true; }
             try
             {
-                foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
+                if (acquired) foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
                 {
                     FileStream lease;
                     try { lease = new FileStream(Path.Combine(directory, ".lease"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
@@ -2026,7 +2089,7 @@ public sealed partial class MainWindow : Window
                     catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup.directory"); }
                 }
             }
-            finally { cleanupGate.ReleaseMutex(); }
+            finally { if (acquired) cleanupGate.ReleaseMutex(); }
             var metadata = Path.Combine(LogUploadDirectory, "latest.json");
             if (!File.Exists(metadata)) return;
             var latest = JsonSerializer.Deserialize<LastLogUpload>(File.ReadAllText(metadata));

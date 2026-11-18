@@ -3,6 +3,7 @@
 package protected_dialer
 
 import (
+	"core/routing"
 	"fmt"
 	"syscall"
 
@@ -22,27 +23,40 @@ func windowsInterfaceOption(network string) (level, option int, ipv4 bool, err e
 	}
 }
 
-func (w *windowsProtector) Protect(fd uintptr, network string) error {
-	selectedIndex, err := physicalInterfaceIndex(network)
-	if err != nil {
-		return err
-	}
+func (w *windowsProtector) Protect(fd uintptr, network, address string) error {
+	return w.ProtectDestinations(fd, network, []string{address})
+}
 
+func (w *windowsProtector) ProtectDestinations(fd uintptr, network string, addresses []string) error {
 	level, option, ipv4, err := windowsInterfaceOption(network)
 	if err != nil {
 		return err
 	}
-	optionIndex := selectedIndex
-	if ipv4 {
-		idx := htonl(uint32(selectedIndex))
-		optionIndex = int(idx)
+	boundIndex, err := syscall.GetsockoptInt(syscall.Handle(fd), level, option)
+	if err != nil {
+		return fmt.Errorf("read existing underlay socket binding: %w", err)
 	}
-	if err := syscall.SetsockoptInt(syscall.Handle(fd), level, option, optionIndex); err != nil {
-		optionName := "IPV6_UNICAST_IF"
-		if ipv4 {
-			optionName = "IP_UNICAST_IF"
+	var preferred uint64
+	if boundIndex > 0 {
+		if identity, identityErr := routing.WindowsUnderlayIdentity(uint32(boundIndex)); identityErr == nil {
+			preferred = identity.LUID
+		} else {
+			log.Debugf(Category, "[Windows-Protect] ignoring stale socket binding index=%d err=%v", boundIndex, identityErr)
 		}
-		log.Errorf(Category, "[Windows-Protect] %s failed fd=%d iface=%d network=%s err=%v", optionName, fd, selectedIndex, network, err)
+	}
+	selected, err := selectCompatibleUnderlays(network, addresses, preferred, routing.WindowsUnderlayForDestination)
+	if err != nil {
+		return err
+	}
+	if err := routing.ValidateWindowsUnderlay(selected); err != nil {
+		return err
+	}
+	optionIndex := selected.Index
+	if ipv4 {
+		optionIndex = htonl(optionIndex)
+	}
+	if err := syscall.SetsockoptInt(syscall.Handle(fd), level, option, int(optionIndex)); err != nil {
+		log.Errorf(Category, "[Windows-Protect] bind failed fd=%d iface=%d network=%s err=%v", fd, selected.Index, network, err)
 		return err
 	}
 	return nil

@@ -211,8 +211,18 @@ internal class UnderlyingNetworkOwner(
     // cancel nor an early cancel can leave a query identity retained forever.
     fun finish(queryID: Long) { synchronized(lock) { canceled.remove(queryID) } }
 
+    fun cancelQueries() = synchronized(lock) {
+        var failure: Throwable? = null
+        queries.values.forEach { query ->
+            try { query.signal.cancel() } catch (error: Throwable) {
+                val previous = failure
+                if (previous == null) failure = error else previous.addSuppressed(error)
+            } finally { query.done.countDown() }
+        }
+        failure?.let { throw it }
+    }
+
     fun stop() = synchronized(lock) {
-        queries.values.forEach { it.signal.cancel(); it.done.countDown() }
         if (registered) manager.unregisterNetworkCallback(callback)
         registered = false
         vpnEstablished = false

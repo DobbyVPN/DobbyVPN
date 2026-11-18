@@ -27,7 +27,7 @@ func macOSInterfaceOption(network string) (level, option int, err error) {
 	}
 }
 
-func (m *macosProtector) Protect(fd uintptr, network string) error {
+func (m *macosProtector) Protect(fd uintptr, network string, _ string) error {
 	interfaceIndex, err := physicalInterfaceIndex(network)
 	if err != nil {
 		return err
