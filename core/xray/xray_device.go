@@ -107,7 +107,7 @@ func (d *XrayDevice) Open(routingTableID int, uplinkIface string) error {
 	if !instanceOwner.TryLock() {
 		return errors.New("another Xray instance owns the process dialer")
 	}
-	retire := internal.InstallProtectedSystemDialer(d.ctx, d.dnsCache)
+	retire := internal.InstallProtectedSystemDialer(d.ctx, d.dnsCache, closeXrayGRPCClients)
 	d.retireDialer = func(ctx context.Context) error {
 		if err := retire(ctx); err != nil {
 			return err
