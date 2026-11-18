@@ -22,7 +22,7 @@ require (
 	golang.getoutline.org/sdk v0.0.23
 	golang.getoutline.org/sdk/x v0.2.2
 	golang.org/x/net v0.62.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	golang.zx2c4.com/wireguard/windows v1.1.1
 	google.golang.org/grpc v1.85.0
 	trusttunnel-go v0.0.0-00010101000000-000000000000
@@ -34,7 +34,7 @@ require (
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344 // indirect
 	github.com/go-gost/relay v0.5.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
