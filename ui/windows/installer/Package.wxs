@@ -1,7 +1,16 @@
 ﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+	<!-- Release UpgradeCode: same as in released 1.5.x MSIs (see desktop_package.py). Debug has its own. -->
+	<?ifdef DOBBYVPN_DEBUG?>
+		<?define ProductName="DobbyVPN Debug"?>
+		<?define UpgradeCode="5C16B3D0-831C-4024-AB10-A76DA27D14FB"?>
+	<?else?>
+		<?define ProductName="DobbyVPN"?>
+		<?define UpgradeCode="AC1AE299-9E08-57FF-A64E-70B0AC9ADB9B"?>
+	<?endif?>
 	<Package
 		Id="DobbyVPN"
-		Name="DobbyVPN"
+		Name="$(var.ProductName)"
+		UpgradeCode="$(var.UpgradeCode)"
 		Manufacturer="DobbyVPN team"
 		Language="1033"
 		Version="$(var.DOBBYVPN_VERSION)">

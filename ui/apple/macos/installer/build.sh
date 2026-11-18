@@ -59,16 +59,18 @@ build_package() {
       "$service_arch" \
       "$APP_BUNDLE/Contents/Resources/dobbyvpn-backend"
 
+    [[ -x "$APP_BUNDLE/Contents/Resources/dobby-cli" ]] || {
+      echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
+      exit 1
+    }
     if [[ "$payload_arch" == "amd64" ]]; then
-      [[ -x "$APP_BUNDLE/Contents/Resources/dobby-cli" ]] || {
-        echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
-        exit 1
-      }
       ln -s ../Resources/dobby-cli "$APP_BUNDLE/Contents/MacOS/dobby-cli"
     fi
 
-    mkdir -p Payload/Applications Payload/usr/local/libexec
+    mkdir -p Payload/Applications Payload/usr/local/libexec Payload/usr/local/bin
     cp -R "$APP_BUNDLE" Payload/Applications/
+    # Same path on Intel and Apple silicon: put dobby-cli on the default PATH.
+    ln -s "/Applications/$APP_BUNDLE/Contents/Resources/dobby-cli" Payload/usr/local/bin/dobby-cli
     cp ../../uninstall.sh Payload/usr/local/libexec/dobbyvpn-uninstall
     chmod 755 Payload/usr/local/libexec/dobbyvpn-uninstall
     write_fixed_payload_component_plist
