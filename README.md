@@ -271,7 +271,8 @@ supported.
 The Build workflow signs and notarizes the release macOS packages
 (`dobbyVPN-macos-aarch64.pkg`, `dobbyVPN-macos-amd64.pkg`) before it uploads
 them, so the Test and Release workflows use the signed files. On the macOS
-runner, `.github/scripts/desktop/macos_signing.sh`:
+runner, [`.github/scripts/desktop/macos_signing.sh`](.github/scripts/desktop/macos_signing.sh),
+called from [`.github/workflows/desktop_package.yml`](.github/workflows/desktop_package.yml):
 
 1. creates a temporary keychain and imports both `.p12` files into it;
 2. selects the identities by certificate type (`Developer ID Application`,
@@ -303,20 +304,27 @@ Build without them, or with only some of them, fails, so the Release workflow,
 which accepts only a successful Build from `main`, cannot publish unsigned
 macOS packages.
 
-Debug packages (`*-debug.pkg`) stay unsigned: hardened runtime blocks
-debugger attachment unless the binaries carry `get-task-allow`, and Apple
-rejects notarization of binaries with that entitlement. A signed but
-unnotarized package would still be blocked by Gatekeeper.
+Debug packages (`*-debug.pkg`) stay unsigned. This is a repository choice
+that follows from Apple's rules: hardened runtime blocks debugger attachment
+unless the binaries carry `get-task-allow`
+([Hardened Runtime](https://developer.apple.com/documentation/security/hardened-runtime)),
+notarization rejects binaries with that entitlement, and Gatekeeper blocks
+Developer ID software that is not notarized
+([Notarizing macOS software before distribution](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)).
 
-To re-issue a `.p12` (for example when a certificate expires), the owner of the
-private key opens Keychain Access on the Mac that holds it, selects the
+To re-export a valid certificate as a `.p12`, the owner of the private key
+opens Keychain Access on the Mac that holds it, selects the
 "Developer ID Application" (or "Developer ID Installer") certificate together
 with its private key under **My Certificates**, chooses **File > Export
 Items**, saves it as Personal Information Exchange (`.p12`) with a strong
 password, and stores `base64 -i <file>.p12` in the matching secret. Both files
-must use the password stored in `MACOS_DEVELOPER_ID_P12_PASSWORD`. If the key
-is lost, create a new certificate of the same type in the Apple Developer
-account and export it the same way.
+must use the password stored in `MACOS_DEVELOPER_ID_P12_PASSWORD`.
+
+Exporting an expired certificate does not help. When a certificate has expired
+or its private key is lost, first create a new certificate of the same type as
+described in [Create Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates),
+install it in the keychain that holds its private key, and then export it as
+above.
 
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)
