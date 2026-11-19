@@ -102,7 +102,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
- "os/exec"
+	"os/exec"
 	"slices"
 	"strings"
 	"unsafe"
@@ -112,8 +112,8 @@ type MacOSPhysicalNetwork struct {
 	IPv4, IPv6 int
 	Identity   string
 	// DNSServers are the physical services' resolvers; the identity covers them.
-	DNSServers []netip.Addr
- NAT64Prefixes []netip.Prefix
+	DNSServers    []netip.Addr
+	NAT64Prefixes []netip.Prefix
 }
 
 func CaptureMacOSPhysicalNetwork(ctx context.Context) (MacOSPhysicalNetwork, error) {
@@ -157,15 +157,21 @@ func CaptureMacOSPhysicalNetwork(ctx context.Context) (MacOSPhysicalNetwork, err
 		servers = append(servers, server)
 	}
 	var prefixes []netip.Prefix
-    if captured.ipv6 != 0 {
-        iface, err := net.InterfaceByIndex(int(captured.ipv6))
-        if err != nil { return MacOSPhysicalNetwork{}, err }
-        output, err := exec.CommandContext(ctx, "/sbin/ifconfig", iface.Name).CombinedOutput()
-        if err != nil {return MacOSPhysicalNetwork{}, fmt.Errorf("capture physical NAT64 inventory: %w: %s",err,output)}
-        prefixes, err = parseMacOSNAT64Prefixes(string(output))
-        if err != nil {return MacOSPhysicalNetwork{}, err}
-    }
-    identity := fmt.Sprintf("macos:%x:nat64:%v", sha256.Sum256(snapshot), prefixes)
-    return MacOSPhysicalNetwork{IPv4:int(captured.ipv4), IPv6:int(captured.ipv6), Identity:identity,
-        DNSServers:servers, NAT64Prefixes:prefixes}, nil
+	if captured.ipv6 != 0 {
+		iface, err := net.InterfaceByIndex(int(captured.ipv6))
+		if err != nil {
+			return MacOSPhysicalNetwork{}, err
+		}
+		output, err := exec.CommandContext(ctx, "/sbin/ifconfig", iface.Name).CombinedOutput()
+		if err != nil {
+			return MacOSPhysicalNetwork{}, fmt.Errorf("capture physical NAT64 inventory: %w: %s", err, output)
+		}
+		prefixes, err = parseMacOSNAT64Prefixes(string(output))
+		if err != nil {
+			return MacOSPhysicalNetwork{}, err
+		}
+	}
+	identity := fmt.Sprintf("macos:%x:nat64:%v", sha256.Sum256(snapshot), prefixes)
+	return MacOSPhysicalNetwork{IPv4: int(captured.ipv4), IPv6: int(captured.ipv6), Identity: identity,
+		DNSServers: servers, NAT64Prefixes: prefixes}, nil
 }

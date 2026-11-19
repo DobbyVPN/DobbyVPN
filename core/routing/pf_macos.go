@@ -30,8 +30,11 @@ var macOSPFCommand = func(ctx context.Context, stdin string, args ...string) (st
 	command.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
-	if err != nil {
+    err := command.Run()
+    log.Debug(Category, "macOS pf command completed", map[string]any{
+        "arguments": args, "stdout": stdout.String(), "stderr": stderr.String(), "error": err,
+    })
+    if err != nil {
 		err = fmt.Errorf("pfctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), stderr.String(), err
@@ -136,10 +139,18 @@ func macOSPFEnable(ctx context.Context) (string, error) {
 	if err == nil {
 		err = os.WriteFile(macOSPFTokenPath, []byte(token+"\n"), 0o600)
 	}
-	if err != nil {
-		_, _, releaseErr := macOSPFCommand(context.WithoutCancel(ctx), "", "-X", token)
-		return "", errors.Join(err, releaseErr)
-	}
+    if err != nil {
+        _, _, releaseErr := macOSPFCommand(context.WithoutCancel(ctx), "", "-X", token)
+        if releaseErr != nil {
+            // Keep ownership in memory so the registered cleanup can still
+            // release the reference even though crash persistence failed.
+            return token, errors.Join(err, releaseErr)
+        }
+        if removeErr := os.Remove(macOSPFTokenPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+            err = errors.Join(err, removeErr)
+        }
+        return "", err
+    }
 	return token, nil
 }
 
@@ -232,11 +243,11 @@ func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, netw
 		return err
 	}
 	destination.Bypass = protected_dialer.IsApplicationBypass(ctx)
-    // The physical resolver exception belongs to bootstrap. Application DNS
-    // must not reach it even though both sockets are owned by the root backend.
-    if destination.Bypass && destination.Port == 53 {
-        return errors.New("application DNS outside the VPN is blocked")
-    }
+	// The physical resolver exception belongs to bootstrap. Application DNS
+	// must not reach it even though both sockets are owned by the root backend.
+	if destination.Bypass && destination.Port == 53 {
+		return errors.New("application DNS outside the VPN is blocked")
+	}
 	return k.update(ctx, func() (bool, error) {
 		if generation == 0 || generation <= k.retiredThrough {
 			return false, errors.New("macOS transport owner is retired")
