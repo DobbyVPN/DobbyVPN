@@ -17,17 +17,23 @@ typedef struct {
 } dobby_physical_network;
 
 // Comma-separated ServerAddresses of the captured physical DNS entities.
-static void dobby_physical_dns(CFDictionaryRef snapshot, char *out, size_t size) {
+static CFArrayRef dobby_dns_servers(CFDictionaryRef snapshot, CFStringRef key) {
+ if (key == NULL) return NULL;
+ CFDictionaryRef service = CFDictionaryGetValue(snapshot, key);
+ if (service == NULL || CFGetTypeID(service) != CFDictionaryGetTypeID()) return NULL;
+ CFArrayRef servers = CFDictionaryGetValue(service, kSCPropNetDNSServerAddresses);
+ if (servers == NULL || CFGetTypeID(servers) != CFArrayGetTypeID() || CFArrayGetCount(servers) == 0) return NULL;
+ return servers;
+}
+
+static void dobby_physical_dns(CFDictionaryRef snapshot, CFStringRef *state, CFStringRef *setup, char *out, size_t size) {
  size_t used = 0;
- CFIndex count = CFDictionaryGetCount(snapshot);
- const void **values = calloc(count > 0 ? count : 1, sizeof(void *));
  out[0] = 0;
- if (values == NULL) return;
- CFDictionaryGetKeysAndValues(snapshot, NULL, values);
- for (CFIndex i = 0; i < count; i++) {
-  if (CFGetTypeID(values[i]) != CFDictionaryGetTypeID()) continue;
-  CFArrayRef servers = CFDictionaryGetValue(values[i], kSCPropNetDNSServerAddresses);
-  if (servers == NULL || CFGetTypeID(servers) != CFArrayGetTypeID()) continue;
+ for (int family = 0; family < 2; family++) {
+  CFArrayRef servers = dobby_dns_servers(snapshot, state[family]);
+  // Static DNS can be present only in Setup for the same primary service.
+  if (servers == NULL) servers = dobby_dns_servers(snapshot, setup[family]);
+  if (servers == NULL) continue;
   for (CFIndex j = 0; j < CFArrayGetCount(servers); j++) {
    CFStringRef server = CFArrayGetValueAtIndex(servers, j);
    char text[96];
@@ -40,7 +46,6 @@ static void dobby_physical_dns(CFDictionaryRef snapshot, char *out, size_t size)
    out[used] = 0;
   }
  }
- free(values);
 }
 
 // Copy only the physical primary services. The supplemental VPN DNS service
@@ -53,6 +58,8 @@ static int dobby_physical_capture(dobby_physical_network *result) {
  CFArrayRef globals = CFArrayCreate(NULL,globalNames,2,&kCFTypeArrayCallBacks);
  CFDictionaryRef before = SCDynamicStoreCopyMultiple(store,globals,NULL);
  CFMutableArrayRef keys = CFArrayCreateMutableCopy(NULL,0,globals);
+ CFStringRef stateDNS[2] = {NULL, NULL};
+ CFStringRef setupDNS[2] = {NULL, NULL};
  CFDictionaryRef snapshot = NULL;
  CFDictionaryRef after = NULL;
  if (before == NULL) { status=SCError(); goto done; }
@@ -71,8 +78,12 @@ static int dobby_physical_capture(dobby_physical_network *result) {
   const CFStringRef entities[]={kSCEntNetIPv4,kSCEntNetIPv6,kSCEntNetDNS};
   for (int entity=0;entity<3;entity++) {
    CFStringRef key=SCDynamicStoreKeyCreateNetworkServiceEntity(NULL,kSCDynamicStoreDomainState,service,entities[entity]);
+   if (entity == 2) stateDNS[family] = key;
    CFArrayAppendValue(keys,key);CFRelease(key);
   }
+  CFStringRef key=SCDynamicStoreKeyCreateNetworkServiceEntity(NULL,kSCDynamicStoreDomainSetup,service,kSCEntNetDNS);
+  setupDNS[family] = key;
+  CFArrayAppendValue(keys,key);CFRelease(key);
  }
  if (result->ipv4==0 && result->ipv6==0) {status=kSCStatusNoLink;goto done;}
  snapshot=SCDynamicStoreCopyMultiple(store,keys,NULL);
@@ -80,7 +91,7 @@ static int dobby_physical_capture(dobby_physical_network *result) {
  after=SCDynamicStoreCopyMultiple(store,globals,NULL);
  if (after==NULL) {status=SCError();goto done;}
  if (!CFEqual(before,after)) {status=kSCStatusStale;goto done;}
- dobby_physical_dns(snapshot,result->dns,sizeof(result->dns));
+ dobby_physical_dns(snapshot,stateDNS,setupDNS,result->dns,sizeof(result->dns));
  result->snapshot=CFPropertyListCreateData(NULL,snapshot,kCFPropertyListXMLFormat_v1_0,0,NULL);
  if (result->snapshot==NULL) status=kSCStatusFailed;
  done:
