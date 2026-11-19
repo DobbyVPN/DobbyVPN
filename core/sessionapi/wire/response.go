@@ -8,6 +8,7 @@ import (
 
 // ProtocolVersion is the snapshot schema version. Bump it on any change that an
 // older window or CLI cannot handle; every client compares it to its own copy.
+// Version 1 includes ParseImportLink as well as the session lifecycle commands.
 const ProtocolVersion = 1
 
 // RestartMessage is shown when a client and the service disagree on ProtocolVersion.

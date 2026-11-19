@@ -92,3 +92,6 @@ func StopSessionAndWait(operationID string) string {
 // RestoreSession starts the saved Go selection for an OS/On Demand launch and
 // returns after its network owner has acquired protection (or startup fails).
 func RestoreSession() string { return mobileSessions.Restore(false) }
+
+// ParseImportLink interprets activation in the containing app without starting its provider.
+func ParseImportLink(value string) string { return mobilebinding.ParseImportLink(value) }

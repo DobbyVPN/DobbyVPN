@@ -1078,38 +1078,36 @@ public sealed partial class MainWindow : Window
         SetSourceText(source);
         SourceChanged(kind);
     }
+    private long _importRevision;
+
     public void ImportLink(string value)
     {
         if (_lifetime.IsClosing) return;
-        _diagnostics.RecordInfo(
-            "activation.import-link",
-            "Received a URI for the main window",
-            new { uri = value });
+        _diagnostics.RecordInfo("activation.import-link", "Received a URI for the main window", new { uri = value });
         Activate();
-        try
+        var revision = ++_importRevision;
+        StartWindowWork(async cancellationToken =>
         {
-            if (value.Equals("dobbyvpn://", StringComparison.OrdinalIgnoreCase) ||
-                value.Equals("dobbyvpn:///", StringComparison.OrdinalIgnoreCase)) return;
-            _dismissedErrors.Clear();
-            if (System.Text.RegularExpressions.Regex.IsMatch(value, "%(?![0-9a-fA-F]{2})")) throw new FormatException("Invalid URL escape");
-            var uri = new Uri(value);
-            if (uri.Scheme != "dobbyvpn" || uri.Host != "import" || uri.AbsolutePath is not ("" or "/") || uri.UserInfo.Length > 0 || !uri.IsDefaultPort || uri.Fragment.Length > 0)
-                throw new FormatException("Invalid import link");
-            var query = uri.Query.TrimStart('?').Split('&');
-            var pair = query[0].Split('=', 2);
-            if (query.Length != 1 || pair.Length != 2 || pair[0] != "url") throw new FormatException("The import link requires one url parameter");
-            var source = Uri.UnescapeDataString(pair[1]);
-            if (!ValidSubscription(source)) throw new FormatException("The import link requires an HTTPS subscription URL with a host");
-            _pendingImport = source;
-            ShowImportDialog();
-        }
-        catch (Exception error)
-        {
-            SetError(error.ToString(), "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL");
-            _importError = _errors.Operation;
-            Render();
-        }
+            try
+            {
+                var parsed = await CallAsync<ImportLinkResult>("ParseImportLink", new { link = value }, cancellationToken);
+                if (_lifetime.IsClosing || revision != _importRevision || parsed.Kind != "import") return;
+                _pendingImport = parsed.Source;
+                ShowImportDialog();
+            }
+            catch (Exception error)
+            {
+                if (_lifetime.IsClosing || revision != _importRevision) return;
+                SetError(error.ToString(), error.Message);
+                _importError = _errors.Operation;
+                Render();
+            }
+        });
     }
+
+    private sealed record ImportLinkResult(
+        [property: System.Text.Json.Serialization.JsonPropertyName("kind")] string Kind,
+        [property: System.Text.Json.Serialization.JsonPropertyName("source")] string? Source);
 
     private static TextBlock ImportPrompt(string source) => new()
     {
@@ -1154,6 +1152,7 @@ public sealed partial class MainWindow : Window
             AutomationProperties.SetAutomationId(_importDialog, "import.confirm");
             var result = await _importDialog.ShowAsync();
             _importDialog = null;
+            ++_importRevision;
             var source = _pendingImport;
             _pendingImport = null;
             if (result == ContentDialogResult.Primary && source is not null && !_lifetime.IsClosing)

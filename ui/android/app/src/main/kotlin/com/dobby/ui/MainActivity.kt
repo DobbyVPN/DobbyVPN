@@ -1351,17 +1351,16 @@ internal class SessionController(
         runCatching { java.net.URI(value) }.getOrNull().let { it?.scheme?.lowercase() == "https" && !it.host.isNullOrEmpty() }
 
     fun importLink(value: String) {
-        if (value.equals("dobbyvpn://", ignoreCase = true)) return
         try {
-            val uri = java.net.URI(value)
-            require(uri.scheme.equals("dobbyvpn", true) && uri.host == "import" && uri.rawPath.isNullOrEmpty() && uri.rawFragment == null && uri.rawUserInfo == null && uri.port == -1)
-            val query = uri.rawQuery.orEmpty().split('&')
-            require(query.size == 1)
-            val pair = query.single().split('=', limit = 2)
-            require(pair.size == 2 && pair[0] == "url")
-            val source = java.net.URLDecoder.decode(pair[1].replace("+", "%2B"), "UTF-8")
-            if (isHttpsSubscription(source)) state = state.copy(pendingImport = source)
-            else importSubscription(source, LoadTrigger.IMPORT)
+            val response = JSONObject(NativeGoSession.parseImportLink(value))
+            if (!response.getBoolean("ok")) {
+                val failure = response.getJSONObject("error")
+                throw IllegalArgumentException(failure.getString("message"))
+            }
+            val result = response.getJSONObject("result")
+            if (result.getString("kind") == "import") {
+                state = state.copy(pendingImport = result.getString("source"))
+            }
         } catch (failure: Exception) { report("Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL", failure) }
     }
 

@@ -196,6 +196,13 @@ func (b *Binding) ConfigureContext(ctx context.Context, sessionID string, expect
 	return success(wire.ConfigurationFrom(result))
 }
 
+// ParseImportLink exposes pure import interpretation without requiring a session.
+func ParseImportLink(value string) string {
+    result, err := sessionapi.ParseImportLink(value)
+    if err != nil { return failed(err) }
+    return success(result)
+}
+
 // Start starts an attempt only if the inspected snapshot is still current.
 func (b *Binding) Start(sessionID string, expectedSequence int64, mode string, index int32) string {
 	return b.StartContext(context.Background(), sessionID, expectedSequence, mode, index)
@@ -340,6 +347,7 @@ func (b *Binding) CallJSONWithConfiguration(
 ) string {
 	var value struct {
 		SessionID        string  `json:"session_id"`
+        Link             string  `json:"link"`
 		ExpectedSequence int64   `json:"expected_sequence"`
 		Generation       int64   `json:"generation"`
 		Source           *string `json:"source"`
@@ -357,6 +365,8 @@ func (b *Binding) CallJSONWithConfiguration(
 		}
 	}
 	switch method {
+    case "ParseImportLink":
+        return ParseImportLink(value.Link)
 	case "PrepareLogUpload":
 		result, err := b.manager.PrepareLogUpload(ctx, value.SessionID, value.Digest)
 		if err != nil {

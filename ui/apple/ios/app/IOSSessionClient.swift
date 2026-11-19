@@ -1,5 +1,6 @@
 import Foundation
 import IOSIntegration
+import DobbyVPNRuntime
 
 final class IOSSessionClient: DobbySessionClient, @unchecked Sendable {
     private let shell = IOSAppCompositionRoot.sessionShell
@@ -14,6 +15,9 @@ final class IOSSessionClient: DobbySessionClient, @unchecked Sendable {
     }
 
     func call(_ method: String, parameters: [String: Any]) -> String {
-        shell.call(method: method, parameters: parameters)
+        if method == "ParseImportLink" {
+            return DobbyvpnParseImportLink(parameters["link"] as? String ?? "")
+        }
+        return shell.call(method: method, parameters: parameters)
     }
 }

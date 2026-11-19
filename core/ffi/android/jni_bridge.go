@@ -507,6 +507,13 @@ func jniResult(env *C.JNIEnv, value string) C.jstring {
 	return C.dobby_new_jstring(env, copy)
 }
 
+//export Java_com_dobby_nativebridge_NativeGoSession_parseImportLink
+func Java_com_dobby_nativebridge_NativeGoSession_parseImportLink(
+    env *C.JNIEnv, _ C.jclass, value C.jstring,
+) C.jstring {
+    return jniResult(env, mobilebinding.ParseImportLink(jniString(env, value)))
+}
+
 //export Java_com_dobby_nativebridge_NativeGoSession_configure
 func Java_com_dobby_nativebridge_NativeGoSession_configure(
 	env *C.JNIEnv, _ C.jclass, session C.jstring, sequence C.jlong, raw C.jbyteArray,

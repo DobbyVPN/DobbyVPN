@@ -265,18 +265,35 @@ public final class DobbySessionViewModel: ObservableObject {
         paste(first)
     }
 
+    private var importRevision: UInt64 = 0
+    private(set) var parsingImport = false
+
     public func importLink(_ url: URL) {
-        do {
-            let source = try subscriptionFromLink(url.absoluteString)
-            guard let source else { return }
-            if !importError.isEmpty {
-                if error == importError { setError("", origin: .other) }
-                importError = ""
+        importRevision &+= 1
+        let revision = importRevision
+        parsingImport = true
+        let link = url.absoluteString
+        worker.async { [weak self, client] in
+            let result = Result {
+                try DobbyResponse.result(from: client.call("ParseImportLink", parameters: ["link": link]),
+                                         as: DobbyImportLink.self)
             }
-            pendingImport = source
-        } catch {
-            importError = error.localizedDescription
-            setError(error.localizedDescription, origin: .other)
+            Task { @MainActor [weak self] in
+                guard let self, self.importRevision == revision else { return }
+                self.parsingImport = false
+                switch result {
+                case let .success(parsed):
+                    guard parsed.kind == "import", let source = parsed.source else { return }
+                    if !self.importError.isEmpty {
+                        if self.error == self.importError { self.setError("", origin: .other) }
+                        self.importError = ""
+                    }
+                    self.pendingImport = source
+                case let .failure(failure):
+                    self.importError = failure.localizedDescription
+                    self.setError(failure.localizedDescription, origin: .other)
+                }
+            }
         }
     }
 
@@ -809,27 +826,21 @@ func validSubscription(_ value: String) -> Bool {
     return url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty
 }
 
-func subscriptionFromLink(_ value: String) throws -> String? {
-    func invalid() -> DobbyClientError { .command(code: "INVALID_ARGUMENT", message: "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL") }
-    guard value.range(of: "%(?![0-9a-fA-F]{2})", options: .regularExpression) == nil,
-          let link = URLComponents(string: value), link.scheme?.lowercased() == "dobbyvpn",
-          link.user == nil, link.password == nil, link.port == nil, link.fragment == nil else { throw invalid() }
-    if (link.host ?? "").isEmpty && link.path.isEmpty && link.query == nil { return nil }
-    guard link.host == "import", link.path.isEmpty,
-          let parameters = link.queryItems, parameters.count == 1,
-          parameters[0].name == "url", let source = parameters[0].value,
-          validSubscription(source) else { throw invalid() }
-    return source
+private struct DobbyImportLink: Decodable {
+    let kind: String
+    let source: String?
 }
 
 extension DobbySessionViewModel {
     public func confirmImport() {
+        importRevision &+= 1
+        parsingImport = false
         guard let source = pendingImport else { return }
         pendingImport = nil
         paste(source)
     }
 
-    public func cancelImport() { pendingImport = nil }
+    public func cancelImport() { importRevision &+= 1; parsingImport = false; pendingImport = nil }
 }
 
 extension DobbySessionViewModel {
