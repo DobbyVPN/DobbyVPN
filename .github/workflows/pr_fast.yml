@@ -73,6 +73,9 @@ jobs:
           from pathlib import Path
           root = Path(os.environ['RUNNER_TEMP']) / 'fast-inputs'
           pair = json.loads((root / 'pair.json').read_text())
+          pair['runner_sha'] = subprocess.check_output(['git', '-C', 'tests', 'rev-parse', 'HEAD'], text=True).strip()
+          with (root / 'runner.tar').open('wb') as stream:
+              subprocess.run(['git', '-C', 'tests', 'archive', pair['runner_sha']], stdout=stream, check=True)
           subprocess.run(['git', '-C', 'tests', 'fetch', '--no-tags', 'origin', pair['torturer_sha']], check=True)
           subprocess.run(['git', '-C', 'tests', 'checkout', '--detach', pair['torturer_sha']], check=True)
           guard = runpy.run_path('trusted/.github/scripts/release/release_guard.py')
@@ -114,9 +117,10 @@ jobs:
           path: inputs
       - name: Prepare isolated candidate trees
         run: |
-          mkdir product tests
+          mkdir product tests runner
           tar -xf inputs/product.tar -C product
           tar -xf inputs/tests.tar -C tests
+          tar -xf inputs/runner.tar -C runner
           cat inputs/pair.json
           python3 -c 'import time; print(f"DOBBYVPN_COMMAND_DEADLINE_MONOTONIC={time.monotonic() + 540}")' >> "$GITHUB_ENV"
       - name: Restore Go caches
@@ -129,7 +133,7 @@ jobs:
       - name: Run fresh synthetic behavioral tests
         env:
           DOBBY_TEST_SHA: ${{ needs.fetch.outputs.torturer_sha }}
-        run: python3 tests/source_checks.py pr-fast --product-root product
+        run: python3 runner/source_checks.py pr-fast --product-root product --test-sources-root tests/source_tests/product
 
   report:
     name: Report fast behavioral status
