@@ -400,8 +400,61 @@ internal static class NativeLogFiles
         });
     }
 
-    // Replace atomically: deleting .previous first would lose it if the move fails (as in Go).
-    private static void Rotate(string path) => File.Move(path, path + ".previous", true);
+    // Replace the name in one operation and let readers finish using an open
+    // handle to the displaced generation.
+    private static void Rotate(string path)
+    {
+        const uint deleteAccess = 0x00010000;
+        const uint openExisting = 3;
+        const int fileRenameInfoEx = 22;
+        const int replaceExisting = 1;
+        const int posixSemantics = 2;
+        using var file = CreateFileW(path, deleteAccess, FileShare.ReadWrite | FileShare.Delete,
+            IntPtr.Zero, openExisting, 0, IntPtr.Zero);
+        if (file.IsInvalid) throw RotationError(path);
+
+        var name = Encoding.Unicode.GetBytes(Path.GetFullPath(path + ".previous") + "\0");
+        var nameOffset = Marshal.OffsetOf<RenameInfo>(nameof(RenameInfo.Name)).ToInt32();
+        var size = Math.Max(Marshal.SizeOf<RenameInfo>(), nameOffset + name.Length);
+        var buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(new RenameInfo
+            {
+                Flags = replaceExisting | posixSemantics,
+                RootDirectory = IntPtr.Zero,
+                Name = 0,
+                NameLength = name.Length - sizeof(char),
+            }, buffer, false);
+            Marshal.Copy(name, 0, IntPtr.Add(buffer, nameOffset), name.Length);
+            if (!SetFileInformationByHandle(file, fileRenameInfoEx, buffer, size)) throw RotationError(path);
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    private static IOException RotationError(string path)
+    {
+        var cause = new Win32Exception(Marshal.GetLastWin32Error());
+        return new IOException($"Could not rotate diagnostic log '{path}': {cause.Message}", cause);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RenameInfo
+    {
+        internal int Flags;
+        internal IntPtr RootDirectory;
+        internal int NameLength;
+        internal ushort Name;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(string path, uint access, FileShare share,
+        IntPtr security, uint disposition, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetFileInformationByHandle(SafeFileHandle file, int informationClass,
+        IntPtr information, int size);
 
     private sealed record LegacySource(string Path, string Label);
     private sealed record LegacyCommit(LegacySource[]? Sources, bool Previous);
