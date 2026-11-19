@@ -224,9 +224,8 @@ func (capture *rawCapture) watch(ticks <-chan time.Time) {
 	var retryAt time.Time
 	for range ticks {
 		// The back-off runs from the actual end of the failed attempt, not
-		// from its tick: a late or slow attempt must not shorten it. The slack
-		// absorbs ticker jitter.
-		if capture.clock().Add(rotationTickSlack).Before(retryAt) {
+		// from its tick: a late or slow attempt must not shorten it.
+		if capture.clock().Before(retryAt) {
 			continue
 		}
 		err := capture.rotate()
@@ -251,10 +250,6 @@ func (capture *rawCapture) watch(ticks <-chan time.Time) {
 		retryAt = failedAt.Add(time.Duration(rotationRetryDelayTicks(failures)) * time.Second)
 	}
 }
-
-// rotationTickSlack is how early before the retry deadline a tick may still
-// start the attempt.
-const rotationTickSlack = 100 * time.Millisecond
 
 // rotationRetryDelayTicks returns how many seconds pass until the next attempt
 // after the given number of consecutive failures: 1 s, 2 s, 4 s, ... capped
