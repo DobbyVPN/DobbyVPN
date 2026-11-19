@@ -86,9 +86,7 @@ require (
 tool golang.org/x/mobile/cmd/gobind
 
 // Shared DobbyVPN extension; upstream module imports stay unchanged.
-replace golang.getoutline.org/sdk => github.com/DobbyVPN/outline-sdk-fork v0.0.24-0.20261022143006-bace007bdf6f
+replace golang.getoutline.org/sdk => github.com/DobbyVPN/outline-sdk-fork v0.0.24-dobby.1
 
-// Upstream SDK/x v0.2.2 sources plus the HTTP/3 API update required by Xray's
-// qpack version. The fork history branches from x/v0.2.0, so Go names this
-// commit v0.2.1-0.<date>-<commit>; it does not contain upstream v0.2.1 as an ancestor.
-replace golang.getoutline.org/sdk/x => github.com/DobbyVPN/outline-sdk-fork/x v0.2.1-0.20261022164150-eea55cf572f7
+// Approved SDK/x fork with the HTTP/3 API update required by Xray.
+replace golang.getoutline.org/sdk/x => github.com/DobbyVPN/outline-sdk-fork/x v0.2.1-dobby.1
