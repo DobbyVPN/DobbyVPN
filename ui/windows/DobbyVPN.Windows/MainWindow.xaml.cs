@@ -394,7 +394,7 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing)
         {
             _snapshot = null;
-            if (_errors.FailSnapshot(error is ProtocolMismatchException ? RestartMessage : "VPN service is unavailable. See logs for details."))
+            if (_errors.FailSnapshot(error is SessionProtocolMismatchException ? SessionProtocol.RestartMessage : "VPN service is unavailable. See logs for details."))
                 RecordError(error.ToString());
             Render();
         }
@@ -403,11 +403,6 @@ public sealed partial class MainWindow : Window
             _snapshotInFlight = false;
         }
     }
-
-    private const int ExpectedProtocolVersion = 1;
-    private const string RestartMessage = "The app and the VPN service are different versions. Restart the app.";
-
-    private sealed class ProtocolMismatchException : Exception { }
 
     private async Task<Snapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
     {
@@ -425,7 +420,7 @@ public sealed partial class MainWindow : Window
             snapshot = await CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
         }
         // A service that predates the field has no value, which is also a mismatch.
-        if (snapshot.ProtocolVersion != ExpectedProtocolVersion) throw new ProtocolMismatchException();
+        SessionProtocol.RequireCompatible(snapshot.ProtocolVersion);
         return snapshot;
     }
 
@@ -1090,6 +1085,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
+                _ = await ReadSnapshotAsync(cancellationToken);
                 var parsed = await CallAsync<ImportLinkResult>("ParseImportLink", new { link = value }, cancellationToken);
                 if (_lifetime.IsClosing || revision != _importRevision || parsed.Kind != "import") return;
                 _pendingImport = parsed.Source;

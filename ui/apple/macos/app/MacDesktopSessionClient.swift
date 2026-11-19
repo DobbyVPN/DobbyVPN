@@ -52,6 +52,20 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
     }
 
     func call(_ method: String, parameters: [String: Any]) -> String {
+        if method == "ParseImportLink" {
+            let snapshot = call("Snapshot", parameters: ["session_id": ""])
+            do {
+                _ = try DobbyResponse.result(from: snapshot, as: DobbySessionSnapshot.self)
+            } catch DobbyClientError.protocolMismatch {
+                let failure: [String: Any] = ["ok": false, "error": ["code": "CONFLICT",
+                    "message": DobbyClientError.protocolMismatch.localizedDescription]]
+                if let data = try? JSONSerialization.data(withJSONObject: failure),
+                   let response = String(data: data, encoding: .utf8) { return response }
+                return snapshot
+            } catch {
+                return snapshot
+            }
+        }
         let requestID = UUID().uuidString.lowercased()
         let sampled = sample(method)
         let started = clock()

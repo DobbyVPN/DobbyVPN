@@ -31,10 +31,12 @@ var macOSPFCommand = func(ctx context.Context, stdin string, args ...string) (st
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
     err := command.Run()
+    errorText := ""
+    if err != nil { errorText = err.Error() }
     log.Debug(Category, "macOS pf command completed", map[string]any{
-        "arguments": args, "stdout": stdout.String(), "stderr": stderr.String(), "error": err,
-    })
-    if err != nil {
+		"arguments": args, "stdout": stdout.String(), "stderr": stderr.String(), "error": errorText,
+	})
+	if err != nil {
 		err = fmt.Errorf("pfctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), stderr.String(), err
@@ -119,8 +121,19 @@ func killMacOSPFStates(ctx context.Context) error {
 func macOSPFEnable(ctx context.Context) (string, error) {
 	if saved, err := os.ReadFile(macOSPFTokenPath); err == nil {
 		if token, parseErr := PFEnableToken("Token : " + strings.TrimSpace(string(saved))); parseErr == nil {
-			log.Info(Category, "macOS kill switch adopts rules left by an interrupted backend", nil)
-			return token, nil
+			references, _, inspectErr := macOSPFCommand(ctx, "", "-s", "References")
+			if inspectErr != nil {
+				return "", inspectErr
+			}
+			held, inspectErr := pfHasReference(references, token)
+			if inspectErr != nil {
+				return "", inspectErr
+			}
+			if held {
+				log.Info(Category, "macOS kill switch adopts rules left by an interrupted backend", nil)
+				return token, nil
+			}
+			log.Warn(Category, "saved macOS pf reference is no longer held; acquiring a new reference", map[string]any{"token": token})
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
@@ -139,18 +152,18 @@ func macOSPFEnable(ctx context.Context) (string, error) {
 	if err == nil {
 		err = os.WriteFile(macOSPFTokenPath, []byte(token+"\n"), 0o600)
 	}
-    if err != nil {
-        _, _, releaseErr := macOSPFCommand(context.WithoutCancel(ctx), "", "-X", token)
-        if releaseErr != nil {
-            // Keep ownership in memory so the registered cleanup can still
-            // release the reference even though crash persistence failed.
-            return token, errors.Join(err, releaseErr)
-        }
-        if removeErr := os.Remove(macOSPFTokenPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-            err = errors.Join(err, removeErr)
-        }
-        return "", err
-    }
+	if err != nil {
+		_, _, releaseErr := macOSPFCommand(context.WithoutCancel(ctx), "", "-X", token)
+		if releaseErr != nil {
+			// Keep ownership in memory so the registered cleanup can still
+			// release the reference even though crash persistence failed.
+			return token, errors.Join(err, releaseErr)
+		}
+		if removeErr := os.Remove(macOSPFTokenPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, removeErr)
+		}
+		return "", err
+	}
 	return token, nil
 }
 
