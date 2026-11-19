@@ -868,3 +868,11 @@ extension DobbySessionViewModel {
     }
 }
 #endif
+
+#if os(iOS)
+extension DobbySessionViewModel {
+    func recordLogMenuGesture(_ observation: String) {
+        recordDiagnostic(observation, event: "ui.logs_menu_gesture", level: "DEBUG")
+    }
+}
+#endif

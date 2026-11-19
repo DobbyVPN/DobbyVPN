@@ -322,7 +322,9 @@ public struct DobbyRootView: View {
                     .frame(height: min(logActionsHeight, max(0, geometry.size.height - pt(60))))
                     .accessibilityIdentifier("logs.actions.viewport")
                     .onPreferenceChange(LogActionsHeight.self) { logActionsHeight = $0 }
-                    DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs, onShowMenu: { showingLogMenu.toggle() }, onClear: model.clearLogs)
+                    DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs,
+                                 onShowMenu: { showingLogMenu.toggle() },
+                                 onMenuGestureObservation: model.recordLogMenuGesture, onClear: model.clearLogs)
                         .accessibilityIdentifier("Connection logs")
                         .frame(minHeight: pt(60), maxHeight: .infinity)
                 }
