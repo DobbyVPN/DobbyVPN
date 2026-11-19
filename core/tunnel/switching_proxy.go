@@ -85,25 +85,27 @@ func (p *switchingProxy) RejectTCP(dst netip.Addr) bool {
 	if !dst.Is6() || dst.Is4In6() {
 		return false
 	}
-	p.mu.Lock()
-	target, _ := p.target.(*DobbyProxy)
-	p.mu.Unlock()
-	if target == nil || target.bypass == nil || target.bypass.ipv6Unavailable == nil {
-		return false
+	for {
+		p.mu.Lock()
+		target, _ := p.target.(*DobbyProxy)
+		p.mu.Unlock()
+		if target == nil || target.bypass == nil || target.bypass.ipv6Unavailable == nil {
+			return false
+		}
+		if !target.bypass.ipv6Unavailable() || target.bypass.IsBypass(&M.Metadata{DstIP: dst}) {
+			return false
+		}
+		// Detach and Attach may have replaced the attempt while its policy ran; a
+		// refusal from a retired attempt must not reset a SYN the new one carries.
+		p.mu.Lock()
+		current := p.target
+		p.mu.Unlock()
+		if current != proxy.Proxy(target) {
+			continue
+		}
+		log.Debugf(Category, "[Router] IPv6 refused, transport has no IPv6 dst=%s", dst)
+		return true
 	}
-	if !target.bypass.ipv6Unavailable() || target.bypass.IsBypass(&M.Metadata{DstIP: dst}) {
-		return false
-	}
-	// Detach and Attach may have replaced the attempt while its policy ran; a
-	// refusal from a retired attempt must not reset a SYN the new one carries.
-	p.mu.Lock()
-	current := p.target
-	p.mu.Unlock()
-	if current != proxy.Proxy(target) {
-		return p.RejectTCP(dst)
-	}
-	log.Debugf(Category, "[Router] IPv6 refused, transport has no IPv6 dst=%s", dst)
-	return true
 }
 
 func (p *switchingProxy) Addr() string       { return "vpn-network" }
