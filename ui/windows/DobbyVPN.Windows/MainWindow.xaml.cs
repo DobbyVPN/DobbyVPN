@@ -394,8 +394,10 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing)
         {
             _snapshot = null;
-            if (_errors.FailSnapshot(error is SessionProtocolMismatchException ? SessionProtocol.RestartMessage : "VPN service is unavailable. See logs for details."))
-                RecordError(error.ToString());
+            var failure = error is SessionProtocolMismatchException
+                ? SnapshotFailure.ProtocolMismatch
+                : SnapshotFailure.ServiceUnavailable;
+            if (_errors.FailSnapshot(failure)) RecordError(error.ToString());
             Render();
         }
         finally
@@ -1094,7 +1096,8 @@ public sealed partial class MainWindow : Window
             catch (Exception error)
             {
                 if (_lifetime.IsClosing || revision != _importRevision) return;
-                SetError(error.ToString(), error.Message);
+                SetError(error.ToString(),
+                    error is SessionProtocolMismatchException ? SessionProtocol.RestartMessage : error.Message);
                 _importError = _errors.Operation;
                 Render();
             }

@@ -8,11 +8,10 @@ internal static class SessionProtocol
 
     internal static void RequireCompatible(int version)
     {
-        if (version != ExpectedVersion) throw new SessionProtocolMismatchException();
+        if (version != ExpectedVersion) throw new SessionProtocolMismatchException(version);
     }
 }
 
-internal sealed class SessionProtocolMismatchException : Exception
-{
-    internal SessionProtocolMismatchException() : base(SessionProtocol.RestartMessage) { }
-}
+internal sealed class SessionProtocolMismatchException(int received)
+    : Exception($"{SessionProtocol.RestartMessage} Expected protocol {SessionProtocol.ExpectedVersion}, received {received}.")
+{ }
