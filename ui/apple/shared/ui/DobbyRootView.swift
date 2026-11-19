@@ -24,7 +24,7 @@ private let sizeScale: CGFloat = 1
 #endif
 
 /// A mockup length in points, scaled for the platform.
-private func pt(_ value: CGFloat) -> CGFloat { value * sizeScale }
+func pt(_ value: CGFloat) -> CGFloat { value * sizeScale }
 
 /// Mockup font sizes that still follow the system text size on iOS.
 private struct ScaledFont: ViewModifier {
@@ -73,7 +73,7 @@ private struct DobbyErrorDetailView: UIViewRepresentable {
 }
 #endif
 
-private let buttonShape = RoundedRectangle(cornerRadius: pt(10))
+let buttonShape = RoundedRectangle(cornerRadius: pt(10))
 
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
@@ -286,77 +286,7 @@ public struct DobbyRootView: View {
     }
 
     private var connections: some View {
-        let snapshot = model.snapshot
-        let orphan = model.orphanProfile
-        return ZStack {
-            Color.tray.onTapGesture { sourceFocused = false }
-            if snapshot.profiles.isEmpty && orphan == nil && !model.loadError.isEmpty {
-                VStack(spacing: pt(10)) {
-                    SockIcon(holey: true).frame(width: pt(40), height: pt(50))
-                    Text("Couldn't load the subscription")
-                        .dobbyFont(15, .medium)
-                        .foregroundColor(.ink)
-                    Button { model.retryLoad() } label: {
-                        Text("Retry")
-                            .dobbyFont(15, .semibold)
-                            .foregroundColor(.surface)
-                            .padding(.horizontal, pt(22))
-                            .frame(minHeight: pt(40))
-                            .background(Color.ink, in: RoundedRectangle(cornerRadius: pt(8)))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("tray.retry")
-                }
-            } else if snapshot.profiles.isEmpty && orphan == nil {
-                EmptyTray()
-            } else {
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: pt(8)) {
-                        if let orphan {
-                            let orphanConnected = snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil
-                            ConnectionButton(
-                                name: orphan.name,
-                                details: [protocolName(orphan.protocolName), model.sessionStatus?.rawValue, "not in subscription"],
-                                on: isOn(model.sessionStatus),
-                                action: orphanConnected ? "Connected" : model.mainActionTitle
-                            ) { sourceFocused = false; model.mainAction() }
-                            .disabled(!model.mainActionEnabled || orphanConnected)
-                            .accessibilityIdentifier("profile.active")
-                        }
-                        ForEach(snapshot.profiles) { profile in
-                            let status = model.profileStatus(profile.index)
-                            let title = model.profileActionTitle(profile.index)
-                            ConnectionButton(
-                                name: profile.name,
-                                details: [protocolName(profile.protocolName), status?.rawValue],
-                                on: isOn(status),
-                                action: title
-                            ) { sourceFocused = false; model.performPrimaryAction(profile.index) }
-                            .disabled(!model.canAct(profile.index) || title == "Connected")
-                            .accessibilityIdentifier("profile.\(snapshot.digest).\(profile.index).action")
-                        }
-                    }
-                    .padding(pt(8))
-                }
-                .accessibilityIdentifier("Profile list viewport")
-                .onPreferenceChange(RowHeight.self) { rowHeight = $0 }
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: pt(14)))
-    }
-
-    private func isOn(_ status: DobbyProfileStatus?) -> Bool {
-        status == .connected || status == .reconnecting
-    }
-
-    private func protocolName(_ value: String) -> String? {
-        switch value {
-        case "": return nil
-        case "OUTLINE": return "Outline"
-        case "XRAY": return "Xray"
-        case "TRUST_TUNNEL": return "TrustTunnel"
-        default: return value
-        }
+        DobbyProfileList(model: model, rowHeight: $rowHeight) { sourceFocused = false }
     }
 
     private var logs: some View {
@@ -611,68 +541,6 @@ private struct PlainPasteButton: View {
     }
 }
 
-/// What the list area shows before any subscription is loaded.
-private struct EmptyTray: View {
-    var body: some View {
-        VStack(spacing: pt(10)) {
-            SockIcon(holey: false)
-                .frame(width: pt(40), height: pt(50))
-                .accessibilityElement()
-                .accessibilityLabel("No subscription yet")
-            Text("Paste the subscription link from your VPN provider above.")
-                .dobbyFont(15)
-                .foregroundColor(.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, pt(16))
-                .accessibilityIdentifier("tray.empty-hint")
-        }
-    }
-}
-
-private struct ConnectionButton: View {
-    let name: String
-    let details: [String?]
-    let on: Bool
-    let action: String
-    let perform: () -> Void
-
-    var body: some View {
-        Button(action: perform) {
-            HStack(spacing: pt(12)) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(name)
-                        .dobbyFont(17, .medium)
-                        .foregroundColor(.ink)
-                        .lineLimit(2)
-                    Text(details.compactMap { $0 }.joined(separator: " · "))
-                        .dobbyFont(13, on ? .semibold : .regular)
-                        .foregroundColor(on ? .ink : .muted)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Text(action)
-                    .dobbyFont(15, .semibold)
-                    .foregroundColor(.ink)
-            }
-            .padding(.horizontal, pt(14))
-            .padding(.vertical, pt(8))
-            .frame(minHeight: pt(56))
-            .background(Color.surface, in: buttonShape)
-            .overlay(buttonShape.stroke(Color.ink, lineWidth: on ? 3 : 1.5))
-            .contentShape(buttonShape)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(action)
-        .accessibilityValue(([name] + details.compactMap { $0 }).joined(separator: " · "))
-        .background(GeometryReader { Color.clear.preference(key: RowHeight.self, value: $0.size.height) })
-    }
-}
-
-private struct RowHeight: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
 #if os(iOS)
 private struct LogActionsHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -706,7 +574,7 @@ private struct DialogButton: View {
 }
 
 /// The doBBYVPN sock, drawn in a 40×50 box: plain when there is no subscription, holey on errors.
-private struct SockIcon: View {
+struct SockIcon: View {
     let holey: Bool
 
     var body: some View {
