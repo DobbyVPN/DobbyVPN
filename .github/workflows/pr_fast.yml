@@ -1,0 +1,163 @@
+name: Fast behavioral tests
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact Product commit to exercise
+        type: string
+        required: true
+      source_branch:
+        description: Canonical Product branch for private pairing
+        type: string
+        required: false
+      torturer_pr:
+        description: Explicit paired Torturer PR number
+        type: string
+        required: false
+
+concurrency:
+  group: fast-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+permissions: {}
+
+jobs:
+  fetch:
+    name: Resolve and fetch paired sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release-tests
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      torturer_sha: ${{ steps.pair.outputs.torturer_sha }}
+      torturer_tree: ${{ steps.pair.outputs.torturer_tree }}
+    steps:
+      - name: Require trusted workflow on main
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || inputs.source_sha }}
+        id: source
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Check out trusted helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+      - name: Check out private input repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: DobbyVPN/Torturer
+          ref: main
+          path: tests
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: true
+      - name: Resolve exact pair and archive private source
+        id: pair
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fast-inputs"
+          python3 trusted/.github/scripts/fast_pair.py --event "$GITHUB_EVENT_PATH" \
+            --paired-checkout tests --output "$RUNNER_TEMP/fast-inputs/pair.json"
+          python3 - <<'PY'
+          import json, os, runpy, subprocess
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'fast-inputs'
+          pair = json.loads((root / 'pair.json').read_text())
+          subprocess.run(['git', '-C', 'tests', 'fetch', '--no-tags', 'origin', pair['torturer_sha']], check=True)
+          subprocess.run(['git', '-C', 'tests', 'checkout', '--detach', pair['torturer_sha']], check=True)
+          guard = runpy.run_path('trusted/.github/scripts/release/release_guard.py')
+          pair['torturer_tree_sha256'] = guard['tests_tree_sha256'](Path('tests'))
+          pair['torturer_tree'] = subprocess.check_output(['git', '-C', 'tests', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          (root / 'pair.json').write_text(json.dumps(pair, indent=2) + '\n')
+          with (root / 'tests.tar').open('wb') as stream:
+              subprocess.run(['git', '-C', 'tests', 'archive', pair['torturer_sha']], stdout=stream, check=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              stream.write(f"torturer_sha={pair['torturer_sha']}\ntorturer_tree={pair['torturer_tree']}\n")
+          print(json.dumps(pair), flush=True)
+          PY
+      - name: Check out selected Product without executing it
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          path: product
+          persist-credentials: false
+      - name: Archive Product source
+        run: git -C product archive HEAD > "$RUNNER_TEMP/fast-inputs/product.tar"
+      - name: Retain exact source inputs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fast-inputs
+          path: ${{ runner.temp }}/fast-inputs
+          retention-days: 1
+
+  fast:
+    name: Execute private fast subset
+    needs: fetch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Download source inputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fast-inputs
+          path: inputs
+      - name: Prepare isolated candidate trees
+        run: |
+          mkdir product tests
+          tar -xf inputs/product.tar -C product
+          tar -xf inputs/tests.tar -C tests
+          cat inputs/pair.json
+          python3 -c 'import time; print(f"DOBBYVPN_COMMAND_DEADLINE_MONOTONIC={time.monotonic() + 540}")' >> "$GITHUB_ENV"
+      - name: Restore Go caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: pr-fast-${{ runner.os }}-${{ hashFiles('product/core/go.sum', 'product/.go-version') }}
+      - name: Run fresh synthetic behavioral tests
+        env:
+          DOBBY_TEST_SHA: ${{ needs.fetch.outputs.torturer_sha }}
+        run: python3 tests/source_checks.py pr-fast --product-root product
+
+  report:
+    name: Report fast behavioral status
+    if: ${{ always() && !cancelled() }}
+    needs: [fetch, fast]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      checks: write
+    steps:
+      - name: Publish result on the exact Product commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.fetch.outputs.source_sha || github.event.pull_request.head.sha || inputs.source_sha }}
+          FETCH_RESULT: ${{ needs.fetch.result }}
+          TEST_RESULT: ${{ needs.fast.result }}
+          TORTURER_SHA: ${{ needs.fetch.outputs.torturer_sha }}
+          TORTURER_TREE: ${{ needs.fetch.outputs.torturer_tree }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          passed = os.environ['FETCH_RESULT'] == 'success' and os.environ['TEST_RESULT'] == 'success'
+          summary = (f"Source setup: {os.environ['FETCH_RESULT']}; test job: {os.environ['TEST_RESULT']}. "
+                     f"Torturer {os.environ['TORTURER_SHA']} tree {os.environ['TORTURER_TREE']}.")
+          payload = dict(name='Fast behavioral tests', head_sha=os.environ['SOURCE_SHA'], status='completed',
+                         conclusion='success' if passed else 'failure',
+                         details_url=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+                         output=dict(title='Fast behavioral tests', summary=summary))
+          subprocess.run(['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/check-runs", '--input', '-'],
+                         input=json.dumps(payload), text=True, check=True)
+          PY
