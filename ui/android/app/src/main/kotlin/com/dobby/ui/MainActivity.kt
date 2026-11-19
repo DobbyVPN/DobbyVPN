@@ -1012,7 +1012,13 @@ internal class SessionController(
     fun dismissError(message: String) { dismissedErrors = dismissedErrors + message }
 
     fun forgetClearedErrors() {
-        if (latest.sessionId.isNotEmpty()) dismissedErrors = forgetClearedDismissals(dismissedErrors, rawErrors)
+        val before = dismissedErrors
+        val sessionId = latest.sessionId
+        if (sessionId.isNotEmpty()) dismissedErrors = forgetClearedDismissals(before, rawErrors)
+        NativeVpnBridge.recordDiagnostic(activity, "ui.error_reconciliation",
+            "session_id=$sessionId displayed_session_id=${state.session.sessionId} " +
+                "raw_error_count=${rawErrors.size} dismissed_before=${before.size} " +
+                "dismissed_after=${dismissedErrors.size} awaiting_snapshot=${sessionId.isEmpty()}", level = "DEBUG")
     }
 
     fun copyToClipboard(text: String) {
