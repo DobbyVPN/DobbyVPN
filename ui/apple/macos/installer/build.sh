@@ -73,6 +73,12 @@ build_package() {
     ln -s "/Applications/$APP_BUNDLE/Contents/Resources/dobby-cli" Payload/usr/local/bin/dobby-cli
     cp ../../uninstall.sh Payload/usr/local/libexec/dobbyvpn-uninstall
     chmod 755 Payload/usr/local/libexec/dobbyvpn-uninstall
+    # Normalize only the public staged payload, before signing/packaging. The
+    # caller's umask continues to protect private scratch and credential files.
+    find Payload -type d -exec chmod 755 {} +
+    find Payload -type f -perm -100 -exec chmod 755 {} +
+    find Payload -type f ! -perm -100 -exec chmod 644 {} +
+    chmod 755 Scripts Scripts/preinstall Scripts/postinstall
     write_fixed_payload_component_plist
     pkgbuild --root Payload \
              --component-plist component.plist \

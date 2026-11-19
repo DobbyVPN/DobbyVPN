@@ -66,6 +66,14 @@ def copy_license_documents(destination: Path) -> None:
     copy_directory(ROOT / "LICENSES", destination / "LICENSES")
 
 
+def normalize_macos_payload_permissions(bundle: Path) -> None:
+    """Public app data is readable and directories/executables traversable by users."""
+    for path in (bundle, *sorted(bundle.rglob("*"))):
+        if path.is_symlink():
+            fail(f"unexpected symbolic link in unsigned macOS payload: {path}")
+        path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
+
+
 def write_zip(root: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -140,6 +148,7 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
         }
         with (contents / "Info.plist").open("wb") as handle:
             plistlib.dump(info, handle, sort_keys=True)
+        normalize_macos_payload_permissions(bundle)
         write_zip(root, output / f"dobby-vpn-{version}-mac-{arch}.zip")
 
 

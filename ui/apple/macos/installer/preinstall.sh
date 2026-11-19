@@ -60,5 +60,5 @@ if [ -n "$INSTALLED_VERSION" ] && /usr/bin/awk -v a="$INSTALLED_VERSION" -v b="$
         }
         exit 1
     }'; then
-    echo "Warning: DobbyVPN $INSTALLED_VERSION is installed and this package is the older $PACKAGE_VERSION. Installing it replaces the newer version." >&2
+    echo "Warning: DobbyVPN $INSTALLED_VERSION is installed and this package is the older $PACKAGE_VERSION. Installing it replaces the newer version." >&2 || :
 fi
