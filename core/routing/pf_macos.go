@@ -30,9 +30,11 @@ var macOSPFCommand = func(ctx context.Context, stdin string, args ...string) (st
 	command.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-	err := command.Run()
-	log.Debug(Category, "macOS pf command completed", map[string]any{
-		"arguments": args, "stdout": stdout.String(), "stderr": stderr.String(), "error": err,
+    err := command.Run()
+    errorText := ""
+    if err != nil { errorText = err.Error() }
+    log.Debug(Category, "macOS pf command completed", map[string]any{
+		"arguments": args, "stdout": stdout.String(), "stderr": stderr.String(), "error": errorText,
 	})
 	if err != nil {
 		err = fmt.Errorf("pfctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
