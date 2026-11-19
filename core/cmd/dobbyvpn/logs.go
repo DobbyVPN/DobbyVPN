@@ -67,7 +67,18 @@ func diagnosticPaths() ([]string, error) {
 	return paths, nil
 }
 
+func logsArgsError(args []string) string {
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "--follow" || args[0] == "clear" || args[0] == "upload")) ||
+		(len(args) == 2 && args[0] == "export") {
+		return ""
+	}
+	return "logs accepts --follow, export <new-file.gz>, upload, or clear"
+}
+
 func runLogs(args []string) int {
+	if message := logsArgsError(args); message != "" {
+		return usage(message)
+	}
 	if len(args) == 1 && args[0] == "clear" {
 		return clearApplicationLog()
 	}
@@ -85,9 +96,6 @@ func runLogs(args []string) int {
 	}
 	follow := len(args) == 1 && args[0] == "--follow"
 	export := len(args) == 2 && args[0] == "export"
-	if len(args) > 0 && !follow && !export {
-		return usage("logs accepts --follow, export <new-file.gz>, upload, or clear")
-	}
 	paths, err := diagnosticPaths()
 	if err != nil {
 		return reportFailure(err)

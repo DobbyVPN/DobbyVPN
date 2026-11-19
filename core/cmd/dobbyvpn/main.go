@@ -50,9 +50,13 @@ func run(args []string) int {
 		printHelp()
 		return exitOK
 	}
-	// Reject malformed service commands before any side effect: no upload
+	// Reject malformed commands before any side effect: no upload
 	// cleanup, log file or service connection for a typo.
-	if args[0] != "logs" {
+	if args[0] == "logs" {
+		if message := logsArgsError(args[1:]); message != "" {
+			return usage(message)
+		}
+	} else {
 		if message := serviceArgsError(args); message != "" {
 			return usage(message)
 		}
