@@ -117,3 +117,42 @@ func PFEnableToken(output string) (string, error) {
 	}
 	return "", errors.New("pfctl -E printed no enable token")
 }
+
+// pfHasReference reads pfctl's fixed-width References table. The process name
+// can contain spaces; matching arbitrary numeric fields could mistake a PID for
+// the token. Unknown output is an error, not proof that a reference is absent.
+func pfHasReference(output, token string) (bool, error) {
+	table := false
+	known := false
+	for _, line := range strings.Split(output, "\n") {
+		text := strings.TrimSpace(line)
+		if text == "No pf starter references held" || text == "No pf_enabled references" {
+			return false, nil
+		}
+		if text == "TOKENS:" {
+			table = true
+			known = true
+			continue
+		}
+		if !table || text == "" {
+			continue
+		}
+		if strings.Contains(line, "Process Name") && strings.Contains(line, "TOKEN") {
+			continue
+		}
+		if len(line) < 62 {
+			return false, fmt.Errorf("invalid pf reference row: %s", line)
+		}
+		value := strings.TrimSpace(line[38:62])
+		if _, err := strconv.ParseUint(value, 10, 64); err != nil {
+			return false, fmt.Errorf("invalid pf reference token row: %s", line)
+		}
+		if value == token {
+			return true, nil
+		}
+	}
+	if !known {
+		return false, errors.New("pfctl printed no recognizable reference inventory")
+	}
+	return false, nil
+}
