@@ -1085,6 +1085,7 @@ public sealed partial class MainWindow : Window
         {
             try
             {
+                _ = await ReadSnapshotAsync(cancellationToken);
                 var parsed = await CallAsync<ImportLinkResult>("ParseImportLink", new { link = value }, cancellationToken);
                 if (_lifetime.IsClosing || revision != _importRevision || parsed.Kind != "import") return;
                 _pendingImport = parsed.Source;
