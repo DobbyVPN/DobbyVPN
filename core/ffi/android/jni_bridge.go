@@ -509,9 +509,9 @@ func jniResult(env *C.JNIEnv, value string) C.jstring {
 
 //export Java_com_dobby_nativebridge_NativeGoSession_parseImportLink
 func Java_com_dobby_nativebridge_NativeGoSession_parseImportLink(
-    env *C.JNIEnv, _ C.jclass, value C.jstring,
+	env *C.JNIEnv, _ C.jclass, value C.jstring,
 ) C.jstring {
-    return jniResult(env, mobilebinding.ParseImportLink(jniString(env, value)))
+	return jniResult(env, mobilebinding.ParseImportLink(jniString(env, value)))
 }
 
 //export Java_com_dobby_nativebridge_NativeGoSession_configure
