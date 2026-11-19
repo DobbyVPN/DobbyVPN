@@ -121,6 +121,8 @@ func PFEnableToken(output string) (string, error) {
 // pfHasReference reads pfctl's fixed-width References table. The process name
 // can contain spaces; matching arbitrary numeric fields could mistake a PID for
 // the token. Unknown output is an error, not proof that a reference is absent.
+//
+//nolint:unused // Used on macOS and exercised by portable Torturer tests.
 func pfHasReference(output, token string) (bool, error) {
 	table := false
 	known := false

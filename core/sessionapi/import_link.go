@@ -39,9 +39,13 @@ func ParseImportLink(value string) (ImportLinkResult, error) {
 	if err != nil {
 		return invalid()
 	}
-	parsed, err := url.Parse(source)
-	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Opaque != "" || parsed.Hostname() == "" {
+	if !isHTTPSImportSource(source) {
 		return invalid()
 	}
 	return ImportLinkResult{Kind: "import", Source: source}, nil
+}
+
+func isHTTPSImportSource(source string) bool {
+	parsed, err := url.Parse(source)
+	return err == nil && strings.EqualFold(parsed.Scheme, "https") && parsed.Opaque == "" && parsed.Hostname() != ""
 }

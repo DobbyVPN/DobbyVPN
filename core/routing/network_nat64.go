@@ -8,6 +8,8 @@ import (
 )
 
 // Parse only stock ifconfig's native per-interface NAT64 inventory.
+//
+//nolint:unused // Used on macOS and exercised by portable Torturer tests.
 func parseMacOSNAT64Prefixes(output string) ([]netip.Prefix, error) {
 	var prefixes []netip.Prefix
 	for _, line := range strings.Split(output, "\n") {
