@@ -63,7 +63,7 @@ type MacOSKillSwitch struct {
 
 // AcquireMacOSKillSwitch blocks outbound traffic outside tunName with rules in
 // MacOSPFAnchor. A pf configuration without the stock com.apple anchor is
-// logged and left untouched; the network then runs without a kill switch.
+// refused without changing the system ruleset; an unprotected connection is not accepted.
 func (p *Plan) AcquireMacOSKillSwitch(ctx context.Context, tunName string, servers []netip.Addr) (*MacOSKillSwitch, error) {
 	k := &MacOSKillSwitch{tunName: tunName, servers: servers, attempts: make(map[uint64]map[PFDestination]struct{})}
 	mainRules, _, err := macOSPFCommand(ctx, "", "-s", "rules")
@@ -72,7 +72,7 @@ func (p *Plan) AcquireMacOSKillSwitch(ctx context.Context, tunName string, serve
 	}
 	if !PFEvaluatesAnchor(mainRules) {
 		log.Error(Category, `macOS kill switch not applied: pf rules were not loaded because /etc/pf.conf has no anchor "com.apple/*"`, map[string]any{"anchor": MacOSPFAnchor})
-		return k, nil
+		return nil, errors.New(`macOS VPN protection requires the com.apple/* pf anchor; no connection was started`)
 	}
 	macOSPFOwner.Lock()
 	defer macOSPFOwner.Unlock()
@@ -232,6 +232,11 @@ func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, netw
 		return err
 	}
 	destination.Bypass = protected_dialer.IsApplicationBypass(ctx)
+    // The physical resolver exception belongs to bootstrap. Application DNS
+    // must not reach it even though both sockets are owned by the root backend.
+    if destination.Bypass && destination.Port == 53 {
+        return errors.New("application DNS outside the VPN is blocked")
+    }
 	return k.update(ctx, func() (bool, error) {
 		if generation == 0 || generation <= k.retiredThrough {
 			return false, errors.New("macOS transport owner is retired")

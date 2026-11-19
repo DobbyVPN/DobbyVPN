@@ -93,7 +93,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			}
 		}
 		protected_dialer.SetPhysicalInterfaces(physical.IPv4, physical.IPv6)
-		resolve := dnscache.MacOSLinkResolver(physical.IPv4, physical.IPv6, physical.DNSServers)
+		resolve := dnscache.MacOSLinkResolver(physical.IPv4, physical.IPv6, physical.DNSServers, physical.NAT64Prefixes)
 		fenced := func(lookupCtx context.Context, host string) ([]net.IPAddr, error) {
 			addresses, err := resolve(lookupCtx, host)
 			after, inspectErr := routing.CaptureMacOSPhysicalNetwork(lookupCtx)
