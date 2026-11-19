@@ -175,27 +175,42 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
         accessibilityLabel = NSLocalizedString("Connection logs", comment: "")
     }
 
-    override var accessibilityElements: [Any]? {
-        get {
-            var visible: [String: IOSLogRecordAccessibilityElement] = [:]
-            let elements = visibleIOSLogRecordFragments(in: self).map { fragment in
-                let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)" +
-                    (fragment.isFullyVisible ? "" : ".partial")
-                let identifier = "logs.record." + fragment.recordID + suffix
-                let element = recordElements[identifier] ?? IOSLogRecordAccessibilityElement(accessibilityContainer: self)
-                element.logView = self
-                element.accessibilityIdentifier = identifier
-                element.accessibilityLabel = fragment.text
-                element.accessibilityTraits = .staticText
-                element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(fragment.frame, in: self)
-                element.accessibilityCustomActions = accessibilityCustomActions
-                visible[identifier] = element
-                return element
-            }
-            recordElements = visible
-            return elements
+    private func logRecordAccessibilityElements() -> [IOSLogRecordAccessibilityElement] {
+        var visible: [String: IOSLogRecordAccessibilityElement] = [:]
+        let elements = visibleIOSLogRecordFragments(in: self).map { fragment in
+            let suffix = fragment.isWholeRecord ? "" : ".fragment.\(fragment.offset).\(fragment.length)" +
+                (fragment.isFullyVisible ? "" : ".partial")
+            let identifier = "logs.record." + fragment.recordID + suffix
+            let element = recordElements[identifier] ?? IOSLogRecordAccessibilityElement(accessibilityContainer: self)
+            element.logView = self
+            element.accessibilityIdentifier = identifier
+            element.accessibilityLabel = fragment.text
+            element.accessibilityTraits = .staticText
+            element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(fragment.frame, in: self)
+            element.accessibilityCustomActions = accessibilityCustomActions
+            visible[identifier] = element
+            return element
         }
+        recordElements = visible
+        return elements
+    }
+
+    // Every container entry point serves the record elements; UIKit's own
+    // paragraph elements lay out the whole text on the main thread per query.
+    override var accessibilityElements: [Any]? {
+        get { logRecordAccessibilityElements() }
         set { super.accessibilityElements = newValue }
+    }
+
+    override func accessibilityElementCount() -> Int { logRecordAccessibilityElements().count }
+
+    override func accessibilityElement(at index: Int) -> Any? {
+        let elements = logRecordAccessibilityElements()
+        return index >= 0 && index < elements.count ? elements[index] : nil
+    }
+
+    override func index(ofAccessibilityElement element: Any) -> Int {
+        logRecordAccessibilityElements().firstIndex { $0 === element as AnyObject } ?? NSNotFound
     }
 
     var accessibilityViewportText: String {
@@ -833,12 +848,26 @@ private let logTimeFormat: DateFormatter = {
     return format
 }()
 
+let logDisplayEntryLimit = 200
+let logDisplayScalarLimit = 32_768
+
+/// The records the log view draws. The full history stays in the log files and
+/// in the `Send logs` export; only the rendered tail is bounded.
+func logDisplayEntries(_ entries: [DobbyLogEntry]) -> [DobbyLogEntry] {
+    var kept = Array(entries.suffix(logDisplayEntryLimit))
+    var scalars = kept.reduce(0) { $0 + $1.message.unicodeScalars.count }
+    while scalars > logDisplayScalarLimit, kept.count > 1 {
+        scalars -= kept.removeFirst().message.unicodeScalars.count
+    }
+    return kept
+}
+
 func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
     let output = NSMutableAttributedString(string: "")
     let paragraph = NSMutableParagraphStyle()
     // Extra space goes below each line so a line's text starts at the top of its fragment.
     paragraph.lineSpacing = 3
-    for entry in entries {
+    for entry in logDisplayEntries(entries) {
         let start = output.length
         let time = entry.date.map(logTimeFormat.string) ?? entry.timestamp
         if !time.isEmpty {
