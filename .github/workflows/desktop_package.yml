@@ -41,6 +41,7 @@ permissions:
 jobs:
   package:
     name: ${{ inputs.platform }} / ${{ inputs.architecture }} package
+    environment: ${{ inputs.platform == 'macos' && !inputs.debug && 'release' || '' }}
     runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     # Release macOS jobs also wait for notarization (notarytool --timeout 30m).
     timeout-minutes: ${{ inputs.platform == 'macos' && !inputs.debug && 90 || 45 }}

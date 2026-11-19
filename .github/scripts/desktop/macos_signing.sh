@@ -74,17 +74,17 @@ prepare() {
   # Developer ID intermediates, in case an exported .p12 holds only the leaf.
   for name in DeveloperIDG2CA DeveloperIDCA; do
     curl -fsSL --retry 3 -o "$WORK/$name.cer" "https://www.apple.com/certificateauthority/$name.cer"
-    security import "$WORK/$name.cer" -k "$KEYCHAIN" >/dev/null
+    security import "$WORK/$name.cer" -k "$KEYCHAIN"
   done
 
   for name in MACOS_DEVELOPER_ID_APP_P12 MACOS_DEVELOPER_ID_INSTALLER_P12; do
-    printf '%s' "${!name}" | tr -d '\r\n ' | base64 --decode > "$WORK/identity.p12"
+    (umask 077; printf '%s' "${!name}" | tr -d '\r\n ' | base64 --decode > "$WORK/identity.p12")
     security import "$WORK/identity.p12" -k "$KEYCHAIN" -f pkcs12 \
       -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" \
-      -T /usr/bin/codesign -T /usr/bin/productsign >/dev/null
+      -T /usr/bin/codesign -T /usr/bin/productsign
     rm -f "$WORK/identity.p12"
   done
-  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$KEYCHAIN" >/dev/null
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$KEYCHAIN"
 
   local app installer
   app="$(select_identity "Developer ID Application")"
@@ -131,10 +131,11 @@ notarize() {
   (umask 077; printf '%s\n' "${APP_STORE_API_KEY//\\n/$'\n'}" > "$key")
   xcrun notarytool submit "$package" --key "$key" --key-id "$APP_STORE_KEY_ID" \
     --issuer "$APP_STORE_ISSUER_ID" --wait --timeout 30m --output-format json > "$result" || status=$?
+  cat "$result"
   id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id", ""))' "$result" 2>/dev/null || true)"
   state="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$result" 2>/dev/null || true)"
   echo "== notarytool submission ${id:-unknown}: status ${state:-unknown} (exit $status)"
-  if [[ "$state" != Accepted ]]; then
+  if [[ "$state" != Accepted || "$status" != 0 ]]; then
     [[ -z "$id" ]] || xcrun notarytool log "$id" --key "$key" --key-id "$APP_STORE_KEY_ID" --issuer "$APP_STORE_ISSUER_ID" || true
     fail "notarization was not accepted"
   fi
@@ -164,14 +165,19 @@ sign_package() {
 }
 
 cleanup() {
-  local original=() name
+  local original=() name status=0
   if [[ -f "$WORK/search-list" ]]; then
     while IFS= read -r name; do [[ -n "$name" ]] && original+=("$name"); done < "$WORK/search-list"
-    security list-keychains -d user -s ${original[@]+"${original[@]}"} || true
+    security list-keychains -d user -s ${original[@]+"${original[@]}"} || status=$?
   fi
-  [[ ! -e "$KEYCHAIN" ]] || security delete-keychain "$KEYCHAIN" || true
-  rm -rf "$WORK"
-  echo "macOS signing keychain and key material removed."
+  if [[ -e "$KEYCHAIN" ]]; then security delete-keychain "$KEYCHAIN" || status=$?; fi
+  rm -rf "$WORK" || status=$?
+  if [[ "$status" == 0 ]]; then
+    echo "macOS signing keychain and key material removed."
+  else
+    echo "macOS signing cleanup failed; original command errors precede this message." >&2
+  fi
+  return "$status"
 }
 
 case "${1:-}" in
