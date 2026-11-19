@@ -512,48 +512,6 @@ public final class DobbySessionViewModel: ObservableObject {
         if visible { refreshLogs() }
     }
 
-    private func recordAppStarted() {
-        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
-        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
-        recordDiagnostic(line, event: "app.started", level: "INFO")
-    }
-
-    private func recordError(_ message: String) {
-        recordDiagnostic(message)
-    }
-
-    private func recordDiagnostic(
-        _ message: String,
-        event: String = "ui.failure",
-        level: String = "ERROR"
-    ) {
-        let path = client.uiDiagnosticPath
-        let excludedPaths = client.diagnosticPaths
-        logWorker.async { [weak self] in
-            do {
-                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
-                Task { @MainActor [weak self] in
-                    guard let self, self.logsVisible else { return }
-                    self.refreshLogs()
-                }
-            } catch {
-                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
-                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
-                    failure += "\nStderr write failed: \(String(reflecting: error))"
-                }
-                Task { @MainActor [weak self] in
-                    self?.diagnosticWriteError = failure
-                    self?.logsError = failure
-                }
-            }
-        }
-    }
-
-    func recordLogsShare(kind: String, phase: String, context: String = "") {
-        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
-                         event: "ui.logs_share", level: "INFO")
-    }
-
     public func refreshLogs() {
         guard !logsInFlight else { logsRefreshPending = true; return }
         logsInFlight = true
@@ -604,6 +562,50 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.refreshLogs()
             }
         }
+    }
+}
+
+extension DobbySessionViewModel {
+    private func recordAppStarted() {
+        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
+        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
+        recordDiagnostic(line, event: "app.started", level: "INFO")
+    }
+
+    private func recordError(_ message: String) {
+        recordDiagnostic(message)
+    }
+
+    private func recordDiagnostic(
+        _ message: String,
+        event: String = "ui.failure",
+        level: String = "ERROR"
+    ) {
+        let path = client.uiDiagnosticPath
+        let excludedPaths = client.diagnosticPaths
+        logWorker.async { [weak self] in
+            do {
+                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
+                Task { @MainActor [weak self] in
+                    guard let self, self.logsVisible else { return }
+                    self.refreshLogs()
+                }
+            } catch {
+                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
+                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
+                    failure += "\nStderr write failed: \(String(reflecting: error))"
+                }
+                Task { @MainActor [weak self] in
+                    self?.diagnosticWriteError = failure
+                    self?.logsError = failure
+                }
+            }
+        }
+    }
+
+    func recordLogsShare(kind: String, phase: String, context: String = "") {
+        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
+                         event: "ui.logs_share", level: "INFO")
     }
 }
 
