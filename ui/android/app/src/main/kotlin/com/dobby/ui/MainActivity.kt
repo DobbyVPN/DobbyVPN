@@ -1361,6 +1361,8 @@ internal class SessionController(
             if (result.getString("kind") == "import") {
                 state = state.copy(pendingImport = result.getString("source"))
             }
+        } catch (failure: LinkageError) {
+            handleNativeLinkageFailure(failure, "import_parse")
         } catch (failure: Exception) { report("Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL", failure) }
     }
 
@@ -1567,9 +1569,9 @@ internal class SessionController(
         }
     }
 
-    internal fun handleNativeLinkageFailure(failure: LinkageError) {
+    internal fun handleNativeLinkageFailure(failure: LinkageError, operation: String = "snapshot") {
         val message = failure.message?.takeIf(String::isNotBlank) ?: "Go backend is unavailable"
-        NativeVpnBridge.recordNativeFailure(activity.applicationContext, "go.snapshot_linkage_failed", failure)
+        NativeVpnBridge.recordNativeFailure(activity.applicationContext, "go.${operation}_linkage_failed", failure)
         if (closed) return
         post {
             backendUnavailableMessage = message
