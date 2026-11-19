@@ -142,7 +142,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      checks: write
+      statuses: write
     steps:
       - name: Publish result on the exact Product commit
         env:
@@ -158,10 +158,10 @@ jobs:
           passed = os.environ['FETCH_RESULT'] == 'success' and os.environ['TEST_RESULT'] == 'success'
           summary = (f"Source setup: {os.environ['FETCH_RESULT']}; test job: {os.environ['TEST_RESULT']}. "
                      f"Torturer {os.environ['TORTURER_SHA']} tree {os.environ['TORTURER_TREE']}.")
-          payload = dict(name='Fast behavioral tests', head_sha=os.environ['SOURCE_SHA'], status='completed',
-                         conclusion='success' if passed else 'failure',
-                         details_url=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-                         output=dict(title='Fast behavioral tests', summary=summary))
-          subprocess.run(['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/check-runs", '--input', '-'],
+          print(summary, flush=True)
+          payload = dict(context='Fast behavioral tests', state='success' if passed else 'failure',
+                         target_url=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+                         description=f"Source setup: {os.environ['FETCH_RESULT']}; test job: {os.environ['TEST_RESULT']}.")
+          subprocess.run(['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/statuses/{os.environ['SOURCE_SHA']}", '--input', '-'],
                          input=json.dumps(payload), text=True, check=True)
           PY
