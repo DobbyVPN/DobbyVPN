@@ -108,6 +108,7 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
 final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
     var onSendLogs: () -> Void = {}
     var onShowMenu: () -> Void = {}
+    var onMenuGestureObservation: (String) -> Void = { _ in }
     var onClear: () -> Void = {}
     var onAccessibilityScroll: () -> Void = {}
     var preservesReadingPosition = false
@@ -146,10 +147,18 @@ final class DobbyLogTextView: UITextView, UIGestureRecognizerDelegate {
 
     // The double tap opens the logs menu instead of selecting a word; a long press still selects text.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
-        other is UITapGestureRecognizer && other.view === self
+        let nativeTap = other as? UITapGestureRecognizer
+        let sameView = other.view === self
+        let descendant = other.view?.isDescendant(of: self) == true
+        let priority = nativeTap != nil && sameView
+        onMenuGestureObservation("phase=arbitration other=\(String(describing: type(of: other))) " +
+            "view=\(other.view.map { String(describing: type(of: $0)) } ?? "nil") " +
+            "taps=\(nativeTap?.numberOfTapsRequired ?? -1) same_view=\(sameView) descendant=\(descendant) priority=\(priority)")
+        return priority
     }
 
     @objc private func showLogsMenu(_ gesture: UITapGestureRecognizer) {
+        onMenuGestureObservation("phase=recognized state=\(gesture.state.rawValue) taps=\(gesture.numberOfTapsRequired)")
         onShowMenu()
     }
 
@@ -287,6 +296,7 @@ struct DobbyLogView: UIViewRepresentable {
     let clear: Int
     let onSendLogs: () -> Void
     var onShowMenu: () -> Void = {}
+    var onMenuGestureObservation: (String) -> Void = { _ in }
     let onClear: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -312,6 +322,7 @@ struct DobbyLogView: UIViewRepresentable {
         if let logView = view as? DobbyLogTextView {
             logView.onSendLogs = onSendLogs
             logView.onShowMenu = onShowMenu
+            logView.onMenuGestureObservation = onMenuGestureObservation
             logView.onClear = onClear
             logView.onAccessibilityScroll = { [weak coordinator, weak logView] in
                 guard let logView else { return }
