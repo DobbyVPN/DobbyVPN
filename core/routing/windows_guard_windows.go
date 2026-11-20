@@ -306,7 +306,13 @@ func (g *WindowsNetworkGuard) addPolicyFilter(name string, layer windows.GUID, a
 	if err != nil {
 		return 0, err
 	}
-	filter := fwpmFilter{flags: wfpPersistent, providerKey: &g.policy.provider, providerData: wfpByteBlob{size: 1, data: &role}, filterKey: key, displayData: fwpmDisplayData{name: label}, layerKey: layer, sublayerKey: g.sublayerKey, weight: wfpValue{dataType: wfpUint8, value: uintptr(weight)}, action: fwpmAction{actionType: action}}
+	filter := fwpmFilter{providerKey: &g.policy.provider, providerData: wfpByteBlob{size: 1, data: &role}, filterKey: key, displayData: fwpmDisplayData{name: label}, layerKey: layer, sublayerKey: g.sublayerKey, weight: wfpValue{dataType: wfpUint8, value: uintptr(weight)}, action: fwpmAction{actionType: action}}
+	// Only the fail-closed base belongs in BFE's persistent store. Source and
+	// interface allowances are rebuilt after reboot or service adoption.
+	if role == wfpBaseFilter {
+		filter.flags = wfpPersistent
+	}
+
 	if len(c.values) > 0 {
 		filter.numFilterConditions = uint32(len(c.values))
 		filter.filterCondition = &c.values[0]
