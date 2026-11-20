@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/iprange"
 	"core/log"
 	"core/tunnel/protected_dialer"
 )
@@ -30,10 +31,12 @@ var macOSPFCommand = func(ctx context.Context, stdin string, args ...string) (st
 	command.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
-    err := command.Run()
-    errorText := ""
-    if err != nil { errorText = err.Error() }
-    log.Debug(Category, "macOS pf command completed", map[string]any{
+	err := command.Run()
+	errorText := ""
+	if err != nil {
+		errorText = err.Error()
+	}
+	log.Debug(Category, "macOS pf command completed", map[string]any{
 		"arguments": args, "stdout": stdout.String(), "stderr": stderr.String(), "error": errorText,
 	})
 	if err != nil {
@@ -53,14 +56,16 @@ var macOSPFOwner struct {
 }
 
 type MacOSKillSwitch struct {
-	mu             sync.Mutex
-	tunName        string
-	token          string
-	servers        []netip.Addr
-	attempts       map[uint64]map[PFDestination]struct{}
-	retiredThrough uint64
-	applied        bool
-	closed         bool
+	mu                sync.Mutex
+	tunName           string
+	token             string
+	servers           []netip.Addr
+	excluded          []netip.Prefix
+	configured, hosts *iprange.Set
+	attempts          map[uint64]map[PFDestination]struct{}
+	retiredThrough    uint64
+	applied           bool
+	closed            bool
 	// stale is set when the loaded rules may differ from the state above, so
 	// the next change reloads even if it changes nothing itself.
 	stale bool
@@ -168,16 +173,30 @@ func macOSPFEnable(ctx context.Context) (string, error) {
 }
 
 func releaseMacOSPF(ctx context.Context, token string) error {
-	if _, _, err := macOSPFCommand(ctx, "", "-a", MacOSPFAnchor, "-F", "rules"); err != nil {
-		return err
+	for _, kind := range []string{"rules", "Tables"} {
+		if _, _, err := macOSPFCommand(ctx, "", "-a", MacOSPFAnchor, "-F", kind); err != nil {
+			return err
+		}
 	}
 	// Only a saved token has a file. It stays until pf accepts the release, so
 	// a retry, the next service start or the uninstall script can repeat it.
 	if token == "" {
 		return nil
 	}
-	if _, _, err := macOSPFCommand(ctx, "", "-X", token); err != nil {
+	// A token pf no longer holds (released before its file was removed)
+	// cannot be released again; drop its file instead of failing forever.
+	references, _, err := macOSPFCommand(ctx, "", "-s", "References")
+	if err != nil {
 		return err
+	}
+	held, err := pfHasReference(references, token)
+	if err != nil {
+		return err
+	}
+	if held {
+		if _, _, err := macOSPFCommand(ctx, "", "-X", token); err != nil {
+			return err
+		}
 	}
 	if err := os.Remove(macOSPFTokenPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -211,7 +230,7 @@ func (k *MacOSKillSwitch) reload(ctx context.Context) error {
 			destinations = append(destinations, destination)
 		}
 	}
-	rules := MacOSPFRules(k.tunName, k.servers, destinations)
+	rules := MacOSPFRules(k.tunName, k.servers, k.excluded, destinations)
 	if _, _, err := macOSPFCommand(ctx, rules, "-a", MacOSPFAnchor, "-f", "-"); err != nil {
 		k.stale = true
 		return err
@@ -250,6 +269,18 @@ func (k *MacOSKillSwitch) SetResolvers(ctx context.Context, servers []netip.Addr
 	})
 }
 
+// SetExcluded replaces the excluded table (ExcludeIPs) as a whole.
+func (k *MacOSKillSwitch) SetExcluded(ctx context.Context, configured, hosts *iprange.Set) error {
+	return k.update(ctx, func() (bool, error) {
+		if k.configured.Hash() == configured.Hash() && k.hosts.Hash() == hosts.Hash() {
+			return false, nil
+		}
+		k.configured, k.hosts = configured, hosts
+		k.excluded = pfPrefixes(configured, hosts)
+		return true, nil
+	})
+}
+
 func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, network, address string) error {
 	destination, err := pfTransportDestination(network, address)
 	if err != nil {
@@ -264,6 +295,12 @@ func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, netw
 	return k.update(ctx, func() (bool, error) {
 		if generation == 0 || generation <= k.retiredThrough {
 			return false, errors.New("macOS transport owner is retired")
+		}
+		// The excluded table already admits direct traffic to these networks.
+		// Other direct destinations, such as the server's own address, keep a
+		// per-connection rule.
+		if destination.Bypass && (k.configured.Contains(destination.Addr) || k.hosts.Contains(destination.Addr)) {
+			return false, nil
 		}
 		entries := k.attempts[generation]
 		if _, ok := entries[destination]; ok {

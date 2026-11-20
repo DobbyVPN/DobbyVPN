@@ -41,8 +41,7 @@ type App struct {
 	UplinkInterface string
 	DNSCache        *dnscache.Cache
 	BypassPolicy    *tunnel.BypassPolicy
-	// Guard, when set, is told each attempt's excluded addresses (Linux and
-	// Windows).
+	// Guard receives the shared configuration and per-attempt resolved hosts.
 	Guard interface {
 		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
 	}

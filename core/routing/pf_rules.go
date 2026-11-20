@@ -1,8 +1,10 @@
 package routing
 
 import (
+	"core/iprange"
 	"errors"
 	"fmt"
+	"go4.org/netipx"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -29,11 +31,25 @@ type PFDestination struct {
 // transport destinations. Application traffic outside the tunnel never gets
 // port 53, so DNS cannot bypass the tunnel through ExcludeIPs; the VPN
 // transport keeps port 53 even when the server is inside an excluded range.
+// Excluded networks (ExcludeIPs) are one table and one rule, so direct traffic
+// to them needs no per-connection rule and no reload. The table is not
+// persistent: pf deletes it once a reload without excluded networks leaves no
+// rule referring to it.
 // Loopback and tunnel rules keep no state: connections that existed before
 // the anchor loaded continue there without a state entry.
-func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDestination) string {
+func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Prefix, destinations []PFDestination) string {
 	var b strings.Builder
 	b.WriteString("# DobbyVPN kill switch: outbound traffic leaves only through the tunnel.\n")
+	if len(excluded) > 0 {
+		b.WriteString("table <dobbyvpn_excluded> {")
+		for i, prefix := range excluded {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString("\n\t" + prefix.String())
+		}
+		b.WriteString("\n}\n")
+	}
 	b.WriteString("pass out quick on lo0 all no state\n")
 	if tunName != "" {
 		fmt.Fprintf(&b, "pass out quick on %s all no state\n", tunName)
@@ -45,6 +61,9 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDest
 	slices.SortFunc(servers, func(a, b netip.Addr) int { return a.Unmap().WithZone("").Compare(b.Unmap().WithZone("")) })
 	for _, server := range slices.Compact(servers) {
 		fmt.Fprintf(&b, "pass out quick %s proto { tcp, udp } from any to %s port 53 user root\n", pfFamily(server), pfAddress(server))
+	}
+	if len(excluded) > 0 {
+		b.WriteString("pass out quick proto { tcp, udp } from any to <dobbyvpn_excluded> port != 53 user root\n")
 	}
 	sorted := slices.Clone(destinations)
 	slices.SortFunc(sorted, func(a, b PFDestination) int {
@@ -79,6 +98,21 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDest
 	}
 	b.WriteString("block drop out quick all\n")
 	return b.String()
+}
+
+// pfPrefixes converts merged inclusive ranges to the CIDRs accepted by pfctl.
+func pfPrefixes(configured, hosts *iprange.Set) []netip.Prefix {
+	all := configured
+	if configured.Len() == 0 {
+		all = hosts
+	} else if hosts.Len() != 0 {
+		all = iprange.New(append(configured.Ranges(), hosts.Ranges()...))
+	}
+	var prefixes []netip.Prefix
+	for _, r := range all.Ranges() {
+		prefixes = netipx.IPRangeFrom(r.First, r.Last).AppendPrefixes(prefixes)
+	}
+	return prefixes
 }
 
 func pfFamily(ip netip.Addr) string {
@@ -118,14 +152,17 @@ func PFEnableToken(output string) (string, error) {
 	return "", errors.New("pfctl -E printed no enable token")
 }
 
-// pfHasReference reads pfctl's fixed-width References table. The process name
-// can contain spaces; matching arbitrary numeric fields could mistake a PID for
-// the token. Unknown output is an error, not proof that a reference is absent.
+// pfHasReference reads pfctl's References table. The process name can contain
+// spaces, and matching arbitrary numeric fields could mistake a PID for the
+// token, so the token is read from the column the header labels TOKEN rather
+// than from a fixed offset. Unknown output is an error, not proof that a
+// reference is absent.
 //
 //nolint:unused // Used on macOS and exercised by portable Torturer tests.
 func pfHasReference(output, token string) (bool, error) {
 	table := false
 	known := false
+	column := -1
 	for _, line := range strings.Split(output, "\n") {
 		text := strings.TrimSpace(line)
 		if text == "No pf starter references held" || text == "No pf_enabled references" {
@@ -140,12 +177,17 @@ func pfHasReference(output, token string) (bool, error) {
 			continue
 		}
 		if strings.Contains(line, "Process Name") && strings.Contains(line, "TOKEN") {
+			column = strings.Index(line, "TOKEN")
 			continue
 		}
-		if len(line) < 62 {
+		if column < 0 || len(line) <= column {
 			return false, fmt.Errorf("invalid pf reference row: %s", line)
 		}
-		value := strings.TrimSpace(line[38:62])
+		fields := strings.Fields(line[column:])
+		value := ""
+		if len(fields) > 0 {
+			value = fields[0]
+		}
 		if _, err := strconv.ParseUint(value, 10, 64); err != nil {
 			return false, fmt.Errorf("invalid pf reference token row: %s", line)
 		}
