@@ -124,7 +124,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [subscription, interaction]
+        shard: [subscription, interaction, logs]
     environment: release-tests
     timeout-minutes: 45
     env:
