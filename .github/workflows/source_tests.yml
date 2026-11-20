@@ -73,8 +73,9 @@ jobs:
       - name: Select Xcode
         if: runner.os == 'macOS'
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-      - name: Install Windows model compiler
-        if: runner.os == 'Windows'
+      - name: Install pinned .NET SDK
+        # The Go runtime suite invokes the Windows serializer on every host.
+        if: contains(inputs.checks, 'go-native-runtime') || contains(inputs.checks, 'windows-mutations')
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
