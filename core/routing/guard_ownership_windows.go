@@ -259,6 +259,26 @@ func (p *WindowsServiceProtection) closeRestoreLocked() error {
 	return nil
 }
 
+// Install the base with no tunnel permit when a saved activation outlives
+// its policy (for example on upgrade from a dynamic-only guard).
+func (p *WindowsServiceProtection) PrepareRestore(ctx context.Context) (err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.active != nil || p.restore != nil {
+		return errors.New("cannot replace an active WFP guard during startup")
+	}
+	g, err := p.openEngine(0)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, g.closeEngine()) }()
+	if err = g.transaction(ctx, g.replaceBase); err != nil {
+		return err
+	}
+	p.retain = true
+	return nil
+}
+
 func (p *WindowsServiceProtection) Recover(ctx context.Context) (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

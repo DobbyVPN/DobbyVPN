@@ -125,7 +125,18 @@ var linuxGuardLifetime struct {
 	retain bool
 }
 
-type LinuxServiceProtection struct{}
+type LinuxServiceProtection struct{ SocketMark int }
+
+// Install the base without a tunnel allowance. The ordinary network owner
+// replaces the detached policy transactionally when it has a tunnel.
+func (p LinuxServiceProtection) PrepareRestore(ctx context.Context) error {
+	if err := p.SetEnabled(ctx, true); err != nil {
+		return err
+	}
+	plan := NewPlan("service restore")
+	_, err := plan.AcquireLinuxOutputGuard(ctx, "", p.SocketMark)
+	return errors.Join(err, plan.Close(context.WithoutCancel(ctx)))
+}
 
 func withLinuxGuardConn(ctx context.Context, action func(*nftables.Conn) error) (err error) {
 	var guard LinuxOutputGuard

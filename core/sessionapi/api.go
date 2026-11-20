@@ -262,6 +262,7 @@ type PlatformLease interface{ Release(context.Context) error }
 // DesktopProtection owns the kernel policy that can survive a service process.
 // Go user intent determines when the platform may release that policy.
 type DesktopProtection interface {
+	PrepareRestore(context.Context) error
 	Recover(context.Context) (bool, error)
 	SetEnabled(context.Context, bool) error
 }

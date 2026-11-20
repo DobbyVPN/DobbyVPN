@@ -3,8 +3,8 @@
 package executor
 
 import (
-	"core/routing"
 	"core/sessionapi"
+	"core/sessionapi/runtime"
 )
 
-var desktopProtection sessionapi.DesktopProtection = routing.LinuxServiceProtection{}
+var desktopProtection sessionapi.DesktopProtection = runtime.LinuxServiceProtection()

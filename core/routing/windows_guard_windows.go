@@ -206,18 +206,7 @@ func (policy *WindowsServiceProtection) open(tunnelLUID uint64) (*WindowsNetwork
 		return g.failInstall(err)
 	}
 	err = g.transaction(context.Background(), func() error {
-		existing, err := g.ownedPolicy()
-		if err != nil {
-			return err
-		}
-		if existing {
-			if err := g.clearPolicyFilters(false); err != nil {
-				return err
-			}
-		} else if err := g.installPolicy(); err != nil {
-			return err
-		}
-		return g.installBase()
+		return g.replaceBase()
 	})
 	if err != nil {
 		return g.failInstall(err)
@@ -225,6 +214,21 @@ func (policy *WindowsServiceProtection) open(tunnelLUID uint64) (*WindowsNetwork
 	policy.active = g
 	log.Info(Category, "Windows network protection acquired", map[string]any{"sublayer_id": g.sublayerKey.String(), "filter_ids": g.filterIDs, "tunnel_luid": tunnelLUID})
 	return g, nil
+}
+
+func (g *WindowsNetworkGuard) replaceBase() error {
+	existing, err := g.ownedPolicy()
+	if err != nil {
+		return err
+	}
+	if existing {
+		if err := g.clearPolicyFilters(false); err != nil {
+			return err
+		}
+	} else if err := g.installPolicy(); err != nil {
+		return err
+	}
+	return g.installBase()
 }
 
 // Conditions retain all Go storage referenced by native WFP unions until Add
@@ -352,6 +356,9 @@ func (g *WindowsNetworkGuard) installBase() error {
 		loop.values[0].matchType = wfpMatchFlagsAllSet
 		if err := g.base("Permit loopback", layer, wfpActionPermit, 15, loop); err != nil {
 			return err
+		}
+		if g.tunnelLUID == 0 {
+			continue
 		}
 		tun := &wfpConditions{}
 		tun.integer64(wfpConditionNextHop, g.tunnelLUID)

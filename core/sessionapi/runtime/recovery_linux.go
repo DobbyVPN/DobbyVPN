@@ -12,6 +12,10 @@ import (
 	"core/sessionapi"
 )
 
+func LinuxServiceProtection() routing.LinuxServiceProtection {
+	return routing.LinuxServiceProtection{SocketMark: ownedRoutingTableID}
+}
+
 // recoveryJournalOut receives the recovery cause as well. The service replaces
 // stderr with the backend log file before recovery runs, while stdout still
 // reaches the system journal that the client message points to. It is a seam

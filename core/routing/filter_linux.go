@@ -111,7 +111,11 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 		g.addLinkMaintenanceRules()
 		policy := nftables.ChainPolicyDrop
 		output := g.conn.AddChain(&nftables.Chain{Table: g.table, Name: "protect", Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityFilter, Policy: &policy})
-		for _, name := range []string{"lo", tunName} {
+		interfaces := []string{"lo"}
+		if tunName != "" {
+			interfaces = append(interfaces, tunName)
+		}
+		for _, name := range interfaces {
 			data := make([]byte, unix.IFNAMSIZ)
 			copy(data, name)
 			g.add(output, []expr.Any{&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: data}}, expr.VerdictAccept)
