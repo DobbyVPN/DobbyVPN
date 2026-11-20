@@ -162,7 +162,8 @@ func CaptureMacOSPhysicalNetwork(ctx context.Context) (MacOSPhysicalNetwork, err
 	var servers []netip.Addr
 	for _, text := range strings.Split(C.GoString(&captured.dns[0]), ",") {
 		server, err := netip.ParseAddr(text)
-		if err != nil || server.IsLoopback() || server.IsUnspecified() || slices.Contains(servers, server) {
+		// Loopback servers (a local DNS proxy) stay: the kill switch passes lo0.
+		if err != nil || server.IsUnspecified() || slices.Contains(servers, server) {
 			continue
 		}
 		servers = append(servers, server)

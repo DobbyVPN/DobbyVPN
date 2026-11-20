@@ -39,7 +39,10 @@ func MacOSLinkResolver(ipv4, ipv6 int, servers []netip.Addr, prefixes []netip.Pr
 	if ipv6 > 0 {
 		queryTypes = append(queryTypes, dns.TypeAAAA)
 	}
-	dialer := &net.Dialer{Control: func(network, _ string, raw syscall.RawConn) error {
+	dialer := &net.Dialer{Control: func(network, address string, raw syscall.RawConn) error {
+		if destination, err := netip.ParseAddrPort(address); err == nil && destination.Addr().IsLoopback() {
+			return nil // a local DNS proxy is reached over loopback, not the physical link
+		}
 		level, option, index := syscall.IPPROTO_IP, macOSIPBoundIf, ipv4
 		if network == "udp6" || network == "tcp6" {
 			level, option, index = syscall.IPPROTO_IPV6, macOSIPv6BoundIf, ipv6

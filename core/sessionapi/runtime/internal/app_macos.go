@@ -137,6 +137,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	guard, err := plan.AcquireMacOSKillSwitch(ctx, name, physical.DNSServers)
 	if guard != nil {
 		killSwitch.Store(guard)
+		app.Guard = guard
 		protected_dialer.SetDestinationPermissions(guard)
 	}
 	if err != nil {
