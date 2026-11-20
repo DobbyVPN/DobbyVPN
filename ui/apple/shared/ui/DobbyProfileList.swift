@@ -69,9 +69,10 @@ struct DobbyProfileList: View {
     }
 
     private func scrollableNotice<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        GeometryReader { tray in
+        let notice = content()
+        return GeometryReader { tray in
             ScrollView {
-                content()
+                notice
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, minHeight: tray.size.height)
             }
