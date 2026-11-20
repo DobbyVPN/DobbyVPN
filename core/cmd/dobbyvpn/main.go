@@ -426,7 +426,7 @@ func stopJSON(ctx context.Context, client controljson.Client, args []string) int
 	if options.sessionID != "" && (snapshot.SessionID != options.sessionID || snapshot.Generation != options.generation) {
 		return writeJSONFailure(&controljson.CallError{Code: string(sessionapi.FailureConflict), Message: "session generation changed; refresh its snapshot before stopping"})
 	}
-	if snapshot.Generation == 0 || snapshot.CleanupComplete {
+	if snapshot.Generation == 0 || (snapshot.CleanupComplete && snapshot.PrimaryAction != "STOP") {
 		if err := cleanupFailure(&snapshot); err != nil {
 			return writeJSONFailure(err)
 		}
