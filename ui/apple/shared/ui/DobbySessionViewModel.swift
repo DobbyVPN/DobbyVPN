@@ -99,6 +99,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private var logsClearInFlight = false
     private var logsRevision = 0
     private let logViewCache = LogViewCache()
+    @Published private var disconnectFailure = ""
     private var lastFailure = ""
     private var errorOrigin: DobbySessionErrorOrigin?
     private var lastSourceErrorIdentity: DobbySourceErrorIdentity?
@@ -351,13 +352,20 @@ public final class DobbySessionViewModel: ObservableObject {
         let recoveringFromSnapshotFailure = currentID.isEmpty && snapshotFailureMessage != nil
         let client = client
         worker.async { [weak self, client] in
+            let observer = client as? DobbyDisconnectObserving
+            let ticket = observer?.beginSnapshotObservation()
             let decoded = readSnapshot(client: client, sessionID: currentID)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.snapshotInFlight = false
+                self.disconnectFailure = observer?.disconnectFailure ?? ""
                 switch decoded {
                 case let .success((value, reattached)):
                     if value.sessionID == self.snapshot.sessionID && value.sequence < max(self.snapshot.sequence, self.acceptedSequence) { return }
+                    if let observer, let ticket {
+                        observer.observedSnapshot(value, ticket: ticket)
+                        self.disconnectFailure = observer.disconnectFailure
+                    }
                     let sameSession = value.sessionID == self.snapshot.sessionID
                     if !sameSession {
                         self.acceptedSequence = 0
@@ -763,7 +771,7 @@ extension DobbySessionViewModel {
 
     private var failures: [String] {
         var seen = Set<String>()
-        return [importError, loadError, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
+        return [importError, loadError, disconnectFailure, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
             .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
@@ -781,7 +789,10 @@ extension DobbySessionViewModel {
         recordDiagnostic("phase=requested branch=\(branch) scalar_count=\(scalarCount) visible_before=\(!shown.isEmpty)",
                          event: "ui.error_close", level: "DEBUG")
         if !shown.isEmpty {
-            if shown == importError {
+            if shown == disconnectFailure, let observer = client as? DobbyDisconnectObserving {
+                observer.acknowledgeDisconnect(shown)
+                disconnectFailure = observer.disconnectFailure
+            } else if shown == importError {
                 dismissError()
             } else {
                 dismissedFailures.insert(shown)

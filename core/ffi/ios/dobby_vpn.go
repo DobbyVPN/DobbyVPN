@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	"core/sessionapi/mobilebinding"
+	"core/tunnel"
 
 	"golang.org/x/sys/unix"
 )
@@ -56,6 +57,9 @@ func CallSessionJSON(operationID, method string, params []byte, rawConfiguration
 		context.Background(), operationID, method, json.RawMessage(params), rawConfiguration, hasConfiguration,
 	)
 }
+
+// ResourceDiagnostics reports process-local Go memory and tunnel flow counts.
+func ResourceDiagnostics() string { return tunnel.ResourceDiagnostics() }
 
 func GetTunnelFileDescriptor() int {
 	ctlInfo := &unix.CtlInfo{}

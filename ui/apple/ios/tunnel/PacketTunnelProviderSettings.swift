@@ -7,6 +7,7 @@ import NetworkExtension
 
 extension PacketTunnelProvider {
     func handleGoPublishedState(sessionID: String?, generation: Int64, state: String?, failureCode: String?) {
+        logResources("state-\(state ?? "unknown")")
         // State is a wake hint only. ReleaseTunnel is the sole settings cleanup path.
         logs.writeLog(log: "Go state session=\(sessionID ?? "") generation=\(generation) state=\(state ?? "") failure=\(failureCode ?? "")")
     }

@@ -10,6 +10,14 @@ public protocol DobbySessionClient: AnyObject, Sendable {
     var sourceCommit: String { get }
 }
 
+/// Native failure presentation for platforms whose transport may outlive the backend.
+public protocol DobbyDisconnectObserving: DobbySessionClient {
+    var disconnectFailure: String { get }
+    func beginSnapshotObservation() -> UInt64
+    func observedSnapshot(_ snapshot: DobbySessionSnapshot, ticket: UInt64)
+    func acknowledgeDisconnect(_ message: String)
+}
+
 public struct DobbySessionSnapshot: Decodable, Sendable {
     public let sessionID: String
     public let sequence: Int64

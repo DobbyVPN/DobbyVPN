@@ -100,3 +100,78 @@ public final class IOSCommandLogSampler {
         return true
     }
 }
+
+/// Retains the OS failure separately from Go's snapshot. A control-only
+/// provider can be connected even when no VPN session has ever been active.
+public final class IOSDisconnectHistory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var revision: UInt64 = 0
+    private var armed = false
+    private var stopping = false
+    private var failure = ""
+
+    public func begin(_ method: String) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        if method == "Stop" {
+            revision &+= 1
+            armed = false
+            stopping = true
+        } else if method == "Start" {
+            revision &+= 1
+            stopping = false
+        }
+        return revision
+    }
+
+    public func acceptedStart(_ ticket: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if ticket == revision { armed = true }
+    }
+
+    public func observedSnapshot(_ ticket: UInt64, state: String, recovering: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard ticket == revision else { return }
+        if state == "IDLE" || state == "CONFIGURED" {
+            stopping = false
+        }
+        guard !stopping else { return }
+        armed = recovering || ["PROBING", "PREPARING", "CONNECTED"].contains(state)
+        if state == "CONNECTED" && !recovering {
+            revision &+= 1
+            failure = ""
+        }
+    }
+
+    public func disconnected() -> UInt64? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard armed else { return nil }
+        armed = false
+        revision &+= 1
+        failure = "The VPN extension disconnected unexpectedly."
+        return revision
+    }
+
+    public func receivedReason(_ reason: String, ticket: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if ticket == revision && !failure.isEmpty { failure += " " + reason }
+    }
+
+    public var message: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return failure
+    }
+
+    public func acknowledge(_ message: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !message.isEmpty, failure == message else { return }
+        revision &+= 1
+        failure = ""
+    }
+}

@@ -26,6 +26,7 @@ import (
 var (
 	engineMu              sync.Mutex
 	activeEngine          *Engine
+	activeFlowDiagnostics       atomic.Pointer[DobbyProxy]
 	stopOperationSequence atomic.Uint64
 )
 
@@ -511,6 +512,7 @@ func (e *Engine) attachLocked(ctx context.Context, generation uint64, address st
 	wrapper.udpRelay = stackTunnel.New(wrapper, statistic.DefaultManager)
 	wrapper.udpRelay.ProcessAsync()
 	e.proxy, e.attempt = wrapper, generation
+	activeFlowDiagnostics.Store(wrapper)
 	e.router.set(wrapper)
 	log.Infof(Category, "[Engine] transport attached generation=%d interface=%s", generation, e.ifaceName)
 	return nil
@@ -542,6 +544,7 @@ func (e *Engine) detachLocked(ctx context.Context) error {
 		return err
 	}
 	log.Infof(Category, "[Engine] transport detached generation=%d interface=%s", e.attempt, e.ifaceName)
+	activeFlowDiagnostics.CompareAndSwap(e.proxy, nil)
 	e.proxy = nil
 	return nil
 }
@@ -643,6 +646,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 		return e.stopErr
 	}
 	e.stopped = true
+	activeFlowDiagnostics.CompareAndSwap(e.proxy, nil)
 	engineMu.Lock()
 	if activeEngine == e {
 		activeEngine = nil
