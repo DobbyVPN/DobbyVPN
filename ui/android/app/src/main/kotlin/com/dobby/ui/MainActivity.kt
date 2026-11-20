@@ -842,12 +842,13 @@ internal class SessionController(
         state = state.copy(loading = true)
         loadWorker.execute {
             val outcome = runCatching {
-                val snapshotResponse = JSONObject(NativeGoSession.snapshot(""))
+                val envelope = NativeGoSession.snapshot("")
+                val snapshotResponse = JSONObject(envelope)
                 requireOK(snapshotResponse)
-                val current = snapshotResponse.getJSONObject("result")
+                val current = decodeSessionSnapshot(snapshotResponse, envelope)
                 val configured = JSONObject(NativeGoSession.configure(
-                    current.getString("session_id"),
-                    current.getLong("sequence"),
+                    current.sessionId,
+                    current.sequence,
                     request.source.toByteArray(Charsets.UTF_8),
                 ))
                 requireOK(configured)
@@ -866,10 +867,17 @@ internal class SessionController(
             post {
                 sourceLoads.complete(request, succeeded = outcome.isSuccess) { current ->
                     state = state.copy(loading = false)
-                    if (outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
+                    if (current && outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
                     if (current) {
                         state = if (outcome.isSuccess) state.copy(sourceDirty = false, loadError = "")
-                        else state.copy(loadError = outcome.exceptionOrNull()?.message ?: "Subscription could not be loaded")
+                        else {
+                            val accepted = state.session.sourceUrl
+                            val sameSource = state.session.configured && accepted.isNotEmpty() && accepted == request.source
+                            val owner = if (state.session.configured && !sameSource && accepted.isNotEmpty())
+                                " Showing profiles from $accepted." else ""
+                            val detail = failure?.message ?: "Subscription could not be loaded"
+                            state.copy(sourceDirty = !sameSource, loadError = "Could not load ${request.source}: $detail.$owner")
+                        }
                     }
                     worker.execute { refreshSnapshot() }
                 }
@@ -939,7 +947,7 @@ internal class SessionController(
     }
 
     fun canAct(index: Int? = null): Boolean = !state.busy && permissionTarget == null &&
-        (isStopTarget(index) || (!state.sourceDirty && !state.loading && state.loadError.isEmpty() && state.session.sequence >= acceptedSequence && state.session.configured &&
+        (isStopTarget(index) || (!state.sourceDirty && !state.loading && (state.loadError.isEmpty() || state.source.trim() == state.session.sourceUrl) && state.session.sequence >= acceptedSequence && state.session.configured &&
             (state.session.primaryAction == "START" || state.session.canSwitch)))
 
     val isProtectedFailure: Boolean get() = state.session.protectedFailure
@@ -1203,27 +1211,24 @@ internal class SessionController(
         worker.execute {
             var admitted = false
             val command = runCatching {
-                val response = JSONObject(NativeGoSession.snapshot(selected.sessionId))
+                val envelope = NativeGoSession.snapshot(selected.sessionId)
+                val response = JSONObject(envelope)
                 requireOK(response)
-                val snapshot = response.getJSONObject("result")
-                val sessionId = snapshot.getString("session_id")
-                val sequence = snapshot.getLong("sequence")
-                val generation = snapshot.getLong("generation")
-                val digest = snapshot.getString("digest")
-                val primaryAction = snapshot.optString("primary_action", "NONE")
-                val canSwitch = snapshot.optBoolean("can_switch")
-                val hasPendingTarget = snapshot.optJSONObject("pending_target") != null
+                val snapshot = decodeSessionSnapshot(response, envelope)
+                val sessionId = snapshot.sessionId
+                val sequence = snapshot.sequence
+                val generation = snapshot.generation
+                val digest = snapshot.digest
+                val primaryAction = snapshot.primaryAction
+                val canSwitch = snapshot.canSwitch
+                val hasPendingTarget = snapshot.pendingTarget != null
                 val retryStillCurrent = target.retry &&
                     sessionId == selected.sessionId &&
                     generation == selected.generation &&
-                    snapshot.optString("state", "IDLE") == "FAILED" &&
-                    snapshot.optBoolean("vpn_active") &&
-                    snapshot.optBoolean("can_retry") &&
-                    primaryAction == "RETRY" &&
-                    !snapshot.optBoolean("cleanup_complete", true) &&
-                    snapshot.optString("active_digest") == target.selection.digest &&
-                    snapshot.optString("active_mode") == target.selection.mode &&
-                    snapshot.optInt("active_index") == target.selection.index
+                    snapshot.protectedFailure &&
+                    snapshot.activeDigest == target.selection.digest &&
+                    snapshot.activeMode == target.selection.mode &&
+                    snapshot.activeIndex == target.selection.index
                 val freshRevision = sourceLoads.revision
                 val freshSnapshot = PermissionSnapshot(
                     sessionId = sessionId,
@@ -1476,57 +1481,21 @@ internal class SessionController(
         try {
             val sessionId = latest.sessionId
             var reattached = false
-            var response = JSONObject(NativeGoSession.snapshot(sessionId))
+            var envelope = NativeGoSession.snapshot(sessionId)
+            var response = JSONObject(envelope)
             val failureCode = response.optJSONObject("error")?.optString("code").orEmpty()
             if (!response.optBoolean("ok") && sessionId.isNotEmpty() && failureCode == "NOT_FOUND") {
-                response = JSONObject(NativeGoSession.snapshot(""))
+                envelope = NativeGoSession.snapshot("")
+                response = JSONObject(envelope)
                 reattached = true
             }
             requireOK(response)
-            val snapshot = response.getJSONObject("result")
-            val active = snapshot.optJSONObject("active_profile")
-            val failure = snapshot.optJSONObject("last_failure")
-            val current = SessionData(
-                sessionId = snapshot.optString("session_id"),
-                sequence = snapshot.optLong("sequence"),
-                generation = snapshot.optLong("generation"),
-                networkGeneration = snapshot.opt("network_generation")?.toString()?.toULongOrNull() ?: 0uL,
-                vpnActive = snapshot.optBoolean("vpn_active"),
-                canRetry = snapshot.optBoolean("can_retry"),
-                state = snapshot.optString("state", "IDLE"),
-                primaryAction = snapshot.optString("primary_action", "NONE"),
-                configured = snapshot.optBoolean("configured"),
-                logsUploadAvailable = snapshot.optBoolean("logs_upload_available"),
-                sourceUrl = snapshot.optString("source_url"),
-                digest = snapshot.optString("digest"),
-                profiles = snapshot.optJSONArray("profiles")?.let { profiles ->
-                    (0 until profiles.length()).map { profiles.getJSONObject(it) }.map {
-                        ProfileData(it.getInt("index"), it.optString("description"), it.optString("protocol"))
-                    }
-                }.orEmpty(),
-                activeDigest = snapshot.optString("active_digest"),
-                activeMode = snapshot.optString("active_mode"),
-                activeIndex = snapshot.optInt("active_index"),
-                activeProfileIndex = active?.optInt("index", -1) ?: -1,
-                pendingTarget = snapshot.optJSONObject("pending_target")?.let { SelectionData(it.getString("digest"), it.getString("mode"), it.getInt("index")) },
-                canSwitch = snapshot.optBoolean("can_switch"),
-                activeProfile = active?.let {
-                    ProfileData(it.optInt("index"), it.optString("description"), it.optString("protocol"))
-                },
-                recovering = snapshot.optBoolean("recovering"),
-                cleanupComplete = snapshot.optBoolean("cleanup_complete", true),
-                failure = failure?.let {
-                    val message = it.optString("message")
-                    val code = it.optString("code")
-                    if (message.isBlank()) code else "$message ($code)"
-                }.orEmpty(),
-                sourceError = snapshot.optString("source_error"),
-            )
+            val current = decodeSessionSnapshot(response, envelope)
             // Command policy consumes only the backend snapshot. The UI projection
             // below preserves inventory while a source edit is still pending.
             post {
-                latest = current
                 if (current.sessionId == state.session.sessionId && current.sequence < maxOf(state.session.sequence, acceptedSequence)) return@post
+                latest = current
                 if (current.sessionId != state.session.sessionId) acceptedSequence = 0
                 sourceLoads.snapshotObserved()
                 val displayedSession = if (state.sourceDirty && current.sessionId == state.session.sessionId) {

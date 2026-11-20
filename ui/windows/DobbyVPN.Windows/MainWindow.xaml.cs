@@ -426,7 +426,6 @@ public sealed partial class MainWindow : Window
             snapshot = await CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
         }
         // A service that predates the field has no value, which is also a mismatch.
-        SessionProtocol.RequireCompatible(snapshot.ProtocolVersion);
         return snapshot;
     }
 
@@ -447,7 +446,7 @@ public sealed partial class MainWindow : Window
             isStopTarget: IsStopTarget(index),
             stopInFlight: _stopInFlight,
             busy: _busy,
-            hasLoadError: _loadError.Length > 0,
+            hasLoadError: _loadError.Length > 0 && NormalizeSource(SourceEditor.Text) != s.SourceUrl,
             sequenceCurrent: s.Sequence >= _acceptedSequence,
             configured: s.Configured,
             canStartOrSwitch: s.PrimaryAction == "START" || s.CanSwitch);
@@ -1290,7 +1289,12 @@ public sealed partial class MainWindow : Window
                 });
             if (_subscriptionLoad.IsCurrent(request))
             {
-                _loadError = error.Message;
+                var accepted = _snapshot?.SourceUrl ?? "";
+                bool sameSource = _snapshot?.Configured == true && accepted.Length > 0 && request.Source == accepted;
+                if (sameSource) _subscriptionLoad.MarkAccepted(request);
+                var owner = _snapshot?.Configured == true && !sameSource && accepted.Length > 0
+                    ? $" Showing profiles from {accepted}." : "";
+                _loadError = $"Could not load {request.Source}: {error.Message}.{owner}";
                 RecordError(error.ToString());
             }
         }
@@ -1359,7 +1363,7 @@ public sealed partial class MainWindow : Window
                 throw new BackendCommandException(code, message);
             }
             var payload = response.RootElement.GetProperty("result");
-            var result = payload.Deserialize<T>(JsonOptions);
+            var result = typeof(T) == typeof(Snapshot) ? (T)(object)Snapshot.Decode(payload) : payload.Deserialize<T>(JsonOptions);
             if (result is null) throw new InvalidDataException("Go backend returned an empty result.");
             if (operation.Sampled) _diagnostics.RecordInfo("control.command.complete", "Completed desktop control command", fields());
             return result;
@@ -2371,56 +2375,6 @@ public sealed partial class MainWindow : Window
             _exportingLogs = false;
             if (!_lifetime.IsClosing) SendLogsItem.IsEnabled = true;
         }
-    }
-
-    private sealed class Snapshot
-    {
-        [JsonPropertyName("protocol_version")] public int ProtocolVersion { get; init; }
-        [JsonPropertyName("service_version")] public string ServiceVersion { get; init; } = "";
-        [JsonPropertyName("session_id")] public string SessionId { get; init; } = "";
-        [JsonPropertyName("sequence")] public long Sequence { get; init; }
-        [JsonPropertyName("generation")] public long Generation { get; init; }
-        [JsonPropertyName("network_generation")] public ulong NetworkGeneration { get; init; }
-        [JsonPropertyName("vpn_active")] public bool VpnActive { get; init; }
-        [JsonPropertyName("can_retry")] public bool CanRetry { get; init; }
-        [JsonPropertyName("state")] public string State { get; init; } = "IDLE";
-        [JsonPropertyName("primary_action")] public string PrimaryAction { get; init; } = "NONE";
-        [JsonPropertyName("logs_upload_available")] public bool LogsUploadAvailable { get; init; }
-        [JsonPropertyName("configured")] public bool Configured { get; set; }
-        [JsonPropertyName("source_url")] public string SourceUrl { get; set; } = "";
-        [JsonPropertyName("source_error")] public string SourceError { get; init; } = "";
-        [JsonPropertyName("active_profile")] public Profile? ActiveProfile { get; init; }
-        [JsonPropertyName("last_failure")] public Failure? LastFailure { get; init; }
-        [JsonPropertyName("cleanup_complete")] public bool CleanupComplete { get; init; }
-        [JsonPropertyName("recovering")] public bool Recovering { get; init; }
-        [JsonPropertyName("service_restore_pending")] public bool ServiceRestorePending { get; init; }
-        [JsonPropertyName("digest")] public string Digest { get; set; } = "";
-        [JsonPropertyName("profiles")] public Profile[] Profiles { get; set; } = [];
-        [JsonPropertyName("active_digest")] public string ActiveDigest { get; init; } = "";
-        [JsonPropertyName("active_mode")] public string ActiveMode { get; init; } = "";
-        [JsonPropertyName("active_index")] public int ActiveIndex { get; init; }
-        [JsonPropertyName("pending_target")] public Selection? PendingTarget { get; init; }
-        [JsonPropertyName("can_switch")] public bool CanSwitch { get; init; }
-    }
-
-    private sealed class Selection
-    {
-        public string Digest { get; init; } = "";
-        public string Mode { get; init; } = "";
-        public int Index { get; init; }
-    }
-
-    private sealed class Profile
-    {
-        [JsonPropertyName("index")] public int Index { get; init; }
-        [JsonPropertyName("protocol")] public string Protocol { get; init; } = "";
-        [JsonPropertyName("description")] public string Description { get; init; } = "";
-    }
-
-    private sealed class Failure
-    {
-        [JsonPropertyName("code")] public string Code { get; init; } = "";
-        [JsonPropertyName("message")] public string Message { get; init; } = "";
     }
 
     private sealed class BackendCommandException : InvalidOperationException

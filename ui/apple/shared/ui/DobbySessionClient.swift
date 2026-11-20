@@ -46,6 +46,10 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
         case sessionID = "session_id"
+        case serviceVersion = "service_version"
+        case sourceKind = "source_kind"
+        case cleanupComplete = "cleanup_complete"
+        case serviceRestorePending = "service_restore_pending"
         case sequence, generation, state, configured
         case networkGeneration = "network_generation"
         case vpnActive = "vpn_active"
@@ -70,28 +74,35 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         guard try values.decodeIfPresent(Int.self, forKey: .protocolVersion) == Self.expectedProtocolVersion else {
             throw DobbyClientError.protocolMismatch
         }
-        sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID) ?? ""
-        sequence = try values.decodeIfPresent(Int64.self, forKey: .sequence) ?? 0
-        generation = try values.decodeIfPresent(Int64.self, forKey: .generation) ?? 0
-        networkGeneration = try values.decodeIfPresent(UInt64.self, forKey: .networkGeneration) ?? 0
-        state = try values.decodeIfPresent(String.self, forKey: .state) ?? "IDLE"
-        primaryAction = try values.decodeIfPresent(String.self, forKey: .primaryAction) ?? "NONE"
-        vpnActive = try values.decodeIfPresent(Bool.self, forKey: .vpnActive) ?? false
-        canRetry = try values.decodeIfPresent(Bool.self, forKey: .canRetry) ?? false
-        configured = try values.decodeIfPresent(Bool.self, forKey: .configured) ?? false
-        sourceURL = try values.decodeIfPresent(String.self, forKey: .sourceURL) ?? ""
-        sourceError = try values.decodeIfPresent(String.self, forKey: .sourceError) ?? ""
+        _ = try values.decode(String.self, forKey: .serviceVersion)
+        _ = try values.decode(String.self, forKey: .sourceKind)
+        _ = try values.decode(Bool.self, forKey: .cleanupComplete)
+        if values.contains(.serviceRestorePending) {
+            _ = try values.decode(Bool.self, forKey: .serviceRestorePending)
+        }
+        sessionID = try values.decode(String.self, forKey: .sessionID)
+        sequence = try values.decode(Int64.self, forKey: .sequence)
+        generation = try values.decode(Int64.self, forKey: .generation)
+        networkGeneration = try values.decode(UInt64.self, forKey: .networkGeneration)
+        guard sequence >= 0, generation >= 0 else { throw DobbyClientError.invalidResponse }
+        state = try values.decode(String.self, forKey: .state)
+        primaryAction = try values.decode(String.self, forKey: .primaryAction)
+        vpnActive = try values.decode(Bool.self, forKey: .vpnActive)
+        canRetry = try values.decode(Bool.self, forKey: .canRetry)
+        configured = try values.decode(Bool.self, forKey: .configured)
+        sourceURL = values.contains(.sourceURL) ? try values.decode(String.self, forKey: .sourceURL) : ""
+        sourceError = values.contains(.sourceError) ? try values.decode(String.self, forKey: .sourceError) : ""
         activeProfile = try values.decodeIfPresent(DobbyProfile.self, forKey: .activeProfile)
         lastFailure = try values.decodeIfPresent(DobbyFailure.self, forKey: .lastFailure)
-        recovering = try values.decodeIfPresent(Bool.self, forKey: .recovering) ?? false
-        digest = try values.decodeIfPresent(String.self, forKey: .digest) ?? ""
-        profiles = try values.decodeIfPresent([DobbyProfile].self, forKey: .profiles) ?? []
-        activeDigest = try values.decodeIfPresent(String.self, forKey: .activeDigest) ?? ""
-        activeMode = try values.decodeIfPresent(String.self, forKey: .activeMode) ?? ""
-        activeIndex = try values.decodeIfPresent(Int.self, forKey: .activeIndex) ?? 0
+        recovering = try values.decode(Bool.self, forKey: .recovering)
+        digest = try values.decode(String.self, forKey: .digest)
+        profiles = try values.decode([DobbyProfile].self, forKey: .profiles)
+        activeDigest = try values.decode(String.self, forKey: .activeDigest)
+        activeMode = try values.decode(String.self, forKey: .activeMode)
+        activeIndex = try values.decode(Int.self, forKey: .activeIndex)
         pendingTarget = try values.decodeIfPresent(DobbySelection.self, forKey: .pendingTarget)
-        canSwitch = try values.decodeIfPresent(Bool.self, forKey: .canSwitch) ?? false
-        logsUploadAvailable = try values.decodeIfPresent(Bool.self, forKey: .logsUploadAvailable) ?? false
+        canSwitch = try values.decode(Bool.self, forKey: .canSwitch)
+        logsUploadAvailable = try values.decode(Bool.self, forKey: .logsUploadAvailable)
     }
 
     public init(
@@ -145,9 +156,9 @@ public struct DobbyProfile: Decodable, Sendable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        index = try values.decodeIfPresent(Int.self, forKey: .index) ?? 0
-        protocolName = try values.decodeIfPresent(String.self, forKey: .protocolName) ?? ""
-        description = try values.decodeIfPresent(String.self, forKey: .description) ?? ""
+        index = try values.decode(Int.self, forKey: .index)
+        protocolName = try values.decode(String.self, forKey: .protocolName)
+        description = try values.decode(String.self, forKey: .description)
     }
 }
 

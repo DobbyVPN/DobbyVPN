@@ -162,7 +162,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public var inventoryReady: Bool {
-        snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && loadError.isEmpty
+        snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && (loadError.isEmpty || snapshot.sourceURL == sourceText)
     }
 
     private var protectedRetryState: Bool {
@@ -324,7 +324,13 @@ public final class DobbySessionViewModel: ObservableObject {
                 if revision == self.loadRevision {
                     switch result {
                     case let .success(sequence): self.acceptedSequence = sequence; self.markSourceAccepted(source)
-                    case let .failure(failure): self.loadError = failure.localizedDescription
+                    case let .failure(failure):
+                        let accepted = self.snapshot.sourceURL
+                        let sameSource = self.snapshot.configured && !accepted.isEmpty && accepted == source
+                        if sameSource { self.sourceIsDirty = false }
+                        let owner = self.snapshot.configured && !sameSource && !accepted.isEmpty
+                            ? " Showing profiles from \(accepted)." : ""
+                        self.loadError = "Could not load \(source): \(failure.localizedDescription).\(owner)"
                     }
                 }
                 self.refreshSnapshot()
