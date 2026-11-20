@@ -117,7 +117,7 @@ func (s FileSourceStore) Clear(ctx context.Context) error {
 // RemoveInstallation clears the saved selection before removing its source.
 func (s FileSourceStore) RemoveInstallation(ctx context.Context) error {
 	activation := s
-	activation.Path += ".activation.json"
+	activation.Path += activationSuffix
 	if err := activation.Clear(ctx); err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -25,6 +26,7 @@ type WindowsServiceProtection struct {
 	mu                 sync.Mutex
 	provider, sublayer windows.GUID
 	active             *WindowsNetworkGuard
+	restore            *WindowsNetworkGuard
 	retain             bool
 }
 
@@ -63,10 +65,10 @@ var (
 	filterEnumDestroy = fwpuclnt.NewProc("FwpmFilterDestroyEnumHandle0")
 )
 
-func (p *WindowsServiceProtection) openEngine() (*WindowsNetworkGuard, error) {
+func (p *WindowsServiceProtection) openEngine(flags uint32) (*WindowsNetworkGuard, error) {
 	g := &WindowsNetworkGuard{policy: p, sublayerKey: p.sublayer}
 	name, _ := windows.UTF16PtrFromString("DobbyVPN network protection")
-	session := fwpmSession{displayData: fwpmDisplayData{name: name}}
+	session := fwpmSession{flags: flags, displayData: fwpmDisplayData{name: name}}
 	_, err := windowsDNSWFPCall(windowsDNSWFP.engineOpen, "FwpmEngineOpen0", 0, wfpAuthnWinNT, 0, uintptr(unsafe.Pointer(&session)), uintptr(unsafe.Pointer(&g.engine)))
 	runtime.KeepAlive(&session)
 	if err != nil || g.engine == 0 {
@@ -191,7 +193,7 @@ func (g *WindowsNetworkGuard) reconcile(retainBase bool) error {
 }
 
 func (p *WindowsServiceProtection) reconcileDetached(ctx context.Context, retain bool) (owned bool, err error) {
-	g, err := p.openEngine()
+	g, err := p.openEngine(0)
 	if err != nil {
 		return false, err
 	}
@@ -207,6 +209,56 @@ func (p *WindowsServiceProtection) reconcileDetached(ctx context.Context, retain
 	return owned, err
 }
 
+// OpenRestoreGuard permits a subscription fetch while the previous tunnel is
+// absent. Its dynamic WFP session removes its filters on close or process loss.
+func (p *WindowsServiceProtection) OpenRestoreGuard(ctx context.Context) (*WindowsNetworkGuard, func() error, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if !p.retain || p.active != nil || p.restore != nil {
+		return nil, nil, errors.New("retained WFP policy unavailable for subscription recovery")
+	}
+	const fwpmSessionFlagDynamic = 1
+	g, err := p.openEngine(fwpmSessionFlagDynamic)
+	if err != nil {
+		return nil, nil, err
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		g.appID, err = windowsApplicationID(exe)
+	}
+	if err != nil {
+		return nil, nil, errors.Join(err, g.closeEngine())
+	}
+	g.attempts = make(map[uint64]map[string]uint64)
+	p.restore = g
+	release := func() error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.restore != g {
+			return nil
+		}
+		return p.closeRestoreLocked()
+	}
+	return g, release, nil
+}
+
+func (p *WindowsServiceProtection) closeRestoreLocked() error {
+	g := p.restore
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err := g.closeEngine(); err != nil {
+		return err
+	}
+	p.restore = nil
+	return nil
+}
+
 func (p *WindowsServiceProtection) Recover(ctx context.Context) (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -219,6 +271,11 @@ func (p *WindowsServiceProtection) SetEnabled(ctx context.Context, enabled bool)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.retain = enabled
+	if !enabled {
+		if err := p.closeRestoreLocked(); err != nil {
+			return err
+		}
+	}
 	if enabled || p.active != nil {
 		return nil
 	}

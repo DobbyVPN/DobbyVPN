@@ -188,7 +188,10 @@ func (policy *WindowsServiceProtection) open(tunnelLUID uint64) (*WindowsNetwork
 	if policy.active != nil {
 		return nil, errors.New("Windows network protection is already active")
 	}
-	g, err := policy.openEngine()
+	if err := policy.closeRestoreLocked(); err != nil {
+		return nil, err
+	}
+	g, err := policy.openEngine(0)
 	if err != nil {
 		return nil, err
 	}

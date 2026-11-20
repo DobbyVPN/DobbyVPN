@@ -86,9 +86,9 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 	}
 	g.table = &nftables.Table{Name: linuxGuardTable, Family: nftables.TableFamilyINet}
 	err = g.operation(ctx, func() error {
-		existing, err := ownedLinuxGuardTable(g.conn)
-		if err != nil {
-			return err
+		existing, inspectErr := ownedLinuxGuardTable(g.conn)
+		if inspectErr != nil {
+			return inspectErr
 		}
 		if existing != nil {
 			// Both operations belong to one nftables batch. The kernel sees
@@ -107,7 +107,7 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 			}
 		}
 		priority := nftables.ChainPriorityMangle
-		g.bootstrap = g.conn.AddChain(&nftables.Chain{Table: g.table, Name: "bootstrap", Type: nftables.ChainTypeRoute, Hooknum: nftables.ChainHookOutput, Priority: priority})
+		g.bootstrap = g.conn.AddChain(&nftables.Chain{Table: g.table, Name: linuxBootstrapChain, Type: nftables.ChainTypeRoute, Hooknum: nftables.ChainHookOutput, Priority: priority})
 		g.addLinkMaintenanceRules()
 		policy := nftables.ChainPolicyDrop
 		output := g.conn.AddChain(&nftables.Chain{Table: g.table, Name: "protect", Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityFilter, Policy: &policy})
@@ -123,8 +123,8 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 			Exprs:    []expr.Any{&expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop}},
 			UserData: userdata.AppendString(nil, userdata.TypeComment, linuxGuardOwner),
 		})
-		if err := g.conn.Flush(); err != nil {
-			return err
+		if flushErr := g.conn.Flush(); flushErr != nil {
+			return flushErr
 		}
 		g.created = true
 		linuxGuardLifetime.active = g

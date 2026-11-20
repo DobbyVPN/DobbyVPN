@@ -56,17 +56,17 @@ func decodeValue(raw json.RawMessage, target reflect.Value) error {
 		}
 		return fmt.Errorf("unexpected null for %s", target.Type())
 	}
-	switch target.Kind() {
-	case reflect.Pointer:
+	switch {
+	case target.Kind() == reflect.Pointer:
 		target.Set(reflect.New(target.Type().Elem()))
 		return decodeValue(raw, target.Elem())
-	case reflect.Struct:
+	case target.Kind() == reflect.Struct:
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &fields); err != nil {
 			return err
 		}
 		return decodeFields(fields, target)
-	case reflect.Slice:
+	case target.Kind() == reflect.Slice:
 		var rows []json.RawMessage
 		if err := json.Unmarshal(raw, &rows); err != nil {
 			return err

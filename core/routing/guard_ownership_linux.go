@@ -7,17 +7,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	nl "github.com/mdlayher/netlink"
 	"sync"
+
+	nl "github.com/mdlayher/netlink"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/userdata"
 )
 
 const (
-	linuxGuardResolver = "DobbyVPN physical resolver"
-	linuxGuardTable    = "dobbyvpn_guard"
-	linuxGuardOwner    = "DobbyVPN output guard schema 1"
+	linuxBootstrapChain = "bootstrap"
+	linuxGuardResolver  = "DobbyVPN physical resolver"
+	linuxGuardTable     = "dobbyvpn_guard"
+	linuxGuardOwner     = "DobbyVPN output guard schema 1"
 )
 
 // A shared name alone grants no authority over a kernel object. Check the
@@ -48,7 +50,7 @@ func verifyLinuxGuardSchema(conn *nftables.Conn, table *nftables.Table) error {
 		return err
 	}
 	for _, chain := range chains {
-		if chain.Table.Name == table.Name && chain.Name != "protect" && chain.Name != "bootstrap" {
+		if chain.Table.Name == table.Name && chain.Name != "protect" && chain.Name != linuxBootstrapChain {
 			return fmt.Errorf("unexpected chain %s", chain.Name)
 		}
 	}
@@ -56,18 +58,40 @@ func verifyLinuxGuardSchema(conn *nftables.Conn, table *nftables.Table) error {
 	if err != nil {
 		return err
 	}
+	bootstrap, err := conn.ListChain(table, linuxBootstrapChain)
+	if err != nil {
+		return err
+	}
+	if schemaErr := validateLinuxBaseChains(protect, bootstrap); schemaErr != nil {
+		return schemaErr
+	}
+	if setErr := verifyLinuxGuardSets(conn, table); setErr != nil {
+		return setErr
+	}
+	rules, err := conn.GetRules(table, protect)
+	if err != nil {
+		return err
+	}
+	marker := userdata.AppendString(nil, userdata.TypeComment, linuxGuardOwner)
+	if len(rules) == 0 || !bytes.Equal(rules[len(rules)-1].UserData, marker) {
+		return fmt.Errorf("missing DobbyVPN ownership marker")
+	}
+	return nil
+}
+
+func validateLinuxBaseChains(protect, bootstrap *nftables.Chain) error {
 	if protect.Type != nftables.ChainTypeFilter || protect.Hooknum == nil || *protect.Hooknum != *nftables.ChainHookOutput ||
 		protect.Policy == nil || *protect.Policy != nftables.ChainPolicyDrop || protect.Priority == nil || *protect.Priority != *nftables.ChainPriorityFilter {
 		return fmt.Errorf("unexpected protect chain schema")
-	}
-	bootstrap, err := conn.ListChain(table, "bootstrap")
-	if err != nil {
-		return err
 	}
 	if bootstrap.Type != nftables.ChainTypeRoute || bootstrap.Hooknum == nil || *bootstrap.Hooknum != *nftables.ChainHookOutput ||
 		bootstrap.Priority == nil || *bootstrap.Priority != *nftables.ChainPriorityMangle {
 		return fmt.Errorf("unexpected bootstrap chain schema")
 	}
+	return nil
+}
+
+func verifyLinuxGuardSets(conn *nftables.Conn, table *nftables.Table) error {
 	sets, err := conn.GetSets(table)
 	if err != nil {
 		return err
@@ -82,14 +106,6 @@ func verifyLinuxGuardSchema(conn *nftables.Conn, table *nftables.Table) error {
 	}
 	if len(known) != 0 {
 		return fmt.Errorf("missing address sets")
-	}
-	rules, err := conn.GetRules(table, protect)
-	if err != nil {
-		return err
-	}
-	marker := userdata.AppendString(nil, userdata.TypeComment, linuxGuardOwner)
-	if len(rules) == 0 || !bytes.Equal(rules[len(rules)-1].UserData, marker) {
-		return fmt.Errorf("missing DobbyVPN ownership marker")
 	}
 	return nil
 }
@@ -164,7 +180,7 @@ func clearLinuxGuardAllowances(conn *nftables.Conn, table *nftables.Table) error
 	if err != nil {
 		return err
 	}
-	bootstrap := &nftables.Chain{Table: table, Name: "bootstrap"}
+	bootstrap := &nftables.Chain{Table: table, Name: linuxBootstrapChain}
 	rules, err := conn.GetRules(table, bootstrap)
 	if err != nil {
 		return err

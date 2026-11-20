@@ -4,11 +4,12 @@ import (
 	"core/iprange"
 	"errors"
 	"fmt"
-	"go4.org/netipx"
 	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
+
+	"go4.org/netipx"
 )
 
 // MacOSPFAnchor is evaluated by the stock `anchor "com.apple/*"` rule of
@@ -101,6 +102,8 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Pref
 }
 
 // pfPrefixes converts merged inclusive ranges to the CIDRs accepted by pfctl.
+//
+//nolint:unused // Used by the Darwin PF backend and shared policy tests.
 func pfPrefixes(configured, hosts *iprange.Set) []netip.Prefix {
 	all := configured
 	if configured.Len() == 0 {

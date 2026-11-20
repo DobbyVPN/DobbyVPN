@@ -26,7 +26,7 @@ import (
 var (
 	engineMu              sync.Mutex
 	activeEngine          *Engine
-	activeFlowDiagnostics       atomic.Pointer[DobbyProxy]
+	activeFlowDiagnostics atomic.Pointer[DobbyProxy]
 	stopOperationSequence atomic.Uint64
 )
 

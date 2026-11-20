@@ -135,7 +135,7 @@ func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64,
 // A restored connection can refresh its inventory in place once connectivity
 // returns. Fetch outside the lock and fence the write exactly like user loads.
 func (m *Manager) refreshAfterOfflineRestore(ctx context.Context, source string, epoch, generation uint64) {
-	loaded, parsed, err := m.loadConfig(ctx, []byte(source))
+	loaded, parsed, err := loadConfig(ctx, m.loader, []byte(source))
 	s := m.session
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -150,6 +150,6 @@ func (m *Manager) refreshAfterOfflineRestore(ctx context.Context, source string,
 		_, err = m.acceptConfigurationLocked(ctx, s, loaded, parsed, false)
 	}
 	if err != nil {
-		log.Error("sessionapi", "offline inventory refresh failed", map[string]any{"generation": generation, "failure_code": string(CodeOf(err))})
+		log.Error("sessionapi", "offline inventory refresh failed", map[string]any{logGeneration: generation, "failure_code": string(CodeOf(err))})
 	}
 }

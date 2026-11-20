@@ -7,16 +7,18 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/google/nftables"
-	"github.com/google/nftables/expr"
-	nl "github.com/mdlayher/netlink"
-	"golang.org/x/sys/unix"
+	"math"
 	"net"
 	"net/netip"
 	"os"
 	"os/user"
 	"strconv"
 	"sync/atomic"
+
+	"github.com/google/nftables"
+	"github.com/google/nftables/expr"
+	nl "github.com/mdlayher/netlink"
+	"golang.org/x/sys/unix"
 )
 
 var resolverQueries atomic.Uint64
@@ -25,6 +27,9 @@ var resolverQueries atomic.Uint64
 // native lookup on the physical link. Closing its netlink socket, including
 // on service death, revokes the temporary rules independently of the base.
 func OpenLinuxResolverQuery(ctx context.Context, index, mark int, servers []netip.AddrPort) (func() error, error) {
+	if mark <= 0 || uint64(mark) > math.MaxUint32 {
+		return nil, errors.New("invalid physical DNS socket mark")
+	}
 	iface, err := net.InterfaceByIndex(index)
 	if err != nil {
 		return nil, err
@@ -41,6 +46,7 @@ func OpenLinuxResolverQuery(ctx context.Context, index, mark int, servers []neti
 	if err != nil {
 		return nil, err
 	}
+	uidBytes := binary.NativeEndian.AppendUint32(nil, uint32(uid)) // #nosec G115 -- ParseUint above is bounded to 32 bits.
 	g := &LinuxOutputGuard{mark: uint32(mark)}
 	g.conn, err = nftables.New(nftables.AsLasting(), nftables.WithSockOptions(func(socket *nl.Conn) error { g.socket = socket; return nil }))
 	if err != nil {
@@ -48,14 +54,14 @@ func OpenLinuxResolverQuery(ctx context.Context, index, mark int, servers []neti
 	}
 	g.table = &nftables.Table{Name: fmt.Sprintf("dobbyvpn_dns_%d_%d", os.Getpid(), resolverQueries.Add(1)), Family: nftables.TableFamilyINet}
 	err = g.operation(ctx, func() error {
-		if err := createLinuxOwnerTable(g.socket, g.table); err != nil {
-			return err
+		if createErr := createLinuxOwnerTable(g.socket, g.table); createErr != nil {
+			return createErr
 		}
 		g.bootstrap = g.conn.AddChain(&nftables.Chain{Table: g.table, Name: "resolve", Type: nftables.ChainTypeRoute, Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityMangle})
 		for _, address := range local {
-			prefix, err := netip.ParsePrefix(address.String())
-			if err != nil {
-				return err
+			prefix, parseErr := netip.ParsePrefix(address.String())
+			if parseErr != nil {
+				return parseErr
 			}
 			for _, server := range servers {
 				ip := server.Addr().WithZone("").Unmap()
@@ -66,7 +72,8 @@ func OpenLinuxResolverQuery(ctx context.Context, index, mark int, servers []neti
 					protocol byte
 					port     uint16
 				}{{unix.IPPROTO_TCP, server.Port()}, {unix.IPPROTO_UDP, server.Port()}, {unix.IPPROTO_TCP, 853}} {
-					matches := []expr.Any{&expr.Meta{Key: expr.MetaKeySKUID, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: native32(uint32(uid))}}
+					matches := make([]expr.Any, 0, 17)
+					matches = append(matches, &expr.Meta{Key: expr.MetaKeySKUID, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: uidBytes})
 					matches = append(matches, matchIP(prefix.Addr(), true)...)
 					matches = append(matches, matchIP(ip, false)...)
 					matches = append(matches, matchProtocol(endpoint.protocol)...)

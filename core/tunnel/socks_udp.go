@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/log"
+
 	"github.com/xjasonlyu/tun2socks/v2/buffer"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"

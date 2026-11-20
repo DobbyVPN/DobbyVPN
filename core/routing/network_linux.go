@@ -38,7 +38,7 @@ func LinuxPhysicalInterface(tunName string) (int, error) {
 			}
 		}
 	}
-	return 0, errors.New("no physical IPv4 or IPv6 default route")
+	return 0, fmt.Errorf("no physical IPv4 or IPv6 default route: %w", unix.ENETUNREACH)
 }
 
 // AcquireLinuxNetwork routes application traffic through one retained TUN.

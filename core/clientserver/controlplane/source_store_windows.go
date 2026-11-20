@@ -4,9 +4,10 @@ package controlplane
 
 import (
 	"fmt"
-	"golang.org/x/sys/windows"
 	"os/user"
 	"path/filepath"
+
+	"golang.org/x/sys/windows"
 
 	"core/sessionapi"
 )

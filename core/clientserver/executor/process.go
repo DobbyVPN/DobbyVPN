@@ -12,6 +12,7 @@ import (
 	"core/clientserver/controlplane"
 	"core/sessionapi"
 	"core/sessionapi/mobilebinding"
+	"core/sessionapi/runtime"
 	"core/sessionapi/runtimebridge"
 )
 
@@ -70,6 +71,7 @@ func desktopProcessBinding() *mobilebinding.Binding {
 		manager := sessionapi.NewManager(sessionapi.ManagerOptions{
 			Runtime:        runtimebridge.New(nil),
 			SourceStore:    sourceStore,
+			RestoreLoader:  runtime.ProtectedRestoreLoader(),
 			StartupFailure: startupFailure,
 			Protection:     desktopProtection, RetainedProtection: retainedProtection,
 		})

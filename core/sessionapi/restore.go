@@ -9,6 +9,8 @@ import (
 	"core/log"
 )
 
+const activationSuffix = ".activation.json"
+
 // ActivationStore persists Go-owned selection intent for OS-started mobile
 // restoration. Native storage never interprets profiles or chooses a protocol.
 type ActivationStore interface {
@@ -26,11 +28,11 @@ type savedActivation struct {
 }
 
 func (s FileSourceStore) LoadActivation(ctx context.Context) ([]byte, error) {
-	s.Path += ".activation.json"
+	s.Path += activationSuffix
 	return s.Load(ctx)
 }
 func (s FileSourceStore) SaveActivation(ctx context.Context, raw []byte) error {
-	s.Path += ".activation.json"
+	s.Path += activationSuffix
 	return s.Save(ctx, raw)
 }
 
@@ -135,31 +137,14 @@ func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool
 		return StartResult{}, failureWithCause(FailurePlatform, "saved activation could not be read", err)
 	}
 	saved, err := decodeActivation(raw)
-	if len(raw) == 0 && m.protection != nil {
-		s.mu.Lock()
-		retained := s.retainedProtection
-		s.mu.Unlock()
-		if retained {
-			return StartResult{}, failure(FailurePlatform, "VPN protection is still active, but its saved activation is missing. Stop to restore ordinary connectivity.")
-		}
+	if len(raw) == 0 && m.hasRetainedProtection() {
+		return StartResult{}, failure(FailurePlatform, "VPN protection is still active, but its saved activation is missing. Stop to restore ordinary connectivity.")
 	}
 	if err != nil {
 		return StartResult{}, err
 	}
 	if !saved.Enabled && (onlyPreviouslyEnabled || saved.Version == 1 || saved.Source == "") {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.restoreEpoch != epoch {
-			return StartResult{}, failure(FailureConflict, "automatic startup was superseded")
-		}
-		if s.retainedProtection && m.protection != nil {
-			if err := m.protection.SetEnabled(ctx, false); err != nil {
-				return StartResult{}, err
-			}
-			s.retainedProtection = false
-			m.appendLocked(s)
-		}
-		return StartResult{}, nil
+		return StartResult{}, m.reconcileDisabledRestore(ctx, s, epoch)
 	}
 	configured, err := m.configure(ctx, sessionID, sequence, []byte(saved.Source), &epoch)
 	if err != nil {
@@ -175,6 +160,28 @@ func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool
 		return result, err
 	}
 	return result, waitForRestoredNetwork(ctx, s, result.Generation)
+}
+
+func (m *Manager) hasRetainedProtection() bool {
+	s := m.session
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return m.protection != nil && s.retainedProtection
+}
+func (m *Manager) reconcileDisabledRestore(ctx context.Context, s *session, epoch uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restoreEpoch != epoch {
+		return failure(FailureConflict, "automatic startup was superseded")
+	}
+	if s.retainedProtection && m.protection != nil {
+		if err := m.protection.SetEnabled(ctx, false); err != nil {
+			return err
+		}
+		s.retainedProtection = false
+		m.appendLocked(s)
+	}
+	return nil
 }
 
 func waitForRestoredNetwork(ctx context.Context, s *session, expectedGeneration uint64) error {

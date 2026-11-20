@@ -73,7 +73,7 @@ func secureAcceptedDirectory(dir string, serviceDirectory bool) error {
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
 		return errors.New("accepted configuration directory is not private")
 	}
 	return nil
@@ -82,7 +82,7 @@ func secureAcceptedDirectory(dir string, serviceDirectory bool) error {
 func (s FileSourceStore) verifyAcceptedAccess(_ *os.File, info os.FileInfo) error {
 	owner := s.DirectoryOwner
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Nlink != 1 || info.Mode().Perm()&0077 != 0 || owner != nil && int(stat.Uid) != owner.UID {
+	if !ok || stat.Nlink != 1 || info.Mode().Perm()&0o077 != 0 || owner != nil && int(stat.Uid) != owner.UID {
 		return errors.New("accepted configuration has unexpected permissions or ownership")
 	}
 	return nil

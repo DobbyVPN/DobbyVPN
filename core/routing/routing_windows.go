@@ -233,7 +233,7 @@ func WindowsPhysicalInterfacesPreferred(preferred4, preferred6 uint64) (ipv4, ip
 		}
 	}
 	if ipv4 == 0 && ipv6 == 0 {
-		return 0, 0, errors.New("no active physical IPv4 or IPv6 default route")
+		return 0, 0, fmt.Errorf("no active physical IPv4 or IPv6 default route: %w", windows.WSAENETUNREACH)
 	}
 	return ipv4, ipv6, nil
 }
