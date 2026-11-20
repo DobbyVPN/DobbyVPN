@@ -549,6 +549,10 @@ func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, configured, hosts
 			return err
 		}
 		for _, r := range append(configured.Ranges(), hosts.Ranges()...) {
+			// A cancelled attach stops here; the transaction is aborted.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			c, layer := excludedRangeConditions(r, g.appID)
 			id, err := g.add("Excluded range", layer, wfpActionPermit, 15, c)
 			if err != nil {

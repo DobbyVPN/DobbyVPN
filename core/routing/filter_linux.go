@@ -225,6 +225,10 @@ func (g *LinuxOutputGuard) SetExcluded(ctx context.Context, configured, hosts *i
 		return err
 	}
 	return g.operation(ctx, func() error {
+		// A Flush that fails after sending, for example when the context ends
+		// while it waits for the acknowledgement, may still have changed the
+		// sets; forget the cached hash so the next call applies them again.
+		g.excludedHash = ""
 		for _, update := range []struct {
 			set      *nftables.Set
 			elements []nftables.SetElement
