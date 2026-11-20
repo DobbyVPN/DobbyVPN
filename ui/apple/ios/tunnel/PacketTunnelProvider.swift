@@ -97,8 +97,13 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
         return SharedKeychainSecretStore.shared.set(value, for: SharedKeychainSecretStore.activationKey)
     }
 
-    func loadAcceptedRecord() throws -> String {
-        try DobbyConfigsRepositoryImpl.shared.loadAcceptedRecord()
+    func loadAcceptedRecord(_ errorPointer: NSErrorPointer) -> String {
+        do {
+            return try DobbyConfigsRepositoryImpl.shared.loadAcceptedRecord()
+        } catch {
+            errorPointer?.pointee = error as NSError
+            return ""
+        }
     }
 
     func saveAcceptedRecord(_ value: String?) throws {
