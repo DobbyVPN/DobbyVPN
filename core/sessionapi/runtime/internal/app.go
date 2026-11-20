@@ -44,7 +44,7 @@ type App struct {
 	// Guard, when set, is told each attempt's excluded addresses (Linux and
 	// Windows).
 	Guard interface {
-		SetExcluded(context.Context, *iprange.Set) error
+		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
 	}
 	RoutingConfig *RoutingConfig
 }

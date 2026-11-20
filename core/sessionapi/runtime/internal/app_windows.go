@@ -73,7 +73,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	if excluded, ok := guard.(interface {
-		SetExcluded(context.Context, *iprange.Set) error
+		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
 	}); ok {
 		app.Guard = excluded
 	}

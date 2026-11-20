@@ -41,9 +41,12 @@ func PrefixRange(prefix netip.Prefix) Range {
 
 // Set is immutable after New and safe for concurrent use. A nil Set is empty.
 type Set struct {
-	v4 []range4
-	v6 []range6
+	v4   []range4
+	v6   []range6
+	hash string
 }
+
+var emptyHash = (&Set{}).computeHash()
 
 type range4 struct{ first, last uint32 }
 
@@ -81,7 +84,7 @@ func New(ranges []Range) *Set {
 		}
 		merged4 = append(merged4, r)
 	}
-	s.v4 = slices.Clip(merged4)
+	s.v4 = exact(merged4)
 	slices.SortFunc(s.v6, func(a, b range6) int { return a.first.compare(b.first) })
 	merged6 := s.v6[:0]
 	for _, r := range s.v6 {
@@ -98,8 +101,18 @@ func New(ranges []Range) *Set {
 			merged6[n-1].last = r.last
 		}
 	}
-	s.v6 = slices.Clip(merged6)
+	s.v6 = exact(merged6)
+	s.hash = s.computeHash()
 	return s
+}
+
+// exact copies merged ranges into an array of their own length, so the
+// array sized for the unmerged input is freed.
+func exact[T any](merged []T) []T {
+	if len(merged) == cap(merged) {
+		return merged
+	}
+	return append(make([]T, 0, len(merged)), merged...)
 }
 
 // Contains reports whether the address is in the set. IPv4-mapped IPv6
@@ -175,8 +188,16 @@ func (s *Set) Addresses(within netip.Prefix) *big.Int {
 	return total
 }
 
-// Hash identifies the set in logs without listing its ranges.
+// Hash identifies the set in logs and firewall updates without listing its
+// ranges. It is computed once by New.
 func (s *Set) Hash() string {
+	if s == nil {
+		return emptyHash
+	}
+	return s.hash
+}
+
+func (s *Set) computeHash() string {
 	hash := sha256.New()
 	for _, r := range s.Ranges() {
 		hash.Write(r.First.AsSlice())

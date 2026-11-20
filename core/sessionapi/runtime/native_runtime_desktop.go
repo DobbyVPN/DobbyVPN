@@ -279,12 +279,13 @@ func (c *nativeRuntime) Attach(ctx context.Context, generation uint64, address s
 	if c.app.Guard == nil {
 		return c.app.Engine.Attach(ctx, generation, address, cache, bypass)
 	}
-	err := c.app.Guard.SetExcluded(ctx, bypass.Excluded())
+	configured, hosts := bypass.Excluded()
+	err := c.app.Guard.SetExcluded(ctx, configured, hosts)
 	if err == nil {
 		err = c.app.Engine.Attach(ctx, generation, address, cache, bypass)
 	}
 	if err != nil {
-		err = errors.Join(err, c.app.Guard.SetExcluded(sessionapi.CleanupContext(ctx), nil))
+		err = errors.Join(err, c.app.Guard.SetExcluded(sessionapi.CleanupContext(ctx), nil, nil))
 	}
 	return err
 }
