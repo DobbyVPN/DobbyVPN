@@ -279,7 +279,7 @@ func (c *nativeRuntime) Attach(ctx context.Context, generation uint64, address s
 	if c.app.Guard == nil {
 		return c.app.Engine.Attach(ctx, generation, address, cache, bypass)
 	}
-	err := c.app.Guard.SetExcluded(ctx, bypass.ExcludedCIDRs())
+	err := c.app.Guard.SetExcluded(ctx, bypass.Excluded())
 	if err == nil {
 		err = c.app.Engine.Attach(ctx, generation, address, cache, bypass)
 	}
