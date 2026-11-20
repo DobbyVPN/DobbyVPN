@@ -52,6 +52,8 @@
 					Arguments="-mode=service" >
 				<ServiceDependency Id="Nsi" />
 				<ServiceDependency Id="TcpIp" />
+				<!-- Match the Go cleanup budget without reconfiguring SCM during automatic startup. -->
+				<ServiceConfig PreShutdownDelay="30000" OnInstall="yes" OnReinstall="yes" />
 				<util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
 					ThirdFailureActionType="restart" RestartServiceDelayInSeconds="1" ResetPeriodInDays="1" />
 			</ServiceInstall>

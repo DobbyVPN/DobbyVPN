@@ -13,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"core/clientserver/controljson"
 	"core/clientserver/controlplane"
@@ -22,11 +21,10 @@ import (
 
 	"core/log"
 
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 )
 
-type managerService struct{}
+type managerService struct{ initLog func() error }
 
 func prepareDesktopControl() (net.Listener, error) {
 	return prepareDesktopControlWith(
@@ -131,6 +129,11 @@ func prepareLocalLogPath() (string, error) {
 
 func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
 	changes <- svc.Status{State: svc.StartPending}
+	if err := service.initLog(); err != nil {
+		reportStartupFailure("initialize local logging", err, true)
+		return true, 1
+	}
+	log.Infof(desktopLogCategory, "Windows service dispatcher connected, preparing desktop control")
 	listener, err := prepareDesktopControl()
 	if err != nil {
 		log.Errorf(desktopLogCategory, "failed to prepare desktop control: %v", err)
@@ -171,46 +174,7 @@ running:
 }
 
 func runService() error {
-	return runServiceWith(configureServiceShutdownBudget, func() error {
-		return svc.Run("DobbyVPN Go backend", &managerService{})
-	})
-}
-
-// A nil result from run means the SCM handler ran; failures inside it are
-// reported through the service exit code, not here.
-func runServiceWith(configureBudget, run func() error) error {
-	if err := configureBudget(); err != nil {
-		return fmt.Errorf("configure service shutdown budget: %w", err)
-	}
-	if err := run(); err != nil {
-		return fmt.Errorf("run service dispatcher: %w", err)
-	}
-	return nil
-}
-
-// Ordinary shutdown notification can force termination before the Go owner's
-// cleanup deadline. Request the same bounded interval in SCM's preshutdown phase.
-func configureServiceShutdownBudget() (resultErr error) {
-	manager, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
-	if err != nil {
-		return fmt.Errorf("open service manager for shutdown budget: %w", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, windows.CloseServiceHandle(manager)) }()
-	name, err := windows.UTF16PtrFromString("DobbyVPN Go backend")
-	if err != nil {
-		return err
-	}
-	service, err := windows.OpenService(manager, name, windows.SERVICE_CHANGE_CONFIG)
-	if err != nil {
-		return fmt.Errorf("open backend service for shutdown budget: %w", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, windows.CloseServiceHandle(service)) }()
-	// SERVICE_PRESHUTDOWN_INFO contains one DWORD timeout in milliseconds.
-	budget := uint32(sessionapi.CleanupTimeout / time.Millisecond)
-	if err := windows.ChangeServiceConfig2(service, windows.SERVICE_CONFIG_PRESHUTDOWN_INFO, (*byte)(unsafe.Pointer(&budget))); err != nil {
-		return fmt.Errorf("configure backend preshutdown budget: %w", err)
-	}
-	return nil
+	return svc.Run("DobbyVPN Go backend", &managerService{initLog: initExplicitLocalLog})
 }
 
 func run() {
@@ -242,8 +206,16 @@ func (c *Executor) Execute(mode string) {
 // executeWith returns the process exit code. Only failures before or outside
 // the SCM handler are non-zero.
 func executeWith(mode string, initLog func() error, runNormal func(), runServiceMode func() error) int {
+	if mode == "service" {
+		// SCM waits for the dispatcher while starting automatic services.
+		// Configuration belongs to the installer, logging to the registered handler.
+		if err := runServiceMode(); err != nil {
+			return reportStartupFailure("run service dispatcher", err, true)
+		}
+		return 0
+	}
 	if err := initLog(); err != nil {
-		return reportStartupFailure("initialize local logging", err, mode == "service")
+		return reportStartupFailure("initialize local logging", err, false)
 	}
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)
 
@@ -254,11 +226,6 @@ func executeWith(mode string, initLog func() error, runNormal func(), runService
 		}
 	case "normal":
 		runNormal()
-	case "service":
-		if err := runServiceMode(); err != nil {
-			log.Errorf(desktopLogCategory, "Go backend service failed: %v", err)
-			return reportStartupFailure("service", err, true)
-		}
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
 		return reportStartupFailure("select run mode", fmt.Errorf("invalid run mode %q", mode), false)
