@@ -188,27 +188,26 @@ var errSourceUnreachable = errors.New("subscription origin unreachable")
 // A failed local socket policy or cleanup must never authorize the cache.
 // A dial may aggregate errors from several addresses. Every cause must agree.
 func cacheEligibleDialFailure(err error) bool {
-	switch cause := err.(type) {
-	case interface{ Unwrap() []error }:
-		causes := cause.Unwrap()
+	var cleanup *CleanupFailure
+	if errors.As(err, &cleanup) {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
 		for _, nested := range causes {
 			if !cacheEligibleDialFailure(nested) {
 				return false
 			}
 		}
 		return len(causes) != 0
-	case *CleanupFailure:
-		return false
-	case *net.DNSError:
-		if nested := cause.Unwrap(); nested != nil {
-			return cacheEligibleDialFailure(nested)
-		}
-		return true
-	case interface{ Unwrap() error }:
-		return cacheEligibleDialFailure(cause.Unwrap())
 	}
-	errno, ok := err.(syscall.Errno)
-	return errors.Is(err, context.DeadlineExceeded) || ok && offlineSocketErrors[errno]
+	if nested := errors.Unwrap(err); nested != nil {
+		return cacheEligibleDialFailure(nested)
+	}
+	var dns *net.DNSError
+	var errno syscall.Errno
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &dns) ||
+		errors.As(err, &errno) && offlineSocketErrors[errno]
 }
 
 var offlineSocketErrors = map[syscall.Errno]bool{
