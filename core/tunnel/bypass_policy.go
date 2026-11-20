@@ -115,7 +115,6 @@ func (p *BypassPolicy) recordResolved() {
 
 func resolveRoutingEntriesWithResolver(ctx context.Context, entries []string, resolve func(context.Context, string) ([]net.IPAddr, error)) ([]*net.IPNet, error) {
 	var result []*net.IPNet
-	var errs []error
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -127,13 +126,15 @@ func resolveRoutingEntriesWithResolver(ctx context.Context, entries []string, re
 		}
 		resolved, err := resolveHostToCIDRsWithResolver(ctx, entry, resolve)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("resolve bypass host %q: %w", entry, err))
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, fmt.Errorf("resolve bypass host: %w", ctxErr)
+			}
+			// An ExcludeIPs mistake must not stop the VPN, so the host's
+			// traffic stays in the tunnel. The name is not logged.
+			log.Warn(Category, "ExcludeIPs: a host name could not be resolved and is ignored; its traffic stays in the VPN", nil)
 			continue
 		}
 		result = append(result, resolved...)
-	}
-	if len(errs) != 0 {
-		return nil, errors.Join(errs...)
 	}
 	return result, nil
 }
