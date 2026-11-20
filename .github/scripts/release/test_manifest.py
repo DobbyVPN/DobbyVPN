@@ -78,10 +78,20 @@ def validate_result(
         "source_sha", "build_manifest_sha256", "checks", "torturer_repository",
         "torturer_sha", "torturer_tree_sha256", "release_attempt_id", "android_pairing",
     }
+    if isinstance(result, dict) and result.get("schema") == 3:
+        expected_fields.add("private_qualification")
+        child = result.get("private_qualification")
+        if (not isinstance(child, dict) or set(child) != {"run_id", "run_attempt"}
+                or any(type(value) is not int or value < 1 for value in child.values())):
+            raise TestManifestError("Test result has invalid private workflow binding")
+    elif re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(build.get("version", ""))) and tuple(
+        int(part) for part in build["version"].split(".")
+    ) >= (1, 5, 15):
+        raise TestManifestError("Build requires a Test with private workflow coverage")
     if not isinstance(result, dict) or set(result) not in (expected_fields, expected_fields | {"run_attempt"}):
         raise TestManifestError("Test result has unexpected or missing fields")
     if (
-        type(result.get("schema")) is not int or result.get("schema") != 2
+        type(result.get("schema")) is not int or result.get("schema") not in (2, 3)
         or result.get("repository") != repository
         or not isinstance(repository, str) or not REPOSITORY_RE.fullmatch(repository)
     ):
