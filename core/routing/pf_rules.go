@@ -31,14 +31,16 @@ type PFDestination struct {
 // port 53, so DNS cannot bypass the tunnel through ExcludeIPs; the VPN
 // transport keeps port 53 even when the server is inside an excluded range.
 // Excluded networks (ExcludeIPs) are one table and one rule, so direct traffic
-// to them needs no per-connection rule and no reload.
+// to them needs no per-connection rule and no reload. The table is not
+// persistent: pf deletes it once a reload without excluded networks leaves no
+// rule referring to it.
 // Loopback and tunnel rules keep no state: connections that existed before
 // the anchor loaded continue there without a state entry.
 func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Prefix, destinations []PFDestination) string {
 	var b strings.Builder
 	b.WriteString("# DobbyVPN kill switch: outbound traffic leaves only through the tunnel.\n")
 	if len(excluded) > 0 {
-		b.WriteString("table <dobbyvpn_excluded> persist {")
+		b.WriteString("table <dobbyvpn_excluded> {")
 		for i, prefix := range excluded {
 			if i > 0 {
 				b.WriteString(",")
@@ -97,8 +99,8 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Pref
 	return b.String()
 }
 
-// MergePFPrefixes returns the networks as sorted prefixes without duplicates
-// and without networks nested in another one.
+// MergePFPrefixes returns the smallest sorted set of prefixes covering the
+// networks: duplicates and nested networks are dropped, adjacent ones joined.
 func MergePFPrefixes(networks []*net.IPNet) []netip.Prefix {
 	prefixes := make([]netip.Prefix, 0, len(networks))
 	for _, network := range networks {
@@ -132,6 +134,18 @@ func MergePFPrefixes(networks []*net.IPNet) []netip.Prefix {
 			continue
 		}
 		merged = append(merged, prefix)
+		// Two halves of one parent block become the parent, repeatedly.
+		for n := len(merged); n > 1; n = len(merged) {
+			low, high := merged[n-2], merged[n-1]
+			if low.Bits() != high.Bits() || low.Bits() == 0 || low == high {
+				break
+			}
+			parent := netip.PrefixFrom(low.Addr(), low.Bits()-1).Masked()
+			if parent != netip.PrefixFrom(high.Addr(), high.Bits()-1).Masked() {
+				break
+			}
+			merged = append(merged[:n-2], parent)
+		}
 	}
 	return merged
 }
