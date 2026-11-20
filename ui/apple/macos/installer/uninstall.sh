@@ -87,6 +87,10 @@ PF_ANCHOR="com.apple/dobbyvpn"
 PF_TOKEN="$CONTROL_DIRECTORY/pf.token"
 capture_command pf-flush /sbin/pfctl -a "$PF_ANCHOR" -F rules
 pf_flush_status="$CAPTURE_STATUS"
+if [ "$pf_flush_status" -eq 0 ]; then
+    capture_command pf-flush-tables /sbin/pfctl -a "$PF_ANCHOR" -F Tables
+    pf_flush_status="$CAPTURE_STATUS"
+fi
 if [ "$pf_flush_status" -ne 0 ]; then
     printf 'pf anchor flush failed (status %s); a reboot removes the rules\n' "$pf_flush_status" >&2
 fi

@@ -3,6 +3,7 @@ package routing
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strconv"
@@ -29,11 +30,23 @@ type PFDestination struct {
 // transport destinations. Application traffic outside the tunnel never gets
 // port 53, so DNS cannot bypass the tunnel through ExcludeIPs; the VPN
 // transport keeps port 53 even when the server is inside an excluded range.
+// Excluded networks (ExcludeIPs) are one table and one rule, so direct traffic
+// to them needs no per-connection rule and no reload.
 // Loopback and tunnel rules keep no state: connections that existed before
 // the anchor loaded continue there without a state entry.
-func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDestination) string {
+func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Prefix, destinations []PFDestination) string {
 	var b strings.Builder
 	b.WriteString("# DobbyVPN kill switch: outbound traffic leaves only through the tunnel.\n")
+	if len(excluded) > 0 {
+		b.WriteString("table <dobbyvpn_excluded> persist {")
+		for i, prefix := range excluded {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString("\n\t" + prefix.String())
+		}
+		b.WriteString("\n}\n")
+	}
 	b.WriteString("pass out quick on lo0 all no state\n")
 	if tunName != "" {
 		fmt.Fprintf(&b, "pass out quick on %s all no state\n", tunName)
@@ -45,6 +58,9 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDest
 	slices.SortFunc(servers, func(a, b netip.Addr) int { return a.Unmap().WithZone("").Compare(b.Unmap().WithZone("")) })
 	for _, server := range slices.Compact(servers) {
 		fmt.Fprintf(&b, "pass out quick %s proto { tcp, udp } from any to %s port 53 user root\n", pfFamily(server), pfAddress(server))
+	}
+	if len(excluded) > 0 {
+		b.WriteString("pass out quick proto { tcp, udp } from any to <dobbyvpn_excluded> port != 53 user root\n")
 	}
 	sorted := slices.Clone(destinations)
 	slices.SortFunc(sorted, func(a, b PFDestination) int {
@@ -79,6 +95,45 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, destinations []PFDest
 	}
 	b.WriteString("block drop out quick all\n")
 	return b.String()
+}
+
+// MergePFPrefixes returns the networks as sorted prefixes without duplicates
+// and without networks nested in another one.
+func MergePFPrefixes(networks []*net.IPNet) []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(networks))
+	for _, network := range networks {
+		if network == nil {
+			continue
+		}
+		address, ok := netip.AddrFromSlice(network.IP)
+		bits, size := network.Mask.Size()
+		if !ok || size == 0 {
+			continue
+		}
+		address = address.Unmap()
+		if address.Is4() && size == 128 { // IPv4-mapped IPv6 network
+			bits -= 96
+		}
+		if prefix := netip.PrefixFrom(address, bits).Masked(); prefix.IsValid() {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	slices.SortFunc(prefixes, func(a, b netip.Prefix) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
+		}
+		return a.Bits() - b.Bits()
+	})
+	merged := prefixes[:0]
+	for _, prefix := range prefixes {
+		// CIDR blocks are nested or disjoint; sorted by start, a nested block
+		// follows the block that contains it.
+		if n := len(merged); n > 0 && merged[n-1].Bits() <= prefix.Bits() && merged[n-1].Contains(prefix.Addr()) {
+			continue
+		}
+		merged = append(merged, prefix)
+	}
+	return merged
 }
 
 func pfFamily(ip netip.Addr) string {

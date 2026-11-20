@@ -52,6 +52,7 @@ type MacOSKillSwitch struct {
 	tunName        string
 	token          string
 	servers        []netip.Addr
+	excluded       []netip.Prefix
 	attempts       map[uint64]map[PFDestination]struct{}
 	retiredThrough uint64
 	applied        bool
@@ -144,8 +145,10 @@ func macOSPFEnable(ctx context.Context) (string, error) {
 }
 
 func releaseMacOSPF(ctx context.Context, token string) error {
-	if _, _, err := macOSPFCommand(ctx, "", "-a", MacOSPFAnchor, "-F", "rules"); err != nil {
-		return err
+	for _, kind := range []string{"rules", "Tables"} {
+		if _, _, err := macOSPFCommand(ctx, "", "-a", MacOSPFAnchor, "-F", kind); err != nil {
+			return err
+		}
 	}
 	// Only a saved token has a file. It stays until pf accepts the release, so
 	// a retry, the next service start or the uninstall script can repeat it.
@@ -187,7 +190,7 @@ func (k *MacOSKillSwitch) reload(ctx context.Context) error {
 			destinations = append(destinations, destination)
 		}
 	}
-	rules := MacOSPFRules(k.tunName, k.servers, destinations)
+	rules := MacOSPFRules(k.tunName, k.servers, k.excluded, destinations)
 	if _, _, err := macOSPFCommand(ctx, rules, "-a", MacOSPFAnchor, "-f", "-"); err != nil {
 		k.stale = true
 		return err
@@ -226,6 +229,18 @@ func (k *MacOSKillSwitch) SetResolvers(ctx context.Context, servers []netip.Addr
 	})
 }
 
+// SetExcluded replaces the excluded table (ExcludeIPs) as a whole.
+func (k *MacOSKillSwitch) SetExcluded(ctx context.Context, excluded []*net.IPNet) error {
+	merged := MergePFPrefixes(excluded)
+	return k.update(ctx, func() (bool, error) {
+		if slices.Equal(k.excluded, merged) {
+			return false, nil
+		}
+		k.excluded = merged
+		return true, nil
+	})
+}
+
 func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, network, address string) error {
 	destination, err := pfTransportDestination(network, address)
 	if err != nil {
@@ -235,6 +250,12 @@ func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, netw
 	return k.update(ctx, func() (bool, error) {
 		if generation == 0 || generation <= k.retiredThrough {
 			return false, errors.New("macOS transport owner is retired")
+		}
+		// The excluded table already admits direct traffic to these networks.
+		// Other direct destinations, such as the server's own address, keep a
+		// per-connection rule.
+		if destination.Bypass && slices.ContainsFunc(k.excluded, func(p netip.Prefix) bool { return p.Contains(destination.Addr) }) {
+			return false, nil
 		}
 		entries := k.attempts[generation]
 		if _, ok := entries[destination]; ok {
