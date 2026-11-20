@@ -170,6 +170,27 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Check out trusted artifact verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          sparse-checkout: .github/scripts/release
+          persist-credentials: false
+
+      - name: Download exact producer attempt and verify uploaded digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ needs.build.outputs.producer_run_id }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          test -n "$BUILD_RUN_ID" && test -n "$ARTIFACT_NAME" && test -n "$ARTIFACT_DIGEST"
+          python3 -s trusted/.github/scripts/release/download_artifact.py \
+            "$BUILD_RUN_ID" "$ARTIFACT_NAME" "$RUNNER_TEMP/dobbyvpn-android-ci-artifact" \
+            --expected-digest "$ARTIFACT_DIGEST"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
@@ -243,19 +264,6 @@ jobs:
           readelf="${ndk_toolchains[0]}/bin/llvm-readelf"
           test -x "$readelf"
           echo "ANDROID_READELF=$readelf" >> "$GITHUB_ENV"
-
-      - name: Download exact producer attempt and verify uploaded digest
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ needs.build.outputs.producer_run_id }}
-          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
-          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
-        run: |
-          set -euo pipefail
-          test -n "$BUILD_RUN_ID" && test -n "$ARTIFACT_NAME" && test -n "$ARTIFACT_DIGEST"
-          python3 .github/scripts/release/download_artifact.py \
-            "$BUILD_RUN_ID" "$ARTIFACT_NAME" "$RUNNER_TEMP/dobbyvpn-android-ci-artifact" \
-            --expected-digest "$ARTIFACT_DIGEST"
 
       - name: Validate complete source and attempt-bound payload
         env:

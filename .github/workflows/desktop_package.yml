@@ -21,27 +21,13 @@ on:
       retention_days:
         default: 1
         type: number
-    secrets:
-      MACOS_DEVELOPER_ID_APP_P12:
-        required: false
-      MACOS_DEVELOPER_ID_INSTALLER_P12:
-        required: false
-      MACOS_DEVELOPER_ID_P12_PASSWORD:
-        required: false
-      APP_STORE_API_KEY:
-        required: false
-      APP_STORE_KEY_ID:
-        required: false
-      APP_STORE_ISSUER_ID:
-        required: false
-
 permissions:
   contents: read
 
 jobs:
   package:
     name: ${{ inputs.platform }} / ${{ inputs.architecture }} package
-    environment: ${{ inputs.platform == 'macos' && !inputs.debug && 'release' || '' }}
+    environment: ${{ inputs.platform == 'macos' && !inputs.debug && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha && 'release' || '' }}
     runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     # Release macOS jobs also wait for notarization (notarytool --timeout 30m).
     timeout-minutes: ${{ inputs.platform == 'macos' && !inputs.debug && 90 || 45 }}
@@ -50,6 +36,21 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
+
+      - name: Verify checked-out package source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PRODUCTION_BUILD: ${{ github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          if [[ "$PRODUCTION_BUILD" == true ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            test "$SOURCE_SHA" = "$GITHUB_SHA"
+          fi
 
       - name: Restore Go modules and verified tool archives
         uses: ./.github/actions/dependency-cache
@@ -66,7 +67,7 @@ jobs:
       # without get-task-allow, and notarization rejects get-task-allow.
       - name: Prepare macOS Developer ID signing
         id: macos_signing
-        if: ${{ inputs.platform == 'macos' && !inputs.debug }}
+        if: ${{ inputs.platform == 'macos' && !inputs.debug && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha }}
         env:
           MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
           MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
@@ -118,7 +119,7 @@ jobs:
         run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
 
       - name: Remove macOS signing keychain
-        if: ${{ always() && inputs.platform == 'macos' && !inputs.debug }}
+        if: ${{ always() && steps.macos_signing.outcome != 'skipped' }}
         run: bash .github/scripts/desktop/macos_signing.sh cleanup
 
       - name: Upload exact package

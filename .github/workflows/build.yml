@@ -116,13 +116,6 @@ jobs:
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.prepare_version.outputs.version_name }}
       retention_days: 7
-    secrets:
-      MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
-      MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
-      MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-      APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-      APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-      APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
 
   build_macos_intel:
     needs: prepare_version
@@ -133,13 +126,6 @@ jobs:
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.prepare_version.outputs.version_name }}
       retention_days: 7
-    secrets:
-      MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
-      MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
-      MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-      APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-      APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-      APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
 
   debug_packages:
     needs: prepare_version
