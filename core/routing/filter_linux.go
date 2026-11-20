@@ -271,12 +271,10 @@ func (g *LinuxOutputGuard) growSendBuffer(elements int) error {
 		return err
 	}
 	var setErr error
-	if err = raw.Control(func(fd uintptr) {
+	controlErr := raw.Control(func(fd uintptr) {
 		setErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, baseBuffer+elements*bytesPerElement)
-	}); err != nil {
-		return err
-	}
-	return setErr
+	})
+	return errors.Join(controlErr, setErr)
 }
 
 func (g *LinuxOutputGuard) rebuildBootstrap(ctx context.Context) error {
