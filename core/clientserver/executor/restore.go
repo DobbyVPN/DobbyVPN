@@ -25,7 +25,7 @@ type serviceRestorer interface {
 // A macOS kill switch left by a backend that died stays in place while the
 // restore runs. Once the restore ends, it is removed unless a network adopted
 // it, so the user is neither left offline nor exposed before reconnecting.
-func prepareDesktopRestore(owner serviceRestorer) (start func()) {
+func prepareDesktopRestore(owner serviceRestorer, releaseUnadopted func(context.Context) error) (start func()) {
 	restore := owner.PrepareServiceRestore()
 	return func() {
 		go func() {
@@ -36,7 +36,7 @@ func prepareDesktopRestore(owner serviceRestorer) (start func()) {
 			}()
 			// Deferred, so a panicking restore also ends with the cleanup.
 			defer func() {
-				if err := releaseUnadoptedKillSwitch(context.Background()); err != nil {
+				if err := releaseUnadopted(context.Background()); err != nil {
 					log.Errorf(desktopLogCategory, "leftover kill switch removal failed: %v", err)
 				}
 			}()

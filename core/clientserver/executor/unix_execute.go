@@ -153,7 +153,7 @@ func run() {
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
 	}
-	startRestore := prepareDesktopRestore(desktopProcessBinding())
+	startRestore := prepareDesktopRestore(desktopProcessBinding(), releaseUnadoptedKillSwitch)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, controlplane.AuthenticateLocalPeer)
