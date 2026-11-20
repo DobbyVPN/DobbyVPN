@@ -161,12 +161,15 @@ certificate verification is required, so keep `skip_verification = false`
 profile-level `skip_verification` key is rejected. In `[[Xray]]`, the first
 outbound carries all traffic and must not be `freedom`. Only `outbounds`, `dns`,
 `policy` and `log` (`loglevel`, `dnsLog`, `maskAddress`) are passed to Xray;
-other Xray settings are ignored. `ExcludeIPs` never rejects a subscription.
-An entry with prefix `/0` (`0.0.0.0/0`, `::/0`, `::ffff:0.0.0.0/96`) is dropped.
-If the IPv4 entries together cover half of IPv4 or more, all IPv4 entries are
-dropped; the same applies to IPv6 entries that cover half of `2000::/3` or more.
-Unique local and link-local IPv6 entries are kept. Dropped traffic stays in the
-VPN, and the service log gets a warning with the number of dropped entries.
+other Xray settings are ignored. A subscription is never rejected because of
+the addresses listed in `ExcludeIPs`; malformed TOML or unknown keys in that
+section are still format errors. An invalid address or network and an entry with
+prefix `/0` (`0.0.0.0/0`, `::/0`, `::ffff:0.0.0.0/96`) are dropped. If the IPv4
+entries together cover half of IPv4 or more, all IPv4 entries, single addresses
+included, are dropped; the same applies to IPv6 entries when they cover half of
+`2000::/3` or more. Unique local and link-local IPv6 entries are kept. A host
+name that cannot be resolved at connection time is ignored. Dropped traffic
+stays in the VPN, and the service log gets a warning with counts only.
 
 If a subscription is rejected, the error names the profile (its position in the file, counted from 1) and the field. A response that is not a DobbyVPN subscription (HTML, JSON, YAML, a base64 list or a single share link such as `vless://`) is reported as such; it is not converted. Unknown `[[Outline]]` fields, a non-string `DisguisePrefix`, and a `WebSocketPath` without `WebSocket = true` do not reject the subscription; they are written to the service log as warnings.
 

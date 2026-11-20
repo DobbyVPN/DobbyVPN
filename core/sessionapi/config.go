@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"math/big"
 	"net"
 	"net/url"
 	"sort"
@@ -49,16 +50,17 @@ const (
 )
 
 // ExcludeIPs sends the listed addresses outside the VPN. A per-country list
-// is the usual content, so a single entry may be wide. A /0 entry, or entries
-// of one family that together cover half of IPv4 or of global IPv6
-// (2000::/3), are a subscription mistake such as a typo or an inverted list.
-// Such entries are dropped, so that traffic stays in the VPN, and the
-// subscription is still accepted. Local IPv6 ranges lie outside 2000::/3 and
-// are never counted or dropped.
+// is the usual content, so a single entry may be wide. An invalid address, a
+// /0 entry, or entries of one family that together cover half of IPv4 or of
+// global IPv6 (2000::/3) are a subscription mistake such as a typo or an
+// inverted list. Such entries are dropped, so that traffic stays in the VPN,
+// and the subscription is still accepted. Unique local and link-local IPv6
+// entries never reach the internet and are never counted or dropped.
 var (
 	globalIPv6            = &net.IPNet{IP: net.ParseIP("2000::"), Mask: net.CIDRMask(3, 128)}
-	maxExcludedIPv4       = math.Ldexp(1, 31)  // half of IPv4
-	maxExcludedGlobalIPv6 = math.Ldexp(1, 124) // half of 2000::/3
+	localIPv6             = []*net.IPNet{{IP: net.ParseIP("fc00::"), Mask: net.CIDRMask(7, 128)}, {IP: net.ParseIP("fe80::"), Mask: net.CIDRMask(10, 128)}}
+	maxExcludedIPv4       = new(big.Int).Lsh(big.NewInt(1), 31)  // half of IPv4
+	maxExcludedGlobalIPv6 = new(big.Int).Lsh(big.NewInt(1), 124) // half of 2000::/3
 )
 
 func parseConfig(raw []byte) (parsedConfig, error) {
@@ -108,16 +110,25 @@ func validateLogsEndpoint(endpoint string) error {
 
 // filterExcludeIPs drops the entries described above and returns the
 // entries to use with warnings that carry counts, never addresses. Host
-// names resolve to single addresses later and are always kept.
+// names are kept; one that cannot be resolved is ignored at start.
 func filterExcludeIPs(entries []string) ([]string, []string) {
-	// family is 0 for entries that are always kept.
-	const ipv4, ipv6, dropped = 4, 6, -1
+	// family is 0 for host names and local IPv6, which are always kept.
+	const ipv4, ipv6, invalid, defaultRoute = 4, 6, -1, -2
 	family := make([]int, len(entries))
-	var networks4, networks6 []*net.IPNet
-	defaultRoutes := 0
-	for i, entry := range entries {
-		_, network, err := net.ParseCIDR(strings.TrimSpace(entry))
-		if err != nil {
+	var networks4, counted6 []*net.IPNet
+	count := map[int]int{}
+	for i, raw := range entries {
+		entry := strings.TrimSpace(raw)
+		_, network, err := net.ParseCIDR(entry)
+		if ip := net.ParseIP(entry); err != nil && ip != nil {
+			network = &net.IPNet{IP: ip, Mask: net.CIDRMask(8*len(ip), 8*len(ip))}
+		}
+		if network == nil {
+			// Host names have no ":" or "/" and are not all digits and dots.
+			if strings.ContainsAny(entry, ":/") || entry != "" && strings.Trim(entry, "0123456789.") == "" {
+				family[i] = invalid
+			}
+			count[family[i]]++
 			continue
 		}
 		ones, bits := network.Mask.Size()
@@ -126,58 +137,73 @@ func filterExcludeIPs(entries []string) ([]string, []string) {
 			ones -= bits - 32
 			network = &net.IPNet{IP: ip, Mask: net.CIDRMask(ones, 32)}
 			family[i] = ipv4
-		} else if globalIPv6.Contains(network.IP) || network.Contains(globalIPv6.IP) {
+		} else if !insideAny(localIPv6, network) {
 			family[i] = ipv6
 		}
 		switch {
 		case ones == 0:
-			family[i] = dropped
-			defaultRoutes++
+			family[i] = defaultRoute
 		case family[i] == ipv4:
 			networks4 = append(networks4, network)
-		case family[i] == ipv6:
-			networks6 = append(networks6, network)
+		case family[i] == ipv6 && globalIPv6.Contains(network.IP):
+			counted6 = append(counted6, network)
+		case family[i] == ipv6 && network.Contains(globalIPv6.IP):
+			counted6 = append(counted6, globalIPv6)
 		}
+		count[family[i]]++
 	}
+	drop := map[int]bool{invalid: true, defaultRoute: true}
 	var warnings []string
-	if defaultRoutes > 0 {
-		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped entries with prefix /0 (%d); this traffic stays in the VPN", defaultRoutes))
+	if count[invalid] > 0 {
+		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped entries that are not valid addresses or networks (%d); this traffic stays in the VPN", count[invalid]))
 	}
-	dropFamily := map[int]bool{}
-	if covered := coveredAddresses(networks4); covered >= maxExcludedIPv4 {
-		dropFamily[ipv4] = true
-		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped all IPv4 entries (%d) because together they cover %.0f addresses, half of IPv4 or more; this traffic stays in the VPN", len(networks4), covered))
+	if count[defaultRoute] > 0 {
+		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped entries with prefix /0 (%d); this traffic stays in the VPN", count[defaultRoute]))
 	}
-	if coveredAddresses(networks6) >= maxExcludedGlobalIPv6 {
-		dropFamily[ipv6] = true
-		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped all global IPv6 entries (%d) because together they cover half of 2000::/3 or more; this traffic stays in the VPN", len(networks6)))
+	if covered := coveredAddresses(networks4); covered.Cmp(maxExcludedIPv4) >= 0 {
+		drop[ipv4] = true
+		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped all IPv4 entries (%d) because together they cover %s addresses, half of IPv4 or more; this traffic stays in the VPN", count[ipv4], covered))
+	}
+	if coveredAddresses(counted6).Cmp(maxExcludedGlobalIPv6) >= 0 {
+		drop[ipv6] = true
+		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped all global IPv6 entries (%d) because together they cover half of 2000::/3 or more; this traffic stays in the VPN", count[ipv6]))
 	}
 	kept := make([]string, 0, len(entries))
 	for i, entry := range entries {
-		if family[i] != dropped && !dropFamily[family[i]] {
+		if !drop[family[i]] {
 			kept = append(kept, entry)
 		}
 	}
 	return kept, warnings
 }
 
+func insideAny(parents []*net.IPNet, network *net.IPNet) bool {
+	ones, _ := network.Mask.Size()
+	for _, parent := range parents {
+		if parentOnes, _ := parent.Mask.Size(); ones >= parentOnes && parent.Contains(network.IP) {
+			return true
+		}
+	}
+	return false
+}
+
 // coveredAddresses counts the addresses the networks cover, counting nested
 // networks once. CIDR networks either nest or do not overlap.
-func coveredAddresses(networks []*net.IPNet) float64 {
+func coveredAddresses(networks []*net.IPNet) *big.Int {
 	sort.Slice(networks, func(i, j int) bool {
 		if order := bytes.Compare(networks[i].IP, networks[j].IP); order != 0 {
 			return order < 0
 		}
 		return bytes.Compare(networks[i].Mask, networks[j].Mask) < 0
 	})
-	total := 0.0
+	total := new(big.Int)
 	var last *net.IPNet
 	for _, network := range networks {
 		if last != nil && last.Contains(network.IP) {
 			continue
 		}
 		ones, bits := network.Mask.Size()
-		total += math.Ldexp(1, bits-ones)
+		total.Add(total, new(big.Int).Lsh(big.NewInt(1), uint(bits-ones)))
 		last = network
 	}
 	return total
