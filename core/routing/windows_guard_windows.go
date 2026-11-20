@@ -273,6 +273,17 @@ func (c *wfpConditions) remoteRange(r iprange.Range) windows.GUID {
 	return layer
 }
 
+// excludedRangeConditions limits a permit to this backend and one address
+// range. Each condition has its own field: how WFP combines several conditions
+// on one field differs between fields and Windows versions, so the filter
+// does not rely on it. The backend only relays TCP and UDP.
+func excludedRangeConditions(r iprange.Range, appID []byte) (*wfpConditions, windows.GUID) {
+	c := &wfpConditions{}
+	layer := c.remoteRange(r)
+	c.blob(wfpConditionAppID, wfpByteBlobType, appID)
+	return c, layer
+}
+
 func (g *WindowsNetworkGuard) add(name string, layer windows.GUID, action uint32, weight uint8, c *wfpConditions) (uint64, error) {
 	key, err := windows.GenerateGUID()
 	if err != nil {
@@ -518,9 +529,9 @@ func (g *WindowsNetworkGuard) Retire(ctx context.Context, generation uint64) err
 	return nil
 }
 
-// SetExcluded permits only this backend to reach the excluded addresses over
-// TCP and UDP outside the tunnel, with one filter per configured range and per
-// resolved host address. The previous filters are replaced in the same
+// SetExcluded permits only this backend to reach the excluded addresses
+// outside the tunnel, with one filter per configured range and per resolved
+// host address. The previous filters are replaced in the same
 // transaction, only when the ranges or the host addresses changed.
 func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, configured, hosts *iprange.Set) error {
 	g.mu.Lock()
@@ -538,12 +549,7 @@ func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, configured, hosts
 			return err
 		}
 		for _, r := range append(configured.Ranges(), hosts.Ranges()...) {
-			c := &wfpConditions{}
-			layer := c.remoteRange(r)
-			c.blob(wfpConditionAppID, wfpByteBlobType, g.appID)
-			// Conditions on the same field are combined with OR.
-			c.scalar(wfpConditionIPProtocol, wfpUint8, wfpProtocolTCP)
-			c.scalar(wfpConditionIPProtocol, wfpUint8, wfpProtocolUDP)
+			c, layer := excludedRangeConditions(r, g.appID)
 			id, err := g.add("Excluded range", layer, wfpActionPermit, 15, c)
 			if err != nil {
 				return err
