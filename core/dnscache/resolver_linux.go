@@ -4,12 +4,15 @@ package dnscache
 
 import (
 	"context"
+
 	"errors"
 	"fmt"
+	"github.com/miekg/dns"
 	"math"
 	"net"
 	"net/netip"
 	"strconv"
+	"syscall"
 
 	"github.com/godbus/dbus/v5"
 	"golang.org/x/sys/unix"
@@ -85,56 +88,140 @@ func resolveOnLink(ctx context.Context, index int32, host string) (addresses []n
 	return addresses, nil
 }
 
-// CaptureLinuxLink reads only the selected physical link before application DNS
-// takes ownership of the VPN link. Returned servers authorize bootstrap packets.
-func CaptureLinuxLink(ctx context.Context, index int) (identity string, servers []netip.Addr, resultErr error) {
+type linuxDNSServer struct {
+	Family  int32
+	Address []byte
+	Port    uint16
+	Name    string
+}
+type linuxDNSLink struct {
+	name     string
+	identity string
+	native   bool
+	servers  []netip.AddrPort
+}
+
+// Read the link settings in one resolved reply. Include transport, validation,
+// addresses and interface identity in the fence checked after every lookup.
+func captureLinuxDNSLink(ctx context.Context, index int) (result linuxDNSLink, resultErr error) {
 	if index <= 0 || index > math.MaxInt32 {
-		return "", nil, fmt.Errorf("invalid physical link %d", index)
+		return result, fmt.Errorf("invalid physical link %d", index)
 	}
 	iface, err := net.InterfaceByIndex(index)
 	if err != nil {
-		return "", nil, err
+		return result, err
 	}
 	local, err := iface.Addrs()
 	if err != nil {
-		return "", nil, err
+		return result, err
 	}
 	conn, link, err := openResolvedLink(ctx, int32(index))
 	if err != nil {
-		return "", nil, err
+		return result, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, conn.Close()) }()
-	var value dbus.Variant
-	if err := link.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, "org.freedesktop.resolve1.Link", "DNS").Store(&value); err != nil {
-		return "", nil, err
+	var properties map[string]dbus.Variant
+	if err := link.CallWithContext(ctx, "org.freedesktop.DBus.Properties.GetAll", 0, "org.freedesktop.resolve1.Link").Store(&properties); err != nil {
+		return result, err
 	}
-	var native []struct {
-		Family  int32
-		Address []byte
+	tlsMode, tlsOK := properties["DNSOverTLS"].Value().(string)
+	validation, validationOK := properties["DNSSEC"].Value().(string)
+	if !tlsOK || !validationOK {
+		return result, errors.New("physical DNS policy unavailable")
 	}
-	if err := dbus.Store([]any{value.Value()}, &native); err != nil {
-		return "", nil, err
+	result.name = iface.Name
+	result.native = tlsMode != "no" || validation != "no"
+	var servers []linuxDNSServer
+	extended, ok := properties["DNSEx"]
+	if !ok {
+		return result, errors.New("physical DNS server configuration unavailable")
 	}
-	for _, record := range native {
-		address, ok := netip.AddrFromSlice(record.Address)
-		if !ok || (record.Family != unix.AF_INET && record.Family != unix.AF_INET6) || address.IsLoopback() || address.IsUnspecified() {
-			return "", nil, fmt.Errorf("invalid underlying DNS address: %v", record)
+	if err := extended.Store(&servers); err != nil {
+		return result, err
+	}
+	result.identity = fmt.Sprintf("linux:%s:%d:%s:%v:%s:%s:%s", iface.Name, index, iface.HardwareAddr, local, tlsMode, validation, extended.String())
+	for _, server := range servers {
+		ip, ok := netip.AddrFromSlice(server.Address)
+		if !ok || ip.IsLoopback() || ip.IsUnspecified() || server.Family != unix.AF_INET && server.Family != unix.AF_INET6 {
+			return result, errors.New("invalid underlying DNS address")
 		}
-		servers = append(servers, address.Unmap())
+		ip = ip.Unmap()
+		if ip.Is6() && ip.IsLinkLocalUnicast() {
+			ip = ip.WithZone(iface.Name)
+		}
+		port := server.Port
+		if port == 0 {
+			port = 53
+		}
+		result.servers = append(result.servers, netip.AddrPortFrom(ip, port))
+		result.native = result.native || server.Name != "" || port == 853
 	}
-	return fmt.Sprintf("linux:%s:%d:%s:%v:%v", iface.Name, index, iface.HardwareAddr, local, servers), servers, nil
+	return result, nil
 }
 
-func LinuxLinkResolver(index int) Resolver {
-	if index <= 0 || index > math.MaxInt32 {
-		return func(context.Context, string) ([]net.IPAddr, error) {
-			return nil, fmt.Errorf("invalid underlying interface index %d", index)
+// CaptureLinuxLink exposes the configured address inventory for diagnostics.
+func CaptureLinuxLink(ctx context.Context, index int) (string, []netip.Addr, error) {
+	link, err := captureLinuxDNSLink(ctx, index)
+	if err != nil {
+		return "", nil, err
+	}
+	servers := make([]netip.Addr, 0, len(link.servers))
+	for _, server := range link.servers {
+		servers = append(servers, server.Addr().WithZone(""))
+	}
+	return link.identity, servers, nil
+}
+
+// CaptureLinuxBootstrap uses backend-owned DNS sockets for plain DNS. Native
+// DNSSEC and encrypted DNS retain resolved's configured validation policy.
+func CaptureLinuxBootstrap(ctx context.Context, index, mark int, openNative func(context.Context, int, int, []netip.AddrPort) (func() error, error)) (string, Resolver, error) {
+	link, err := captureLinuxDNSLink(ctx, index)
+	if err != nil {
+		return "", nil, err
+	}
+	upstreams := make([]string, 0, len(link.servers))
+	for _, server := range link.servers {
+		upstreams = append(upstreams, server.String())
+	}
+	lookup := func(ctx context.Context, host string) (addresses []net.IPAddr, err error) {
+		if link.native {
+			release, openErr := openNative(ctx, index, mark, link.servers)
+			if openErr != nil {
+				return nil, openErr
+			}
+			defer func() {
+				if closeErr := release(); closeErr != nil {
+					addresses = nil
+					err = errors.Join(err, closeErr)
+				}
+			}()
+			addresses, err = resolveOnLink(ctx, int32(index), host)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			dialer := net.Dialer{Control: func(_, _ string, raw syscall.RawConn) error {
+				var socketErr error
+				err := raw.Control(func(fd uintptr) {
+					socketErr = unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, link.name)
+					if socketErr == nil {
+						socketErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_MARK, mark)
+					}
+				})
+				return errors.Join(err, socketErr)
+			}}
+			addresses, err = resolveCapturedDNSServers(ctx, host, upstreams, &dialer, link.identity, []uint16{dns.TypeA, dns.TypeAAAA})
+			if err != nil {
+				return nil, err
+			}
 		}
+		current, err := captureLinuxDNSLink(ctx, index)
+		if err != nil || current.identity != link.identity {
+			return nil, errors.Join(err, errors.New("physical DNS configuration changed during lookup"))
+		}
+		return addresses, nil
 	}
-	linkIndex := int32(index)
-	return func(ctx context.Context, host string) ([]net.IPAddr, error) {
-		return resolveOnLink(ctx, linkIndex, host)
-	}
+	return link.identity, lookup, nil
 }
 
 func openResolvedLink(ctx context.Context, index int32) (*dbus.Conn, dbus.BusObject, error) {

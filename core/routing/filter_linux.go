@@ -28,20 +28,19 @@ import (
 // LinuxOutputGuard manages the persistent inet table. Closing the socket or
 // losing the userspace service leaves the last committed protection in force.
 type LinuxOutputGuard struct {
-	mu                sync.Mutex
-	conn              *nftables.Conn
-	socket            *nl.Conn
-	table             *nftables.Table
-	bootstrap         *nftables.Chain
-	mark              uint32
-	resolverUID       uint32
-	dhcpUIDs          []uint32
-	bootstrapIdentity string
-	servers           []netip.Addr
-	excluded4         *nftables.Set
-	excluded6         *nftables.Set
-	excludedHash      string
-	created, closed   bool
+	mu        sync.Mutex
+	conn      *nftables.Conn
+	socket    *nl.Conn
+	table     *nftables.Table
+	bootstrap *nftables.Chain
+	mark      uint32
+
+	dhcpUIDs []uint32
+
+	excluded4       *nftables.Set
+	excluded6       *nftables.Set
+	excludedHash    string
+	created, closed bool
 }
 
 // excludedSetChunk keeps one element list well below the 64 KiB netlink
@@ -57,15 +56,8 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 	if mark <= 0 || uint64(mark) > math.MaxUint32 {
 		return nil, errors.New("output guard requires an owned socket mark")
 	}
-	account, err := user.Lookup("systemd-resolve")
-	if err != nil {
-		return nil, fmt.Errorf("identify underlying resolver service: %w", err)
-	}
-	uid, err := strconv.ParseUint(account.Uid, 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	g := &LinuxOutputGuard{mark: uint32(mark), resolverUID: uint32(uid), dhcpUIDs: []uint32{0}}
+	var err error
+	g := &LinuxOutputGuard{mark: uint32(mark), dhcpUIDs: []uint32{0}}
 	// NetworkManager/dhclient use root; networkd drops to its dedicated account.
 	// Ports alone are insufficient: unprivileged applications can bind low
 	// ports on systems configured with ip_unprivileged_port_start=0.
@@ -116,6 +108,7 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 		}
 		priority := nftables.ChainPriorityMangle
 		g.bootstrap = g.conn.AddChain(&nftables.Chain{Table: g.table, Name: "bootstrap", Type: nftables.ChainTypeRoute, Hooknum: nftables.ChainHookOutput, Priority: priority})
+		g.addLinkMaintenanceRules()
 		policy := nftables.ChainPolicyDrop
 		output := g.conn.AddChain(&nftables.Chain{Table: g.table, Name: "protect", Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityFilter, Policy: &policy})
 		for _, name := range []string{"lo", tunName} {
@@ -155,7 +148,7 @@ func matchProtocol(protocol byte) []expr.Any {
 func matchPort(offset uint32, port uint16) []expr.Any {
 	return []expr.Any{&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: offset, Len: 2}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: binary.BigEndian.AppendUint16(nil, port)}}
 }
-func matchIP(ip netip.Addr) []expr.Any {
+func matchIP(ip netip.Addr, source bool) []expr.Any {
 	const (
 		ipv4AddressLength uint32 = 4
 		ipv6AddressLength uint32 = 16
@@ -164,33 +157,10 @@ func matchIP(ip netip.Addr) []expr.Any {
 	if ip.Is4() {
 		family, offset, length = unix.NFPROTO_IPV4, 16, ipv4AddressLength
 	}
+	if source {
+		offset -= length
+	}
 	return []expr.Any{&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{family}}, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: offset, Len: length}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ip.AsSlice()}}
-}
-
-// UpdateBootstrap atomically replaces exceptions for the captured link's DNS.
-// Application bypass remains confined to marked sockets created by the owned
-// packet router; independent applications receive no destination-wide escape.
-func (g *LinuxOutputGuard) UpdateBootstrap(ctx context.Context, identity string, servers []netip.Addr) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.closed {
-		return errors.New("output guard is closed")
-	}
-	if g.bootstrapIdentity == identity {
-		return nil
-	}
-	for _, server := range servers {
-		if !server.IsValid() || server.IsLoopback() || server.IsUnspecified() {
-			return fmt.Errorf("invalid physical DNS server %s", server)
-		}
-	}
-	g.servers = servers
-	err := g.rebuildBootstrap(ctx)
-	if err == nil {
-		g.bootstrapIdentity = identity
-		log.Infof(Category, "output guard physical resolver updated network=%s servers=%v", identity, servers)
-	}
-	return err
 }
 
 // SetExcluded lets packets of already established connections to the excluded
@@ -275,59 +245,39 @@ func (g *LinuxOutputGuard) growSendBuffer(elements int) error {
 	return errors.Join(controlErr, setErr)
 }
 
-func (g *LinuxOutputGuard) rebuildBootstrap(ctx context.Context) error {
-	return g.operation(ctx, func() error {
-		g.conn.FlushChain(g.bootstrap)
-		for _, server := range g.servers {
-			for _, protocol := range []byte{unix.IPPROTO_TCP, unix.IPPROTO_UDP} {
-				for _, port := range []uint16{53, 853} {
-					if protocol == unix.IPPROTO_UDP && port == 853 {
-						continue
-					}
-					matches := make([]expr.Any, 0, 10)
-					matches = append(matches, &expr.Meta{Key: expr.MetaKeySKUID, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: native32(g.resolverUID)})
-					matches = append(matches, matchIP(server)...)
-					matches = append(matches, matchProtocol(protocol)...)
-					matches = append(matches, matchPort(2, port)...)
-					matches = append(matches, &expr.Immediate{Register: 1, Data: native32(g.mark)}, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1}, &expr.Verdict{Kind: expr.VerdictAccept})
-					g.conn.AddRule(&nftables.Rule{Table: g.table, Chain: g.bootstrap, Exprs: matches, UserData: userdata.AppendString(nil, userdata.TypeComment, linuxGuardResolver)})
-				}
-			}
-		}
-		// DHCP clients and IPv6 neighbour discovery must maintain the physical
-		// link while all ordinary application packets remain captured/blocked.
-		for _, client := range []struct {
-			family        byte
-			local, remote uint16
-		}{{unix.NFPROTO_IPV4, 68, 67}, {unix.NFPROTO_IPV6, 546, 547}} {
-			for _, uid := range g.dhcpUIDs {
-				matches := make([]expr.Any, 0, 10)
-				matches = append(matches,
-					&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{client.family}},
-					&expr.Meta{Key: expr.MetaKeySKUID, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: native32(uid)},
-				)
-				matches = append(matches, matchProtocol(unix.IPPROTO_UDP)...)
-				matches = append(matches, matchPort(0, client.local)...)
-				matches = append(matches, matchPort(2, client.remote)...)
-				g.markTraffic(matches)
-			}
-		}
-		// ICMPv6 type 143 (MLDv2 report) keeps multicast membership, and so MLD-snooping
-		// switches, working. Reports are sent with hop limit 1.
-		mld := matchProtocol(unix.IPPROTO_ICMPV6)
-		mld = append(mld, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{143}},
-			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}})
-		g.markTraffic(mld)
-		for _, kind := range []byte{133, 135, 136} {
-			matches := matchProtocol(unix.IPPROTO_ICMPV6)
-			matches = append(matches, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{kind}},
-				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{255}})
+func (g *LinuxOutputGuard) addLinkMaintenanceRules() {
+	// DHCP clients and IPv6 neighbour discovery must maintain the physical
+	// link while all ordinary application packets remain captured/blocked.
+	for _, client := range []struct {
+		family        byte
+		local, remote uint16
+	}{{unix.NFPROTO_IPV4, 68, 67}, {unix.NFPROTO_IPV6, 546, 547}} {
+		for _, uid := range g.dhcpUIDs {
+			matches := make([]expr.Any, 0, 10)
+			matches = append(matches,
+				&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{client.family}},
+				&expr.Meta{Key: expr.MetaKeySKUID, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: native32(uid)},
+			)
+			matches = append(matches, matchProtocol(unix.IPPROTO_UDP)...)
+			matches = append(matches, matchPort(0, client.local)...)
+			matches = append(matches, matchPort(2, client.remote)...)
 			g.markTraffic(matches)
 		}
-		g.markTraffic(matchEstablishedTo(unix.NFPROTO_IPV4, g.excluded4))
-		g.markTraffic(matchEstablishedTo(unix.NFPROTO_IPV6, g.excluded6))
-		return g.conn.Flush()
-	})
+	}
+	// ICMPv6 type 143 (MLDv2 report) keeps multicast membership, and so MLD-snooping
+	// switches, working. Reports are sent with hop limit 1.
+	mld := matchProtocol(unix.IPPROTO_ICMPV6)
+	mld = append(mld, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{143}},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}})
+	g.markTraffic(mld)
+	for _, kind := range []byte{133, 135, 136} {
+		matches := matchProtocol(unix.IPPROTO_ICMPV6)
+		matches = append(matches, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{kind}},
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{255}})
+		g.markTraffic(matches)
+	}
+	g.markTraffic(matchEstablishedTo(unix.NFPROTO_IPV4, g.excluded4))
+	g.markTraffic(matchEstablishedTo(unix.NFPROTO_IPV6, g.excluded6))
 }
 
 func matchEstablishedTo(family byte, set *nftables.Set) []expr.Any {
