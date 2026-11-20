@@ -83,7 +83,7 @@ func (s FileSourceStore) LoadAccepted(ctx context.Context) ([]byte, error) {
 	if !os.SameFile(before, opened) {
 		return nil, errors.New("accepted configuration file changed while opening")
 	}
-	if err := verifyAcceptedAccess(opened, s.DirectoryOwner); err != nil {
+	if err := s.verifyAcceptedAccess(file, opened); err != nil {
 		return nil, err
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxAcceptedRecord+1))
