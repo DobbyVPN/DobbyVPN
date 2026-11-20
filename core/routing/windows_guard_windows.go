@@ -15,6 +15,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"core/iprange"
 	"core/log"
 
 	"golang.org/x/sys/windows"
@@ -38,6 +39,8 @@ const (
 	wfpSecurityDescriptor = 14
 	wfpActionPermit       = 0x1002
 	wfpMatchFlagsAllSet   = 6
+	wfpMatchRange         = 5
+	wfpRangeType          = 258
 )
 
 var (
@@ -165,6 +168,10 @@ type WindowsNetworkGuard struct {
 	retiredThrough    uint64
 	bootstrapIdentity string
 	bootstrapIDs      []uint64
+	excluded          *iprange.Set
+	excludedHosts     *iprange.Set
+	excludedHash      string
+	excludedIDs       []uint64
 }
 
 func OpenWindowsNetworkGuard(tunnelLUID uint64) (*WindowsNetworkGuard, error) {
@@ -242,6 +249,41 @@ func (c *wfpConditions) remote(address netip.Addr) windows.GUID {
 	c.scalar(wfpConditionRemoteAddress, wfpByteArray16, uintptr(unsafe.Pointer(b)))
 	return wfpLayerConnectV6
 }
+
+// fwpRange matches FWP_RANGE0.
+type fwpRange struct{ low, high wfpValue }
+
+func (c *wfpConditions) remoteRange(r iprange.Range) windows.GUID {
+	bounds := new(fwpRange)
+	layer := wfpLayerConnectV4
+	if r.First.Is4() {
+		first, last := r.First.As4(), r.Last.As4()
+		bounds.low = wfpValue{dataType: wfpUint32, value: uintptr(binary.BigEndian.Uint32(first[:]))}
+		bounds.high = wfpValue{dataType: wfpUint32, value: uintptr(binary.BigEndian.Uint32(last[:]))}
+	} else {
+		first, last := new([16]byte), new([16]byte)
+		*first, *last = r.First.As16(), r.Last.As16()
+		c.roots = append(c.roots, first, last)
+		bounds.low = wfpValue{dataType: wfpByteArray16, value: uintptr(unsafe.Pointer(first))}
+		bounds.high = wfpValue{dataType: wfpByteArray16, value: uintptr(unsafe.Pointer(last))}
+		layer = wfpLayerConnectV6
+	}
+	c.roots = append(c.roots, bounds)
+	c.values = append(c.values, fwpmFilterCondition{fieldKey: wfpConditionRemoteAddress, matchType: wfpMatchRange, conditionValue: wfpValue{dataType: wfpRangeType, value: uintptr(unsafe.Pointer(bounds))}})
+	return layer
+}
+
+// excludedRangeConditions limits a permit to this backend and one address
+// range. Each condition has its own field: how WFP combines several conditions
+// on one field differs between fields and Windows versions, so the filter
+// does not rely on it. The backend only relays TCP and UDP.
+func excludedRangeConditions(r iprange.Range, appID []byte) (*wfpConditions, windows.GUID) {
+	c := &wfpConditions{}
+	layer := c.remoteRange(r)
+	c.blob(wfpConditionAppID, wfpByteBlobType, appID)
+	return c, layer
+}
+
 func (g *WindowsNetworkGuard) add(name string, layer windows.GUID, action uint32, weight uint8, c *wfpConditions) (uint64, error) {
 	key, err := windows.GenerateGUID()
 	if err != nil {
@@ -431,6 +473,11 @@ func (g *WindowsNetworkGuard) Authorize(ctx context.Context, generation uint64, 
 	if g.engine == 0 || generation == 0 || generation <= g.retiredThrough {
 		return errors.New("Windows transport owner is retired")
 	}
+	// A direct connection to an excluded address is already permitted by the
+	// range filters; no filter per address and port is added.
+	if g.excluded.Contains(ip) || g.excludedHosts.Contains(ip) {
+		return ctx.Err()
+	}
 	key := network + "/" + ip.String() + "/" + strconv.Itoa(int(port))
 	entries := g.attempts[generation]
 	if _, ok := entries[key]; ok {
@@ -479,6 +526,47 @@ func (g *WindowsNetworkGuard) Retire(ctx context.Context, generation uint64) err
 	}
 	delete(g.attempts, generation)
 	log.Debug(Category, "Windows transport permissions retired", map[string]any{"generation": generation, "filter_ids": ids})
+	return nil
+}
+
+// SetExcluded permits only this backend to reach the excluded addresses
+// outside the tunnel, with one filter per configured range and per resolved
+// host address. The previous filters are replaced in the same
+// transaction, only when the ranges or the host addresses changed.
+func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, configured, hosts *iprange.Set) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.engine == 0 {
+		return errors.New("Windows network protection closed")
+	}
+	hash := configured.Hash() + hosts.Hash()
+	if hash == g.excludedHash {
+		return nil
+	}
+	var replacement []uint64
+	err := g.transaction(ctx, func() error {
+		if err := g.deleteIDs(g.excludedIDs); err != nil {
+			return err
+		}
+		for _, r := range append(configured.Ranges(), hosts.Ranges()...) {
+			// A cancelled attach stops here; the transaction is aborted.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			c, layer := excludedRangeConditions(r, g.appID)
+			id, err := g.add("Excluded range", layer, wfpActionPermit, 15, c)
+			if err != nil {
+				return err
+			}
+			replacement = append(replacement, id)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	g.excluded, g.excludedHosts, g.excludedHash, g.excludedIDs = configured, hosts, hash, replacement
+	log.Info(Category, "Windows excluded ranges applied", map[string]any{"filters": len(replacement), "sha256": configured.Hash(), "host_address_ranges": hosts.Len()})
 	return nil
 }
 

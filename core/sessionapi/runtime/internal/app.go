@@ -19,6 +19,7 @@ package internal
 import (
 	"context"
 	"core/dnscache"
+	"core/iprange"
 	"core/log"
 	"core/sessionapi"
 	"core/tunnel"
@@ -40,9 +41,10 @@ type App struct {
 	UplinkInterface string
 	DNSCache        *dnscache.Cache
 	BypassPolicy    *tunnel.BypassPolicy
-	// Guard, when set, is told each attempt's excluded networks (Linux).
+	// Guard, when set, is told each attempt's excluded addresses (Linux and
+	// Windows).
 	Guard interface {
-		SetExcluded(context.Context, []*net.IPNet) error
+		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
 	}
 	RoutingConfig *RoutingConfig
 }
