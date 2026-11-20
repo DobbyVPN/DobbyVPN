@@ -111,7 +111,7 @@ func validateLogsEndpoint(endpoint string) error {
 // filterExcludeIPs drops the entries described above and returns the
 // entries to use with warnings that carry counts, never addresses. Host
 // names are kept; one that cannot be resolved is ignored at start.
-func filterExcludeIPs(entries []string) ([]string, []string) {
+func filterExcludeIPs(entries []string) (kept, warnings []string) {
 	// family is 0 for host names and local IPv6, which are always kept.
 	const ipv4, ipv6, invalid, defaultRoute = 4, 6, -1, -2
 	family := make([]int, len(entries))
@@ -149,7 +149,6 @@ func filterExcludeIPs(entries []string) ([]string, []string) {
 		count[family[i]]++
 	}
 	drop := map[int]bool{invalid: true, defaultRoute: true}
-	var warnings []string
 	if count[invalid] > 0 {
 		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped entries that are not valid addresses or networks (%d); this traffic stays in the VPN", count[invalid]))
 	}
@@ -164,7 +163,7 @@ func filterExcludeIPs(entries []string) ([]string, []string) {
 		drop[ipv6] = true
 		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped all global IPv6 entries (%d) because together they cover half of 2000::/3 or more; this traffic stays in the VPN", count[ipv6]))
 	}
-	kept := make([]string, 0, len(entries))
+	kept = make([]string, 0, len(entries))
 	for i, entry := range entries {
 		if !drop[family[i]] {
 			kept = append(kept, entry)
