@@ -331,7 +331,9 @@ jobs:
         id: ios
         if: ${{ !cancelled() }}
         continue-on-error: true
-        run: python3 .github/scripts/ios/ios_production_check.py --source-sha "$GITHUB_SHA" --output-dir "$RUNNER_TEMP/ios-production"
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 .github/scripts/ios/ios_production_check.py --source-sha "$SOURCE_SHA" --output-dir "$RUNNER_TEMP/ios-production"
 
       - name: Require selected Apple checks
         if: ${{ always() }}
