@@ -6,6 +6,7 @@ package sessionapi
 
 import (
 	"context"
+	"core/iprange"
 	"core/log"
 	"core/protocol"
 	"crypto/rand"
@@ -203,10 +204,12 @@ type SessionRef struct {
 type RuntimeProfile struct {
 	Summary ProfileSummary
 	Config  protocol.Config
-	// ExcludeCIDRs is interpreted once by Go and remains private to the
+	// ExcludeSet and ExcludeHosts are interpreted once by Go per accepted
+	// configuration, shared by all its profiles and remain private to the
 	// runtime. Platform shells must not parse routing inputs from the original
 	// configuration.
-	ExcludeCIDRs []string
+	ExcludeSet   *iprange.Set
+	ExcludeHosts []string
 }
 
 // Runtime owns protocol process/device work. Implementations must honor ctx;
@@ -1239,7 +1242,8 @@ func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptCon
 }
 
 func retainPolicy(digest string, profiles []RuntimeProfile) {
-	if err := log.SetPolicy(digest, map[string]any{"exclude_ips": profiles[0].ExcludeCIDRs, "profiles": summaries(profiles)}); err != nil {
+	excluded := map[string]any{"ranges": profiles[0].ExcludeSet.Len(), "hosts": len(profiles[0].ExcludeHosts), "sha256": profiles[0].ExcludeSet.Hash()}
+	if err := log.SetPolicy(digest, map[string]any{"exclude_ips": excluded, "profiles": summaries(profiles)}); err != nil {
 		log.Error("CONFIGURATION", "retain routing policy diagnostics failed", map[string]any{"cause": err.Error(), "configuration_digest": digest})
 	}
 }
