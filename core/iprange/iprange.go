@@ -200,6 +200,8 @@ func (s *Set) Hash() string {
 func (s *Set) computeHash() string {
 	hash := sha256.New()
 	for _, r := range s.Ranges() {
+		// The address length keeps IPv4 and IPv6 encodings apart.
+		hash.Write([]byte{byte(r.First.BitLen())})
 		hash.Write(r.First.AsSlice())
 		hash.Write(r.Last.AsSlice())
 	}
