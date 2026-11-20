@@ -119,13 +119,9 @@ func filterExcludeIPs(entries []string) ([]string, []string) {
 	count := map[int]int{}
 	for i, raw := range entries {
 		entry := strings.TrimSpace(raw)
-		_, network, err := net.ParseCIDR(entry)
-		if ip := net.ParseIP(entry); err != nil && ip != nil {
-			network = &net.IPNet{IP: ip, Mask: net.CIDRMask(8*len(ip), 8*len(ip))}
-		}
+		network := parseExcludeNetwork(entry)
 		if network == nil {
-			// Host names have no ":" or "/" and are not all digits and dots.
-			if strings.ContainsAny(entry, ":/") || entry != "" && strings.Trim(entry, "0123456789.") == "" {
+			if looksLikeAddress(entry) {
 				family[i] = invalid
 			}
 			count[family[i]]++
@@ -175,6 +171,23 @@ func filterExcludeIPs(entries []string) ([]string, []string) {
 		}
 	}
 	return kept, warnings
+}
+
+// parseExcludeNetwork returns the network of a CIDR or a single address.
+func parseExcludeNetwork(entry string) *net.IPNet {
+	if _, network, err := net.ParseCIDR(entry); err == nil {
+		return network
+	}
+	if ip := net.ParseIP(entry); ip != nil {
+		return &net.IPNet{IP: ip, Mask: net.CIDRMask(8*len(ip), 8*len(ip))}
+	}
+	return nil
+}
+
+// looksLikeAddress reports an entry that is not a host name: host names have
+// no ":" or "/" and are not all digits and dots.
+func looksLikeAddress(entry string) bool {
+	return strings.ContainsAny(entry, ":/") || entry != "" && strings.Trim(entry, "0123456789.") == ""
 }
 
 func insideAny(parents []*net.IPNet, network *net.IPNet) bool {
