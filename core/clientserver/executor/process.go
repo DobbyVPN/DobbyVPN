@@ -37,12 +37,12 @@ var (
 	connectionSourceStore = controlplane.ConnectionSourceStore
 )
 
-func removeDesktopInstallationState(ctx context.Context) error {
+func removeDesktopInstallationState(ctx context.Context, installationStore func() (sessionapi.SourceStore, error)) error {
 	var policyErr error
 	if desktopProtection != nil {
 		policyErr = desktopProtection.SetEnabled(ctx, false)
 	}
-	store, err := connectionSourceStore()
+	store, err := installationStore()
 	if err != nil {
 		return errors.Join(policyErr, err)
 	}

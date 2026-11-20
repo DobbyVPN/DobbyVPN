@@ -185,7 +185,7 @@ func run() {
 func (c *Executor) Execute(mode string) {
 	switch mode {
 	case "release-protection":
-		if err := removeDesktopInstallationState(context.Background()); err != nil {
+		if err := removeDesktopInstallationState(context.Background(), connectionSourceStore); err != nil {
 			exitWithShutdownError(err)
 		}
 	case "normal":

@@ -221,8 +221,9 @@ func executeWith(mode string, initLog func() error, runNormal func(), runService
 
 	switch mode {
 	case "release-protection":
-		if err := removeDesktopInstallationState(context.Background()); err != nil {
-			return reportStartupFailure("release installed VPN state", err, false)
+		if err := removeDesktopInstallationState(context.Background(), controlplane.WindowsInstallationSourceStore); err != nil {
+			log.Errorf(desktopLogCategory, "failed to release installed VPN state: %v", err)
+			return reportStartupFailure("release installed VPN state", err, true)
 		}
 	case "normal":
 		runNormal()
