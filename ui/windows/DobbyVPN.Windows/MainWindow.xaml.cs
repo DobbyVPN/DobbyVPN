@@ -372,7 +372,11 @@ public sealed partial class MainWindow : Window
                 _sourceInitialized = true;
             }
             var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (_subscriptionLoad.CanRestore(SourceEditor.Text, _acceptedInThisWindow, result.Configured) && _restoredLoad != restoreKey)
+            if (result.ServiceRestorePending && (previous?.ServiceRestorePending != true || previous?.SessionId != result.SessionId))
+                _diagnostics.RecordInfo("subscription.restore-pending", "Waiting for the service to restore its saved VPN session",
+                    new { sessionId = result.SessionId });
+            if (_subscriptionLoad.CanRestore(SourceEditor.Text, _acceptedInThisWindow, result.Configured, result.ServiceRestorePending)
+                && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
                 await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);
@@ -2389,6 +2393,7 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("last_failure")] public Failure? LastFailure { get; init; }
         [JsonPropertyName("cleanup_complete")] public bool CleanupComplete { get; init; }
         [JsonPropertyName("recovering")] public bool Recovering { get; init; }
+        [JsonPropertyName("service_restore_pending")] public bool ServiceRestorePending { get; init; }
         [JsonPropertyName("digest")] public string Digest { get; set; } = "";
         [JsonPropertyName("profiles")] public Profile[] Profiles { get; set; } = [];
         [JsonPropertyName("active_digest")] public string ActiveDigest { get; init; } = "";

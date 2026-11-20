@@ -73,6 +73,8 @@ type Snapshot struct {
 	CleanupComplete     bool       `json:"cleanup_complete"`
 	Recovering          bool       `json:"recovering"`
 	PrimaryAction       string     `json:"primary_action"`
+
+	ServiceRestorePending bool `json:"service_restore_pending,omitempty"`
 }
 
 func profileResultDTO(in sessionapi.ProfileSummary) Profile {
@@ -111,6 +113,8 @@ func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 		CleanupComplete: in.CleanupComplete,
 		Recovering:      in.Recovering,
 		PrimaryAction:   in.PrimaryAction,
+
+		ServiceRestorePending: in.ServiceRestorePending,
 	}
 	if in.PendingTarget != nil {
 		out.PendingTarget = &Selection{Digest: in.PendingTarget.Digest, Mode: string(in.PendingTarget.Mode), Index: in.PendingTarget.Index}

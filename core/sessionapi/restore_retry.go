@@ -59,8 +59,14 @@ func (m *Manager) PrepareRestoreAtServiceStart() func(context.Context) error {
 	s := m.session
 	s.mu.Lock()
 	epoch := s.restoreEpoch
+	s.serviceRestorePending = true
 	s.mu.Unlock()
 	return func(ctx context.Context) error {
+		defer func() {
+			s.mu.Lock()
+			s.serviceRestorePending = false
+			s.mu.Unlock()
+		}()
 		_, err := m.restoreWithRetries(ctx, epoch, realRestoreClock)
 		return err
 	}

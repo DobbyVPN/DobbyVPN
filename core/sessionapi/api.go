@@ -189,6 +189,8 @@ type SnapshotResult struct {
 	CleanupComplete     bool
 	Recovering          bool
 	PrimaryAction       string
+
+	ServiceRestorePending bool
 }
 
 // SessionRef is passed to every platform/runtime operation.  It prevents a
@@ -306,6 +308,7 @@ type session struct {
 	configureRequest           uint64
 	restoreEpoch               uint64
 	restorePrepared            bool
+	serviceRestorePending      bool
 	activeProfiles             []RuntimeProfile
 	activeDigest               string
 	activeSourceKind           ConfigSourceKind
@@ -1294,6 +1297,7 @@ func snapshotLocked(s *session) SnapshotResult {
 		ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure,
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,
 		Recovering: s.recovering, PrimaryAction: primaryActionLocked(s),
+		ServiceRestorePending: s.serviceRestorePending,
 	}
 }
 
