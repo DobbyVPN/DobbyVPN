@@ -185,11 +185,35 @@ func setConfigRedirectPolicy(client *http.Client, request *http.Request, trace *
 
 var errSourceUnreachable = errors.New("subscription origin unreachable")
 
+// A failed local socket policy or cleanup must never authorize the cache.
+// A dial may aggregate errors from several addresses. Every cause must agree.
 func cacheEligibleDialFailure(err error) bool {
-	var dns *net.DNSError
-	var op *net.OpError
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) || errors.As(err, &dns) ||
-		errors.As(err, &op) && op.Op == "dial"
+	switch cause := err.(type) {
+	case interface{ Unwrap() []error }:
+		causes := cause.Unwrap()
+		for _, nested := range causes {
+			if !cacheEligibleDialFailure(nested) {
+				return false
+			}
+		}
+		return len(causes) != 0
+	case *CleanupFailure:
+		return false
+	case *net.DNSError:
+		if nested := cause.Unwrap(); nested != nil {
+			return cacheEligibleDialFailure(nested)
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return cacheEligibleDialFailure(cause.Unwrap())
+	}
+	errno, ok := err.(syscall.Errno)
+	return errors.Is(err, context.DeadlineExceeded) || ok && offlineSocketErrors[errno]
+}
+
+var offlineSocketErrors = map[syscall.Errno]bool{
+	syscall.ENETDOWN: true, syscall.ENETUNREACH: true, syscall.EHOSTUNREACH: true,
+	syscall.ECONNREFUSED: true, syscall.ETIMEDOUT: true,
 }
 
 func versionOrDev(version string) string {

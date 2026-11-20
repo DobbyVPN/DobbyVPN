@@ -3,8 +3,6 @@ package sessionapi
 import (
 	"context"
 	"errors"
-	"io"
-	"net"
 	"time"
 
 	"core/log"
@@ -93,15 +91,11 @@ func (m *Manager) restoreWithRetries(ctx context.Context, epoch uint64, clock re
 
 func finalRestoreFailure(err error) bool {
 	code := CodeOf(err)
-	return code == FailureNotConfigured || code == FailureMalformedConfig || code == FailureConflict || code == FailureUnsupported
+	return code == FailureCleanup || code == FailureNotConfigured || code == FailureMalformedConfig || code == FailureConflict || code == FailureUnsupported
 }
 
-// unreachableSource reports a network failure or timeout, including one while
-// the response body is read, as opposed to a server that answered.
-func unreachableSource(err error) bool {
-	var op *net.OpError
-	var dns *net.DNSError
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &op) || errors.As(err, &dns)
+func isUnreachableLoad(err error) bool {
+	return CodeOf(err) != FailureCleanup && errors.Is(err, errSourceUnreachable)
 }
 
 // reportStartupRestoreFailure shows a failed restore in the idle session's
@@ -119,7 +113,7 @@ func (m *Manager) reportStartupRestoreFailure(ctx context.Context, epoch uint64,
 	if errors.As(err, &domain) {
 		text = "automatic restore failed: " + domain.Message
 	}
-	if unreachableSource(err) {
+	if isUnreachableLoad(err) {
 		code, text = FailurePlatform, SubscriptionUnreachableMessage
 	}
 	s := m.session

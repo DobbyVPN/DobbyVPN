@@ -29,7 +29,7 @@ func (protectedRestoreLoader) Load(ctx context.Context, source []byte) (config s
 	defer func() {
 		if closeErr := release(); closeErr != nil {
 			config = sessionapi.LoadedConfig{}
-			err = errors.Join(err, closeErr)
+			err = errors.Join(err, &sessionapi.CleanupFailure{Err: closeErr})
 		}
 	}()
 	transport := &http.Transport{DialContext: dial, DisableKeepAlives: true, ForceAttemptHTTP2: true}

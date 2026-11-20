@@ -514,7 +514,7 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 		defer s.finishProtectedFetch(request, cancelFetch)
 	}
 	loaded, parsed, loadErr := loadConfig(ctx, loader, rawConfig)
-	if loadErr != nil && restoreEpoch != nil && hasCache && ctx.Err() == nil && errors.Is(loadErr, errSourceUnreachable) {
+	if loadErr != nil && restoreEpoch != nil && hasCache && ctx.Err() == nil && isUnreachableLoad(loadErr) {
 		loaded, parsed, loadErr = m.loadForRestore(ctx, cache, rawConfig, loadErr)
 	}
 	if loadErr != nil {
