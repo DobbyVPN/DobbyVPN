@@ -109,6 +109,26 @@ if [ "$pf_flush_status" -eq 0 ] && [ -f "$PF_TOKEN" ] && [ ! -L "$PF_TOKEN" ]; t
     fi
 fi
 
+# Read the installed service owner before retiring its plist. Use that
+# account's privileges for its private files, including on headless uninstall.
+if [ -f "$PLIST_DEST" ]; then
+    owner_uid="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:DOBBYVPN_CONTROL_PEER_UID' "$PLIST_DEST")"
+    if ! [[ "$owner_uid" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Installed service has an invalid configuration owner" >&2
+        exit 1
+    fi
+    capture_command remove-configuration /usr/bin/sudo -n -H -u "#$owner_uid" /bin/sh -eu -c '
+        cd -P -- "$HOME"
+        for part in .dobbyvpn configs; do
+            if [ -L "$part" ]; then echo "Saved configuration directory is a symlink" >&2; exit 1; fi
+            if [ ! -e "$part" ]; then exit 0; fi
+            cd -P -- "$part"
+        done
+        /bin/rm -f -- connection-url.txt.activation.json connection-url.txt accepted-configuration.v1.json
+    '
+    if [ "$CAPTURE_STATUS" -ne 0 ]; then exit "$CAPTURE_STATUS"; fi
+fi
+
 # Remove only the product's launchd registration and runtime endpoint.  Do not
 # follow symlinks or sweep the parent runtime directory if another owner uses
 # it; an empty product directory is removed as a cosmetic final step.
