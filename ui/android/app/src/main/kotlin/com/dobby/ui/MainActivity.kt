@@ -644,6 +644,7 @@ internal data class SessionData(
     val cleanupComplete: Boolean = true,
     val failure: String = "",
     val sourceError: String = "",
+    val offlineAcceptedAt: String = "",
 ) {
     val protectedFailure: Boolean
         get() = state == "FAILED" && vpnActive && canRetry && primaryAction == "RETRY" && !cleanupComplete
@@ -1502,6 +1503,7 @@ internal class SessionController(
                     current.copy(
                         configured = state.session.configured,
                         sourceUrl = state.session.sourceUrl,
+                        offlineAcceptedAt = state.session.offlineAcceptedAt,
                         digest = state.session.digest,
                         profiles = state.session.profiles,
                     )

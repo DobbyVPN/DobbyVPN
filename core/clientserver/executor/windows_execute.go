@@ -30,7 +30,13 @@ type managerService struct{}
 func prepareDesktopControl() (net.Listener, error) {
 	return prepareDesktopControlWith(
 		controlplane.ListenDesktopControlPipe,
-		recoverInterruptedState,
+		func() error {
+			startupFailure = prepareServiceProtection()
+			if startupFailure != nil {
+				return nil
+			} // Open the pipe so the operator sees the retained policy failure.
+			return recoverInterruptedState()
+		},
 		platform_engine.RecoverStaleWindowsIPv6FirewallRules,
 	)
 }
@@ -241,6 +247,10 @@ func executeWith(mode string, initLog func() error, runNormal func(), runService
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)
 
 	switch mode {
+	case "release-protection":
+		if err := removeDesktopInstallationState(context.Background()); err != nil {
+			return reportStartupFailure("release installed VPN state", err, false)
+		}
 	case "normal":
 		runNormal()
 	case "service":

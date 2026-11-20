@@ -34,6 +34,9 @@ type PlatformCallbacks interface {
 	LoadSourceURL() string
 	SaveSourceURL(value string) bool
 	ClearSourceURL() bool
+	LoadAcceptedRecord() (string, error)
+	SaveAcceptedRecord(string) error
+	ClearAcceptedRecord() error
 	LoadActivation() string
 	SaveActivation(string) bool
 }

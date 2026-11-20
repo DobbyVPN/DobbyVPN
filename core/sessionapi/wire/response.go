@@ -47,6 +47,7 @@ type Selection struct {
 }
 
 type Snapshot struct {
+	OfflineAcceptedAt   string     `json:"offline_accepted_at,omitempty"`
 	ProtocolVersion     int        `json:"protocol_version"`
 	ServiceVersion      string     `json:"service_version"`
 	ActiveDigest        string     `json:"active_digest"`
@@ -114,7 +115,7 @@ func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 		Recovering:      in.Recovering,
 		PrimaryAction:   in.PrimaryAction,
 
-		ServiceRestorePending: in.ServiceRestorePending,
+		ServiceRestorePending: in.ServiceRestorePending, OfflineAcceptedAt: in.OfflineAcceptedAt,
 	}
 	if in.PendingTarget != nil {
 		out.PendingTarget = &Selection{Digest: in.PendingTarget.Digest, Mode: string(in.PendingTarget.Mode), Index: in.PendingTarget.Index}

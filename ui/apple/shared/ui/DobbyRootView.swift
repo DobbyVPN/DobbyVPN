@@ -101,6 +101,11 @@ public struct DobbyRootView: View {
             VStack(spacing: 0) {
                 VStack(spacing: pt(8)) {
                     subscriptionField
+                    if !model.snapshot.offlineAcceptedAt.isEmpty {
+                        Text("Using saved profiles from \(model.snapshot.offlineAcceptedAt)")
+                            .font(.caption)
+                            .accessibilityIdentifier("configuration.offline")
+                    }
                     mainButton
                     connections
                         .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))

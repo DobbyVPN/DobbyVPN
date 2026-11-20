@@ -43,3 +43,5 @@ func controlSourceDirectoryOwner(home string) (*sessionapi.SourceDirectoryOwner,
 	}
 	return &sessionapi.SourceDirectoryOwner{Root: home, UID: uid, GID: gid}, nil
 }
+
+func protectedConfigurationDirectory() (string, error) { return "", nil }

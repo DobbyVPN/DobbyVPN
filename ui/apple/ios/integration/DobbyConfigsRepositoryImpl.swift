@@ -1,7 +1,7 @@
+import CryptoKit
 import Foundation
 
-/// Stores only the user-entered source URL. Go owns acquired bytes, parsing,
-/// profile selection, telemetry policy, and protocol state.
+/// Protects the legacy source URL and the Go-owned accepted configuration.
 public final class DobbyConfigsRepositoryImpl {
     public static let shared = DobbyConfigsRepositoryImpl()
 
@@ -37,5 +37,41 @@ public final class DobbyConfigsRepositoryImpl {
     @discardableResult
     public func clearConnectionURL() -> Bool {
         secrets.remove(sourceKey)
+    }
+}
+
+extension DobbyConfigsRepositoryImpl {
+    private func acceptedFile() throws -> URL {
+        guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        return directory.appendingPathComponent("accepted-configuration.v1.enc")
+    }
+
+    public func loadAcceptedRecord() throws -> String {
+        let url = try acceptedFile()
+        let encrypted: Data
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            guard let size = attributes[.size] as? NSNumber, size.intValue <= 8 * 1_048_576 + 28,
+                  attributes[.type] as? FileAttributeType == .typeRegular else { throw CocoaError(.fileReadCorruptFile) }
+            encrypted = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile { return "" }
+        let key = try secrets.acceptedConfigurationKey(create: false)
+        let clear = try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: key)
+        guard let value = String(data: clear, encoding: .utf8) else { throw CocoaError(.fileReadCorruptFile) }
+        return value
+    }
+
+    public func saveAcceptedRecord(_ value: String) throws {
+        let url = try acceptedFile()
+        let key = try secrets.acceptedConfigurationKey(create: !FileManager.default.fileExists(atPath: url.path))
+        guard let sealed = try AES.GCM.seal(Data(value.utf8), using: key).combined else { throw CocoaError(.fileWriteUnknown) }
+        try sealed.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    public func clearAcceptedRecord() throws {
+        do { try FileManager.default.removeItem(at: acceptedFile()) }
+        catch let error as CocoaError where error.code == .fileNoSuchFile { return }
     }
 }

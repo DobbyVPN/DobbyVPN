@@ -29,6 +29,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let canRetry: Bool
     public internal(set) var configured: Bool
     public internal(set) var sourceURL: String
+    public var offlineAcceptedAt = ""
     public let sourceError: String
     public let activeProfile: DobbyProfile?
     public let lastFailure: DobbyFailure?
@@ -65,6 +66,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         case primaryAction = "primary_action"
         case sourceURL = "source_url"
         case sourceError = "source_error"
+        case offlineAcceptedAt = "offline_accepted_at"
         case activeProfile = "active_profile"
         case lastFailure = "last_failure"
         case recovering, digest, profiles
@@ -99,6 +101,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         canRetry = try values.decode(Bool.self, forKey: .canRetry)
         configured = try values.decode(Bool.self, forKey: .configured)
         sourceURL = values.contains(.sourceURL) ? try values.decode(String.self, forKey: .sourceURL) : ""
+        offlineAcceptedAt = values.contains(.offlineAcceptedAt) ? try values.decode(String.self, forKey: .offlineAcceptedAt) : ""
         sourceError = values.contains(.sourceError) ? try values.decode(String.self, forKey: .sourceError) : ""
         activeProfile = try values.decodeIfPresent(DobbyProfile.self, forKey: .activeProfile)
         lastFailure = try values.decodeIfPresent(DobbyFailure.self, forKey: .lastFailure)

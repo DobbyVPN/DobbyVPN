@@ -37,7 +37,7 @@
 		</Component>
 		<!-- The v1.5.1 service key file and runtime closure changed. -->
 		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="5810499f-aa36-44a7-b9df-9a9505597be2">
-			<File Source="dobbyVPN-windows\bin\dobbyvpn-backend.exe" KeyPath="yes" />
+			<File Id="DobbyBackendFile" Source="dobbyVPN-windows\bin\dobbyvpn-backend.exe" KeyPath="yes" />
 			<File Source="dobbyVPN-windows\bin\dobby_bridge.dll" />
 			<File Source="wintun\bin\$(var.DOBBYVPN_PLATFORM)\wintun.dll" />
 
@@ -52,6 +52,8 @@
 					Arguments="-mode=service" >
 				<ServiceDependency Id="Nsi" />
 				<ServiceDependency Id="TcpIp" />
+				<util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+					ThirdFailureActionType="restart" RestartServiceDelayInSeconds="1" ResetPeriodInDays="1" />
 			</ServiceInstall>
 			<ServiceControl
 					Id="svc.Control"

@@ -131,6 +131,10 @@ internal fun DobbyApp(controller: SessionController) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SubscriptionField(controller)
+                    if (controller.state.session.offlineAcceptedAt.isNotEmpty()) {
+                        Text("Using saved profiles from " + controller.state.session.offlineAcceptedAt,
+                            color = Muted, fontSize = 12.sp, modifier = Modifier.testTag("configuration.offline"))
+                    }
                     if (controller.state.source.isEmpty()) {
                         Text("Enter a subscription URL to connect.", color = Muted, fontSize = 13.sp)
                     }

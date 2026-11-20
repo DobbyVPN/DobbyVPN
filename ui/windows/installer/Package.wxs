@@ -15,6 +15,12 @@
 		Language="1033"
 		Version="$(var.DOBBYVPN_VERSION)">
 
+		<CustomAction Id="ReleaseDobbyProtection" FileRef="DobbyBackendFile" ExeCommand="-mode=release-protection"
+			Execute="deferred" Impersonate="no" Return="check" />
+		<InstallExecuteSequence>
+			<Custom Action="ReleaseDobbyProtection" After="StopServices" Condition='REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+		</InstallExecuteSequence>
+
 		<Icon Id="dobbyvpn.ico" SourceFile="dobbyVPN-windows/app/app.ico" />
 
 		<Property Id="ARPPRODUCTICON" Value="dobbyvpn.ico" />

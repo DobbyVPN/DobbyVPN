@@ -375,6 +375,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     if sameSession && self.sourceIsDirty {
                         displayedValue.configured = self.snapshot.configured
                         displayedValue.sourceURL = self.snapshot.sourceURL
+                        displayedValue.offlineAcceptedAt = self.snapshot.offlineAcceptedAt
                         displayedValue.digest = self.snapshot.digest
                         displayedValue.profiles = self.snapshot.profiles
                     }

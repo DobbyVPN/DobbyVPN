@@ -67,3 +67,30 @@ func preparePeerSourceDirectory(root *os.Root, current string, owner *SourceDire
 	}
 	return nil
 }
+
+func secureAcceptedDirectory(dir string, serviceDirectory bool) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return errors.New("accepted configuration directory is not private")
+	}
+	return nil
+}
+
+func verifyAcceptedAccess(info os.FileInfo, owner *SourceDirectoryOwner) error {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Nlink != 1 || info.Mode().Perm()&0077 != 0 || owner != nil && int(stat.Uid) != owner.UID {
+		return errors.New("accepted configuration has unexpected permissions or ownership")
+	}
+	return nil
+}
+
+func syncAcceptedDirectory(root *os.Root) error {
+	f, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	return errors.Join(f.Sync(), f.Close())
+}

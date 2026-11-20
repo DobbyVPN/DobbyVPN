@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -39,9 +40,10 @@ const (
 )
 
 type LoadedConfig struct {
-	Raw       []byte
-	Kind      ConfigSourceKind
-	SourceURL string
+	OfflineAcceptedAt string
+	Raw               []byte
+	Kind              ConfigSourceKind
+	SourceURL         string
 }
 
 // ConfigLoader is injectable so parser tests remain deterministic and do not
@@ -99,6 +101,7 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 		transport = http.DefaultTransport
 	}
 	client.Transport = &configTraceTransport{base: transport, trace: trace}
+	sameOrigin := true
 	callerCheckRedirect := client.CheckRedirect
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		trace.record("redirect", map[string]any{configLogHost: req.URL.Host, configLogURL: req.URL.String(), "status": req.Response.StatusCode, "redirect_count": len(via)})
@@ -119,6 +122,9 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 				return errors.New("configuration redirect must use HTTPS")
 			}
 		}
+		if !strings.EqualFold(req.URL.Host, request.URL.Host) {
+			sameOrigin = false
+		}
 		return nil
 	}
 	version := l.Version
@@ -129,6 +135,9 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	response, err := client.Do(request)
 	if err != nil {
 		trace.record("request failed", map[string]any{configLogError: err.Error(), configLogContextError: errorText(requestCtx.Err())})
+		if sameOrigin && ctx.Err() == nil && cacheEligibleDialFailure(err) {
+			err = errors.Join(errSourceUnreachable, err)
+		}
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -158,12 +167,24 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 		)
 	}
 	if readErr != nil {
+		if sameOrigin && ctx.Err() == nil && errors.Is(readErr, context.DeadlineExceeded) && closeErr == nil {
+			readErr = errors.Join(errSourceUnreachable, readErr)
+		}
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be read", errors.Join(readErr, closeErr))
 	}
 	if closeErr != nil {
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be closed", closeErr)
 	}
 	return LoadedConfig{Raw: body, Kind: ConfigSourceURL, SourceURL: source}, nil
+}
+
+var errSourceUnreachable = errors.New("subscription origin unreachable")
+
+func cacheEligibleDialFailure(err error) bool {
+	var dns *net.DNSError
+	var op *net.OpError
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &dns) ||
+		errors.As(err, &op) && op.Op == "dial"
 }
 
 func versionOrDev(version string) string {

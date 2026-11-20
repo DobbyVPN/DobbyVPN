@@ -10,7 +10,6 @@ import (
 	"math"
 	"net"
 	"net/netip"
-	"os"
 	"os/user"
 	"strconv"
 	"sync"
@@ -21,12 +20,13 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/google/nftables/userdata"
 	nl "github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 )
 
-// LinuxOutputGuard owns a netlink-owner table. The kernel removes it if its
-// socket/process dies. Its lifetime is the VPN network, never a protocol.
+// LinuxOutputGuard manages the persistent inet table. Closing the socket or
+// losing the userspace service leaves the last committed protection in force.
 type LinuxOutputGuard struct {
 	mu                sync.Mutex
 	conn              *nftables.Conn
@@ -49,6 +49,11 @@ type LinuxOutputGuard struct {
 const excludedSetChunk = 1024
 
 func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark int) (*LinuxOutputGuard, error) {
+	linuxGuardLifetime.Lock()
+	defer linuxGuardLifetime.Unlock()
+	if linuxGuardLifetime.active != nil {
+		return nil, errors.New("another network owns the Linux output guard")
+	}
 	if mark <= 0 || uint64(mark) > math.MaxUint32 {
 		return nil, errors.New("output guard requires an owned socket mark")
 	}
@@ -79,7 +84,7 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 		}
 	}
 	// Register before any native operation: an interrupted ACK can still leave
-	// a committed kernel table owned by this socket.
+	// a committed kernel table.
 	if _, acquireErr := p.Acquire("owned IPv4/IPv6 output guard", func() error { return nil }, g.Close); acquireErr != nil {
 		return nil, acquireErr
 	}
@@ -87,12 +92,19 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 	if err != nil {
 		return g, err
 	}
-	g.table = &nftables.Table{Name: fmt.Sprintf("dobbyvpn_%d", os.Getpid()), Family: nftables.TableFamilyINet}
+	g.table = &nftables.Table{Name: linuxGuardTable, Family: nftables.TableFamilyINet}
 	err = g.operation(ctx, func() error {
-		if createErr := createLinuxOwnerTable(g.socket, g.table); createErr != nil {
-			return createErr
+		existing, err := ownedLinuxGuardTable(g.conn)
+		if err != nil {
+			return err
 		}
-		g.created = true
+		if existing != nil {
+			// Both operations belong to one nftables batch. The kernel sees
+			// the previous policy or the complete replacement, including if
+			// creating any new chain, set or rule fails.
+			g.conn.DelTable(existing)
+		}
+		g.conn.CreateTable(g.table)
 		// Excluded addresses are interval sets, so one rule per family matches
 		// any number of ranges and a change replaces only the set elements.
 		g.excluded4 = &nftables.Set{Table: g.table, Name: "excluded4", KeyType: nftables.TypeIPAddr, Interval: true}
@@ -114,37 +126,19 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 		g.add(output, []expr.Any{&expr.Meta{Key: expr.MetaKeyMARK, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: native32(g.mark)}}, expr.VerdictAccept)
 		// No established-flow exemption: a pre-existing application connection
 		// cannot escape merely because its transport used to work.
-		g.add(output, []expr.Any{&expr.Counter{}}, expr.VerdictDrop)
-		return g.conn.Flush()
+		g.conn.AddRule(&nftables.Rule{Table: g.table, Chain: output,
+			Exprs:    []expr.Any{&expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop}},
+			UserData: userdata.AppendString(nil, userdata.TypeComment, linuxGuardOwner),
+		})
+		if err := g.conn.Flush(); err != nil {
+			return err
+		}
+		g.created = true
+		linuxGuardLifetime.active = g
+		log.Infof(Category, "persistent output guard active table=%s adopted=%t", g.table.Name, existing != nil)
+		return nil
 	})
 	return g, err
-}
-
-// createLinuxOwnerTable uses the documented NFT_TABLE_F_OWNER kernel flag.
-// The upstream released table constructor does not expose that flag, so this
-// native table-creation request precedes normal upstream chain/rule operations.
-func createLinuxOwnerTable(socket *nl.Conn, table *nftables.Table) error {
-	attributes, err := nl.MarshalAttributes([]nl.Attribute{
-		{Type: unix.NFTA_TABLE_NAME, Data: append([]byte(table.Name), 0)},
-		{Type: unix.NFTA_TABLE_FLAGS, Data: binary.BigEndian.AppendUint32(nil, 2)}, // NFT_TABLE_F_OWNER
-	})
-	if err != nil {
-		return err
-	}
-	batch := []nl.Message{
-		{Header: nl.Header{Type: unix.NFNL_MSG_BATCH_BEGIN, Flags: nl.Request}, Data: []byte{unix.NFPROTO_UNSPEC, unix.NFNETLINK_V0, 0, unix.NFNL_SUBSYS_NFTABLES}},
-		{Header: nl.Header{Type: (unix.NFNL_SUBSYS_NFTABLES << 8) | unix.NFT_MSG_NEWTABLE, Flags: nl.Request | nl.Acknowledge | nl.Create | nl.Excl}, Data: append([]byte{byte(table.Family), unix.NFNETLINK_V0, 0, 0}, attributes...)},
-		{Header: nl.Header{Type: unix.NFNL_MSG_BATCH_END, Flags: nl.Request}, Data: []byte{unix.NFPROTO_UNSPEC, unix.NFNETLINK_V0, 0, unix.NFNL_SUBSYS_NFTABLES}},
-	}
-	sent, err := socket.SendMessages(batch)
-	if err != nil {
-		return err
-	}
-	replies, err := socket.Receive()
-	if err != nil {
-		return err
-	}
-	return nl.Validate(sent[1], replies)
 }
 
 func native32(value uint32) []byte { return binary.NativeEndian.AppendUint32(nil, value) }
@@ -295,7 +289,8 @@ func (g *LinuxOutputGuard) rebuildBootstrap(ctx context.Context) error {
 					matches = append(matches, matchIP(server)...)
 					matches = append(matches, matchProtocol(protocol)...)
 					matches = append(matches, matchPort(2, port)...)
-					g.markTraffic(matches)
+					matches = append(matches, &expr.Immediate{Register: 1, Data: native32(g.mark)}, &expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1}, &expr.Verdict{Kind: expr.VerdictAccept})
+					g.conn.AddRule(&nftables.Rule{Table: g.table, Chain: g.bootstrap, Exprs: matches, UserData: userdata.AppendString(nil, userdata.TypeComment, linuxGuardResolver)})
 				}
 			}
 		}
@@ -369,13 +364,20 @@ func (g *LinuxOutputGuard) operation(ctx context.Context, fn func() error) error
 }
 
 func (g *LinuxOutputGuard) Close(ctx context.Context) error {
+	linuxGuardLifetime.Lock()
+	defer linuxGuardLifetime.Unlock()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
 		return nil
 	}
 	if g.conn != nil && g.created {
-		if err := g.operation(ctx, func() error { g.conn.DelTable(g.table); return g.conn.Flush() }); err != nil && !errors.Is(err, unix.ENOENT) {
+		if err := g.operation(ctx, func() error {
+			if linuxGuardLifetime.retain {
+				return resetLinuxGuardAllowances(g.conn)
+			}
+			return removeOwnedLinuxGuard(g.conn)
+		}); err != nil {
 			return err
 		}
 		g.created = false
@@ -388,6 +390,9 @@ func (g *LinuxOutputGuard) Close(ctx context.Context) error {
 		if err := g.socket.Close(); err != nil {
 			return err
 		}
+	}
+	if linuxGuardLifetime.active == g {
+		linuxGuardLifetime.active = nil
 	}
 	g.closed = true
 	return nil

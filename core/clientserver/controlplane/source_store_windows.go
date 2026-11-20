@@ -4,7 +4,9 @@ package controlplane
 
 import (
 	"fmt"
+	"golang.org/x/sys/windows"
 	"os/user"
+	"path/filepath"
 
 	"core/sessionapi"
 )
@@ -26,4 +28,12 @@ func controlUserHome() (string, error) {
 
 func controlSourceDirectoryOwner(string) (*sessionapi.SourceDirectoryOwner, error) {
 	return nil, nil
+}
+
+func protectedConfigurationDirectory() (string, error) {
+	local, err := windows.KnownFolderPath(windows.FOLDERID_LocalAppData, 0)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(local, "DobbyVPN", "Configuration"), nil
 }

@@ -556,6 +556,9 @@ public sealed partial class MainWindow : Window
 
     private void Render()
     {
+        var acceptedAt = _snapshot?.OfflineAcceptedAt;
+        OfflineConfigurationText.Visibility = string.IsNullOrEmpty(acceptedAt) ? Visibility.Collapsed : Visibility.Visible;
+        OfflineConfigurationText.Text = string.IsNullOrEmpty(acceptedAt) ? "" : "Using saved profiles from " + acceptedAt;
         if (_lifetime.IsClosing) return;
         RenderSourceField();
         RenderMainButton();

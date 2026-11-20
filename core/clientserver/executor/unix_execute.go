@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -142,9 +143,6 @@ func run() {
 	logrus.StandardLogger().ExitFunc = func(code int) {
 		panic(fmt.Sprintf("fatal error (exit code %d)", code))
 	}
-	// A failed recovery must not stop the service: the control socket opens,
-	// clients see the error, and every Connect retries the recovery.
-	startupFailure = recoverInterruptedState()
 	controlPath, pathErr := controlplane.ControlSocketPath()
 	if pathErr != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", pathErr))
@@ -152,6 +150,12 @@ func run() {
 	listener, err := controlplane.ListenControlSocket()
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
+	}
+	// A failed recovery must not stop the service: the control socket opens,
+	// clients see the error, and every Connect retries the recovery.
+	startupFailure = prepareServiceProtection()
+	if startupFailure == nil {
+		startupFailure = recoverInterruptedState()
 	}
 	startRestore := prepareDesktopRestore(desktopProcessBinding(), releaseUnadoptedKillSwitch)
 	serveDone := make(chan error, 1)
@@ -180,6 +184,10 @@ func run() {
 
 func (c *Executor) Execute(mode string) {
 	switch mode {
+	case "release-protection":
+		if err := removeDesktopInstallationState(context.Background()); err != nil {
+			exitWithShutdownError(err)
+		}
 	case "normal":
 		run()
 	default:

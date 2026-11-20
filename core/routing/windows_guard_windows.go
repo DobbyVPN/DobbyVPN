@@ -23,7 +23,7 @@ import (
 
 const (
 	wfpAuthnWinNT         = 10
-	wfpSessionDynamic     = 1
+	wfpPersistent         = 1
 	wfpUint8              = 1
 	wfpUint16             = 2
 	wfpUint64             = 4
@@ -153,11 +153,12 @@ var (
 	wfpConditionUser          = windows.GUID{Data1: 0xaf043a0a, Data2: 0xb34d, Data3: 0x4f86, Data4: [8]byte{0x97, 0x9c, 0xc9, 0x03, 0x71, 0xaf, 0x6e, 0x66}}
 )
 
-// WindowsNetworkGuard owns one dynamic WFP session from network activation to
+// WindowsNetworkGuard manages persistent provider-owned filters from activation to
 // Stop. Only the retained tunnel, loopback, required system traffic, and actual
 // backend destinations are permitted. There is no executable-wide exemption.
-// Process termination removes the session through Windows, as for Wintun.
+// Enforcement survives the service handle closing.
 type WindowsNetworkGuard struct {
+	policy            *WindowsServiceProtection
 	mu                sync.Mutex
 	engine            windows.Handle
 	sublayerKey       windows.GUID
@@ -175,21 +176,24 @@ type WindowsNetworkGuard struct {
 }
 
 func OpenWindowsNetworkGuard(tunnelLUID uint64) (*WindowsNetworkGuard, error) {
+	return ServiceWindowsProtection.open(tunnelLUID)
+}
+
+func (policy *WindowsServiceProtection) open(tunnelLUID uint64) (*WindowsNetworkGuard, error) {
 	if tunnelLUID == 0 {
 		return nil, errors.New("open Windows network guard: tunnel LUID is zero")
 	}
-	g := &WindowsNetworkGuard{tunnelLUID: tunnelLUID, attempts: make(map[uint64]map[string]uint64)}
-	sessionName, _ := windows.UTF16PtrFromString("DobbyVPN network protection")
-	session := fwpmSession{displayData: fwpmDisplayData{name: sessionName}, flags: wfpSessionDynamic}
-	_, err := windowsDNSWFPCall(windowsDNSWFP.engineOpen, "FwpmEngineOpen0", 0, wfpAuthnWinNT, 0, uintptr(unsafe.Pointer(&session)), uintptr(unsafe.Pointer(&g.engine)))
-	runtime.KeepAlive(&session)
-	if err != nil || g.engine == 0 {
-		return g.failInstall(errors.Join(err, errors.New("WFP network session acquisition failed")))
+	policy.mu.Lock()
+	defer policy.mu.Unlock()
+	if policy.active != nil {
+		return nil, errors.New("Windows network protection is already active")
 	}
-	g.sublayerKey, err = windows.GenerateGUID()
+	g, err := policy.openEngine()
 	if err != nil {
-		return g.failInstall(err)
+		return nil, err
 	}
+	g.tunnelLUID = tunnelLUID
+	g.attempts = make(map[uint64]map[string]uint64)
 	exe, err := os.Executable()
 	if err != nil {
 		return g.failInstall(err)
@@ -199,11 +203,15 @@ func OpenWindowsNetworkGuard(tunnelLUID uint64) (*WindowsNetworkGuard, error) {
 		return g.failInstall(err)
 	}
 	err = g.transaction(context.Background(), func() error {
-		name, _ := windows.UTF16PtrFromString("DobbyVPN network protection")
-		layer := fwpmSublayer{sublayerKey: g.sublayerKey, displayData: fwpmDisplayData{name: name}, weight: ^uint16(0)}
-		_, err := windowsDNSWFPCall(windowsDNSWFP.subLayerAdd, "FwpmSubLayerAdd0", uintptr(g.engine), uintptr(unsafe.Pointer(&layer)), 0)
-		runtime.KeepAlive(&layer)
+		existing, err := g.ownedPolicy()
 		if err != nil {
+			return err
+		}
+		if existing {
+			if err := g.clearPolicyFilters(false); err != nil {
+				return err
+			}
+		} else if err := g.installPolicy(); err != nil {
 			return err
 		}
 		return g.installBase()
@@ -211,6 +219,7 @@ func OpenWindowsNetworkGuard(tunnelLUID uint64) (*WindowsNetworkGuard, error) {
 	if err != nil {
 		return g.failInstall(err)
 	}
+	policy.active = g
 	log.Info(Category, "Windows network protection acquired", map[string]any{"sublayer_id": g.sublayerKey.String(), "filter_ids": g.filterIDs, "tunnel_luid": tunnelLUID})
 	return g, nil
 }
@@ -285,6 +294,10 @@ func excludedRangeConditions(r iprange.Range, appID []byte) (*wfpConditions, win
 }
 
 func (g *WindowsNetworkGuard) add(name string, layer windows.GUID, action uint32, weight uint8, c *wfpConditions) (uint64, error) {
+	return g.addPolicyFilter(name, layer, action, weight, c, wfpAttemptFilter)
+}
+
+func (g *WindowsNetworkGuard) addPolicyFilter(name string, layer windows.GUID, action uint32, weight uint8, c *wfpConditions, role byte) (uint64, error) {
 	key, err := windows.GenerateGUID()
 	if err != nil {
 		return 0, err
@@ -293,7 +306,7 @@ func (g *WindowsNetworkGuard) add(name string, layer windows.GUID, action uint32
 	if err != nil {
 		return 0, err
 	}
-	filter := fwpmFilter{filterKey: key, displayData: fwpmDisplayData{name: label}, layerKey: layer, sublayerKey: g.sublayerKey, weight: wfpValue{dataType: wfpUint8, value: uintptr(weight)}, action: fwpmAction{actionType: action}}
+	filter := fwpmFilter{flags: wfpPersistent, providerKey: &g.policy.provider, providerData: wfpByteBlob{size: 1, data: &role}, filterKey: key, displayData: fwpmDisplayData{name: label}, layerKey: layer, sublayerKey: g.sublayerKey, weight: wfpValue{dataType: wfpUint8, value: uintptr(weight)}, action: fwpmAction{actionType: action}}
 	if len(c.values) > 0 {
 		filter.numFilterConditions = uint32(len(c.values))
 		filter.filterCondition = &c.values[0]
@@ -310,7 +323,11 @@ func (g *WindowsNetworkGuard) add(name string, layer windows.GUID, action uint32
 	return id, nil
 }
 func (g *WindowsNetworkGuard) base(name string, layer windows.GUID, action uint32, weight uint8, c *wfpConditions) error {
-	id, err := g.add(name, layer, action, weight, c)
+	role := byte(wfpBaseFilter)
+	if name == "Permit retained VPN interface" {
+		role = wfpAttemptFilter
+	}
+	id, err := g.addPolicyFilter(name, layer, action, weight, c, role)
 	if err == nil {
 		g.filterIDs = append(g.filterIDs, id)
 	}
@@ -617,7 +634,7 @@ func (g *WindowsNetworkGuard) UpdateBootstrap(ctx context.Context, identity stri
 	return nil
 }
 func (g *WindowsNetworkGuard) failInstall(cause error) (*WindowsNetworkGuard, error) {
-	if err := g.Close(); err != nil {
+	if err := g.closeEngine(); err != nil {
 		return g, errors.Join(cause, err)
 	}
 	return nil, cause
@@ -626,8 +643,23 @@ func (g *WindowsNetworkGuard) Close() error {
 	if g == nil {
 		return nil
 	}
+	g.policy.mu.Lock()
+	defer g.policy.mu.Unlock()
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.engine == 0 {
+		return nil
+	}
+	if g.policy.active == g {
+		if err := g.transaction(context.Background(), func() error { return g.reconcile(g.policy.retain) }); err != nil {
+			return err
+		}
+		g.policy.active = nil
+	}
+	return g.closeEngine()
+}
+
+func (g *WindowsNetworkGuard) closeEngine() error {
 	if g.engine == 0 {
 		return nil
 	}
@@ -636,7 +668,7 @@ func (g *WindowsNetworkGuard) Close() error {
 		return err
 	}
 	g.engine = 0
-	log.Info(Category, "Windows network protection removed", map[string]any{"sublayer_id": g.sublayerKey.String()})
+	log.Info(Category, "Windows network protection handle closed", map[string]any{"sublayer_id": g.sublayerKey.String()})
 	return nil
 }
 

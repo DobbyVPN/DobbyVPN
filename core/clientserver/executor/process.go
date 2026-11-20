@@ -30,10 +30,36 @@ var (
 	processBinding *mobilebinding.Binding
 	// startupFailure is set before the first desktopProcessBinding call by
 	// platforms whose startup recovery failed without stopping the service.
-	startupFailure error
+	startupFailure     error
+	retainedProtection bool
 	// connectionSourceStore is a seam for the startup-path test.
 	connectionSourceStore = controlplane.ConnectionSourceStore
 )
+
+func removeDesktopInstallationState(ctx context.Context) error {
+	var policyErr error
+	if desktopProtection != nil {
+		policyErr = desktopProtection.SetEnabled(ctx, false)
+	}
+	store, err := connectionSourceStore()
+	if err != nil {
+		return errors.Join(policyErr, err)
+	}
+	file, ok := store.(sessionapi.FileSourceStore)
+	if !ok {
+		return errors.Join(policyErr, errors.New("installed configuration storage unavailable"))
+	}
+	return errors.Join(policyErr, file.RemoveInstallation(ctx))
+}
+
+func prepareServiceProtection() error {
+	if desktopProtection == nil {
+		return nil
+	}
+	var err error
+	retainedProtection, err = desktopProtection.Recover(context.Background())
+	return err
+}
 
 func desktopProcessBinding() *mobilebinding.Binding {
 	processOnce.Do(func() {
@@ -45,6 +71,7 @@ func desktopProcessBinding() *mobilebinding.Binding {
 			Runtime:        runtimebridge.New(nil),
 			SourceStore:    sourceStore,
 			StartupFailure: startupFailure,
+			Protection:     desktopProtection, RetainedProtection: retainedProtection,
 		})
 		processBinding = mobilebinding.NewForDesktop(manager)
 	})

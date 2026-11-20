@@ -83,6 +83,7 @@ internal fun decodeSessionSnapshot(response: JSONObject, envelope: String): Sess
         logsUploadAvailable = snapshot.field("logs_upload_available"),
         sourceUrl = snapshot.optionalText("source_url"),
         sourceError = snapshot.optionalText("source_error"),
+        offlineAcceptedAt = snapshot.optionalText("offline_accepted_at"),
         digest = snapshot.field("digest"),
         profiles = (0 until profiles.length()).map { profiles.getJSONObject(it).profile() },
         activeDigest = snapshot.field("active_digest"),

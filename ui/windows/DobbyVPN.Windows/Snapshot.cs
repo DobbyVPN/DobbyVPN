@@ -19,6 +19,7 @@ internal sealed class Snapshot : IJsonOnDeserialized
     [JsonRequired, JsonPropertyName("source_kind")] public string SourceKind { get; init; } = "";
     [JsonRequired, JsonPropertyName("configured")] public bool Configured { get; set; }
     [JsonPropertyName("source_url")] public string SourceUrl { get; set; } = "";
+    [JsonPropertyName("offline_accepted_at")] public string OfflineAcceptedAt { get; init; } = "";
     [JsonPropertyName("source_error")] public string SourceError { get; init; } = "";
     [JsonPropertyName("active_profile")] public Profile? ActiveProfile { get; init; }
     [JsonPropertyName("last_failure")] public Failure? LastFailure { get; init; }

@@ -72,6 +72,9 @@ func (m *Manager) saveActivationLocked(ctx context.Context, kind ConfigSourceKin
 	if err != nil {
 		return failureWithCause(FailurePlatform, "automatic startup selection could not be saved", err)
 	}
+	if m.protection != nil {
+		return m.protection.SetEnabled(ctx, true)
+	}
 	return nil
 }
 func (m *Manager) stopActivationLocked(ctx context.Context) error {
@@ -132,10 +135,30 @@ func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool
 		return StartResult{}, failureWithCause(FailurePlatform, "saved activation could not be read", err)
 	}
 	saved, err := decodeActivation(raw)
+	if len(raw) == 0 && m.protection != nil {
+		s.mu.Lock()
+		retained := s.retainedProtection
+		s.mu.Unlock()
+		if retained {
+			return StartResult{}, failure(FailurePlatform, "VPN protection is still active, but its saved activation is missing. Stop to restore ordinary connectivity.")
+		}
+	}
 	if err != nil {
 		return StartResult{}, err
 	}
 	if !saved.Enabled && (onlyPreviouslyEnabled || saved.Version == 1 || saved.Source == "") {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.restoreEpoch != epoch {
+			return StartResult{}, failure(FailureConflict, "automatic startup was superseded")
+		}
+		if s.retainedProtection && m.protection != nil {
+			if err := m.protection.SetEnabled(ctx, false); err != nil {
+				return StartResult{}, err
+			}
+			s.retainedProtection = false
+			m.appendLocked(s)
+		}
 		return StartResult{}, nil
 	}
 	configured, err := m.configure(ctx, sessionID, sequence, []byte(saved.Source), &epoch)
