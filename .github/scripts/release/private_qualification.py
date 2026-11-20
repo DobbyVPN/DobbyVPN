@@ -1,6 +1,7 @@
 """Join one private qualification run and return only its verified public receipt."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -116,6 +117,19 @@ def dispatch(binding):
                    input=json.dumps(fields), text=True, check=True)
 
 
+def receipt_digest(record):
+    return hashlib.sha256(json.dumps(record, sort_keys=True, separators=(",", ":")).encode()).digest()
+
+
+def receipt_description(record):
+    # GitHub limits a status description to 140 characters. Three SHA-256
+    # digests occupy 128 Base64 characters. The last digest commits to every
+    # field and every actual per-job outcome in the validated private receipt.
+    pairing = record["android_pairing"]
+    digests = bytes.fromhex(pairing["unsigned_product_apk_sha256"] + pairing["test_companion_sha256"])
+    return base64.b64encode(digests + receipt_digest(record)).decode("ascii")
+
+
 def publish_status(binding, run, parent_attempt):
     if run["status"] != "completed":
         raise ValueError("private run has not completed")
@@ -123,8 +137,7 @@ def publish_status(binding, run, parent_attempt):
     target = f"https://github.com/{TORTURER_REPOSITORY}/actions/runs/{run['id']}/attempts/{attempt}"
     if run["conclusion"] == "success":
         record = public_receipt(coverage(run), binding, run)
-        pairing = record["android_pairing"]
-        description = pairing["unsigned_product_apk_sha256"] + " " + pairing["test_companion_sha256"]
+        description = receipt_description(record)
         state = "success"
     else:
         description, state = "Private qualification requires review", "failure"
@@ -136,8 +149,10 @@ def publish_status(binding, run, parent_attempt):
         if any(previous.get(key) != value for key, value in fields.items()):
             raise ValueError("an incompatible result already exists for this parent attempt")
         return
-    subprocess.run(["gh", "api", f"repos/{PRODUCT}/statuses/{binding['source_sha']}", "--input", "-"],
-                   input=json.dumps(fields), text=True, stdout=subprocess.DEVNULL, check=True)
+    posted = json.loads(subprocess.check_output(["gh", "api", f"repos/{PRODUCT}/statuses/{binding['source_sha']}", "--input", "-"],
+                                                input=json.dumps(fields), text=True))
+    if posted["creator"]["id"] != coordinator or any(posted.get(key) != value for key, value in fields.items()):
+        raise ValueError("GitHub recorded a different qualification status")
 
 
 def receipt_from_status(binding, status):
@@ -145,15 +160,18 @@ def receipt_from_status(binding, status):
         raise ValueError("private qualification requires review")
     target = re.fullmatch(r"https://github\.com/DobbyVPN/Torturer/actions/runs/([1-9][0-9]*)/attempts/([1-9][0-9]*)",
                           status["target_url"] or "")
-    digests = re.fullmatch(r"([0-9a-f]{64}) ([0-9a-f]{64})", status["description"] or "")
-    if not target or not digests:
+    digests = base64.b64decode(status["description"] or "", validate=True)
+    if not target or len(digests) != 96:
         raise ValueError("invalid private qualification run or Android package digests")
     run = dict(id=int(target[1]), run_attempt=int(target[2]))
     pairing = dict(product_sha=binding["source_sha"], torturer_repository=TORTURER_REPOSITORY,
                    torturer_sha=binding["torturer_sha"], torturer_tree_sha256=binding["torturer_tree_sha256"],
-                   unsigned_product_apk_sha256=digests[1], test_companion_sha256=digests[2])
-    return public_receipt({**binding, "run_id": run["id"], "run_attempt": run["run_attempt"],
+                   unsigned_product_apk_sha256=digests[:32].hex(), test_companion_sha256=digests[32:64].hex())
+    receipt = public_receipt({**binding, "run_id": run["id"], "run_attempt": run["run_attempt"],
                            "checks": dict.fromkeys(PRIVATE_CHECKS, "success"), "android_pairing": pairing}, binding, run)
+    if receipt_digest(receipt) != digests[64:]:
+        raise ValueError("public status differs from the original private coverage receipt")
+    return receipt
 
 
 def await_status(binding, attempt):
