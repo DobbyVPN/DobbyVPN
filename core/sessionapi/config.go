@@ -119,7 +119,7 @@ func validateLogsEndpoint(endpoint string) error {
 // filterExcludeIPs drops the entries described above and returns the merged
 // ranges and host names to use, with warnings that carry counts, never
 // addresses. A host name that cannot be resolved is ignored at start.
-func filterExcludeIPs(entries []string) (excludeList, []string) {
+func filterExcludeIPs(entries []string) (list excludeList, warnings []string) {
 	const ipv4, ipv6, local, invalid, defaultRoute = 4, 6, 7, -1, -2
 	ranges := map[int][]iprange.Range{}
 	count := map[int]int{}
@@ -154,7 +154,6 @@ func filterExcludeIPs(entries []string) (excludeList, []string) {
 		count[family]++
 		ranges[family] = append(ranges[family], iprange.PrefixRange(netip.PrefixFrom(address, bits)))
 	}
-	var warnings []string
 	if count[invalid] > 0 {
 		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped entries that are not valid addresses or networks (%d); this traffic stays in the VPN", count[invalid]))
 	}
