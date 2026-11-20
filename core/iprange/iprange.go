@@ -85,16 +85,18 @@ func New(ranges []Range) *Set {
 	slices.SortFunc(s.v6, func(a, b range6) int { return a.first.compare(b.first) })
 	merged6 := s.v6[:0]
 	for _, r := range s.v6 {
-		if n := len(merged6); n > 0 {
-			next, overflow := merged6[n-1].last.next()
-			if overflow || r.first.compare(next) <= 0 {
-				if merged6[n-1].last.compare(r.last) < 0 {
-					merged6[n-1].last = r.last
-				}
-				continue
-			}
+		n := len(merged6)
+		if n == 0 {
+			merged6 = append(merged6, r)
+			continue
 		}
-		merged6 = append(merged6, r)
+		if next, overflow := merged6[n-1].last.next(); !overflow && r.first.compare(next) > 0 {
+			merged6 = append(merged6, r)
+			continue
+		}
+		if merged6[n-1].last.compare(r.last) < 0 {
+			merged6[n-1].last = r.last
+		}
 	}
 	s.v6 = slices.Clip(merged6)
 	return s

@@ -102,7 +102,7 @@ func (p *BypassPolicy) WithNumericIPs(ips []net.IP) (*BypassPolicy, error) {
 // recordResolved logs counts and a hash of the large configuration list and
 // the few per-attempt addresses.
 func (p *BypassPolicy) recordResolved() {
-	var upstreams []string
+	upstreams := make([]string, 0, p.upstreams.Len())
 	for _, r := range p.upstreams.Ranges() {
 		upstreams = append(upstreams, r.First.String()+"-"+r.Last.String())
 	}
