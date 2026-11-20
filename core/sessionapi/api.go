@@ -297,12 +297,13 @@ const (
 )
 
 type session struct {
-	offlineAcceptedAt  string
-	retainedProtection bool
-	mu                 sync.Mutex
-	closing            bool
-	changed            chan struct{}
-	cleanupBudget      *cleanupBudget
+	offlineAcceptedAt     string
+	offlineRefreshPending bool
+	retainedProtection    bool
+	mu                    sync.Mutex
+	closing               bool
+	changed               chan struct{}
+	cleanupBudget         *cleanupBudget
 
 	networkGeneration     uint64
 	networkLedger         *ledger
@@ -337,6 +338,7 @@ type session struct {
 	startupFailure             *Error
 	cleanupDone                bool
 	cleanupFailed              bool
+	attemptCtx                 context.Context
 	cancel                     context.CancelFunc
 	ledger                     *ledger
 	activeTarget               StartTarget
@@ -489,6 +491,7 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 	}
 	if preloadErr == nil {
 		if restoreEpoch == nil {
+			s.offlineRefreshPending = false
 			s.restoreEpoch++
 		}
 		s.configureRequest++
@@ -519,11 +522,16 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 	if acceptErr := validateConfigureBeforeAccept(ctx, s, request); acceptErr != nil {
 		return ConfigureResult{}, acceptErr
 	}
+	return m.acceptConfigurationLocked(ctx, s, loaded, parsed, restoreEpoch != nil)
+}
+
+func (m *Manager) acceptConfigurationLocked(ctx context.Context, s *session, loaded LoadedConfig, parsed parsedConfig, restoring bool) (ConfigureResult, error) {
 	if err := m.saveConfigurationSourceLocked(ctx, loaded, parsed.digest); err != nil {
 		return ConfigureResult{}, err
 	}
 	s.offlineAcceptedAt = loaded.OfflineAcceptedAt
-	s.restorePrepared = restoreEpoch != nil
+	s.restorePrepared = restoring
+	s.offlineRefreshPending = loaded.OfflineAcceptedAt != ""
 	s.profiles, s.digest, s.sourceKind, s.sourceURL, s.configured = parsed.profiles, parsed.digest, loaded.Kind, loaded.SourceURL, true
 	s.logsEndpoint = parsed.logsEndpoint
 	s.sourceError = ""
@@ -713,6 +721,7 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	// Accepted work outlives the request and is canceled by Stop or recovery.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cleanupBudget = &cleanupBudget{}
+	s.attemptCtx = ctx
 	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, false, false, nil, "", ""
 	s.startupFailure = nil
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
@@ -813,6 +822,7 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 		return StopResult{}, failure(FailureStaleGeneration, "generation is no longer active")
 	}
 	s.restoreEpoch++
+	s.offlineRefreshPending = false
 	s.configureRequest++
 	defer func() { s.restorePrepared = false }()
 	// A persistence failure is reported, but cannot prevent the requested
@@ -964,9 +974,8 @@ func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cau
 }
 
 // NetworkEvent reports a system wake or network-path change. When a connected
-// generation is monitored it triggers an immediate health check; otherwise the
-// event is only logged. It never changes state itself, so reconnects stay under
-// the automatic-recovery limit.
+// generation is monitored it triggers an immediate health check. An offline inventory can request
+// one fresh load through the current protected connection.
 func (m *Manager) NetworkEvent(_ context.Context, sessionID, reason string) error {
 	s, err := m.get(sessionID)
 	if err != nil {
@@ -977,6 +986,10 @@ func (m *Manager) NetworkEvent(_ context.Context, sessionID, reason string) erro
 	}
 	s.mu.Lock()
 	state, generation := s.state, s.generation
+	if s.offlineRefreshPending && s.attemptCtx != nil && s.vpnActive && state == StateConnected && !s.stopRequested && !s.closing {
+		s.offlineRefreshPending = false
+		go m.refreshAfterOfflineRestore(s.attemptCtx, s.sourceURL, s.restoreEpoch, generation)
+	}
 	probe := s.prober != nil && s.probeGeneration == generation && state == StateConnected && !s.stopRequested
 	if probe {
 		s.prober.ProbeNow(reason)
@@ -1216,7 +1229,7 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 	if s.generation != generation {
 		return
 	}
-	s.cancel = nil
+	s.attemptCtx, s.cancel = nil, nil
 	s.cleanupFailed = cleanupErr != nil || CodeOf(cause) == FailureCleanup
 	if s.cleanupFailed {
 		s.pending = nil
@@ -1297,6 +1310,7 @@ func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptCon
 	s.generation++
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cleanupBudget = &cleanupBudget{}
+	s.attemptCtx = ctx
 	s.cancel, s.ledger = cancel, &ledger{}
 	s.cleanupDone, s.cleanupFailed, s.stopRequested = false, false, false
 	s.active, s.activeTarget = nil, target
