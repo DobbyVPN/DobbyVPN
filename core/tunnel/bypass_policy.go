@@ -33,16 +33,14 @@ func (p *BypassPolicy) WithIPv6Availability(unavailable func() bool) *BypassPoli
 	return &policy
 }
 
-// Excluded returns the user's excluded addresses, the configuration's ranges
-// and its resolved host names, without the protocol upstream addresses.
-func (p *BypassPolicy) Excluded() *iprange.Set {
+// Excluded returns the user's excluded addresses without the protocol
+// upstream addresses: the configuration's shared ranges and the small set of
+// its resolved host names, kept apart so the large set is never rebuilt.
+func (p *BypassPolicy) Excluded() (configured, hosts *iprange.Set) {
 	if p == nil {
-		return nil
+		return nil, nil
 	}
-	if p.hosts.Len() == 0 {
-		return p.excluded
-	}
-	return iprange.New(append(p.excluded.Ranges(), p.hosts.Ranges()...))
+	return p.excluded, p.hosts
 }
 
 func (p *BypassPolicy) IsBypass(metadata *M.Metadata) bool {

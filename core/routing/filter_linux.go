@@ -202,16 +202,23 @@ func (g *LinuxOutputGuard) UpdateBootstrap(ctx context.Context, identity string,
 // SetExcluded lets packets of already established connections to the excluded
 // addresses (replies to inbound connections) leave outside the tunnel. New
 // connections keep following the normal path. The sets are replaced as a
-// whole in one transaction.
-func (g *LinuxOutputGuard) SetExcluded(ctx context.Context, excluded *iprange.Set) error {
+// whole in one transaction, only when the configured ranges or the resolved
+// host addresses changed.
+func (g *LinuxOutputGuard) SetExcluded(ctx context.Context, configured, hosts *iprange.Set) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
 		return errors.New("output guard is closed")
 	}
-	hash := excluded.Hash()
+	hash := configured.Hash() + hosts.Hash()
 	if hash == g.excludedHash {
 		return nil
+	}
+	excluded := configured
+	if hosts.Len() > 0 {
+		// Interval set elements must not overlap, so host addresses are merged
+		// into the ranges; this happens only when the list changed.
+		excluded = iprange.New(append(configured.Ranges(), hosts.Ranges()...))
 	}
 	elements4, elements6 := ExcludedSetElements(excluded)
 	if err := g.growSendBuffer(len(elements4) + len(elements6)); err != nil {
@@ -233,7 +240,7 @@ func (g *LinuxOutputGuard) SetExcluded(ctx context.Context, excluded *iprange.Se
 			return err
 		}
 		g.excludedHash = hash
-		log.Info(Category, "output guard excluded ranges applied", map[string]any{"ranges": excluded.Len(), "sha256": hash})
+		log.Info(Category, "output guard excluded ranges applied", map[string]any{"ranges": excluded.Len(), "sha256": configured.Hash(), "host_address_ranges": hosts.Len()})
 		return nil
 	})
 }

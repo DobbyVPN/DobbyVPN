@@ -169,6 +169,7 @@ type WindowsNetworkGuard struct {
 	bootstrapIdentity string
 	bootstrapIDs      []uint64
 	excluded          *iprange.Set
+	excludedHosts     *iprange.Set
 	excludedHash      string
 	excludedIDs       []uint64
 }
@@ -463,7 +464,7 @@ func (g *WindowsNetworkGuard) Authorize(ctx context.Context, generation uint64, 
 	}
 	// A direct connection to an excluded address is already permitted by the
 	// range filters; no filter per address and port is added.
-	if g.excluded.Contains(ip) {
+	if g.excluded.Contains(ip) || g.excludedHosts.Contains(ip) {
 		return ctx.Err()
 	}
 	key := network + "/" + ip.String() + "/" + strconv.Itoa(int(port))
@@ -518,15 +519,16 @@ func (g *WindowsNetworkGuard) Retire(ctx context.Context, generation uint64) err
 }
 
 // SetExcluded permits only this backend to reach the excluded addresses over
-// TCP and UDP outside the tunnel, with one filter per merged range. The
-// previous ranges are replaced in the same transaction.
-func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, excluded *iprange.Set) error {
+// TCP and UDP outside the tunnel, with one filter per configured range and per
+// resolved host address. The previous filters are replaced in the same
+// transaction, only when the ranges or the host addresses changed.
+func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, configured, hosts *iprange.Set) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.engine == 0 {
 		return errors.New("Windows network protection closed")
 	}
-	hash := excluded.Hash()
+	hash := configured.Hash() + hosts.Hash()
 	if hash == g.excludedHash {
 		return nil
 	}
@@ -535,7 +537,7 @@ func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, excluded *iprange
 		if err := g.deleteIDs(g.excludedIDs); err != nil {
 			return err
 		}
-		for _, r := range excluded.Ranges() {
+		for _, r := range append(configured.Ranges(), hosts.Ranges()...) {
 			c := &wfpConditions{}
 			layer := c.remoteRange(r)
 			c.blob(wfpConditionAppID, wfpByteBlobType, g.appID)
@@ -553,8 +555,8 @@ func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, excluded *iprange
 	if err != nil {
 		return err
 	}
-	g.excluded, g.excludedHash, g.excludedIDs = excluded, hash, replacement
-	log.Info(Category, "Windows excluded ranges applied", map[string]any{"ranges": len(replacement), "sha256": hash})
+	g.excluded, g.excludedHosts, g.excludedHash, g.excludedIDs = configured, hosts, hash, replacement
+	log.Info(Category, "Windows excluded ranges applied", map[string]any{"filters": len(replacement), "sha256": configured.Hash(), "host_address_ranges": hosts.Len()})
 	return nil
 }
 
