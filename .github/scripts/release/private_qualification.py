@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -85,47 +86,111 @@ def environment_binding():
                    source_sha=os.environ["GITHUB_SHA"], torturer_sha=os.environ["TORTURER_SHA"],
                    build_manifest_sha256=os.environ["MANIFEST_SHA256"], torturer_tree_sha256=os.environ["TESTS_TREE"])
 
+PRODUCT = "DobbyVPN/DobbyVPN"
+
+
+def status_context(binding, parent_attempt):
+    # The status lives on the Product commit. Bind every other immutable input
+    # and the public parent attempt so a retry cannot consume an old result.
+    digest = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return f"DobbyVPN/private/{binding['parent_run_id']}/{parent_attempt}/{digest}"
+
+
+def product_statuses(binding):
+    pages = subprocess.check_output(["gh", "api", "--paginate", "--slurp",
+        f"repos/{PRODUCT}/commits/{binding['source_sha']}/statuses?per_page=100"])
+    return [status for page in json.loads(pages) for status in page]
+
+
+def coordinator_status(binding, parent_attempt, coordinator):
+    context = status_context(binding, parent_attempt)
+    return next((item for item in product_statuses(binding) if item["context"] == context
+                 and item["creator"]["id"] == coordinator and item["creator"]["type"] == "User"), None)
+
+
+def dispatch(binding):
+    if api("git/ref/heads/main")["object"]["sha"] != binding["torturer_sha"]:
+        raise ValueError("reviewed Torturer SHA differs from trusted private main")
+    fields = {key: str(value) for key, value in binding.items() if key != "torturer_sha"}
+    subprocess.run(["gh", "workflow", "run", WORKFLOW, "--repo", TORTURER_REPOSITORY, "--ref", "main", "--json"],
+                   input=json.dumps(fields), text=True, check=True)
+
+
+def publish_status(binding, run, parent_attempt):
+    if run["status"] != "completed":
+        raise ValueError("private run has not completed")
+    attempt = run["run_attempt"]
+    target = f"https://github.com/{TORTURER_REPOSITORY}/actions/runs/{run['id']}/attempts/{attempt}"
+    if run["conclusion"] == "success":
+        record = public_receipt(coverage(run), binding, run)
+        pairing = record["android_pairing"]
+        description = pairing["unsigned_product_apk_sha256"] + " " + pairing["test_companion_sha256"]
+        state = "success"
+    else:
+        description, state = "Private qualification requires review", "failure"
+    coordinator = json.loads(subprocess.check_output(["gh", "api", "user"]))["id"]
+    previous = coordinator_status(binding, parent_attempt, coordinator)
+    fields = dict(context=status_context(binding, parent_attempt), description=description,
+                  target_url=target, state=state)
+    if previous:
+        if any(previous.get(key) != value for key, value in fields.items()):
+            raise ValueError("an incompatible result already exists for this parent attempt")
+        return
+    subprocess.run(["gh", "api", f"repos/{PRODUCT}/statuses/{binding['source_sha']}", "--input", "-"],
+                   input=json.dumps(fields), text=True, stdout=subprocess.DEVNULL, check=True)
+
+
+def receipt_from_status(binding, status):
+    if status["state"] != "success":
+        raise ValueError("private qualification requires review")
+    target = re.fullmatch(r"https://github\.com/DobbyVPN/Torturer/actions/runs/([1-9][0-9]*)/attempts/([1-9][0-9]*)",
+                          status["target_url"] or "")
+    digests = re.fullmatch(r"([0-9a-f]{64}) ([0-9a-f]{64})", status["description"] or "")
+    if not target or not digests:
+        raise ValueError("invalid private qualification run or Android package digests")
+    run = dict(id=int(target[1]), run_attempt=int(target[2]))
+    pairing = dict(product_sha=binding["source_sha"], torturer_repository=TORTURER_REPOSITORY,
+                   torturer_sha=binding["torturer_sha"], torturer_tree_sha256=binding["torturer_tree_sha256"],
+                   unsigned_product_apk_sha256=digests[1], test_companion_sha256=digests[2])
+    return public_receipt({**binding, "run_id": run["id"], "run_attempt": run["run_attempt"],
+                           "checks": dict.fromkeys(PRIVATE_CHECKS, "success"), "android_pairing": pairing}, binding, run)
+
+
+def await_status(binding, attempt):
+    if os.environ["GITHUB_REF"] != "refs/heads/main" or os.environ["GITHUB_REPOSITORY"] != PRODUCT:
+        raise ValueError("private qualification requires Product main")
+    coordinator = int(os.environ["QUALIFICATION_COORDINATOR_ID"])
+    if coordinator <= 0:
+        raise ValueError("invalid coordinator account")
+    while True:
+        status = coordinator_status(binding, attempt, coordinator)
+        if status:
+            return receipt_from_status(binding, status)
+        time.sleep(20)
+
+
 def main():
     binding = environment_binding()
-    if sys.argv[1:] == ["inspect"]:
-        run = find_run(binding)
-        if run is not None:
-            verify_run(run, binding)
-            run = {key: run[key] for key in ("id", "run_attempt", "status", "conclusion")}
-        print(json.dumps(run))
+    args = sys.argv[1:]
+    if args == ["await"]:
+        receipt = await_status(binding, int(os.environ["GITHUB_RUN_ATTEMPT"]))
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+            print("receipt=" + json.dumps(receipt, separators=(",", ":")), file=output)
         return
-    if sys.argv[1:]:
-        raise ValueError("unexpected private qualification command")
-    if os.environ["GITHUB_REF"] != "refs/heads/main" or os.environ["GITHUB_REPOSITORY"] != "DobbyVPN/DobbyVPN":
-        raise ValueError("private qualification requires Product main")
     run = find_run(binding)
-    if run is None:
-        if api("git/ref/heads/main")["object"]["sha"] != binding["torturer_sha"]:
-            raise ValueError("reviewed Torturer SHA differs from trusted private main")
-        fields = {key: str(value) for key, value in binding.items() if key != "torturer_sha"}
-        subprocess.run(["gh", "workflow", "run", WORKFLOW, "--repo", TORTURER_REPOSITORY, "--ref", "main", "--json"],
-                       input=json.dumps(fields), text=True, check=True)
-        deadline = time.monotonic() + 300
-        while run is None:
-            run = find_run(binding)
-            if run is None:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("private dispatch was not identified")
-                time.sleep(5)
-    verify_run(run, binding)
-    run_id, attempt = run["id"], run["run_attempt"]
-    print(f"Private qualification run {run_id} attempt {attempt}", flush=True)
-    while run["status"] != "completed":
-        time.sleep(15)
-        run = api(f"actions/runs/{run_id}")
+    if run is not None:
         verify_run(run, binding)
-        if run["id"] != run_id or run["run_attempt"] != attempt:
-            raise ValueError("private qualification attempt changed during observation")
-    if run["conclusion"] != "success":
-        raise ValueError(f"private qualification {run_id}/{attempt} requires review")
-    receipt = public_receipt(coverage(run), binding, run)
-    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-        print("receipt=" + json.dumps(receipt, separators=(",", ":")), file=output)
+    if args == ["inspect"]:
+        print(json.dumps({key: run[key] for key in ("id", "run_attempt", "status", "conclusion")} if run else None))
+    elif args == ["dispatch"]:
+        if run is None:
+            dispatch(binding)
+    elif len(args) == 3 and args[0] == "report":
+        if not run or (run["id"], run["run_attempt"]) != (int(args[1]), int(args[2])):
+            raise ValueError("private run or attempt changed before reporting")
+        publish_status(binding, run, int(os.environ["GITHUB_RUN_ATTEMPT"]))
+    else:
+        raise ValueError("unexpected private qualification command")
 
 
 if __name__ == "__main__":

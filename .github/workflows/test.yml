@@ -278,6 +278,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     environment: release-tests
+    permissions:
+      contents: read
+      statuses: read
     outputs:
       receipt: ${{ steps.child.outputs.receipt }}
     steps:
@@ -288,12 +291,13 @@ jobs:
       - name: Bind private workflow to the completed Build
         id: child
         env:
-          GH_TOKEN: ${{ secrets.TORTURER_ACTIONS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_COORDINATOR_ID: ${{ vars.QUALIFICATION_COORDINATOR_ID }}
           TORTURER_SHA: ${{ needs.resolve_build.outputs.torturer_sha }}
           TESTS_TREE: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
           MANIFEST_SHA256: ${{ needs.final_build.outputs.manifest_sha256 }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/private_qualification.py
+        run: python3 .github/scripts/release/private_qualification.py await
 
   qualification_result:
     name: Record final verification and release stop
