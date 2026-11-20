@@ -17,8 +17,7 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
 
-// socksTCPProxy retains the existing UDP implementation and makes the local
-// TCP SOCKS handshake obey its caller and engine generation cancellation.
+// socksTCPProxy negotiates the local SOCKS transport under the attempt deadline.
 // Successful calls return the original socket, preserving TCP half-close.
 type socksTCPProxy struct {
 	proxy.Proxy
@@ -44,10 +43,16 @@ func newSocksTCPProxy(outbound proxy.Proxy, address string, owner *flowOwner) (p
 }
 
 func (p *socksTCPProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {
+	target := socks5.SerializeAddr("", metadata.DstIP, metadata.DstPort)
+	conn, _, err := p.negotiate(ctx, socks5.CmdConnect, target)
+	return conn, err
+}
+
+func (p *socksTCPProxy) negotiate(ctx context.Context, command socks5.Command, target socks5.Addr) (net.Conn, socks5.Addr, error) {
 	started := time.Now()
 	conn, err := dialer.DialContext(ctx, "tcp", p.address)
 	if err != nil {
-		return nil, fmt.Errorf("connect to local SOCKS proxy: %w", err)
+		return nil, nil, fmt.Errorf("connect to local SOCKS proxy: %w", err)
 	}
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		if err := tcp.SetKeepAlive(true); err != nil {
@@ -67,18 +72,17 @@ func (p *socksTCPProxy) DialContext(ctx context.Context, metadata *M.Metadata) (
 		cancellationCloseErr = lease.Close()
 		close(done)
 	})
-	address := socks5.SerializeAddr("", metadata.DstIP, metadata.DstPort)
-	_, handshakeErr := socks5.ClientHandshake(conn, address, socks5.CmdConnect, p.user)
+	bound, handshakeErr := socks5.ClientHandshake(conn, target, command, p.user)
 	if !stop() {
 		<-done
 	}
 	if ctx.Err() != nil || handshakeErr != nil {
 		closeErr := lease.Close()
 		err := errors.Join(ctx.Err(), handshakeErr, cancellationCloseErr, closeErr)
-		log.Debugf(Category, "[Router] local SOCKS TCP handshake ended address=%s dest=%s elapsed=%s ctxErr=%v err=%v", p.address, metadata.DestinationAddress(), time.Since(started), ctx.Err(), err)
-		return nil, err
+		log.Debugf(Category, "[Router] local SOCKS handshake ended address=%s dest=%s elapsed=%s ctxErr=%v err=%v", p.address, target.String(), time.Since(started), ctx.Err(), err)
+		return nil, nil, err
 	}
-	return conn, nil
+	return conn, bound, nil
 }
 
 // A failed raw socket close remains an engine-owned lease for Stop to retry.
