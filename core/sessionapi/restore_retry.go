@@ -77,7 +77,7 @@ func (m *Manager) restoreWithRetries(ctx context.Context, epoch uint64, clock re
 		if err == nil {
 			return result, nil
 		}
-		retry := errors.Is(err, errRestoreLoad) && ctx.Err() == nil && !finalRestoreFailure(err)
+		retry := errors.Is(err, errRestoreLoad) && ctx.Err() == nil && isUnreachableLoad(err)
 		if !retry || clock.now().Add(restoreRetryInterval).After(deadline) {
 			log.Error("sessionapi", "automatic restore failed", map[string]any{"attempts": attempt, "failure_code": string(CodeOf(err))})
 			m.reportStartupRestoreFailure(ctx, epoch, err)
@@ -87,11 +87,6 @@ func (m *Manager) restoreWithRetries(ctx context.Context, epoch uint64, clock re
 			return result, errors.Join(err, sleepErr)
 		}
 	}
-}
-
-func finalRestoreFailure(err error) bool {
-	code := CodeOf(err)
-	return code == FailureCleanup || code == FailureNotConfigured || code == FailureMalformedConfig || code == FailureConflict || code == FailureUnsupported
 }
 
 func isUnreachableLoad(err error) bool {
