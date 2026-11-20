@@ -16,6 +16,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"core/log"
 	protocolconfig "core/protocol"
 )
 
@@ -45,24 +46,28 @@ const (
 	configSectionXray        = "Xray"
 	configSectionTrustTunnel = "TrustTunnel"
 	maxConfigBytes           = 1 << 20
-	// ExcludeIPs limits: one IPv4 or local IPv6 entry may cover at most a /8
-	// (10.0.0.0/8, fd00::/8), any other IPv6 entry at most a /32, and the
-	// entries of one family together at most two such networks.
-	minExcludePrefix       = 8
-	minGlobalExcludePrefix = 32
 )
 
-// localIPv6 lists the unique local and link-local IPv6 ranges.
-var localIPv6 = []*net.IPNet{
-	{IP: net.ParseIP("fc00::"), Mask: net.CIDRMask(7, 128)},
-	{IP: net.ParseIP("fe80::"), Mask: net.CIDRMask(10, 128)},
-}
+// ExcludeIPs sends the listed addresses outside the VPN. A per-country list
+// is the usual content, so a single entry may be wide. A /0 entry, or entries
+// of one family that together cover half of IPv4 or of global IPv6
+// (2000::/3), are a subscription mistake such as a typo or an inverted list.
+// Such entries are dropped, so that traffic stays in the VPN, and the
+// subscription is still accepted. Local IPv6 ranges lie outside 2000::/3 and
+// are never counted or dropped.
+var (
+	globalIPv6            = &net.IPNet{IP: net.ParseIP("2000::"), Mask: net.CIDRMask(3, 128)}
+	maxExcludedIPv4       = math.Ldexp(1, 31)  // half of IPv4
+	maxExcludedGlobalIPv6 = math.Ldexp(1, 124) // half of 2000::/3
+)
 
 func parseConfig(raw []byte) (parsedConfig, error) {
 	root, protocols, err := decodeConfig(raw)
 	if err != nil {
 		return parsedConfig{}, err
 	}
+	var excludeWarnings []string
+	root.ExcludeIPs.IPs, excludeWarnings = filterExcludeIPs(root.ExcludeIPs.IPs)
 	profiles, warnings, err := parseProfiles(root, protocols)
 	if err != nil {
 		return parsedConfig{}, err
@@ -70,12 +75,12 @@ func parseConfig(raw []byte) (parsedConfig, error) {
 	if validateErr := validateLogsEndpoint(root.LogsEndpoint); validateErr != nil {
 		return parsedConfig{}, validateErr
 	}
-	if validateErr := validateExcludeIPs(root.ExcludeIPs.IPs); validateErr != nil {
-		return parsedConfig{}, validateErr
-	}
 	// Warnings are logged only for a subscription that is accepted.
 	for _, w := range warnings {
 		w.ref.emit(w.items)
+	}
+	for _, message := range excludeWarnings {
+		log.Warn(logCategoryConfig, message, nil)
 	}
 	digest := sha256.Sum256(raw)
 	return parsedConfig{digest: hex.EncodeToString(digest[:]), profiles: profiles, logsEndpoint: root.LogsEndpoint}, nil
@@ -101,47 +106,59 @@ func validateLogsEndpoint(endpoint string) error {
 	return nil
 }
 
-// validateExcludeIPs rejects CIDR entries that would send a large part of the
-// traffic outside the tunnel. Host names resolve to single addresses later.
-func validateExcludeIPs(entries []string) error {
-	var ipv4, globalIPv6 []*net.IPNet
-	for _, entry := range entries {
+// filterExcludeIPs drops the entries described above and returns the
+// entries to use with warnings that carry counts, never addresses. Host
+// names resolve to single addresses later and are always kept.
+func filterExcludeIPs(entries []string) ([]string, []string) {
+	// family is 0 for entries that are always kept.
+	const ipv4, ipv6, dropped = 4, 6, -1
+	family := make([]int, len(entries))
+	var networks4, networks6 []*net.IPNet
+	defaultRoutes := 0
+	for i, entry := range entries {
 		_, network, err := net.ParseCIDR(strings.TrimSpace(entry))
 		if err != nil {
 			continue
 		}
 		ones, bits := network.Mask.Size()
-		limit := minExcludePrefix
 		if ip := network.IP.To4(); ip != nil {
 			// An IPv4-mapped prefix matches IPv4 destinations.
 			ones -= bits - 32
-			network = &net.IPNet{IP: ip, Mask: net.CIDRMask(max(ones, 0), 32)}
-			ipv4 = append(ipv4, network)
-		} else if !insideAny(localIPv6, network) {
-			limit = minGlobalExcludePrefix
-			globalIPv6 = append(globalIPv6, network)
+			network = &net.IPNet{IP: ip, Mask: net.CIDRMask(ones, 32)}
+			family[i] = ipv4
+		} else if globalIPv6.Contains(network.IP) || network.Contains(globalIPv6.IP) {
+			family[i] = ipv6
 		}
-		if ones < limit {
-			return failure(FailureMalformedConfig, fmt.Sprintf("ExcludeIPs entry %q is too broad; use a prefix of /%d or longer", entry, limit))
-		}
-	}
-	if coveredAddresses(ipv4) > math.Ldexp(2, 32-minExcludePrefix) {
-		return failure(FailureMalformedConfig, fmt.Sprintf("ExcludeIPs entries together cover more than two /%d IPv4 networks", minExcludePrefix))
-	}
-	if coveredAddresses(globalIPv6) > math.Ldexp(2, 128-minGlobalExcludePrefix) {
-		return failure(FailureMalformedConfig, fmt.Sprintf("ExcludeIPs entries together cover more than two /%d IPv6 networks", minGlobalExcludePrefix))
-	}
-	return nil
-}
-
-func insideAny(parents []*net.IPNet, network *net.IPNet) bool {
-	ones, _ := network.Mask.Size()
-	for _, parent := range parents {
-		if parentOnes, _ := parent.Mask.Size(); ones >= parentOnes && parent.Contains(network.IP) {
-			return true
+		switch {
+		case ones == 0:
+			family[i] = dropped
+			defaultRoutes++
+		case family[i] == ipv4:
+			networks4 = append(networks4, network)
+		case family[i] == ipv6:
+			networks6 = append(networks6, network)
 		}
 	}
-	return false
+	var warnings []string
+	if defaultRoutes > 0 {
+		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped entries with prefix /0 (%d); this traffic stays in the VPN", defaultRoutes))
+	}
+	dropFamily := map[int]bool{}
+	if covered := coveredAddresses(networks4); covered >= maxExcludedIPv4 {
+		dropFamily[ipv4] = true
+		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped all IPv4 entries (%d) because together they cover %.0f addresses, half of IPv4 or more; this traffic stays in the VPN", len(networks4), covered))
+	}
+	if coveredAddresses(networks6) >= maxExcludedGlobalIPv6 {
+		dropFamily[ipv6] = true
+		warnings = append(warnings, fmt.Sprintf("ExcludeIPs: dropped all global IPv6 entries (%d) because together they cover half of 2000::/3 or more; this traffic stays in the VPN", len(networks6)))
+	}
+	kept := make([]string, 0, len(entries))
+	for i, entry := range entries {
+		if family[i] != dropped && !dropFamily[family[i]] {
+			kept = append(kept, entry)
+		}
+	}
+	return kept, warnings
 }
 
 // coveredAddresses counts the addresses the networks cover, counting nested
