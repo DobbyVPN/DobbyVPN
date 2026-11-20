@@ -1047,7 +1047,7 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 	}
 	s.mu.Lock()
 	s.vpnActive = true
-	if m.protection != nil {
+	if m.protection != nil && !s.stopRequested && !s.closing {
 		s.retainedProtection = true
 	}
 	m.appendLocked(s)
@@ -1228,6 +1228,14 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 	defer s.mu.Unlock()
 	if s.generation != generation {
 		return
+	}
+	// Preparation can install the base policy before the network lease is
+	// ready. After rollback, inspect the kernel under the same intent lock as
+	// Stop so a surviving guard remains visible and can be released.
+	if releaseNetwork && cleanupErr == nil && cause != nil && !s.vpnActive && !s.stopRequested && !s.closing && m.protection != nil {
+		retained, err := m.protection.Recover(s.cleanupBudget.begin())
+		s.retainedProtection = retained
+		cleanupErr = err
 	}
 	s.attemptCtx, s.cancel = nil, nil
 	s.cleanupFailed = cleanupErr != nil || CodeOf(cause) == FailureCleanup
