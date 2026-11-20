@@ -34,11 +34,14 @@ func prepareDesktopRestore(owner serviceRestorer) (start func()) {
 					log.Errorf(desktopLogCategory, "automatic session restore panicked: %v", recovered)
 				}
 			}()
+			// Deferred, so a panicking restore also ends with the cleanup.
+			defer func() {
+				if err := releaseUnadoptedKillSwitch(context.Background()); err != nil {
+					log.Errorf(desktopLogCategory, "leftover kill switch removal failed: %v", err)
+				}
+			}()
 			if err := restore(context.Background()); err != nil {
 				log.Errorf(desktopLogCategory, "automatic session restore failed: %s", sessionapi.CodeOf(err))
-			}
-			if err := releaseUnadoptedKillSwitch(context.Background()); err != nil {
-				log.Errorf(desktopLogCategory, "leftover kill switch removal failed: %v", err)
 			}
 		}()
 	}
