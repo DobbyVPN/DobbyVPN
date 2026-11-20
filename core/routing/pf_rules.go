@@ -171,6 +171,16 @@ func PFEvaluatesAnchor(mainRules string) bool {
 	return false
 }
 
+// PFTokenListed reports whether `pfctl -s References` output lists token.
+func PFTokenListed(references, token string) bool {
+	for _, line := range strings.Split(references, "\n") {
+		if slices.Contains(strings.Fields(line), token) {
+			return true
+		}
+	}
+	return false
+}
+
 // PFEnableToken extracts the reference token printed by `pfctl -E`.
 func PFEnableToken(output string) (string, error) {
 	for _, line := range strings.Split(output, "\n") {

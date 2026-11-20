@@ -116,9 +116,17 @@ func killMacOSPFStates(ctx context.Context) error {
 // left. A pf that was already enabled stays enabled after release.
 func macOSPFEnable(ctx context.Context) (string, error) {
 	if saved, err := os.ReadFile(macOSPFTokenPath); err == nil {
+		// A token that pf no longer holds (released before its file was
+		// removed) keeps nothing enabled; a new reference replaces it.
 		if token, parseErr := PFEnableToken("Token : " + strings.TrimSpace(string(saved))); parseErr == nil {
-			log.Info(Category, "macOS kill switch adopts rules left by an interrupted backend", nil)
-			return token, nil
+			held, heldErr := macOSPFTokenHeld(ctx, token)
+			if heldErr != nil {
+				return "", heldErr
+			}
+			if held {
+				log.Info(Category, "macOS kill switch adopts rules left by an interrupted backend", nil)
+				return token, nil
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
@@ -144,6 +152,14 @@ func macOSPFEnable(ctx context.Context) (string, error) {
 	return token, nil
 }
 
+func macOSPFTokenHeld(ctx context.Context, token string) (bool, error) {
+	references, _, err := macOSPFCommand(ctx, "", "-s", "References")
+	if err != nil {
+		return false, err
+	}
+	return PFTokenListed(references, token), nil
+}
+
 func releaseMacOSPF(ctx context.Context, token string) error {
 	for _, kind := range []string{"rules", "Tables"} {
 		if _, _, err := macOSPFCommand(ctx, "", "-a", MacOSPFAnchor, "-F", kind); err != nil {
@@ -155,8 +171,14 @@ func releaseMacOSPF(ctx context.Context, token string) error {
 	if token == "" {
 		return nil
 	}
-	if _, _, err := macOSPFCommand(ctx, "", "-X", token); err != nil {
+	held, err := macOSPFTokenHeld(ctx, token)
+	if err != nil {
 		return err
+	}
+	if held {
+		if _, _, err := macOSPFCommand(ctx, "", "-X", token); err != nil {
+			return err
+		}
 	}
 	if err := os.Remove(macOSPFTokenPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -247,6 +269,12 @@ func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, netw
 		return err
 	}
 	destination.Bypass = protected_dialer.IsApplicationBypass(ctx)
+	// pf cannot tell application DNS from the backend's own lookups to the
+	// physical DNS servers (both root, same address and port), so application
+	// DNS outside the tunnel is refused here, before the socket connects.
+	if destination.Bypass && destination.Port == 53 {
+		return fmt.Errorf("DNS outside the tunnel is blocked: %s %s", network, address)
+	}
 	return k.update(ctx, func() (bool, error) {
 		if generation == 0 || generation <= k.retiredThrough {
 			return false, errors.New("macOS transport owner is retired")
