@@ -56,6 +56,12 @@ jobs:
         with:
           pinned-tools: ${{ inputs.platform == 'linux' || inputs.platform == 'windows' }}
 
+      - name: Install pinned .NET SDK
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
       # Release packages only: hardened runtime blocks debugger attachment
       # without get-task-allow, and notarization rejects get-task-allow.
       - name: Prepare macOS Developer ID signing
