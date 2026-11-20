@@ -12,24 +12,26 @@ struct DobbyProfileList: View {
         return ZStack {
             Color.tray.onTapGesture { dismissSourceFocus() }
             if snapshot.profiles.isEmpty && orphan == nil && !model.loadError.isEmpty {
-                VStack(spacing: pt(10)) {
-                    SockIcon(holey: true).frame(width: pt(40), height: pt(50))
-                    Text("Couldn't load the subscription")
-                        .dobbyFont(15, .medium)
-                        .foregroundColor(.ink)
-                    Button { model.retryLoad() } label: {
-                        Text("Retry")
-                            .dobbyFont(15, .semibold)
-                            .foregroundColor(.surface)
-                            .padding(.horizontal, pt(22))
-                            .frame(minHeight: pt(40))
-                            .background(Color.ink, in: RoundedRectangle(cornerRadius: pt(8)))
+                scrollableNotice {
+                    VStack(spacing: pt(10)) {
+                        SockIcon(holey: true).frame(width: pt(40), height: pt(50))
+                        Text("Couldn't load the subscription")
+                            .dobbyFont(15, .medium)
+                            .foregroundColor(.ink)
+                        Button { model.retryLoad() } label: {
+                            Text("Retry")
+                                .dobbyFont(15, .semibold)
+                                .foregroundColor(.surface)
+                                .padding(.horizontal, pt(22))
+                                .frame(minHeight: pt(40))
+                                .background(Color.ink, in: RoundedRectangle(cornerRadius: pt(8)))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("tray.retry")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("tray.retry")
                 }
             } else if snapshot.profiles.isEmpty && orphan == nil {
-                EmptyTray()
+                scrollableNotice { EmptyTray() }
             } else {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: pt(8)) {
@@ -64,6 +66,16 @@ struct DobbyProfileList: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: pt(14)))
+    }
+
+    private func scrollableNotice<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        GeometryReader { tray in
+            ScrollView {
+                content()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: tray.size.height)
+            }
+        }
     }
 
     private func isOn(_ status: DobbyProfileStatus?) -> Bool {
