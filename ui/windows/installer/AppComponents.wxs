@@ -71,10 +71,6 @@
 					Name="Environment"
 					Type="multiString">
 				<MultiStringValue Value="DOBBYVPN_CONTROL_PIPE_SID=[DOBBYVPN_CONTROL_PIPE_SID]" />
-				<!-- The Windows Go runtime can fail during startup while asynchronously
-				     preempting a goroutine (golang/go#67108 and #79249). Apply the
-				     scheduler setting only to the installed service process. -->
-				<MultiStringValue Value="GODEBUG=asyncpreemptoff=1" />
 			</RegistryValue>
 		</Component>
 		

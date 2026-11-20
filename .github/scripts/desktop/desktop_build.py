@@ -116,6 +116,7 @@ CLI_NAMES = {
 }
 MACOS_MINIMUM_SYSTEM_VERSION = "12.0"
 PROBE_TIMEOUT_SECONDS = 30
+WINDOWS_GO_SCHEDULER = "asyncpreemptoff=1"
 GOOS_BY_PLATFORM = {
     "linux": "linux",
     "macos": "darwin",
@@ -168,12 +169,9 @@ def child_environment(
     if executable in {"go", "go.exe"}:
         child_env["GOTOOLCHAIN"] = "local"
     if host_platform() == "windows" and executable in {"go", "go.exe"}:
-        # Some Windows Go compilers have stalled in asyncPreempt/badmcall and
-        # recursive panic reporting, even during compile -V=full. Upstream:
-        # golang/go#67108 and #79249. Scope this mitigation to Go tools, not
-        # the VPN runtime, until a Windows qualification proves it unnecessary.
+        # The compiler can also fail in asyncPreempt/badmcall during startup.
         child_env["GODEBUG"] = ",".join(
-            filter(None, (child_env.get("GODEBUG"), "asyncpreemptoff=1"))
+            filter(None, (child_env.get("GODEBUG"), WINDOWS_GO_SCHEDULER))
         )
     return child_env
 
@@ -182,8 +180,9 @@ def run_bounded_capture(
     command: list[str],
     cwd: Path = ROOT_DIR,
     timeout_seconds: int = PROBE_TIMEOUT_SECONDS,
+    *, env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    child_env = child_environment(command)
+    child_env = child_environment(command, env)
     return _run_bounded_capture(
         command,
         cwd=cwd,
@@ -929,6 +928,23 @@ def verify_go_debug(go: Path, binary: Path) -> None:
         fail(f"Go debugging compiler flags missing from {binary}")
 
 
+def windows_go_runtime_ldflags(
+    go: Path, package: str, env: dict[str, str], build_tags: tuple[str, ...] = (),
+) -> str:
+    # A cold Windows process can fail inside Go before main or the SCM
+    # dispatcher (golang/go#67108, #79249). The pinned Go toolchain accepts
+    # this runtime knob at startup but omits it from the //go:debug keys.
+    # Use cmd/go's own linker setting and preserve its per-package defaults.
+    command = [str(go), "list", "-f", "{{.DefaultGODEBUG}}"]
+    if build_tags:
+        command.append(f"-tags={','.join(build_tags)}")
+    result = run_bounded_capture([*command, package], GO_MODULE_DIR, env=env)
+    emit_process_streams("Windows Go runtime defaults", result.stdout, result.stderr)
+    result.check_returncode()
+    defaults = ",".join(filter(None, (result.stdout.strip(), WINDOWS_GO_SCHEDULER)))
+    return f" -X=runtime.godebugDefault={defaults}"
+
+
 def build_cli(
     target_platform: str, go_executable: Path, arch: str | None = None, *, debug: bool = False,
 ) -> Path:
@@ -939,6 +955,8 @@ def build_cli(
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
     configure_macos_deployment_target(target_platform, env)
     ldflags = go_build_identity(debug)
+    if target_platform == "windows":
+        ldflags += windows_go_runtime_ldflags(go_executable, "./cmd/dobbyvpn/", env)
     if target_platform == "macos":
         # The CLI shares the runtime's native physical-network resolver and DNS
         # ownership code, so it needs the same cgo framework closure as the service.
@@ -1026,6 +1044,8 @@ def build_service(
             env["CGO_CFLAGS"] = "-O0 -g"
             env["CGO_CXXFLAGS"] = "-O0 -g"
         ldflags = go_build_identity(debug)
+        if target_platform == "windows":
+            ldflags += windows_go_runtime_ldflags(go, "./clientserver/", env, build_tags)
         if target_platform == "macos":
             # Keep the package's declared macOS 12 floor valid for both
             # the Go backend and the native operator CLI.
