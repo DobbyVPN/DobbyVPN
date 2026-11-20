@@ -200,8 +200,12 @@ func (s *Set) Hash() string {
 func (s *Set) computeHash() string {
 	hash := sha256.New()
 	for _, r := range s.Ranges() {
-		// The address length keeps IPv4 and IPv6 encodings apart.
-		hash.Write([]byte{byte(r.First.BitLen())})
+		// The family marker keeps IPv4 and IPv6 encodings apart.
+		family := []byte{6}
+		if r.First.Is4() {
+			family = []byte{4}
+		}
+		hash.Write(family)
 		hash.Write(r.First.AsSlice())
 		hash.Write(r.Last.AsSlice())
 	}
