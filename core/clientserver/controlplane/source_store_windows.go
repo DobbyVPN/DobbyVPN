@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"core/log"
 	"core/sessionapi"
 )
 
@@ -36,5 +37,9 @@ func protectedConfigurationDirectory() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(local, "DobbyVPN", "Configuration"), nil
+	directory := filepath.Join(local, "DobbyVPN", "Configuration")
+	// A process under a different account resolves a different protected
+	// store. Report its location without emitting any accepted configuration.
+	log.Info("controlplane", "Windows protected configuration directory selected", map[string]any{"directory": directory})
+	return directory, nil
 }
