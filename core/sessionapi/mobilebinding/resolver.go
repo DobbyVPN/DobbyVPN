@@ -78,9 +78,13 @@ func newNativeUnderlyingResolver(lookup networkLookupCallbacks, ref sessionapi.S
 		var result struct {
 			Addresses []string `json:"addresses"`
 			Error     string   `json:"error"`
+			NotFound  bool     `json:"notFound"`
 		}
 		if err := json.Unmarshal([]byte(raw), &result); err != nil {
 			return nil, err
+		}
+		if result.NotFound {
+			return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 		}
 		if result.Error != "" {
 			return nil, errors.New(result.Error)

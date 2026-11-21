@@ -18,8 +18,12 @@ const Category = "DNSCache"
 const ServerResolveTimeout = 5 * time.Second
 
 // StaleAnswerLimit bounds how old a remembered answer may be when it is served
-// because the physical network's DNS failed.
-const StaleAnswerLimit = 24 * time.Hour
+// because the physical network's DNS failed; staleAnswerEntries bounds how many
+// host names are remembered (the client resolves only a few).
+const (
+	StaleAnswerLimit   = 24 * time.Hour
+	staleAnswerEntries = 64
+)
 
 // now is a test seam for answer ages.
 var now = time.Now
@@ -28,8 +32,10 @@ var now = time.Now
 // DNS servers own caching and DNS64 answers; Dobby must not pin another CDN TTL.
 // The only exception is serve-stale on resolver failure (RFC 8767): when a
 // query fails with an error or timeout, the last successful answer for the
-// same network and host may be used, at most StaleAnswerLimit old. With
-// working DNS every lookup still goes to the resolver.
+// host from the same resolver revision may be used, at most StaleAnswerLimit
+// old. Any resolver or network change starts a new revision, so an answer is
+// never used on another network. With working DNS every lookup still goes to
+// the resolver.
 type Resolver func(context.Context, string) ([]net.IPAddr, error)
 
 // ResolverSource captures a current physical network before each lookup. The
@@ -44,17 +50,27 @@ type Cache struct {
 	identity string
 	revision uint64
 	source   ResolverSource
-	// lastGood holds the last successful answer per network identity and
-	// host, used only when a later query on the same network fails.
-	lastGood map[staleKey]staleAnswer
+	// lastGood holds the last successful answer per host, used only when a
+	// later query in the same revision fails.
+	lastGood map[string]staleAnswer
 }
-
-type staleKey struct{ identity, host string }
 
 type staleAnswer struct {
 	addresses []net.IPAddr
+	revision  uint64
 	at        time.Time
 	warned    bool // the current failure episode is already logged
+}
+
+// NetworkChanged starts a new revision after the platform reports a network
+// change. Resolver identities may not tell two networks apart (same interface,
+// DHCP address and DNS server), so remembered answers are dropped and an
+// in-flight lookup from before the change is rejected.
+func (c *Cache) NetworkChanged() {
+	c.mu.Lock()
+	c.revision++
+	c.lastGood = nil
+	c.mu.Unlock()
 }
 
 func New() *Cache { return &Cache{revision: 1} }
@@ -129,59 +145,79 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 		err = errors.New("underlying resolver returned no addresses")
 	}
 	log.Debugf(Category, "underlying lookup network=%s revision=%d host=%s addresses=%v elapsed=%s err=%v", identity, revision, host, addresses, time.Since(started), err)
-	key := staleKey{identity, host}
 	if err != nil {
-		// Only a failed query on the same network may use the last answer: not
+		// Only a failed query in the same revision may use the last answer: not
 		// a negative answer, a replaced network or a caller that gave up.
-		if queryFailed && current == revision && parent.Err() == nil && c.sameNetwork(parent, source, identity) {
-			if stale, ok := c.staleAnswer(key, err); ok {
+		if queryFailed && current == revision && parent.Err() == nil {
+			revision = c.recapture(parent, source, revision)
+			if stale, ok := c.staleAnswer(host, revision, err); ok {
 				return stale, nil
 			}
 		}
 		return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
 	}
-	c.mu.Lock()
-	if c.lastGood == nil {
-		c.lastGood = make(map[staleKey]staleAnswer)
-	}
-	for k, answer := range c.lastGood {
-		if now().Sub(answer.at) > StaleAnswerLimit {
-			delete(c.lastGood, k)
-		}
-	}
-	c.lastGood[key] = staleAnswer{addresses: append([]net.IPAddr(nil), addresses...), at: now()}
-	c.mu.Unlock()
+	c.remember(host, revision, addresses)
 	return addresses, nil
 }
 
-// sameNetwork recaptures the physical network after a failed query: a native
+// remember stores a successful answer unless the revision changed meanwhile.
+// When the store is full, the oldest answer gives way.
+func (c *Cache) remember(host string, revision uint64, addresses []net.IPAddr) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.revision != revision {
+		return
+	}
+	if c.lastGood == nil {
+		c.lastGood = make(map[string]staleAnswer)
+	}
+	if _, known := c.lastGood[host]; !known && len(c.lastGood) >= staleAnswerEntries {
+		oldest := ""
+		for name, answer := range c.lastGood {
+			if oldest == "" || answer.at.Before(c.lastGood[oldest].at) {
+				oldest = name
+			}
+		}
+		delete(c.lastGood, oldest)
+	}
+	c.lastGood[host] = staleAnswer{addresses: append([]net.IPAddr(nil), addresses...), revision: revision, at: now()}
+}
+
+// recapture reads the physical network again after a failed query: a native
 // resolver may fail because the network was replaced before the cache's
-// revision changed, and an answer from the old network must not be used.
-func (c *Cache) sameNetwork(ctx context.Context, source ResolverSource, identity string) bool {
+// revision changed. A new identity starts a new revision, so the answer from
+// the old network is not used. It returns the revision to check.
+func (c *Cache) recapture(ctx context.Context, source ResolverSource, revision uint64) uint64 {
 	if source == nil {
-		return true
+		return revision
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	latest, _, err := source(ctx)
-	return err == nil && latest == identity
+	identity, resolver, err := source(ctx)
+	if err != nil {
+		return 0 // no current network: nothing may be served
+	}
+	c.SetResolver(identity, resolver)
+	return revision
 }
 
-// staleAnswer returns the last answer for key if it is recent enough. The
-// first use in a failure episode is logged once; a successful lookup ends it.
-func (c *Cache) staleAnswer(key staleKey, cause error) ([]net.IPAddr, bool) {
+// staleAnswer returns the last answer for host if it belongs to the current
+// revision and is recent enough. The revision is checked under the same lock
+// as the decision. The first use in a failure episode is logged once; a
+// successful lookup ends it.
+func (c *Cache) staleAnswer(host string, revision uint64, cause error) ([]net.IPAddr, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	answer, ok := c.lastGood[key]
+	answer, ok := c.lastGood[host]
 	age := now().Sub(answer.at)
-	if !ok || age > StaleAnswerLimit {
+	if !ok || revision == 0 || answer.revision != revision || c.revision != revision || age > StaleAnswerLimit {
 		return nil, false
 	}
 	if !answer.warned {
 		answer.warned = true
-		c.lastGood[key] = answer
+		c.lastGood[host] = answer
 		log.Warn(Category, "underlying DNS failed; using the last known endpoint address", map[string]any{
-			"host": key.host, "answer_age_ms": age.Milliseconds(), "cause": cause.Error(),
+			"host": host, "answer_age_ms": age.Milliseconds(), "cause": cause.Error(),
 		})
 	}
 	return append([]net.IPAddr(nil), answer.addresses...), true

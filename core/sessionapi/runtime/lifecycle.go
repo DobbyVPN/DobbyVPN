@@ -165,6 +165,18 @@ type networkOwner struct {
 
 func (n *networkOwner) Stop(ctx context.Context) error { return n.lease.Stop(ctx) }
 
+// NetworkChanged tells the current network's resolver cache that the platform
+// reported a network change, so answers remembered for DNS failures are not
+// reused on what may be another network.
+func (r *runtime) NetworkChanged() {
+	r.mu.Lock()
+	n := r.network
+	r.mu.Unlock()
+	if n != nil {
+		n.cache.NetworkChanged()
+	}
+}
+
 func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef, _ sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

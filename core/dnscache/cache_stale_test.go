@@ -3,6 +3,7 @@ package dnscache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -106,6 +107,68 @@ func TestLastKnownAnswerSkipsReplacedNetworkDuringQuery(t *testing.T) {
 	addressesOf(t, cache)
 	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
 		t.Fatal("a network replaced during the failed query must not use the old answer")
+	}
+}
+
+// Two networks can share a resolver identity (same interface, DHCP address
+// and DNS server). A reported network change must still drop the answer.
+func TestLastKnownAnswerSkipsSameIdentityAfterNetworkChange(t *testing.T) {
+	useClock(t)
+	cache := New()
+	cache.SetResolver("network-a", scriptedResolver([]string{"192.0.2.1"}, nil))
+	addressesOf(t, cache)
+	cache.NetworkChanged()
+	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
+		t.Fatal("an answer from before a network change must not be used")
+	}
+}
+
+// A network change between the failed query and the decision to serve the
+// remembered answer is seen under the same lock as that decision.
+func TestLastKnownAnswerSkipsChangeBeforeServing(t *testing.T) {
+	useClock(t)
+	cache := New()
+	captures := 0
+	resolver := scriptedResolver([]string{"192.0.2.1"}, nil)
+	cache.SetResolverSource(func(context.Context) (string, Resolver, error) {
+		captures++
+		if captures == 3 { // the recapture after the failed query
+			cache.NetworkChanged()
+		}
+		return "network-a", resolver, nil
+	})
+	addressesOf(t, cache)
+	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
+		t.Fatal("a network change before serving must reject the remembered answer")
+	}
+}
+
+// The store keeps a bounded number of host names; the oldest gives way.
+func TestLastKnownAnswersAreBounded(t *testing.T) {
+	clock := useClock(t)
+	cache := New()
+	fail := false
+	cache.SetResolver("network-a", func(context.Context, string) ([]net.IPAddr, error) {
+		if fail {
+			return nil, context.DeadlineExceeded
+		}
+		return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
+	})
+	for i := range staleAnswerEntries + 1 {
+		*clock = clock.Add(time.Second)
+		if _, err := cache.ResolveAddresses(context.Background(), fmt.Sprintf("host%d.example", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(cache.lastGood) != staleAnswerEntries {
+		t.Fatalf("remembered %d names, want at most %d", len(cache.lastGood), staleAnswerEntries)
+	}
+	fail = true
+	if _, err := cache.ResolveAddresses(context.Background(), "host0.example"); err == nil {
+		t.Fatal("the oldest name must have been evicted")
+	}
+	if _, err := cache.ResolveAddresses(context.Background(), fmt.Sprintf("host%d.example", staleAnswerEntries)); err != nil {
+		t.Fatalf("the newest name must still be remembered: %v", err)
 	}
 }
 
