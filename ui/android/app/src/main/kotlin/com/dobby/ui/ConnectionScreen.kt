@@ -462,8 +462,9 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
 private fun LogsMenu(controller: SessionController, position: IntOffset, close: () -> Unit) {
     val state = controller.state
     val shape = RoundedCornerShape(14.dp)
+    val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
     Popup(
-        popupPositionProvider = remember(position) { TapPositionProvider(position) },
+        popupPositionProvider = remember(position, margin) { TapPositionProvider(position, margin) },
         onDismissRequest = close,
         properties = PopupProperties(focusable = true),
     ) {
@@ -528,13 +529,15 @@ private fun MenuHalf(title: String, tag: String, filled: Boolean, modifier: Modi
     }
 }
 
-// Places the menu at the tap point like a dropdown: below it when it fits, otherwise above, kept inside the window.
-private class TapPositionProvider(private val tap: IntOffset) : PopupPositionProvider {
+// Places the menu at the tap point like a dropdown: below it when it fits, otherwise above,
+// kept inside the window with a small margin.
+private class TapPositionProvider(private val tap: IntOffset, private val margin: Int) : PopupPositionProvider {
     override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
         val left = anchorBounds.left + tap.x
         val top = anchorBounds.top + tap.y
-        val x = left.coerceAtMost(windowSize.width - popupContentSize.width).coerceAtLeast(0)
-        val y = (if (top + popupContentSize.height <= windowSize.height) top else top - popupContentSize.height).coerceAtLeast(0)
+        val x = left.coerceAtMost(windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin)
+        val below = top + popupContentSize.height <= windowSize.height - margin
+        val y = (if (below) top else top - popupContentSize.height).coerceAtLeast(margin)
         return IntOffset(x, y)
     }
 }
