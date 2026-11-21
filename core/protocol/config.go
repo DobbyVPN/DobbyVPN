@@ -18,7 +18,7 @@ func (c Config) Empty() bool {
 func CloneFields(fields map[string]any) map[string]any {
 	cloned := make(map[string]any, len(fields))
 	for key, value := range fields {
-		cloned[key] = cloneValue(value)
+		cloned[key] = value
 	}
 	return cloned
 }
