@@ -111,6 +111,8 @@ public sealed partial class MainWindow : Window
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
         Root.Loaded += (_, _) =>
         {
+            Root.XamlRoot.Changed -= OnXamlRootChanged;
+            Root.XamlRoot.Changed += OnXamlRootChanged;
             if (ErrorShown) KeepFocusInError();
             else ClearFocus();
         };
@@ -280,14 +282,23 @@ public sealed partial class MainWindow : Window
     [DllImport("user32.dll")]
     private static extern uint GetDpiForWindow(IntPtr window);
 
+    private double _minimumSizeScale;
+
+    // The minimum size is in physical pixels, so it is recomputed when the window moves to a monitor with another DPI.
+    private void ApplyMinimumSize(double scale)
+    {
+        if (scale == _minimumSizeScale || AppWindow.Presenter is not OverlappedPresenter presenter) return;
+        _minimumSizeScale = scale;
+        presenter.PreferredMinimumWidth = (int)(320 * scale);
+        presenter.PreferredMinimumHeight = (int)(460 * scale);
+    }
+
+    private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => ApplyMinimumSize(sender.RasterizationScale);
+
     private void SizeWindow()
     {
         var scale = GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96.0;
-        if (AppWindow.Presenter is OverlappedPresenter presenter)
-        {
-            presenter.PreferredMinimumWidth = (int)(320 * scale);
-            presenter.PreferredMinimumHeight = (int)(460 * scale);
-        }
+        ApplyMinimumSize(scale);
         AppWindow.ResizeClient(new SizeInt32((int)(380 * scale), (int)(680 * scale)));
         var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + (area.Height - AppWindow.Size.Height) / 2));
