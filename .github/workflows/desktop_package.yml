@@ -21,13 +21,26 @@ on:
       retention_days:
         default: 1
         type: number
+    secrets:
+      MACOS_DEVELOPER_ID_APP_P12:
+        required: false
+      MACOS_DEVELOPER_ID_INSTALLER_P12:
+        required: false
+      MACOS_DEVELOPER_ID_P12_PASSWORD:
+        required: false
+      APP_STORE_API_KEY:
+        required: false
+      APP_STORE_KEY_ID:
+        required: false
+      APP_STORE_ISSUER_ID:
+        required: false
+
 permissions:
   contents: read
 
 jobs:
   package:
     name: ${{ inputs.platform }} / ${{ inputs.architecture }} package
-    environment: ${{ inputs.platform == 'macos' && !inputs.debug && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha && 'release' || '' }}
     runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     # Release macOS jobs also wait for notarization (notarytool --timeout 30m).
     timeout-minutes: ${{ inputs.platform == 'macos' && !inputs.debug && 90 || 45 }}
