@@ -89,7 +89,8 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         _ = try values.decode(String.self, forKey: .serviceVersion)
         _ = try values.decode(String.self, forKey: .sourceKind)
         _ = try values.decode(Bool.self, forKey: .cleanupComplete)
-        serviceRestorePending = try values.decodeIfPresent(Bool.self, forKey: .serviceRestorePending) ?? false
+        // Absent means false (older service or iOS); a null or non-boolean value is a malformed snapshot.
+        serviceRestorePending = values.contains(.serviceRestorePending) ? try values.decode(Bool.self, forKey: .serviceRestorePending) : false
         sessionID = try values.decode(String.self, forKey: .sessionID)
         sequence = try values.decode(Int64.self, forKey: .sequence)
         generation = try values.decode(Int64.self, forKey: .generation)
