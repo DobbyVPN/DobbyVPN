@@ -81,7 +81,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private let loadWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.configuration")
     private var loadInFlight = false
     private var loadRevision = 0
-    private var pendingLoad: String?
+    private var pendingLoad: (source: String, automaticOwner: String?)?
     private let debounceScheduler: any DobbySessionDebounceScheduling
     private var debounce: (any DobbySessionScheduledWork)?
     private var restoredLoad = ""
@@ -214,6 +214,10 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func sourceChanged(_ value: String, immediate: Bool = false) {
+        scheduleSourceLoad(value, immediate: immediate, automaticOwner: nil)
+    }
+
+    private func scheduleSourceLoad(_ value: String, immediate: Bool, automaticOwner: String?) {
         if !immediate && value == sourceText { return }
         sourceText = value
         sourceIsDirty = true
@@ -231,7 +235,7 @@ public final class DobbySessionViewModel: ObservableObject {
         let enqueueLoad: @MainActor () -> Void = { [weak self] in
             guard let self else { return }
             self.debounce = nil
-            self.pendingLoad = source
+            self.pendingLoad = (source, automaticOwner)
             self.loadNext()
         }
         if immediate {
@@ -304,15 +308,19 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func loadNext() {
-        guard !loadInFlight, let source = pendingLoad, !snapshot.sessionID.isEmpty else { return }
+        guard !loadInFlight, let (source, automaticOwner) = pendingLoad, !snapshot.sessionID.isEmpty else { return }
         pendingLoad = nil
         loadInFlight = true
         loading = true
         let revision = loadRevision
         let client = client
         loadWorker.async { [weak self, client] in
-            let result = Result {
+            let result = Result { () -> Int64? in
                 let current = try DobbyResponse.result(from: client.call("Snapshot", parameters: ["session_id": ""]), as: DobbySessionSnapshot.self)
+                if let automaticOwner, current.sessionID != automaticOwner || current.serviceRestorePending || current.configured {
+                    // Recheck the live owner before loading its saved source. Configure supersedes its restore.
+                    return nil
+                }
                 let response = client.call("Configure", parameters: [
                     "session_id": current.sessionID, "expected_sequence": current.sequence, "source": source,
                 ])
@@ -324,7 +332,11 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.loading = false
                 if revision == self.loadRevision {
                     switch result {
-                    case let .success(sequence): self.acceptedSequence = sequence; self.markSourceAccepted(source)
+                    case let .success(sequence?):
+                        self.acceptedSequence = sequence
+                        self.markSourceAccepted(source)
+                    case .success(nil):
+                        self.sourceIsDirty = false
                     case let .failure(failure):
                         let accepted = self.snapshot.sourceURL
                         let sameSource = self.snapshot.configured && !accepted.isEmpty && accepted == source
@@ -367,6 +379,12 @@ public final class DobbySessionViewModel: ObservableObject {
                         self.disconnectFailure = observer.disconnectFailure
                     }
                     let sameSession = value.sessionID == self.snapshot.sessionID
+                    if value.serviceRestorePending && (!sameSession || !self.snapshot.serviceRestorePending) {
+                        self.recordDiagnostic(
+                            "Waiting for the service to restore its saved VPN session; session_id=\(value.sessionID)",
+                            event: "subscription.restore-pending", level: "INFO"
+                        )
+                    }
                     if !sameSession {
                         self.acceptedSequence = 0
                         self.clearError(from: .sourceSnapshot)
@@ -396,9 +414,10 @@ public final class DobbySessionViewModel: ObservableObject {
                         }
                     }
                     let restoreKey = value.sessionID + "|" + self.sourceText
-                    if !value.configured && !self.sourceIsDirty && !self.sourceText.isEmpty && self.restoredLoad != restoreKey {
+                    if !value.configured && !value.serviceRestorePending && !self.sourceIsDirty &&
+                        !self.sourceText.isEmpty && self.restoredLoad != restoreKey {
                         self.restoredLoad = restoreKey
-                        self.sourceChanged(self.sourceText, immediate: true)
+                        self.scheduleSourceLoad(self.sourceText, immediate: true, automaticOwner: value.sessionID)
                     }
                     self.loadNext()
                     if reattached || recoveringFromSnapshotFailure { self.clearSnapshotFailure() }
