@@ -217,34 +217,6 @@ public final class DobbySessionViewModel: ObservableObject {
         scheduleSourceLoad(value, immediate: immediate, automaticOwner: nil)
     }
 
-    private func scheduleSourceLoad(_ value: String, immediate: Bool, automaticOwner: String?) {
-        if !immediate && value == sourceText { return }
-        sourceText = value
-        sourceIsDirty = true
-        importError = ""
-        setError("", origin: .other)
-        loadError = ""
-        // Typing only forgets the closed failures it cleared; a persistent one must not reopen on every keystroke.
-        pruneClosedFailures()
-        loadRevision += 1
-        pendingLoad = nil
-        debounce?.cancel()
-        debounce = nil
-        let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard validSubscription(source) else { return }
-        let enqueueLoad: @MainActor () -> Void = { [weak self] in
-            guard let self else { return }
-            self.debounce = nil
-            self.pendingLoad = (source, automaticOwner)
-            self.loadNext()
-        }
-        if immediate {
-            enqueueLoad()
-        } else {
-            debounce = debounceScheduler.schedule(afterNanoseconds: 400_000_000, action: enqueueLoad)
-        }
-    }
-
     public func paste(_ value: String) {
         resetClosedFailures()
         let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -381,7 +353,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     let sameSession = value.sessionID == self.snapshot.sessionID
                     if value.serviceRestorePending && (!sameSession || !self.snapshot.serviceRestorePending) {
                         self.recordDiagnostic(
-                            "Waiting for the service to restore its saved VPN session; session_id=\(value.sessionID)",
+                            "Waiting for the service to restore its saved VPN session. session_id=\(value.sessionID)",
                             event: "subscription.restore-pending", level: "INFO"
                         )
                     }
@@ -595,6 +567,36 @@ public final class DobbySessionViewModel: ObservableObject {
                 }
                 self.refreshLogs()
             }
+        }
+    }
+}
+
+private extension DobbySessionViewModel {
+    func scheduleSourceLoad(_ value: String, immediate: Bool, automaticOwner: String?) {
+        if !immediate && value == sourceText { return }
+        sourceText = value
+        sourceIsDirty = true
+        importError = ""
+        setError("", origin: .other)
+        loadError = ""
+        // Typing only forgets the closed failures it cleared; a persistent one must not reopen on every keystroke.
+        pruneClosedFailures()
+        loadRevision += 1
+        pendingLoad = nil
+        debounce?.cancel()
+        debounce = nil
+        let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard validSubscription(source) else { return }
+        let enqueueLoad: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            self.debounce = nil
+            self.pendingLoad = (source, automaticOwner)
+            self.loadNext()
+        }
+        if immediate {
+            enqueueLoad()
+        } else {
+            debounce = debounceScheduler.schedule(afterNanoseconds: 400_000_000, action: enqueueLoad)
         }
     }
 }
