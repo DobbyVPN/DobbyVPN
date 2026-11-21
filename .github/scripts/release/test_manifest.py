@@ -26,6 +26,10 @@ ANDROID_PAIRING_FIELDS = frozenset({
     "unsigned_product_apk_sha256", "test_companion_sha256",
     "torturer_repository", "torturer_sha", "torturer_tree_sha256",
 })
+PUBLIC_ANDROID_FIELDS = frozenset({
+    "build_run_id", "build_manifest_sha256", "product_sha", "unsigned_product_apk_sha256",
+})
+PUBLIC_CHECKS = frozenset({"resolve_build", "ios_analysis", "android_reproducibility", "fdroid_preflight"})
 REQUIRED_CHECKS = frozenset({
     "resolve_build", "ios_analysis", "android_reproducibility", "fdroid_preflight",
     "migrate_windows", "migrate_macos_arm", "migrate_macos_intel", "fixture_hosts",
@@ -73,15 +77,29 @@ def _selected_test_run(repository: str, run_id: int) -> dict[str, Any]:
 def validate_result(
     result: Any, *, repository: str, run_id: int, build: dict[str, Any], source_sha: str,
 ) -> None:
-    expected_fields = {
+    common_fields = {
         "schema", "repository", "workflow_path", "run_id", "build_run_id",
-        "source_sha", "build_manifest_sha256", "checks", "torturer_repository",
-        "torturer_sha", "torturer_tree_sha256", "release_attempt_id", "android_pairing",
+        "source_sha", "build_manifest_sha256", "checks", "release_attempt_id", "android_pairing",
     }
+    schema = result.get("schema") if isinstance(result, dict) else None
+    public = schema == 4
+    expected_fields = common_fields if public else common_fields | {
+        "torturer_repository", "torturer_sha", "torturer_tree_sha256",
+    }
+    if schema == 3:
+        expected_fields.add("private_qualification")
+        child = result.get("private_qualification")
+        if (not isinstance(child, dict) or set(child) != {"run_id", "run_attempt"}
+                or any(type(value) is not int or value < 1 for value in child.values())):
+            raise TestManifestError("Test result has invalid private workflow binding")
+    elif not public and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(build.get("version", ""))) and tuple(
+        int(part) for part in build["version"].split(".")
+    ) >= (1, 5, 15):
+        raise TestManifestError("Build requires a Test with private workflow coverage")
     if not isinstance(result, dict) or set(result) not in (expected_fields, expected_fields | {"run_attempt"}):
         raise TestManifestError("Test result has unexpected or missing fields")
     if (
-        type(result.get("schema")) is not int or result.get("schema") != 2
+        type(result.get("schema")) is not int or result.get("schema") not in (2, 3, 4)
         or result.get("repository") != repository
         or not isinstance(repository, str) or not REPOSITORY_RE.fullmatch(repository)
     ):
@@ -110,17 +128,18 @@ def validate_result(
         raise TestManifestError("Test result has an invalid Build manifest digest")
     if manifest_sha != build.get("manifest_sha256"):
         raise TestManifestError("Test result was produced for a different Build manifest")
-    if result.get("torturer_repository") != TORTURER_REPOSITORY:
-        raise TestManifestError(f"Test result torturer_repository must be {TORTURER_REPOSITORY}")
-    if not isinstance(result.get("torturer_sha"), str) or not SHA_RE.fullmatch(result["torturer_sha"]):
-        raise TestManifestError("Test result has an invalid Torturer commit SHA")
-    if not isinstance(result.get("torturer_tree_sha256"), str) or not SHA256_RE.fullmatch(result["torturer_tree_sha256"]):
-        raise TestManifestError("Test result has an invalid Torturer tree SHA-256")
+    if not public:
+        if result.get("torturer_repository") != TORTURER_REPOSITORY:
+            raise TestManifestError(f"Test result torturer_repository must be {TORTURER_REPOSITORY}")
+        if not isinstance(result.get("torturer_sha"), str) or not SHA_RE.fullmatch(result["torturer_sha"]):
+            raise TestManifestError("Test result has an invalid Torturer commit SHA")
+        if not isinstance(result.get("torturer_tree_sha256"), str) or not SHA256_RE.fullmatch(result["torturer_tree_sha256"]):
+            raise TestManifestError("Test result has an invalid Torturer tree SHA-256")
     if type(result.get("release_attempt_id")) is not int or result["release_attempt_id"] <= 0:
         raise TestManifestError("Test result release_attempt_id must be a positive integer")
     _validate_android_pairing(result, build)
     checks = result.get("checks")
-    if not isinstance(checks, dict) or set(checks) != REQUIRED_CHECKS:
+    if not isinstance(checks, dict) or set(checks) != (PUBLIC_CHECKS if public else REQUIRED_CHECKS):
         raise TestManifestError("Test result does not contain the complete qualification check set")
     if any(value != "success" for value in checks.values()):
         raise TestManifestError("Test result contains a failed or skipped qualification check")
@@ -128,18 +147,19 @@ def validate_result(
 
 def _validate_android_pairing(result: dict[str, Any], build: dict[str, Any]) -> None:
     pairing = result.get("android_pairing")
-    if not isinstance(pairing, dict) or set(pairing) != ANDROID_PAIRING_FIELDS:
+    public = result["schema"] == 4
+    if not isinstance(pairing, dict) or set(pairing) != (PUBLIC_ANDROID_FIELDS if public else ANDROID_PAIRING_FIELDS):
         raise TestManifestError("Test result has an invalid Android Build/Test pairing record")
     if type(pairing.get("build_run_id")) is not int or pairing["build_run_id"] <= 0:
         raise TestManifestError("Android pairing has an invalid Build run ID")
-    for key, value in (
+    identity = (
         ("build_run_id", result["build_run_id"]),
         ("build_manifest_sha256", result["build_manifest_sha256"]),
         ("product_sha", result["source_sha"]),
-        ("torturer_repository", result["torturer_repository"]),
-        ("torturer_sha", result["torturer_sha"]),
-        ("torturer_tree_sha256", result["torturer_tree_sha256"]),
-    ):
+    )
+    if not public:
+        identity += tuple((key, result[key]) for key in ("torturer_repository", "torturer_sha", "torturer_tree_sha256"))
+    for key, value in identity:
         if pairing.get(key) != value:
             raise TestManifestError(f"Android pairing {key} does not match the Test result identity")
     if pairing["build_run_id"] != build.get("run_id"):
@@ -148,7 +168,7 @@ def _validate_android_pairing(result: dict[str, Any], build: dict[str, Any]) -> 
         raise TestManifestError("Android pairing does not identify the selected Build manifest")
     if not isinstance(pairing.get("unsigned_product_apk_sha256"), str) or not SHA256_RE.fullmatch(pairing["unsigned_product_apk_sha256"]):
         raise TestManifestError("Android pairing has an invalid unsigned product APK digest")
-    if not isinstance(pairing.get("test_companion_sha256"), str) or not SHA256_RE.fullmatch(pairing["test_companion_sha256"]):
+    if not public and (not isinstance(pairing.get("test_companion_sha256"), str) or not SHA256_RE.fullmatch(pairing["test_companion_sha256"])):
         raise TestManifestError("Android pairing has an invalid test companion digest")
 
 
@@ -182,15 +202,16 @@ def guard_candidate(result: Any) -> dict[str, Any]:
         build=build,
         source_sha=result.get("source_sha"),
     )
-    return {
-        "schema": 1,
+    candidate = {
+        "schema": release_guard.PUBLIC_SCHEMA if result["schema"] == 4 else release_guard.SCHEMA,
         "build_run_id": result["build_run_id"],
         "build_manifest_sha256": result["build_manifest_sha256"],
         "product_sha": result["source_sha"],
-        "tests_repository": result["torturer_repository"],
-        "tests_sha": result["torturer_sha"],
-        "tests_tree_sha256": result["torturer_tree_sha256"],
     }
+    if result["schema"] != 4:
+        candidate.update(tests_repository=result["torturer_repository"],
+                         tests_sha=result["torturer_sha"], tests_tree_sha256=result["torturer_tree_sha256"])
+    return candidate
 
 
 def resolve_test(

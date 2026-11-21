@@ -120,6 +120,21 @@ func (b *Binding) Restore(onlyPreviouslyEnabled bool) string {
 	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
 }
 
+// PrepareServiceRestore is used only by the desktop service at startup. It
+// fixes the user-intent epoch now and returns the bounded-retry restore to run
+// once the control channel is serving.
+func (b *Binding) PrepareServiceRestore() func(context.Context) error {
+	owner, ok := b.manager.(interface {
+		PrepareRestoreAtServiceStart() func(context.Context) error
+	})
+	if !ok {
+		return func(context.Context) error {
+			return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "automatic startup owner is unavailable"}
+		}
+	}
+	return owner.PrepareRestoreAtServiceStart()
+}
+
 func (b *Binding) AttachSourceStore() {
 	manager, ok := b.manager.(interface {
 		AttachSourceStore(context.Context, sessionapi.SourceStore) error
@@ -179,6 +194,15 @@ func (b *Binding) ConfigureContext(ctx context.Context, sessionID string, expect
 		return failed(err)
 	}
 	return success(wire.ConfigurationFrom(result))
+}
+
+// ParseImportLink exposes pure import interpretation without requiring a session.
+func ParseImportLink(value string) string {
+	result, err := sessionapi.ParseImportLink(value)
+	if err != nil {
+		return failed(err)
+	}
+	return success(result)
 }
 
 // Start starts an attempt only if the inspected snapshot is still current.
@@ -325,6 +349,7 @@ func (b *Binding) CallJSONWithConfiguration(
 ) string {
 	var value struct {
 		SessionID        string  `json:"session_id"`
+		Link             string  `json:"link"`
 		ExpectedSequence int64   `json:"expected_sequence"`
 		Generation       int64   `json:"generation"`
 		Source           *string `json:"source"`
@@ -342,6 +367,8 @@ func (b *Binding) CallJSONWithConfiguration(
 		}
 	}
 	switch method {
+	case "ParseImportLink":
+		return ParseImportLink(value.Link)
 	case "PrepareLogUpload":
 		result, err := b.manager.PrepareLogUpload(ctx, value.SessionID, value.Digest)
 		if err != nil {

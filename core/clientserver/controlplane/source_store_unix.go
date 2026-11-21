@@ -11,7 +11,7 @@ import (
 )
 
 func controlUserHome() (string, error) {
-	uid, err := expectedPeerUID()
+	uid, err := serviceStateUID()
 	if err != nil {
 		return "", err
 	}
@@ -26,7 +26,7 @@ func controlUserHome() (string, error) {
 }
 
 func controlSourceDirectoryOwner(home string) (*sessionapi.SourceDirectoryOwner, error) {
-	uid, err := expectedPeerUID()
+	uid, err := serviceStateUID()
 	if err != nil {
 		return nil, err
 	}
@@ -43,3 +43,5 @@ func controlSourceDirectoryOwner(home string) (*sessionapi.SourceDirectoryOwner,
 	}
 	return &sessionapi.SourceDirectoryOwner{Root: home, UID: uid, GID: gid}, nil
 }
+
+func protectedConfigurationDirectory() (string, error) { return "", nil }

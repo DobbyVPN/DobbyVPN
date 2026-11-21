@@ -44,6 +44,8 @@ type OutlineDevice struct {
 	websocket     bool
 	hasTCPPath    bool
 	hasUDPPath    bool
+	ipv6          ipv6Capability
+	dnsRequests   chan struct{}
 }
 
 func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {
@@ -85,6 +87,7 @@ func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dns
 		websocket:    isWebSocket,
 		hasTCPPath:   hasTCPPath,
 		hasUDPPath:   hasUDPPath,
+		dnsRequests:  make(chan struct{}, 64),
 	}
 
 	username, password := auth.GenerateRandomAuth(), auth.GenerateRandomAuth()

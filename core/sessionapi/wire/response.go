@@ -1,7 +1,18 @@
 // Package wire owns the JSON response contract for every Go control transport.
 package wire
 
-import "core/sessionapi"
+import (
+	"core/buildinfo"
+	"core/sessionapi"
+)
+
+// ProtocolVersion is the snapshot schema version. Bump it on any change that an
+// older window or CLI cannot handle; every client compares it to its own copy.
+// Version 1 includes ParseImportLink as well as the session lifecycle commands.
+const ProtocolVersion = 1
+
+// RestartMessage is shown when a client and the service disagree on ProtocolVersion.
+const RestartMessage = "The app and the VPN service are different versions. Restart the app."
 
 // Response is the shared JSON envelope used by mobile, desktop and CLI clients.
 type Response[T any] struct {
@@ -36,6 +47,9 @@ type Selection struct {
 }
 
 type Snapshot struct {
+	OfflineAcceptedAt   string     `json:"offline_accepted_at,omitempty"`
+	ProtocolVersion     int        `json:"protocol_version"`
+	ServiceVersion      string     `json:"service_version"`
 	ActiveDigest        string     `json:"active_digest"`
 	ActiveMode          string     `json:"active_mode"`
 	ActiveIndex         int        `json:"active_index"`
@@ -60,6 +74,8 @@ type Snapshot struct {
 	CleanupComplete     bool       `json:"cleanup_complete"`
 	Recovering          bool       `json:"recovering"`
 	PrimaryAction       string     `json:"primary_action"`
+
+	ServiceRestorePending bool `json:"service_restore_pending,omitempty"`
 }
 
 func profileResultDTO(in sessionapi.ProfileSummary) Profile {
@@ -87,6 +103,7 @@ func ConfigurationFrom(in sessionapi.ConfigureResult) Configuration {
 }
 func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 	out := Snapshot{
+		ProtocolVersion: ProtocolVersion, ServiceVersion: buildinfo.Version,
 		ActiveDigest: in.ActiveDigest, ActiveMode: string(in.ActiveMode), ActiveIndex: in.ActiveIndex, CanSwitch: in.CanSwitch,
 		SessionID: in.SessionID, Sequence: in.Sequence, Generation: in.Generation,
 		NetworkGeneration: in.NetworkGeneration, VPNActive: in.VPNActive, CanRetry: in.CanRetry,
@@ -97,6 +114,8 @@ func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 		CleanupComplete: in.CleanupComplete,
 		Recovering:      in.Recovering,
 		PrimaryAction:   in.PrimaryAction,
+
+		ServiceRestorePending: in.ServiceRestorePending, OfflineAcceptedAt: in.OfflineAcceptedAt,
 	}
 	if in.PendingTarget != nil {
 		out.PendingTarget = &Selection{Digest: in.PendingTarget.Digest, Mode: string(in.PendingTarget.Mode), Index: in.PendingTarget.Index}

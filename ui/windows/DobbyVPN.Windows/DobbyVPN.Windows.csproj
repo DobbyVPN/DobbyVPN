@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode>true</RestoreLockedMode>
     <OutputType>WinExe</OutputType>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
@@ -23,6 +25,6 @@
 
   <ItemGroup>
     <AssemblyMetadata Include="DobbySourceCommit" Value="$(SourceCommit)" />
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.7.0" />
   </ItemGroup>
 </Project>

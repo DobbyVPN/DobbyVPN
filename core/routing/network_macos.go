@@ -8,11 +8,45 @@ package routing
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <net/if.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct {
  unsigned int ipv4, ipv6;
  CFDataRef snapshot;
+ char dns[1024];
 } dobby_physical_network;
+
+// Comma-separated ServerAddresses of the captured physical DNS entities.
+static CFArrayRef dobby_dns_servers(CFDictionaryRef snapshot, CFStringRef key) {
+ if (key == NULL) return NULL;
+ CFDictionaryRef service = CFDictionaryGetValue(snapshot, key);
+ if (service == NULL || CFGetTypeID(service) != CFDictionaryGetTypeID()) return NULL;
+ CFArrayRef servers = CFDictionaryGetValue(service, kSCPropNetDNSServerAddresses);
+ if (servers == NULL || CFGetTypeID(servers) != CFArrayGetTypeID() || CFArrayGetCount(servers) == 0) return NULL;
+ return servers;
+}
+
+static void dobby_physical_dns(CFDictionaryRef snapshot, CFStringRef *state, CFStringRef *setup, char *out, size_t size) {
+ size_t used = 0;
+ out[0] = 0;
+ for (int family = 0; family < 2; family++) {
+  CFArrayRef servers = dobby_dns_servers(snapshot, state[family]);
+  // Static DNS can be present only in Setup for the same primary service.
+  if (servers == NULL) servers = dobby_dns_servers(snapshot, setup[family]);
+  if (servers == NULL) continue;
+  for (CFIndex j = 0; j < CFArrayGetCount(servers); j++) {
+   CFStringRef server = CFArrayGetValueAtIndex(servers, j);
+   char text[96];
+   if (CFGetTypeID(server) != CFStringGetTypeID() || !CFStringGetCString(server, text, sizeof(text), kCFStringEncodingUTF8)) continue;
+   size_t length = strlen(text);
+   if (used + length + 2 > size) break;
+   memcpy(out + used, text, length);
+   used += length;
+   out[used++] = ',';
+   out[used] = 0;
+  }
+ }
+}
 
 // Copy only the physical primary services. The supplemental VPN DNS service
 // never participates in this snapshot, and no global DNS setting is consulted.
@@ -24,6 +58,8 @@ static int dobby_physical_capture(dobby_physical_network *result) {
  CFArrayRef globals = CFArrayCreate(NULL,globalNames,2,&kCFTypeArrayCallBacks);
  CFDictionaryRef before = SCDynamicStoreCopyMultiple(store,globals,NULL);
  CFMutableArrayRef keys = CFArrayCreateMutableCopy(NULL,0,globals);
+ CFStringRef stateDNS[2] = {NULL, NULL};
+ CFStringRef setupDNS[2] = {NULL, NULL};
  CFDictionaryRef snapshot = NULL;
  CFDictionaryRef after = NULL;
  if (before == NULL) { status=SCError(); goto done; }
@@ -42,8 +78,12 @@ static int dobby_physical_capture(dobby_physical_network *result) {
   const CFStringRef entities[]={kSCEntNetIPv4,kSCEntNetIPv6,kSCEntNetDNS};
   for (int entity=0;entity<3;entity++) {
    CFStringRef key=SCDynamicStoreKeyCreateNetworkServiceEntity(NULL,kSCDynamicStoreDomainState,service,entities[entity]);
+   if (entity == 2) stateDNS[family] = key;
    CFArrayAppendValue(keys,key);CFRelease(key);
   }
+  CFStringRef key=SCDynamicStoreKeyCreateNetworkServiceEntity(NULL,kSCDynamicStoreDomainSetup,service,kSCEntNetDNS);
+  setupDNS[family] = key;
+  CFArrayAppendValue(keys,key);CFRelease(key);
  }
  if (result->ipv4==0 && result->ipv6==0) {status=kSCStatusNoLink;goto done;}
  snapshot=SCDynamicStoreCopyMultiple(store,keys,NULL);
@@ -51,6 +91,7 @@ static int dobby_physical_capture(dobby_physical_network *result) {
  after=SCDynamicStoreCopyMultiple(store,globals,NULL);
  if (after==NULL) {status=SCError();goto done;}
  if (!CFEqual(before,after)) {status=kSCStatusStale;goto done;}
+ dobby_physical_dns(snapshot,stateDNS,setupDNS,result->dns,sizeof(result->dns));
  result->snapshot=CFPropertyListCreateData(NULL,snapshot,kCFPropertyListXMLFormat_v1_0,0,NULL);
  if (result->snapshot==NULL) status=kSCStatusFailed;
  done:
@@ -71,6 +112,9 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
+	"os/exec"
+	"slices"
 	"strings"
 	"unsafe"
 )
@@ -78,6 +122,9 @@ import (
 type MacOSPhysicalNetwork struct {
 	IPv4, IPv6 int
 	Identity   string
+	// DNSServers are the physical services' resolvers; the identity covers them.
+	DNSServers    []netip.Addr
+	NAT64Prefixes []netip.Prefix
 }
 
 func CaptureMacOSPhysicalNetwork(ctx context.Context) (MacOSPhysicalNetwork, error) {
@@ -112,5 +159,31 @@ func CaptureMacOSPhysicalNetwork(ctx context.Context) (MacOSPhysicalNetwork, err
 	if err := ctx.Err(); err != nil {
 		return MacOSPhysicalNetwork{}, err
 	}
-	return MacOSPhysicalNetwork{int(captured.ipv4), int(captured.ipv6), fmt.Sprintf("macos:%x", sha256.Sum256(snapshot))}, nil
+	var servers []netip.Addr
+	for _, text := range strings.Split(C.GoString(&captured.dns[0]), ",") {
+		server, err := netip.ParseAddr(text)
+		// Loopback servers (a local DNS proxy) stay: the kill switch passes lo0.
+		if err != nil || server.IsUnspecified() || slices.Contains(servers, server) {
+			continue
+		}
+		servers = append(servers, server)
+	}
+	var prefixes []netip.Prefix
+	if captured.ipv6 != 0 {
+		iface, err := net.InterfaceByIndex(int(captured.ipv6))
+		if err != nil {
+			return MacOSPhysicalNetwork{}, err
+		}
+		output, err := exec.CommandContext(ctx, "/sbin/ifconfig", iface.Name).CombinedOutput()
+		if err != nil {
+			return MacOSPhysicalNetwork{}, fmt.Errorf("capture physical NAT64 inventory: %w: %s", err, output)
+		}
+		prefixes, err = parseMacOSNAT64Prefixes(string(output))
+		if err != nil {
+			return MacOSPhysicalNetwork{}, err
+		}
+	}
+	identity := fmt.Sprintf("macos:%x:nat64:%v", sha256.Sum256(snapshot), prefixes)
+	return MacOSPhysicalNetwork{IPv4: int(captured.ipv4), IPv6: int(captured.ipv6), Identity: identity,
+		DNSServers: servers, NAT64Prefixes: prefixes}, nil
 }

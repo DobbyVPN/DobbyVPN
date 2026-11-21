@@ -82,6 +82,8 @@ public final class NativeGoSession {
 
     private static native String attachNative(Context context, String sourcePath);
 
+    public static native String parseImportLink(String value);
+
     public static native String configure(String sessionId, long expectedSequence, byte[] rawConfig);
 
     public static native String start(

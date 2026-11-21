@@ -276,7 +276,18 @@ func (c *nativeRuntime) generationValue() uint64 {
 }
 
 func (c *nativeRuntime) Attach(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *tunnel.BypassPolicy) error {
-	return c.app.Engine.Attach(ctx, generation, address, cache, bypass)
+	if c.app.Guard == nil {
+		return c.app.Engine.Attach(ctx, generation, address, cache, bypass)
+	}
+	configured, hosts := bypass.Excluded()
+	err := c.app.Guard.SetExcluded(ctx, configured, hosts)
+	if err == nil {
+		err = c.app.Engine.Attach(ctx, generation, address, cache, bypass)
+	}
+	if err != nil {
+		err = errors.Join(err, c.app.Guard.SetExcluded(sessionapi.CleanupContext(ctx), nil, nil))
+	}
+	return err
 }
 func (c *nativeRuntime) Detach(ctx context.Context, generation uint64) error {
 	return c.app.Engine.Detach(ctx, generation)

@@ -6,10 +6,12 @@ package sessionapi
 
 import (
 	"context"
+	"core/iprange"
 	"core/log"
 	"core/protocol"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -164,6 +166,7 @@ type StateChange struct {
 }
 
 type SnapshotResult struct {
+	OfflineAcceptedAt   string
 	SessionID           string
 	Sequence            uint64
 	Generation          uint64
@@ -189,6 +192,8 @@ type SnapshotResult struct {
 	CleanupComplete     bool
 	Recovering          bool
 	PrimaryAction       string
+
+	ServiceRestorePending bool
 }
 
 // SessionRef is passed to every platform/runtime operation.  It prevents a
@@ -203,10 +208,12 @@ type SessionRef struct {
 type RuntimeProfile struct {
 	Summary ProfileSummary
 	Config  protocol.Config
-	// ExcludeCIDRs is interpreted once by Go and remains private to the
+	// ExcludeSet and ExcludeHosts are interpreted once by Go per accepted
+	// configuration, shared by all its profiles and remain private to the
 	// runtime. Platform shells must not parse routing inputs from the original
 	// configuration.
-	ExcludeCIDRs []string
+	ExcludeSet   *iprange.Set
+	ExcludeHosts []string
 }
 
 // Runtime owns protocol process/device work. Implementations must honor ctx;
@@ -252,22 +259,38 @@ type PlatformAdapter interface {
 
 type PlatformLease interface{ Release(context.Context) error }
 
+// DesktopProtection owns the kernel policy that can survive a service process.
+// Go user intent determines when the platform may release that policy.
+type DesktopProtection interface {
+	PrepareRestore(context.Context) error
+	Recover(context.Context) (bool, error)
+	SetEnabled(context.Context, bool) error
+}
+
 type ManagerOptions struct {
-	Runtime     Runtime
-	Platform    PlatformAdapter
-	Loader      ConfigLoader
-	SourceStore SourceStore
-	Now         func() time.Time
+	RestoreLoader      ConfigLoader // Used only before a retained desktop tunnel has been re-established.
+	Protection         DesktopProtection
+	RetainedProtection bool
+	Runtime            Runtime
+	Platform           PlatformAdapter
+	Loader             ConfigLoader
+	SourceStore        SourceStore
+	Now                func() time.Time
+	// StartupFailure, when set, is reported as the last failure of the initial
+	// idle session until the next Start. Nil leaves behavior unchanged.
+	StartupFailure error
 }
 
 type Manager struct {
-	runtime     Runtime
-	platform    PlatformAdapter
-	loader      ConfigLoader
-	sourceStore SourceStore
-	now         func() time.Time
-	initErr     error
-	session     *session
+	restoreLoader ConfigLoader
+	protection    DesktopProtection
+	runtime       Runtime
+	platform      PlatformAdapter
+	loader        ConfigLoader
+	sourceStore   SourceStore
+	now           func() time.Time
+	initErr       error
+	session       *session
 }
 
 const (
@@ -277,10 +300,14 @@ const (
 )
 
 type session struct {
-	mu            sync.Mutex
-	closing       bool
-	changed       chan struct{}
-	cleanupBudget *cleanupBudget
+	cancelRestoreFetch    context.CancelFunc
+	offlineAcceptedAt     string
+	offlineRefreshPending bool
+	retainedProtection    bool
+	mu                    sync.Mutex
+	closing               bool
+	changed               chan struct{}
+	cleanupBudget         *cleanupBudget
 
 	networkGeneration     uint64
 	networkLedger         *ledger
@@ -303,6 +330,7 @@ type session struct {
 	configureRequest           uint64
 	restoreEpoch               uint64
 	restorePrepared            bool
+	serviceRestorePending      bool
 	activeProfiles             []RuntimeProfile
 	activeDigest               string
 	activeSourceKind           ConfigSourceKind
@@ -311,8 +339,10 @@ type session struct {
 	active                     *ProfileSummary
 	lastFailure                FailureCode
 	lastFailureMessage         string
+	startupFailure             *Error
 	cleanupDone                bool
 	cleanupFailed              bool
+	attemptCtx                 context.Context
 	cancel                     context.CancelFunc
 	ledger                     *ledger
 	activeTarget               StartTarget
@@ -355,7 +385,7 @@ func NewManager(options ManagerOptions) *Manager {
 	sourceKind := ConfigSourceKind("")
 	sourceError := ""
 	if options.SourceStore != nil {
-		saved, err := options.SourceStore.Load(context.Background())
+		saved, err := storedSource(context.Background(), options.SourceStore)
 		if err != nil {
 			sourceError = fmt.Sprintf("saved configuration URL could not be read: %v", err)
 		} else if len(saved) > 0 {
@@ -365,12 +395,23 @@ func NewManager(options ManagerOptions) *Manager {
 			}
 		}
 	}
+	initial := &session{
+		retainedProtection: options.RetainedProtection,
+		id:                 id, state: StateIdle, cleanupDone: true, sequence: 1, sourceURL: sourceURL,
+		sourceKind: sourceKind, sourceError: sourceError, changed: make(chan struct{}),
+	}
+	if options.RetainedProtection {
+		// Adopt an actionable generation before the control transport opens.
+		// All native Stop commands fence a positive generation.
+		initial.generation = 1
+	}
+	if options.StartupFailure != nil {
+		initial.startupFailure = &Error{Code: CodeOf(options.StartupFailure), Message: options.StartupFailure.Error()}
+		initial.lastFailure, initial.lastFailureMessage = initial.startupFailure.Code, initial.startupFailure.Message
+	}
 	return &Manager{
 		runtime: r, platform: p, loader: loader, sourceStore: options.SourceStore, now: now, initErr: initErr,
-		session: &session{
-			id: id, state: StateIdle, cleanupDone: true, sequence: 1, sourceURL: sourceURL,
-			sourceKind: sourceKind, sourceError: sourceError, changed: make(chan struct{}),
-		},
+		session: initial, protection: options.Protection, restoreLoader: options.RestoreLoader,
 	}
 }
 
@@ -389,7 +430,7 @@ func (m *Manager) AttachSourceStore(ctx context.Context, store SourceStore) erro
 	m.sourceStore = store
 	s.mu.Unlock()
 
-	saved, err := store.Load(ctx)
+	saved, err := storedSource(ctx, store)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
@@ -405,8 +446,8 @@ func (m *Manager) AttachSourceStore(ctx context.Context, store SourceStore) erro
 	return nil
 }
 
-func (m *Manager) loadConfig(ctx context.Context, rawConfig []byte) (LoadedConfig, parsedConfig, error) {
-	loaded, err := m.loader.Load(ctx, rawConfig)
+func loadConfig(ctx context.Context, loader ConfigLoader, rawConfig []byte) (LoadedConfig, parsedConfig, error) {
+	loaded, err := loader.Load(ctx, rawConfig)
 	if err != nil {
 		return LoadedConfig{}, parsedConfig{}, safeConfigError(rawConfig, err)
 	}
@@ -452,38 +493,91 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 	if preloadErr == nil && restoreEpoch != nil && s.restoreEpoch != *restoreEpoch {
 		preloadErr = failure(FailureConflict, "automatic startup was superseded")
 	}
+	loader := m.loader
+	var cancelFetch context.CancelFunc
 	if preloadErr == nil {
+		ctx, cancelFetch, loader = m.configurationLoaderLocked(ctx, s, restoreEpoch != nil)
+		if restoreEpoch == nil {
+			s.offlineRefreshPending = false
+			s.restoreEpoch++
+		}
 		s.configureRequest++
 	}
+	cache, hasCache := m.sourceStore.(AcceptedStore)
 	request := s.configureRequest
 	s.mu.Unlock()
 	if preloadErr != nil {
 		return ConfigureResult{}, preloadErr
 	}
 
-	loaded, parsed, loadErr := m.loadConfig(ctx, rawConfig)
+	if cancelFetch != nil {
+		defer s.finishProtectedFetch(request, cancelFetch)
+	}
+	loaded, parsed, loadErr := loadConfig(ctx, loader, rawConfig)
+	if loadErr != nil && restoreEpoch != nil && hasCache && ctx.Err() == nil && isUnreachableLoad(loadErr) {
+		loaded, parsed, loadErr = m.loadForRestore(ctx, cache, rawConfig, loadErr)
+	}
 	if loadErr != nil {
 		return ConfigureResult{}, loadErr
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if restoreEpoch != nil && (loaded.Kind != ConfigSourceURL || loaded.SourceURL != string(rawConfig)) {
-		return ConfigureResult{}, failure(FailureConflict, "automatic startup source changed; connect again")
-	}
-	if restoreEpoch != nil && s.restoreEpoch != *restoreEpoch {
-		return ConfigureResult{}, failure(FailureConflict, "automatic startup was superseded")
+	if err := validateRestoreSource(s, restoreEpoch, loaded, rawConfig); err != nil {
+		return ConfigureResult{}, err
 	}
 	if acceptErr := validateConfigureBeforeAccept(ctx, s, request); acceptErr != nil {
 		return ConfigureResult{}, acceptErr
 	}
-	if err := m.saveConfigurationSourceLocked(ctx, loaded); err != nil {
+	return m.acceptConfigurationLocked(ctx, s, loaded, parsed, restoreEpoch != nil)
+}
+
+func validateRestoreSource(s *session, epoch *uint64, loaded LoadedConfig, rawConfig []byte) error {
+	if epoch == nil {
+		return nil
+	}
+	if loaded.Kind != ConfigSourceURL || loaded.SourceURL != string(rawConfig) {
+		return failure(FailureConflict, "automatic startup source changed; connect again")
+	}
+	if s.restoreEpoch != *epoch {
+		return failure(FailureConflict, "automatic startup was superseded")
+	}
+	return nil
+}
+
+func (s *session) finishProtectedFetch(request uint64, cancel context.CancelFunc) {
+	cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.configureRequest == request {
+		s.cancelRestoreFetch = nil
+	}
+}
+
+func (m *Manager) configurationLoaderLocked(ctx context.Context, s *session, restoring bool) (context.Context, context.CancelFunc, ConfigLoader) {
+	s.cancelProtectedFetchLocked()
+	if restoring && s.retainedProtection && !s.vpnActive && m.restoreLoader != nil {
+		request, cancel := context.WithCancel(ctx)
+		s.cancelRestoreFetch = cancel
+		return request, cancel, m.restoreLoader
+	}
+	return ctx, nil, m.loader
+}
+
+func (s *session) cancelProtectedFetchLocked() {
+	if s.cancelRestoreFetch != nil {
+		s.cancelRestoreFetch()
+		s.cancelRestoreFetch = nil
+	}
+}
+
+func (m *Manager) acceptConfigurationLocked(ctx context.Context, s *session, loaded LoadedConfig, parsed parsedConfig, restoring bool) (ConfigureResult, error) {
+	if err := m.saveConfigurationSourceLocked(ctx, loaded, parsed.digest); err != nil {
 		return ConfigureResult{}, err
 	}
-	if restoreEpoch == nil {
-		s.restoreEpoch++
-	}
-	s.restorePrepared = restoreEpoch != nil
+	s.offlineAcceptedAt = loaded.OfflineAcceptedAt
+	s.restorePrepared = restoring
+	s.offlineRefreshPending = loaded.OfflineAcceptedAt != ""
 	s.profiles, s.digest, s.sourceKind, s.sourceURL, s.configured = parsed.profiles, parsed.digest, loaded.Kind, loaded.SourceURL, true
 	s.logsEndpoint = parsed.logsEndpoint
 	s.sourceError = ""
@@ -502,15 +596,22 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 func resetConfiguredSessionLocked(s *session) {
 	if s.cleanupDone && !s.cleanupFailed && !s.recovering && s.pending == nil {
 		s.active, s.lastFailure, s.lastFailureMessage, s.state = nil, "", "", StateConfigured
+		if s.startupFailure != nil {
+			// Reported until the first Start; Configure must not hide it.
+			s.lastFailure, s.lastFailureMessage = s.startupFailure.Code, s.startupFailure.Message
+		}
 		s.activeDigest, s.activeProfiles, s.activeTarget = "", nil, StartTarget{}
 		s.recoveryOriginGeneration, s.recoveryCount = 0, 0
 	}
 }
 
 // saveConfigurationSourceLocked persists the accepted source while the session is locked.
-func (m *Manager) saveConfigurationSourceLocked(ctx context.Context, loaded LoadedConfig) error {
+func (m *Manager) saveConfigurationSourceLocked(ctx context.Context, loaded LoadedConfig, digest string) error {
 	if m.sourceStore == nil {
 		return nil
+	}
+	if cache, ok := m.sourceStore.(AcceptedStore); ok {
+		return m.saveAcceptedSource(ctx, cache, loaded, digest)
 	}
 	if loaded.Kind == ConfigSourceURL {
 		if err := m.sourceStore.Save(ctx, []byte(loaded.SourceURL)); err != nil {
@@ -518,6 +619,31 @@ func (m *Manager) saveConfigurationSourceLocked(ctx context.Context, loaded Load
 		}
 	} else if err := m.sourceStore.Clear(ctx); err != nil {
 		return failureWithCause(FailurePlatform, "saved configuration URL could not be cleared", err)
+	}
+	return nil
+}
+
+func (m *Manager) saveAcceptedSource(ctx context.Context, cache AcceptedStore, loaded LoadedConfig, digest string) error {
+	if loaded.OfflineAcceptedAt != "" {
+		return nil
+	}
+	if loaded.Kind == ConfigSourceURL {
+		record := acceptedConfiguration{Version: 1, Source: loaded.SourceURL, Digest: digest, Body: loaded.Raw, AcceptedAt: m.now().UTC()}
+		raw, err := json.Marshal(record)
+		if err == nil {
+			err = cache.SaveAccepted(ctx, raw)
+		}
+		if err != nil {
+			return failureWithCause(FailurePlatform, "accepted configuration could not be saved", err)
+		}
+		return nil
+	}
+	// Clear legacy state first so a crash cannot resurrect an older URL.
+	if err := m.sourceStore.Clear(ctx); err != nil {
+		return failureWithCause(FailurePlatform, "saved configuration URL could not be cleared", err)
+	}
+	if err := cache.ClearAccepted(ctx); err != nil {
+		return failureWithCause(FailurePlatform, "cached configuration could not be cleared", err)
 	}
 	return nil
 }
@@ -645,7 +771,9 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	// Accepted work outlives the request and is canceled by Stop or recovery.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cleanupBudget = &cleanupBudget{}
+	s.attemptCtx = ctx
 	s.cancel, s.ledger, s.cleanupDone, s.cleanupFailed, s.active, s.lastFailure, s.lastFailureMessage = cancel, &ledger{}, false, false, nil, "", ""
+	s.startupFailure = nil
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.failureMessageAfterCleanup = ""
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
@@ -719,7 +847,7 @@ func (m *Manager) acknowledgeStoppedLocked(s *session, generation uint64) (StopR
 	// generation is fully cleaned, stop is an idempotent acknowledgement;
 	// it must not turn a clean terminal state into a misleading stale-stop
 	// failure. Cleanup failures remain errors and still block restart.
-	if s.generation == generation && s.cleanupDone && !s.cleanupFailed && (s.state != StateConfigured || s.restorePrepared) {
+	if s.generation == generation && s.cleanupDone && !s.cleanupFailed && (s.state != StateConfigured || s.restorePrepared || s.retainedProtection) {
 		if s.recovering || s.recoveryOriginGeneration != 0 {
 			s.recovering, s.restartAfterCleanup, s.recoveryOriginGeneration = false, false, 0
 			m.appendLocked(s)
@@ -744,10 +872,23 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 		return StopResult{}, failure(FailureStaleGeneration, "generation is no longer active")
 	}
 	s.restoreEpoch++
+	s.cancelProtectedFetchLocked()
+	s.offlineRefreshPending = false
+	s.configureRequest++
 	defer func() { s.restorePrepared = false }()
 	// A persistence failure is reported, but cannot prevent the requested
 	// release of app-owned protection. OS teardown does not call this path.
 	persistErr := m.stopActivationLocked(ctx)
+	if m.protection != nil {
+		removeErr := m.protection.SetEnabled(ctx, false)
+		if removeErr == nil {
+			if s.retainedProtection {
+				s.restorePrepared = true
+			}
+			s.retainedProtection = false
+		}
+		persistErr = errors.Join(persistErr, removeErr)
+	}
 	defer func() { err = errors.Join(err, persistErr) }()
 	// A stop from cleanup may arrive just after its replacement is reserved.
 	generation = s.generation
@@ -807,7 +948,7 @@ func stopGenerationInactive(s *session, generation uint64) bool {
 	if retryableCleanup(s) || (s.state == StateFailed && s.vpnActive && !s.cleanupFailed) {
 		return false
 	}
-	return s.generation != generation || !s.cleanupDone || s.cleanupFailed || (s.state == StateConfigured && !s.restorePrepared)
+	return s.generation != generation || !s.cleanupDone || s.cleanupFailed || (s.state == StateConfigured && !s.restorePrepared && !s.retainedProtection)
 }
 
 // ProtectSocket is the session API path for platform socket protection.
@@ -884,9 +1025,8 @@ func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cau
 }
 
 // NetworkEvent reports a system wake or network-path change. When a connected
-// generation is monitored it triggers an immediate health check; otherwise the
-// event is only logged. It never changes state itself, so reconnects stay under
-// the automatic-recovery limit.
+// generation is monitored it triggers an immediate health check. An offline inventory can request
+// one fresh load through the current protected connection.
 func (m *Manager) NetworkEvent(_ context.Context, sessionID, reason string) error {
 	s, err := m.get(sessionID)
 	if err != nil {
@@ -897,12 +1037,16 @@ func (m *Manager) NetworkEvent(_ context.Context, sessionID, reason string) erro
 	}
 	s.mu.Lock()
 	state, generation := s.state, s.generation
+	if s.offlineRefreshPending && s.attemptCtx != nil && s.vpnActive && state == StateConnected && !s.stopRequested && !s.closing {
+		s.offlineRefreshPending = false
+		go m.refreshAfterOfflineRestore(s.attemptCtx, s.sourceURL, s.restoreEpoch, generation)
+	}
 	probe := s.prober != nil && s.probeGeneration == generation && state == StateConnected && !s.stopRequested
 	if probe {
 		s.prober.ProbeNow(reason)
 	}
 	s.mu.Unlock()
-	log.Info("SESSION", "network event", map[string]any{"reason": reason, "state": string(state), "generation": generation, "probe": probe})
+	log.Info("SESSION", "network event", map[string]any{"reason": reason, "state": string(state), logGeneration: generation, "probe": probe})
 	return nil
 }
 
@@ -954,6 +1098,9 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 	}
 	s.mu.Lock()
 	s.vpnActive = true
+	if m.protection != nil && !s.stopRequested && !s.closing {
+		s.retainedProtection = true
+	}
 	m.appendLocked(s)
 	s.mu.Unlock()
 	return ctx.Err()
@@ -1133,7 +1280,10 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 	if s.generation != generation {
 		return
 	}
-	s.cancel = nil
+	if releaseNetwork && cleanupErr == nil {
+		cleanupErr = m.recoverPartialProtectionLocked(s, cause)
+	}
+	s.attemptCtx, s.cancel = nil, nil
 	s.cleanupFailed = cleanupErr != nil || CodeOf(cause) == FailureCleanup
 	if s.cleanupFailed {
 		s.pending = nil
@@ -1182,6 +1332,18 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 	m.finishProtectedFailureLocked(s, cause)
 }
 
+func (m *Manager) recoverPartialProtectionLocked(s *session, cause error) error {
+	// Preparation can install the base policy before the network lease is
+	// ready. After rollback, inspect the kernel under the same intent lock as
+	// Stop so a surviving guard remains visible and can be released.
+	if cause != nil && !s.vpnActive && !s.stopRequested && !s.closing && m.protection != nil {
+		retained, err := m.protection.Recover(s.cleanupBudget.begin())
+		s.retainedProtection = retained
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) finishProtectedFailureLocked(s *session, cause error) {
 	message := errorMessage(cause)
 	code := CodeOf(cause)
@@ -1214,6 +1376,7 @@ func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptCon
 	s.generation++
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cleanupBudget = &cleanupBudget{}
+	s.attemptCtx = ctx
 	s.cancel, s.ledger = cancel, &ledger{}
 	s.cleanupDone, s.cleanupFailed, s.stopRequested = false, false, false
 	s.active, s.activeTarget = nil, target
@@ -1225,7 +1388,8 @@ func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptCon
 }
 
 func retainPolicy(digest string, profiles []RuntimeProfile) {
-	if err := log.SetPolicy(digest, map[string]any{"exclude_ips": profiles[0].ExcludeCIDRs, "profiles": summaries(profiles)}); err != nil {
+	excluded := map[string]any{"ranges": profiles[0].ExcludeSet.Len(), "hosts": len(profiles[0].ExcludeHosts), "sha256": profiles[0].ExcludeSet.Hash()}
+	if err := log.SetPolicy(digest, map[string]any{"exclude_ips": excluded, "profiles": summaries(profiles)}); err != nil {
 		log.Error("CONFIGURATION", "retain routing policy diagnostics failed", map[string]any{"cause": err.Error(), "configuration_digest": digest})
 	}
 }
@@ -1239,7 +1403,7 @@ func (m *Manager) appendLocked(s *session) {
 	if digest == "" {
 		digest = s.digest
 	}
-	details := map[string]any{"session_id": s.id, "generation": s.generation, "configuration_digest": digest, "loaded_configuration_digest": s.digest, "sequence": s.sequence, "state": s.state, "cleanup_complete": s.cleanupDone, "vpn_active": s.vpnActive, "network_generation": s.networkGeneration, "recovering": s.recovering, "active_profile": s.active}
+	details := map[string]any{"session_id": s.id, logGeneration: s.generation, "configuration_digest": digest, "loaded_configuration_digest": s.digest, "sequence": s.sequence, "state": s.state, "cleanup_complete": s.cleanupDone, "vpn_active": s.vpnActive, "network_generation": s.networkGeneration, "recovering": s.recovering, "active_profile": s.active}
 	if !s.lastTransitionAt.IsZero() {
 		details["previous_state_duration_ms"] = now.Sub(s.lastTransitionAt).Milliseconds()
 	}
@@ -1280,6 +1444,7 @@ func snapshotLocked(s *session) SnapshotResult {
 		ActiveProfile: cloneSummaryPtr(s.active), LastFailure: s.lastFailure,
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,
 		Recovering: s.recovering, PrimaryAction: primaryActionLocked(s),
+		ServiceRestorePending: s.serviceRestorePending, OfflineAcceptedAt: s.offlineAcceptedAt,
 	}
 }
 
@@ -1292,12 +1457,13 @@ func canRetry(s *session) bool {
 }
 
 const primaryActionStop = "STOP"
+const logGeneration = "generation"
 
 func primaryActionLocked(s *session) string {
 	if canRetry(s) {
 		return "RETRY"
 	}
-	if s.state == StateFailed && s.cleanupFailed {
+	if s.retainedProtection && !s.vpnActive && s.state != StateStopping || s.state == StateFailed && s.cleanupFailed {
 		return primaryActionStop
 	}
 	if s.pending != nil {

@@ -168,10 +168,11 @@ def main():
     parser.add_argument("run_id")
     parser.add_argument("name")
     parser.add_argument("destination")
+    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--expected-digest")
     args = parser.parse_args()
     download_artifact(
-        args.run_id, args.name, args.destination, os.environ["GITHUB_REPOSITORY"],
+        args.run_id, args.name, args.destination, args.repository,
         expected_digest=args.expected_digest,
     )
 

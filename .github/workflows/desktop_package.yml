@@ -21,6 +21,19 @@ on:
       retention_days:
         default: 1
         type: number
+    secrets:
+      MACOS_DEVELOPER_ID_APP_P12:
+        required: false
+      MACOS_DEVELOPER_ID_INSTALLER_P12:
+        required: false
+      MACOS_DEVELOPER_ID_P12_PASSWORD:
+        required: false
+      APP_STORE_API_KEY:
+        required: false
+      APP_STORE_KEY_ID:
+        required: false
+      APP_STORE_ISSUER_ID:
+        required: false
 
 permissions:
   contents: read
@@ -29,17 +42,54 @@ jobs:
   package:
     name: ${{ inputs.platform }} / ${{ inputs.architecture }} package
     runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
-    timeout-minutes: 45
+    # Release macOS jobs also wait for notarization (notarytool --timeout 30m).
+    timeout-minutes: ${{ inputs.platform == 'macos' && !inputs.debug && 90 || 45 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
+      - name: Verify checked-out package source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PRODUCTION_BUILD: ${{ github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          if [[ "$PRODUCTION_BUILD" == true ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            test "$SOURCE_SHA" = "$GITHUB_SHA"
+          fi
+
       - name: Restore Go modules and verified tool archives
         uses: ./.github/actions/dependency-cache
         with:
           pinned-tools: ${{ inputs.platform == 'linux' || inputs.platform == 'windows' }}
+
+      - name: Install pinned .NET SDK
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      # Release packages only: hardened runtime blocks debugger attachment
+      # without get-task-allow, and notarization rejects get-task-allow.
+      - name: Prepare macOS Developer ID signing
+        id: macos_signing
+        if: ${{ inputs.platform == 'macos' && !inputs.debug && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha }}
+        env:
+          MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
+          MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
+        run: bash .github/scripts/desktop/macos_signing.sh prepare
 
       - name: Build package with the local platform command
         id: build
@@ -71,6 +121,19 @@ jobs:
           test -s "$output/$package"
           printf 'package=%s\n' "$output/$package" >> "$GITHUB_OUTPUT"
           printf 'artifact=%s\n' "$package" >> "$GITHUB_OUTPUT"
+
+      - name: Sign, notarize and verify macOS package
+        if: ${{ steps.macos_signing.outputs.enabled == 'true' }}
+        env:
+          PACKAGE: ${{ steps.build.outputs.package }}
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
+
+      - name: Remove macOS signing keychain
+        if: ${{ always() && steps.macos_signing.outcome != 'skipped' }}
+        run: bash .github/scripts/desktop/macos_signing.sh cleanup
 
       - name: Upload exact package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

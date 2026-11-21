@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 
 	"github.com/things-go/go-socks5"
@@ -124,6 +125,9 @@ func (a *udpAssociation) relayFromClient() {
 			continue
 		}
 		destination := packet.DstAddr.String()
+		if runtime.GOOS == "windows" && packet.DstAddr.Port == 53 && a.relayDNS(packet, destination, client) {
+			continue
+		}
 		key := client.String() + "|" + destination
 		upstream := a.upstreamFor(key, destination, client, packet.Header())
 		if upstream == nil {

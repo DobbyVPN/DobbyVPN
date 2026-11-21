@@ -46,6 +46,10 @@ public sealed partial class MainWindow : Window
     private string _status = "";
     private readonly WindowErrorState _errors = new();
     private string _importError = "";
+    // An import link waits here until the user confirms that it may replace the saved subscription.
+    private string? _pendingImport;
+    private ContentDialog? _importDialog;
+    private bool _importWaitsForLoad;
     private string _logsError = "";
     private string _exportError = "";
     private string _clearLogsError = "";
@@ -56,7 +60,6 @@ public sealed partial class MainWindow : Window
     private string _errorDetailOriginal = "";
     private string _lastSourceError = "";
     private bool _canPaste;
-    private double _rowHeight;
     private string _loadError = "";
     private string _restoredLoad = "";
     private CancellationTokenSource? _debounce;
@@ -105,9 +108,6 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         RestoreLogUpload();
         SizeWindow();
-        Column.SizeChanged += (_, _) => UpdateTrayHeight();
-        Controls.SizeChanged += (_, _) => UpdateTrayHeight();
-        UploadStatusPanel.SizeChanged += (_, _) => UpdateTrayHeight();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
         Root.Loaded += (_, _) =>
         {
@@ -293,23 +293,6 @@ public sealed partial class MainWindow : Window
         AppWindow.Move(new PointInt32(area.X + (area.Width - AppWindow.Size.Width) / 2, area.Y + (area.Height - AppWindow.Size.Height) / 2));
     }
 
-    // Four connections when there is room. Reserve the log viewport itself,
-    // separately from an upload reference and the measured, text-scaled controls.
-    private void UpdateTrayHeight()
-    {
-        if (_lifetime.IsClosing) return;
-        var height = Column.ActualHeight;
-        if (height <= 0) return;
-        var fourRows = 4 * Math.Max(_rowHeight, 42) + 5 * 6;
-        var controlsHeight = Math.Max(0, Controls.ActualHeight - ConnectionsTray.ActualHeight);
-        var uploadHeight = UploadStatusPanel.Visibility == Visibility.Visible ? UploadStatusPanel.ActualHeight : 0;
-        var logHeight = Math.Max(120, height / 4);
-        var available = height - controlsHeight - uploadHeight - 1.5 - logHeight;
-        var trayHeight = Math.Min(Math.Max(available, 54), fourRows);
-        if (Math.Abs(ConnectionsTray.Height - trayHeight) > 0.5 || double.IsNaN(ConnectionsTray.Height))
-            ConnectionsTray.Height = trayHeight;
-    }
-
     private void RecordAppStarted()
     {
         var commit = _commit == "N/A" ? "" : _commit[..Math.Min(8, _commit.Length)];
@@ -339,6 +322,7 @@ public sealed partial class MainWindow : Window
             {
                 await RefreshSnapshotAsync(cancellationToken);
                 if (cancellationToken.IsCancellationRequested) return;
+                if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized }) continue;
                 await RefreshLogsAsync(cancellationToken);
             }
         }
@@ -388,7 +372,11 @@ public sealed partial class MainWindow : Window
                 _sourceInitialized = true;
             }
             var restoreKey = result.SessionId + "|" + SourceEditor.Text;
-            if (_subscriptionLoad.CanRestore(SourceEditor.Text, _acceptedInThisWindow, result.Configured) && _restoredLoad != restoreKey)
+            if (result.ServiceRestorePending && (previous?.ServiceRestorePending != true || previous?.SessionId != result.SessionId))
+                _diagnostics.RecordInfo("subscription.restore-pending", "Waiting for the service to restore its saved VPN session",
+                    new { sessionId = result.SessionId });
+            if (_subscriptionLoad.CanRestore(SourceEditor.Text, _acceptedInThisWindow, result.Configured, result.ServiceRestorePending)
+                && _restoredLoad != restoreKey)
             {
                 _restoredLoad = restoreKey;
                 await SourceChangedAsync(SubscriptionInputKind.Restore, cancellationToken);
@@ -410,8 +398,10 @@ public sealed partial class MainWindow : Window
         catch (Exception error) when (!_lifetime.IsClosing)
         {
             _snapshot = null;
-            if (_errors.FailSnapshot("VPN service is unavailable. See logs for details."))
-                RecordError(error.ToString());
+            var failure = error is SessionProtocolMismatchException
+                ? SnapshotFailure.ProtocolMismatch
+                : SnapshotFailure.ServiceUnavailable;
+            if (_errors.FailSnapshot(failure)) RecordError(error.ToString());
             Render();
         }
         finally
@@ -423,17 +413,20 @@ public sealed partial class MainWindow : Window
     private async Task<Snapshot> ReadSnapshotAsync(CancellationToken cancellationToken)
     {
         var sessionId = _snapshot?.SessionId ?? "";
+        Snapshot snapshot;
         try
         {
-            return await CallAsync<Snapshot>("Snapshot", new { session_id = sessionId }, cancellationToken);
+            snapshot = await CallAsync<Snapshot>("Snapshot", new { session_id = sessionId }, cancellationToken);
         }
         catch (BackendCommandException error) when (error.Code == "NOT_FOUND" && !string.IsNullOrEmpty(sessionId))
         {
             // The Go backend owns session state. A replacement backend has a
             // new session ID, so reattach through its owner-independent
             // Snapshot entry point and let it restore the saved configuration URL.
-            return await CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
+            snapshot = await CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
         }
+        // A service that predates the field has no value, which is also a mismatch.
+        return snapshot;
     }
 
     private bool IsStopTarget(int? index)
@@ -453,7 +446,7 @@ public sealed partial class MainWindow : Window
             isStopTarget: IsStopTarget(index),
             stopInFlight: _stopInFlight,
             busy: _busy,
-            hasLoadError: _loadError.Length > 0,
+            hasLoadError: _loadError.Length > 0 && NormalizeSource(SourceEditor.Text) != s.SourceUrl,
             sequenceCurrent: s.Sequence >= _acceptedSequence,
             configured: s.Configured,
             canStartOrSwitch: s.PrimaryAction == "START" || s.CanSwitch);
@@ -474,8 +467,8 @@ public sealed partial class MainWindow : Window
     private bool ShowSeparateStop => HasUnfinishedActiveVpn(_snapshot) && _snapshot?.PrimaryAction != "STOP";
 
     private string ActionTitle(int? index) => IsStopTarget(index)
-        ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Disconnect" : "Stop")
-        : (index is null ? "Auto connect" : "Connect");
+        ? (_snapshot?.State == "CONNECTED" && _snapshot.PendingTarget is null ? "Connected" : "Stop")
+        : (index is null ? "Auto connect" : _snapshot is { State: "CONNECTED", PendingTarget: null } ? "Switch" : "Connect");
 
     private bool Busy => _busy || _stopInFlight;
     private bool Connected => _snapshot is { PrimaryAction: "STOP" } active && active.State != "FAILED";
@@ -563,6 +556,9 @@ public sealed partial class MainWindow : Window
 
     private void Render()
     {
+        var acceptedAt = _snapshot?.OfflineAcceptedAt;
+        OfflineConfigurationText.Visibility = string.IsNullOrEmpty(acceptedAt) ? Visibility.Collapsed : Visibility.Visible;
+        OfflineConfigurationText.Text = string.IsNullOrEmpty(acceptedAt) ? "" : "Using saved profiles from " + acceptedAt;
         if (_lifetime.IsClosing) return;
         RenderSourceField();
         RenderMainButton();
@@ -632,7 +628,7 @@ public sealed partial class MainWindow : Window
         var empty = (current?.Profiles.Length ?? 0) == 0 && orphan is null;
         var failed = empty && _loadError.Length > 0;
         LoadFailed.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
-        EmptySock.Visibility = empty && !failed ? Visibility.Visible : Visibility.Collapsed;
+        EmptyState.Visibility = empty && !failed ? Visibility.Visible : Visibility.Collapsed;
         ProfilesScroll.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         if (current is null) return;
 
@@ -667,15 +663,19 @@ public sealed partial class MainWindow : Window
         _trayKey = trayKey;
         ProfileList.Children.Clear();
         if (orphan is not null)
+        {
+            var orphanConnected = current.State == "CONNECTED" && current.PendingTarget is null;
             ProfileList.Children.Add(CreateRow("profile.active", ProfileName(orphan),
                 [ProtocolName(orphan.Protocol), SessionStatus, "not in subscription"],
-                IsOn(SessionStatus), MainTitle, MainEnabled, MainActionAsync));
+                IsOn(SessionStatus), orphanConnected ? "Connected" : MainTitle, MainEnabled && !orphanConnected, MainActionAsync));
+        }
         foreach (var profile in current.Profiles)
         {
             var index = profile.Index;
             var status = ProfileStatus(index);
+            var title = ProfileTitle(index);
             ProfileList.Children.Add(CreateRow(ProfileAutomationIds.Create(current.Digest, index, "action"), ProfileName(profile),
-                [ProtocolName(profile.Protocol), status], IsOn(status), ProfileTitle(index), CanAct(index),
+                [ProtocolName(profile.Protocol), status], IsOn(status), title, CanAct(index) && title != "Connected",
                 token => PerformActionAsync(index, false, token)));
         }
     }
@@ -687,7 +687,7 @@ public sealed partial class MainWindow : Window
         var description = new TextBlock
         {
             Text = name, FontSize = 14.45, FontWeight = FontWeights.Medium, Foreground = Palette("Ink"),
-            TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis
+            TextWrapping = TextWrapping.Wrap, MaxLines = 2, TextTrimming = TextTrimming.CharacterEllipsis
         };
         var protocol = new TextBlock
         {
@@ -731,12 +731,6 @@ public sealed partial class MainWindow : Window
         row.Click += (_, _) =>
         {
             if (!ErrorShown) StartWindowWork(click);
-        };
-        row.SizeChanged += (_, _) =>
-        {
-            if (row.ActualHeight <= _rowHeight) return;
-            _rowHeight = row.ActualHeight;
-            UpdateTrayHeight();
         };
         return row;
     }
@@ -868,6 +862,20 @@ public sealed partial class MainWindow : Window
 
     private async Task PerformActionAsync(int? index, bool forceStop, CancellationToken cancellationToken)
     {
+        var actionMode = index is null ? "AUTO_SELECT" : "PROFILE_INDEX";
+        _diagnostics.RecordDebug("ui.connection-action",
+            $"connection_action mode={actionMode} index={index?.ToString() ?? "auto"} force_stop={forceStop} " +
+            $"generation={_snapshot?.Generation} sequence={_snapshot?.Sequence} status={_status}",
+            new
+            {
+                index,
+                force_stop = forceStop,
+                mode = actionMode,
+                replace_current = true,
+                generation = _snapshot?.Generation,
+                sequence = _snapshot?.Sequence,
+                status_before = _status,
+            });
         if (_lifetime.IsClosing) return;
         if (_snapshot is not { } current) return;
         if (forceStop || IsStopTarget(index))
@@ -973,7 +981,8 @@ public sealed partial class MainWindow : Window
         if (_lifetime.IsClosing) return;
         var source = SourceEditor.Text.Trim();
         var valid = ValidSubscription(source);
-        var revision = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
+        var edit = _subscriptionLoad.Edit(source, valid, kind, LoadNow);
+        var revision = edit.Revision;
         _diagnostics.RecordInfo(
             "subscription.source-edited",
             "Edited the subscription source",
@@ -982,6 +991,8 @@ public sealed partial class MainWindow : Window
                 source,
                 input_kind = kind.ToString(),
                 revision,
+                duplicate_suppressed = edit.DuplicateSuppressed,
+                dropped_queued = edit.DroppedQueued,
                 valid,
                 session_id = _snapshot?.SessionId,
                 sequence = _snapshot?.Sequence,
@@ -989,6 +1000,13 @@ public sealed partial class MainWindow : Window
                 is_loading = _subscriptionLoad.IsLoading,
                 busy = Busy
             });
+        // A duplicate notification did not start a new attempt. Keep any load
+        // error and its Retry action until the editor intent actually changes.
+        if (edit.DuplicateSuppressed)
+        {
+            Render();
+            return;
+        }
         _loadError = "";
         _errors.Operation = "";
         _importError = "";
@@ -1033,7 +1051,7 @@ public sealed partial class MainWindow : Window
         _diagnostics.RecordInfo("subscription.paste-click", "Started handling a Paste button click", new { session_id = _snapshot?.SessionId });
         try
         {
-            var pastedText = (await Clipboard.GetContent().GetTextAsync()).Trim();
+            var pastedText = (await ReadClipboardTextAsync(cancellationToken)).Trim();
             if (cancellationToken.IsCancellationRequested) return;
             _diagnostics.RecordInfo("subscription.paste-clipboard-text-returned", "Clipboard text returned to the Paste handler", new { session_id = _snapshot?.SessionId, text_length = pastedText.Length });
             if (!ValidSubscription(pastedText)) throw new InvalidOperationException("Paste an HTTPS subscription URL with a host");
@@ -1041,6 +1059,21 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception error) when (!_lifetime.IsClosing) { SetError(error.ToString(), error.Message); Render(); }
     }
+
+    // A clipboard provider can withhold completion indefinitely. Cancelling
+    // the WinRT operation alone would still wait for the provider to report
+    // back, so the wait itself also ends as soon as the window starts closing.
+    private static async Task<string> ReadClipboardTextAsync(CancellationToken cancellationToken)
+    {
+        var operation = Clipboard.GetContent().GetTextAsync();
+        using var cancelOperation = cancellationToken.Register(() =>
+        {
+            try { operation.Cancel(); }
+            catch (Exception) { /* already completed or closed; the wait below ends regardless */ }
+        });
+        return await operation.AsTask().WaitAsync(cancellationToken);
+    }
+
     private void ImportSubscription(string source, SubscriptionInputKind kind)
     {
         if (!ValidSubscription(source)) throw new InvalidOperationException("Enter an HTTPS subscription URL with a host");
@@ -1048,32 +1081,94 @@ public sealed partial class MainWindow : Window
         SetSourceText(source);
         SourceChanged(kind);
     }
+    private long _importRevision;
+
     public void ImportLink(string value)
     {
         if (_lifetime.IsClosing) return;
-        _diagnostics.RecordInfo(
-            "activation.import-link",
-            "Received a URI for the main window",
-            new { uri = value });
+        _diagnostics.RecordInfo("activation.import-link", "Received a URI for the main window", new { uri = value });
         Activate();
+        var revision = ++_importRevision;
+        StartWindowWork(async cancellationToken =>
+        {
+            try
+            {
+                _ = await ReadSnapshotAsync(cancellationToken);
+                var parsed = await CallAsync<ImportLinkResult>("ParseImportLink", new { link = value }, cancellationToken);
+                if (_lifetime.IsClosing || revision != _importRevision || parsed.Kind != "import") return;
+                _pendingImport = parsed.Source;
+                ShowImportDialog();
+            }
+            catch (Exception error)
+            {
+                if (_lifetime.IsClosing || revision != _importRevision) return;
+                SetError(error.ToString(),
+                    error is SessionProtocolMismatchException ? SessionProtocol.RestartMessage : error.Message);
+                _importError = _errors.Operation;
+                Render();
+            }
+        });
+    }
+
+    private sealed record ImportLinkResult(
+        [property: System.Text.Json.Serialization.JsonPropertyName("kind")] string Kind,
+        [property: System.Text.Json.Serialization.JsonPropertyName("source")] string? Source);
+
+    private static TextBlock ImportPrompt(string source) => new()
+    {
+        Text = $"{new Uri(source).Host}\n\n{source}\n\nThe saved subscription and the log upload address will be replaced.",
+        TextWrapping = TextWrapping.Wrap,
+        IsTextSelectionEnabled = true,
+    };
+
+    private async void ShowImportDialog()
+    {
+        if (_pendingImport is null || _lifetime.IsClosing) return;
+        if (_importDialog is not null)
+        {
+            _importDialog.Content = ImportPrompt(_pendingImport);
+            return;
+        }
+        if (Root.XamlRoot is null)
+        {
+            if (_importWaitsForLoad) return;
+            _importWaitsForLoad = true;
+            void OnRootLoaded(object sender, RoutedEventArgs args)
+            {
+                Root.Loaded -= OnRootLoaded;
+                _importWaitsForLoad = false;
+                ShowImportDialog();
+            }
+            Root.Loaded += OnRootLoaded;
+            return;
+        }
         try
         {
-            if (value.Equals("dobbyvpn://", StringComparison.OrdinalIgnoreCase) ||
-                value.Equals("dobbyvpn:///", StringComparison.OrdinalIgnoreCase)) return;
-            _dismissedErrors.Clear();
-            if (System.Text.RegularExpressions.Regex.IsMatch(value, "%(?![0-9a-fA-F]{2})")) throw new FormatException("Invalid URL escape");
-            var uri = new Uri(value);
-            if (uri.Scheme != "dobbyvpn" || uri.Host != "import" || uri.AbsolutePath is not ("" or "/") || uri.UserInfo.Length > 0 || !uri.IsDefaultPort || uri.Fragment.Length > 0)
-                throw new FormatException("Invalid import link");
-            var query = uri.Query.TrimStart('?').Split('&');
-            var pair = query[0].Split('=', 2);
-            if (query.Length != 1 || pair.Length != 2 || pair[0] != "url") throw new FormatException("The import link requires one url parameter");
-            ImportSubscription(Uri.UnescapeDataString(pair[1]), SubscriptionInputKind.Import);
+            _importDialog = new ContentDialog
+            {
+                XamlRoot = Root.XamlRoot,
+                Style = (Style)Application.Current.Resources["DefaultContentDialogStyle"],
+                Title = "Replace subscription?",
+                Content = ImportPrompt(_pendingImport),
+                PrimaryButtonText = "Replace",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            AutomationProperties.SetAutomationId(_importDialog, "import.confirm");
+            var result = await _importDialog.ShowAsync();
+            _importDialog = null;
+            ++_importRevision;
+            var source = _pendingImport;
+            _pendingImport = null;
+            if (result == ContentDialogResult.Primary && source is not null && !_lifetime.IsClosing)
+                ImportSubscription(source, SubscriptionInputKind.Import);
         }
         catch (Exception error)
         {
-            SetError(error.ToString(), "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL");
-            _importError = _errors.Operation;
+            _importDialog = null;
+            _pendingImport = null;
+            if (_lifetime.IsClosing) return;
+            SetError(error.ToString(), error.Message);
             Render();
         }
     }
@@ -1197,7 +1292,12 @@ public sealed partial class MainWindow : Window
                 });
             if (_subscriptionLoad.IsCurrent(request))
             {
-                _loadError = error.Message;
+                var accepted = _snapshot?.SourceUrl ?? "";
+                bool sameSource = _snapshot?.Configured == true && accepted.Length > 0 && request.Source == accepted;
+                if (sameSource) _subscriptionLoad.MarkAccepted(request);
+                var owner = _snapshot?.Configured == true && !sameSource && accepted.Length > 0
+                    ? $" Showing profiles from {accepted}." : "";
+                _loadError = $"Could not load {request.Source}: {error.Message}.{owner}";
                 RecordError(error.ToString());
             }
         }
@@ -1266,7 +1366,7 @@ public sealed partial class MainWindow : Window
                 throw new BackendCommandException(code, message);
             }
             var payload = response.RootElement.GetProperty("result");
-            var result = payload.Deserialize<T>(JsonOptions);
+            var result = typeof(T) == typeof(Snapshot) ? (T)(object)Snapshot.Decode(payload) : payload.Deserialize<T>(JsonOptions);
             if (result is null) throw new InvalidDataException("Go backend returned an empty result.");
             if (operation.Sampled) _diagnostics.RecordInfo("control.command.complete", "Completed desktop control command", fields());
             return result;
@@ -2066,10 +2166,12 @@ public sealed partial class MainWindow : Window
         {
             Directory.CreateDirectory(LogUploadDirectory);
             using var cleanupGate = new Mutex(false, @"Local\DobbyVPN.LogUploadCleanup");
-            cleanupGate.WaitOne();
+            bool acquired;
+            try { acquired = cleanupGate.WaitOne(TimeSpan.FromSeconds(5)); }
+            catch (AbandonedMutexException) { acquired = true; }
             try
             {
-                foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
+                if (acquired) foreach (var directory in Directory.EnumerateDirectories(LogUploadDirectory, "upload-*"))
                 {
                     FileStream lease;
                     try { lease = new FileStream(Path.Combine(directory, ".lease"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
@@ -2085,11 +2187,11 @@ public sealed partial class MainWindow : Window
                     catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.cleanup.directory"); }
                 }
             }
-            finally { cleanupGate.ReleaseMutex(); }
+            finally { if (acquired) cleanupGate.ReleaseMutex(); }
             var metadata = LatestUploadPath;
             if (!File.Exists(metadata)) return;
             var latest = JsonSerializer.Deserialize<LastLogUpload>(File.ReadAllText(metadata));
-            if (latest is null) return;
+            if (latest is null || string.IsNullOrEmpty(latest.Reference)) return;
             _lastLogReference = latest.Reference;
             UploadStatusText.Text = $"Uploaded: {latest.Reference} · {latest.Time.LocalDateTime:g} · {latest.Provider}";
             UploadStatusPanel.Visibility = Visibility.Visible;
@@ -2282,53 +2384,6 @@ public sealed partial class MainWindow : Window
             _exportingLogs = false;
             if (!_lifetime.IsClosing) SendLogsItem.IsEnabled = true;
         }
-    }
-
-    private sealed class Snapshot
-    {
-        [JsonPropertyName("session_id")] public string SessionId { get; init; } = "";
-        [JsonPropertyName("sequence")] public long Sequence { get; init; }
-        [JsonPropertyName("generation")] public long Generation { get; init; }
-        [JsonPropertyName("network_generation")] public ulong NetworkGeneration { get; init; }
-        [JsonPropertyName("vpn_active")] public bool VpnActive { get; init; }
-        [JsonPropertyName("can_retry")] public bool CanRetry { get; init; }
-        [JsonPropertyName("state")] public string State { get; init; } = "IDLE";
-        [JsonPropertyName("primary_action")] public string PrimaryAction { get; init; } = "NONE";
-        [JsonPropertyName("logs_upload_available")] public bool LogsUploadAvailable { get; init; }
-        [JsonPropertyName("configured")] public bool Configured { get; set; }
-        [JsonPropertyName("source_url")] public string SourceUrl { get; set; } = "";
-        [JsonPropertyName("source_error")] public string SourceError { get; init; } = "";
-        [JsonPropertyName("active_profile")] public Profile? ActiveProfile { get; init; }
-        [JsonPropertyName("last_failure")] public Failure? LastFailure { get; init; }
-        [JsonPropertyName("cleanup_complete")] public bool CleanupComplete { get; init; }
-        [JsonPropertyName("recovering")] public bool Recovering { get; init; }
-        [JsonPropertyName("digest")] public string Digest { get; set; } = "";
-        [JsonPropertyName("profiles")] public Profile[] Profiles { get; set; } = [];
-        [JsonPropertyName("active_digest")] public string ActiveDigest { get; init; } = "";
-        [JsonPropertyName("active_mode")] public string ActiveMode { get; init; } = "";
-        [JsonPropertyName("active_index")] public int ActiveIndex { get; init; }
-        [JsonPropertyName("pending_target")] public Selection? PendingTarget { get; init; }
-        [JsonPropertyName("can_switch")] public bool CanSwitch { get; init; }
-    }
-
-    private sealed class Selection
-    {
-        public string Digest { get; init; } = "";
-        public string Mode { get; init; } = "";
-        public int Index { get; init; }
-    }
-
-    private sealed class Profile
-    {
-        [JsonPropertyName("index")] public int Index { get; init; }
-        [JsonPropertyName("protocol")] public string Protocol { get; init; } = "";
-        [JsonPropertyName("description")] public string Description { get; init; } = "";
-    }
-
-    private sealed class Failure
-    {
-        [JsonPropertyName("code")] public string Code { get; init; } = "";
-        [JsonPropertyName("message")] public string Message { get; init; } = "";
     }
 
     private sealed class BackendCommandException : InvalidOperationException

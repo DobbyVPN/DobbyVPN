@@ -39,6 +39,7 @@ APP_BUNDLE="/Applications/Dobby VPN.app"
 CONTROL_SOCKET="/var/run/dobbyvpn/control.sock"
 CONTROL_DIRECTORY="/var/run/dobbyvpn"
 UNINSTALLER="/usr/local/libexec/dobbyvpn-uninstall"
+CLI_LINK="/usr/local/bin/dobby-cli"
 
 capture_command launchctl-print launchctl print system/com.dobby.vpnservice
 service_state="$CAPTURE_OUTPUT"
@@ -78,6 +79,56 @@ else
     esac
 fi
 
+# A backend that died while connected leaves its kill switch in pf.  Flush
+# only the product anchor and release only the product's enable reference;
+# the main ruleset is untouched and pf stays enabled if another owner uses it.
+# A failure does not stop the uninstall: the token file stays so the release
+# can be repeated, and a reboot clears pf state and /var/run as well.
+PF_ANCHOR="com.apple/dobbyvpn"
+PF_TOKEN="$CONTROL_DIRECTORY/pf.token"
+capture_command pf-flush /sbin/pfctl -a "$PF_ANCHOR" -F rules
+pf_flush_status="$CAPTURE_STATUS"
+if [ "$pf_flush_status" -eq 0 ]; then
+    capture_command pf-flush-tables /sbin/pfctl -a "$PF_ANCHOR" -F Tables
+    pf_flush_status="$CAPTURE_STATUS"
+fi
+if [ "$pf_flush_status" -ne 0 ]; then
+    printf 'pf anchor flush failed (status %s); a reboot removes the rules\n' "$pf_flush_status" >&2
+fi
+if [ "$pf_flush_status" -eq 0 ] && [ -f "$PF_TOKEN" ] && [ ! -L "$PF_TOKEN" ]; then
+    pf_token="$(tr -cd '0-9' <"$PF_TOKEN")"
+    pf_release_status=0
+    if [ -n "$pf_token" ]; then
+        capture_command pf-release /sbin/pfctl -X "$pf_token"
+        pf_release_status="$CAPTURE_STATUS"
+    fi
+    if [ "$pf_release_status" -eq 0 ]; then
+        rm -f "$PF_TOKEN"
+    else
+        printf 'pf enable reference release failed (status %s); %s is kept\n' "$pf_release_status" "$PF_TOKEN" >&2
+    fi
+fi
+
+# Read the installed service owner before retiring its plist. Use that
+# account's privileges for its private files, including on headless uninstall.
+if [ -f "$PLIST_DEST" ]; then
+    owner_uid="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:DOBBYVPN_CONTROL_PEER_UID' "$PLIST_DEST")"
+    if ! [[ "$owner_uid" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Installed service has an invalid configuration owner" >&2
+        exit 1
+    fi
+    capture_command remove-configuration /usr/bin/sudo -n -H -u "#$owner_uid" /bin/sh -eu -c '
+        cd -P -- "$HOME"
+        for part in .dobbyvpn configs; do
+            if [ -L "$part" ]; then echo "Saved configuration directory is a symlink" >&2; exit 1; fi
+            if [ ! -e "$part" ]; then exit 0; fi
+            cd -P -- "$part"
+        done
+        /bin/rm -f -- connection-url.txt.activation.json connection-url.txt accepted-configuration.v1.json
+    '
+    if [ "$CAPTURE_STATUS" -ne 0 ]; then exit "$CAPTURE_STATUS"; fi
+fi
+
 # Remove only the product's launchd registration and runtime endpoint.  Do not
 # follow symlinks or sweep the parent runtime directory if another owner uses
 # it; an empty product directory is removed as a cosmetic final step.
@@ -102,6 +153,11 @@ if [ "$pkgutil_status" -ne 0 ]; then
         *"No receipt"*|*"not found"*|*"No such file"*) ;;
         *) printf 'Package receipt removal failed (status %s)\n' "$pkgutil_status" >&2; exit "$pkgutil_status" ;;
     esac
+fi
+# Remove the PATH link only while it still points at this application; a link
+# that another tool re-pointed is not ours to delete.
+if [ -L "$CLI_LINK" ] && [ "$(readlink "$CLI_LINK")" = "$APP_BUNDLE/Contents/Resources/dobby-cli" ]; then
+    rm -f "$CLI_LINK"
 fi
 rm -rf "$APP_BUNDLE"
 rm -f "$UNINSTALLER"
