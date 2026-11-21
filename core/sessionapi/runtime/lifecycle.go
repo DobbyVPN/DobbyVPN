@@ -163,7 +163,12 @@ type networkOwner struct {
 	lease lease
 }
 
-func (n *networkOwner) Stop(ctx context.Context) error { return n.lease.Stop(ctx) }
+// Stop also ends the cache's background DNS queries, which would otherwise
+// keep using the stopped session's resolver until their timeout.
+func (n *networkOwner) Stop(ctx context.Context) error {
+	n.cache.Close()
+	return n.lease.Stop(ctx)
+}
 
 // NetworkChanged tells the current network's resolver cache that the platform
 // reported a network change, so answers remembered for DNS failures are not

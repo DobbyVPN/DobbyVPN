@@ -239,140 +239,227 @@ func TestLastKnownAnswerWarnsOncePerEpisode(t *testing.T) {
 	}
 }
 
-// hangingAfterFirst answers the first query and then hangs until the query's
-// context ends, like a router DNS that stops answering.
-func hangingAfterFirst(calls *atomic.Int32) Resolver {
-	return func(ctx context.Context, _ string) ([]net.IPAddr, error) {
-		if calls.Add(1) == 1 {
-			return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
-		}
-		<-ctx.Done()
+// fakeTimer replaces the client response timer; closing the returned channel
+// fires it for every waiting caller.
+func fakeTimer(t *testing.T) chan time.Time {
+	t.Helper()
+	fire := make(chan time.Time)
+	old := staleTimer
+	staleTimer = func() (<-chan time.Time, func() bool) { return fire, func() bool { return true } }
+	t.Cleanup(func() { staleTimer = old })
+	return fire
+}
+
+// blockingResolver answers the first query; every later query reports on
+// started and then waits for next (or the query's context, if honorContext).
+type blockingResolver struct {
+	calls        atomic.Int32
+	started      chan struct{}
+	next         chan func() ([]net.IPAddr, error)
+	honorContext bool
+}
+
+func newBlockingResolver(honorContext bool) *blockingResolver {
+	return &blockingResolver{started: make(chan struct{}, 8), next: make(chan func() ([]net.IPAddr, error), 8), honorContext: honorContext}
+}
+
+func (b *blockingResolver) resolve(ctx context.Context, _ string) ([]net.IPAddr, error) {
+	if b.calls.Add(1) == 1 {
+		return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
+	}
+	b.started <- struct{}{}
+	done := ctx.Done()
+	if !b.honorContext {
+		done = nil
+	}
+	select {
+	case answer := <-b.next:
+		return answer()
+	case <-done:
 		return nil, ctx.Err()
 	}
 }
 
-func useWait(t *testing.T, wait time.Duration) {
-	t.Helper()
-	old := staleAnswerWait
-	staleAnswerWait = wait
-	t.Cleanup(func() { staleAnswerWait = old })
+type lookupResult struct {
+	addresses string
+	err       error
 }
 
-// A hanging DNS gives the remembered answer after the client response timer,
-// well inside the caller's own deadline.
-func TestHangingDNSServesRememberedAnswerWithinClientTimer(t *testing.T) {
+func resolveAsync(ctx context.Context, cache *Cache) chan lookupResult {
+	result := make(chan lookupResult, 1)
+	go func() {
+		addresses, err := cache.ResolveAddresses(ctx, "endpoint.example")
+		text := make([]string, 0, len(addresses))
+		for _, address := range addresses {
+			text = append(text, address.IP.String())
+		}
+		result <- lookupResult{strings.Join(text, " "), err}
+	}()
+	return result
+}
+
+func TestClientResponseTimerIsOneAndAHalfSeconds(t *testing.T) {
+	if staleAnswerWait != 1500*time.Millisecond {
+		t.Fatalf("client response timer is %s, want 1.5s", staleAnswerWait)
+	}
+}
+
+// A hanging DNS gives the remembered answer when the client response timer
+// fires, well inside the caller's own 5 s deadline, and not before.
+func TestHangingDNSServesRememberedAnswerAtClientTimer(t *testing.T) {
 	useClock(t)
-	var calls atomic.Int32
+	fire := fakeTimer(t)
+	resolver := newBlockingResolver(true)
 	cache := New()
-	cache.SetResolver("network-a", hangingAfterFirst(&calls))
-	t.Cleanup(cache.NetworkChanged) // stop the background query
+	t.Cleanup(cache.Close)
+	cache.SetResolver("network-a", resolver.resolve)
 	addressesOf(t, cache)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	started := time.Now()
-	addresses, err := cache.ResolveAddresses(ctx, "endpoint.example")
-	elapsed := time.Since(started)
-	if err != nil || len(addresses) != 1 || addresses[0].IP.String() != "192.0.2.1" {
-		t.Fatalf("want the remembered answer, got %v %v", addresses, err)
+	result := resolveAsync(ctx, cache)
+	<-resolver.started
+	select {
+	case got := <-result:
+		t.Fatalf("answered before the timer: %+v", got)
+	default:
 	}
-	if elapsed < staleAnswerWait-100*time.Millisecond || elapsed > staleAnswerWait+time.Second {
-		t.Fatalf("remembered answer after %s, want about %s", elapsed, staleAnswerWait)
+	close(fire)
+	if got := <-result; got.err != nil || got.addresses != "192.0.2.1" {
+		t.Fatalf("want the remembered answer, got %+v", got)
 	}
 }
 
 // The query keeps running after the caller got the remembered answer; its
-// later answer replaces the remembered one.
-func TestBackgroundAnswerReplacesRememberedAnswer(t *testing.T) {
+// later answer replaces the remembered one, and a later negative answer
+// forgets it.
+func TestBackgroundAnswersUpdateRememberedAnswer(t *testing.T) {
 	useClock(t)
-	useWait(t, 50*time.Millisecond)
-	release := make(chan struct{})
-	var calls atomic.Int32
+	fire := fakeTimer(t)
+	resolver := newBlockingResolver(true)
 	cache := New()
-	cache.SetResolver("network-a", func(ctx context.Context, _ string) ([]net.IPAddr, error) {
-		switch calls.Add(1) {
-		case 1:
-			return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
-		case 2:
-			select {
-			case <-release:
-				return []net.IPAddr{{IP: net.ParseIP("192.0.2.2")}}, nil
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		default:
-			return nil, context.DeadlineExceeded
-		}
-	})
+	t.Cleanup(cache.Close)
+	cache.SetResolver("network-a", resolver.resolve)
 	addressesOf(t, cache)
-	if got := addressesOf(t, cache); got != "192.0.2.1" {
-		t.Fatalf("slow DNS must give the remembered answer: %s", got)
-	}
-	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	close(fire) // every wait ends at once from here on
+
+	background := func(answer func() ([]net.IPAddr, error)) lookupResult {
+		result := resolveAsync(context.Background(), cache)
+		<-resolver.started
 		cache.mu.RLock()
-		pending := len(cache.refreshing)
+		r := cache.refreshing["endpoint.example"]
 		cache.mu.RUnlock()
-		if pending == 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("background query did not finish")
-		}
-		time.Sleep(5 * time.Millisecond)
+		got := <-result
+		resolver.next <- answer
+		<-r.done
+		return got
 	}
-	if got := addressesOf(t, cache); got != "192.0.2.2" {
-		t.Fatalf("the background answer must replace the remembered one: %s", got)
+	if got := background(func() ([]net.IPAddr, error) { return []net.IPAddr{{IP: net.ParseIP("192.0.2.2")}}, nil }); got.addresses != "192.0.2.1" {
+		t.Fatalf("slow DNS must give the remembered answer: %+v", got)
+	}
+	if got := background(func() ([]net.IPAddr, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "endpoint.example", IsNotFound: true}
+	}); got.addresses != "192.0.2.2" {
+		t.Fatalf("the background answer must have replaced the remembered one: %+v", got)
+	}
+	if cache.hasStaleAnswer("endpoint.example", cache.revision) {
+		t.Fatal("a negative answer must forget the remembered answer")
 	}
 }
 
 // A network change while the caller waits drops the remembered answer.
 func TestNetworkChangeWhileWaitingDropsRememberedAnswer(t *testing.T) {
 	useClock(t)
-	useWait(t, time.Second)
-	var calls atomic.Int32
+	fakeTimer(t)
+	resolver := newBlockingResolver(true)
 	cache := New()
-	cache.SetResolver("network-a", hangingAfterFirst(&calls))
+	t.Cleanup(cache.Close)
+	cache.SetResolver("network-a", resolver.resolve)
 	addressesOf(t, cache)
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cache.NetworkChanged()
-	}()
-	started := time.Now()
-	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
-		t.Fatal("an answer from before the network change must not be used")
+	result := resolveAsync(context.Background(), cache)
+	<-resolver.started
+	cache.NetworkChanged()
+	if got := <-result; got.err == nil {
+		t.Fatalf("an answer from before the network change must not be used: %+v", got)
 	}
-	if elapsed := time.Since(started); elapsed >= staleAnswerWait {
-		t.Fatalf("the network change must end the wait, took %s", elapsed)
+}
+
+// Stopping the network session ends the background query and the wait.
+func TestCloseEndsBackgroundQuery(t *testing.T) {
+	useClock(t)
+	fakeTimer(t)
+	resolver := newBlockingResolver(true)
+	cache := New()
+	cache.SetResolver("network-a", resolver.resolve)
+	addressesOf(t, cache)
+	result := resolveAsync(context.Background(), cache)
+	<-resolver.started
+	cache.Close()
+	if got := <-result; got.err == nil {
+		t.Fatalf("a stopped session must not wait for its resolver: %+v", got)
+	}
+}
+
+// A resolver that ignores its context does not hold the caller after the
+// background query is cancelled.
+func TestStuckResolverDoesNotHoldCaller(t *testing.T) {
+	useClock(t)
+	fakeTimer(t)
+	resolver := newBlockingResolver(false)
+	cache := New()
+	t.Cleanup(func() {
+		resolver.next <- func() ([]net.IPAddr, error) { return nil, context.Canceled }
+		cache.Close()
+	})
+	cache.SetResolver("network-a", resolver.resolve)
+	addressesOf(t, cache)
+	result := resolveAsync(context.Background(), cache)
+	<-resolver.started
+	cache.NetworkChanged()
+	if got := <-result; got.err == nil {
+		t.Fatalf("want an error once the stuck query is cancelled: %+v", got)
 	}
 }
 
 // Concurrent callers for one host share a single background query.
 func TestConcurrentCallersShareOneBackgroundQuery(t *testing.T) {
 	useClock(t)
-	useWait(t, 50*time.Millisecond)
-	var calls atomic.Int32
+	fire := fakeTimer(t)
+	resolver := newBlockingResolver(true)
 	cache := New()
-	cache.SetResolver("network-a", hangingAfterFirst(&calls))
-	t.Cleanup(cache.NetworkChanged)
+	t.Cleanup(cache.Close)
+	cache.SetResolver("network-a", resolver.resolve)
 	addressesOf(t, cache)
-	results := make(chan string, 3)
-	for range 3 {
-		go func() {
-			addresses, err := cache.ResolveAddresses(context.Background(), "endpoint.example")
-			if err != nil || len(addresses) == 0 {
-				results <- fmt.Sprint(err)
-				return
-			}
-			results <- addresses[0].IP.String()
-		}()
+	results := make([]chan lookupResult, 0, 3)
+	results = append(results, resolveAsync(context.Background(), cache))
+	<-resolver.started
+	for range 2 {
+		results = append(results, resolveAsync(context.Background(), cache))
 	}
-	for range 3 {
-		if got := <-results; got != "192.0.2.1" {
-			t.Fatalf("want the remembered answer, got %s", got)
+	close(fire)
+	for _, result := range results {
+		if got := <-result; got.err != nil || got.addresses != "192.0.2.1" {
+			t.Fatalf("want the remembered answer, got %+v", got)
 		}
 	}
-	if n := calls.Load(); n != 2 {
+	if n := resolver.calls.Load(); n != 2 {
 		t.Fatalf("resolver queried %d times, want 2 (one answer, one shared background query)", n)
+	}
+}
+
+// A background query is registered and its answer returned only for the
+// current revision.
+func TestBackgroundQueryIsBoundToCurrentRevision(t *testing.T) {
+	cache := New()
+	t.Cleanup(cache.Close)
+	cache.SetResolver("network-a", scriptedResolver([]string{"192.0.2.1"}))
+	cache.mu.RLock()
+	old := cache.revision
+	cache.mu.RUnlock()
+	cache.NetworkChanged()
+	if r := cache.startRefresh(cache.resolver, "network-a", "endpoint.example", old); r != nil {
+		t.Fatal("a query of a replaced revision must not be registered")
+	}
+	if _, ok := cache.ofRevision([]net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, old); ok {
+		t.Fatal("an answer of a replaced revision must not be returned")
 	}
 }

@@ -31,6 +31,14 @@ const (
 // whole ServerResolveTimeout.
 var staleAnswerWait = 1500 * time.Millisecond
 
+// staleTimer starts the client response timer; a test seam.
+var staleTimer = func() (<-chan time.Time, func() bool) {
+	timer := time.NewTimer(staleAnswerWait)
+	return timer.C, timer.Stop
+}
+
+var errNetworkChanged = errors.New("underlying network changed during resolution")
+
 // now is a test seam for answer ages.
 var now = time.Now
 
@@ -62,14 +70,19 @@ type Cache struct {
 	// later query in the same revision fails or is slow.
 	lastGood map[string]staleAnswer
 	// refreshing holds at most one background query per host for the current
-	// revision; a revision change cancels them.
+	// revision; a revision change and Close cancel them.
 	refreshing map[string]*refresh
+	// life bounds background queries to the network session that owns the
+	// cache; Close ends it.
+	life context.Context
+	end  context.CancelFunc
 }
 
 // refresh is one query that may outlive its caller. Its fields are written
 // before done is closed.
 type refresh struct {
 	revision  uint64
+	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
 	addresses []net.IPAddr
@@ -105,7 +118,19 @@ func (c *Cache) cancelRefreshesLocked() {
 	c.refreshing = nil
 }
 
-func New() *Cache { return &Cache{revision: 1} }
+func New() *Cache {
+	life, end := context.WithCancel(context.Background())
+	return &Cache{revision: 1, life: life, end: end}
+}
+
+// Close cancels background queries when the network session that owns the
+// cache stops. Lookups still work; new background queries end at once.
+func (c *Cache) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.end()
+	c.cancelRefreshesLocked()
+}
 
 func (c *Cache) SetResolverSource(source ResolverSource) {
 	c.mu.Lock()
@@ -164,23 +189,16 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 	if c.hasStaleAnswer(host, revision) {
 		return c.resolveWithStaleAnswer(parent, source, resolve, identity, host, revision)
 	}
-	addresses, failed, err := c.lookup(ctx, resolve, identity, host, revision)
+	addresses, _, err := c.lookup(ctx, resolve, identity, host, revision)
 	if err != nil {
-		// Only a failed query in the same revision may use the last answer: not
-		// a negative answer, a replaced network or a caller that gave up.
-		if failed && parent.Err() == nil {
-			revision = c.recapture(parent, source, revision)
-			if stale, ok := c.staleAnswer(host, revision, err); ok {
-				return stale, nil
-			}
-		}
 		return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
 	}
 	return addresses, nil
 }
 
-// lookup runs one query. A successful answer is remembered; failed reports a
-// query that failed in this revision, as opposed to a negative answer.
+// lookup runs one query. A successful answer is remembered and a negative one
+// (no such host, empty answer) forgets the remembered answer; failed reports a
+// query that failed in this revision.
 func (c *Cache) lookup(ctx context.Context, resolve Resolver, identity, host string, revision uint64) ([]net.IPAddr, bool, error) {
 	started := time.Now()
 	addresses, err := resolve(ctx, host)
@@ -190,7 +208,7 @@ func (c *Cache) lookup(ctx context.Context, resolve Resolver, identity, host str
 	current := c.revision
 	c.mu.RUnlock()
 	if current != revision {
-		err = errors.Join(err, errors.New("underlying network changed during resolution"))
+		err = errors.Join(err, errNetworkChanged)
 		failed = false
 	}
 	if ctx.Err() != nil {
@@ -201,6 +219,9 @@ func (c *Cache) lookup(ctx context.Context, resolve Resolver, identity, host str
 	}
 	log.Debugf(Category, "underlying lookup network=%s revision=%d host=%s addresses=%v elapsed=%s err=%v", identity, revision, host, addresses, time.Since(started), err)
 	if err != nil {
+		if !failed && current == revision {
+			c.forget(host, revision)
+		}
 		return nil, failed, err
 	}
 	c.remember(host, revision, addresses)
@@ -217,44 +238,76 @@ func (c *Cache) hasStaleAnswer(host string, revision uint64) bool {
 
 // resolveWithStaleAnswer waits at most staleAnswerWait for the resolver while a
 // remembered answer is at hand. The query keeps running in the background,
-// bounded by ServerResolveTimeout, and a later answer replaces the remembered
-// one. Concurrent callers for the same host share one query.
+// bounded by ServerResolveTimeout and the cache's life, and a later answer
+// replaces the remembered one. Concurrent callers for one host share a query.
 func (c *Cache) resolveWithStaleAnswer(parent context.Context, source ResolverSource, resolve Resolver, identity, host string, revision uint64) ([]net.IPAddr, error) {
 	r := c.startRefresh(resolve, identity, host, revision)
-	timer := time.NewTimer(staleAnswerWait)
-	defer timer.Stop()
+	if r == nil {
+		return nil, fmt.Errorf("resolve endpoint %s: %w", host, errNetworkChanged)
+	}
+	waitEnd := time.Now().Add(staleAnswerWait)
+	timer, stop := staleTimer()
+	defer stop()
 	for {
 		select {
 		case <-r.done:
 			if r.err == nil {
-				return append([]net.IPAddr(nil), r.addresses...), nil
+				if addresses, ok := c.ofRevision(r.addresses, revision); ok {
+					return addresses, nil
+				}
+				return nil, fmt.Errorf("resolve endpoint %s: %w", host, errNetworkChanged)
 			}
-			if r.failed && parent.Err() == nil {
-				if stale, ok := c.staleAnswer(host, c.recapture(parent, source, revision), r.err); ok {
-					return stale, nil
+			if r.failed && c.life.Err() == nil {
+				// The failure may come from a replaced network; read it again
+				// within what is left of the wait.
+				capture, cancel := context.WithDeadline(parent, waitEnd)
+				current := c.recapture(capture, source, revision)
+				cancel()
+				if parent.Err() == nil {
+					if stale, ok := c.staleAnswer(host, current, r.err); ok {
+						return stale, nil
+					}
 				}
 			}
 			return nil, fmt.Errorf("resolve endpoint %s: %w", host, r.err)
-		case <-timer.C:
+		case <-timer:
+			timer = nil
 			slow := fmt.Errorf("underlying DNS has not answered within %s", staleAnswerWait)
-			if stale, ok := c.staleAnswer(host, c.recapture(parent, source, revision), slow); ok {
-				return stale, nil
+			if parent.Err() == nil && c.life.Err() == nil {
+				if stale, ok := c.staleAnswer(host, revision, slow); ok {
+					return stale, nil
+				}
 			}
 			// The network changed: only the query's own result may be used.
+		case <-r.ctx.Done():
+			// A resolver that ignores its context must not hold the caller.
+			select {
+			case <-r.done:
+				continue
+			default:
+			}
+			return nil, fmt.Errorf("resolve endpoint %s: %w", host, r.ctx.Err())
 		case <-parent.Done():
 			return nil, fmt.Errorf("resolve endpoint %s: %w", host, parent.Err())
 		}
 	}
 }
 
+// startRefresh registers the background query for host in revision, or joins
+// the running one. It returns nil if the revision is no longer current. A
+// query past its deadline is replaced, so a stuck resolver blocks nothing.
 func (c *Cache) startRefresh(resolve Resolver, identity, host string, revision uint64) *refresh {
 	c.mu.Lock()
-	if r := c.refreshing[host]; r != nil && r.revision == revision {
+	if c.revision != revision {
+		c.mu.Unlock()
+		return nil
+	}
+	if r := c.refreshing[host]; r != nil && r.revision == revision && r.ctx.Err() == nil {
 		c.mu.Unlock()
 		return r
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ServerResolveTimeout)
-	r := &refresh{revision: revision, cancel: cancel, done: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(c.life, ServerResolveTimeout)
+	r := &refresh{revision: revision, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	if c.refreshing == nil {
 		c.refreshing = make(map[string]*refresh)
 	}
@@ -271,6 +324,25 @@ func (c *Cache) startRefresh(resolve Resolver, identity, host string, revision u
 		close(r.done)
 	}()
 	return r
+}
+
+// ofRevision copies a background answer if its revision is still current.
+func (c *Cache) ofRevision(addresses []net.IPAddr, revision uint64) ([]net.IPAddr, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.revision != revision {
+		return nil, false
+	}
+	return append([]net.IPAddr(nil), addresses...), true
+}
+
+// forget drops the remembered answer after a negative answer in revision.
+func (c *Cache) forget(host string, revision uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if answer, ok := c.lastGood[host]; ok && answer.revision == revision && c.revision == revision {
+		delete(c.lastGood, host)
+	}
 }
 
 // remember stores a successful answer unless the revision changed meanwhile.
@@ -304,8 +376,6 @@ func (c *Cache) recapture(ctx context.Context, source ResolverSource, revision u
 	if source == nil {
 		return revision
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
 	identity, resolver, err := source(ctx)
 	if err != nil {
 		return 0 // no current network: nothing may be served
