@@ -34,6 +34,8 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let activeProfile: DobbyProfile?
     public let lastFailure: DobbyFailure?
     public let recovering: Bool
+    /// The service is still restoring its saved VPN session; the window must not send Configure meanwhile.
+    public let serviceRestorePending: Bool
     public internal(set) var digest: String
     public internal(set) var profiles: [DobbyProfile]
     public let activeDigest: String
@@ -87,9 +89,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         _ = try values.decode(String.self, forKey: .serviceVersion)
         _ = try values.decode(String.self, forKey: .sourceKind)
         _ = try values.decode(Bool.self, forKey: .cleanupComplete)
-        if values.contains(.serviceRestorePending) {
-            _ = try values.decode(Bool.self, forKey: .serviceRestorePending)
-        }
+        serviceRestorePending = try values.decodeIfPresent(Bool.self, forKey: .serviceRestorePending) ?? false
         sessionID = try values.decode(String.self, forKey: .sessionID)
         sequence = try values.decode(Int64.self, forKey: .sequence)
         generation = try values.decode(Int64.self, forKey: .generation)
@@ -136,6 +136,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         self.activeProfile = activeProfile
         self.lastFailure = lastFailure
         self.recovering = recovering
+        serviceRestorePending = false
         digest = ""
         profiles = []
         activeDigest = ""

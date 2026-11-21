@@ -85,6 +85,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private let debounceScheduler: any DobbySessionDebounceScheduling
     private var debounce: (any DobbySessionScheduledWork)?
     private var restoredLoad = ""
+    private var pendingLoadRestores = false
     private var acceptedSequence: Int64 = 0
 
     public let client: DobbySessionClient
@@ -213,7 +214,7 @@ public final class DobbySessionViewModel: ObservableObject {
         importError = ""
     }
 
-    public func sourceChanged(_ value: String, immediate: Bool = false) {
+    public func sourceChanged(_ value: String, immediate: Bool = false, restoring: Bool = false) {
         if !immediate && value == sourceText { return }
         sourceText = value
         sourceIsDirty = true
@@ -232,6 +233,7 @@ public final class DobbySessionViewModel: ObservableObject {
             guard let self else { return }
             self.debounce = nil
             self.pendingLoad = source
+            self.pendingLoadRestores = restoring
             self.loadNext()
         }
         if immediate {
@@ -306,13 +308,16 @@ public final class DobbySessionViewModel: ObservableObject {
     private func loadNext() {
         guard !loadInFlight, let source = pendingLoad, !snapshot.sessionID.isEmpty else { return }
         pendingLoad = nil
+        let restoring = pendingLoadRestores
         loadInFlight = true
         loading = true
         let revision = loadRevision
         let client = client
         loadWorker.async { [weak self, client] in
-            let result = Result {
+            let result: Result<Int64?, Error> = Result {
                 let current = try DobbyResponse.result(from: client.call("Snapshot", parameters: ["session_id": ""]), as: DobbySessionSnapshot.self)
+                // A saved source must not cancel a restore the (possibly replaced) service started after this load was queued.
+                if restoring && current.serviceRestorePending { return nil }
                 let response = client.call("Configure", parameters: [
                     "session_id": current.sessionID, "expected_sequence": current.sequence, "source": source,
                 ])
@@ -324,7 +329,8 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.loading = false
                 if revision == self.loadRevision {
                     switch result {
-                    case let .success(sequence): self.acceptedSequence = sequence; self.markSourceAccepted(source)
+                    case let .success(sequence?): self.acceptedSequence = sequence; self.markSourceAccepted(source)
+                    case .success: self.restoredLoad = ""; self.sourceIsDirty = false
                     case let .failure(failure):
                         let accepted = self.snapshot.sourceURL
                         let sameSource = self.snapshot.configured && !accepted.isEmpty && accepted == source
@@ -371,6 +377,9 @@ public final class DobbySessionViewModel: ObservableObject {
                         self.acceptedSequence = 0
                         self.clearError(from: .sourceSnapshot)
                     }
+                    if value.serviceRestorePending && !(sameSession && self.snapshot.serviceRestorePending) {
+                        self.recordDiagnostic("Waiting for the service to restore its saved VPN session", event: "subscription.restore-pending", level: "INFO")
+                    }
                     var displayedValue = value
                     if sameSession && self.sourceIsDirty {
                         displayedValue.configured = self.snapshot.configured
@@ -396,9 +405,11 @@ public final class DobbySessionViewModel: ObservableObject {
                         }
                     }
                     let restoreKey = value.sessionID + "|" + self.sourceText
-                    if !value.configured && !self.sourceIsDirty && !self.sourceText.isEmpty && self.restoredLoad != restoreKey {
+                    // Sending Configure would cancel the restore the service is running; wait for it to end.
+                    if !value.configured && !value.serviceRestorePending && !self.sourceIsDirty && !self.sourceText.isEmpty
+                        && self.restoredLoad != restoreKey {
                         self.restoredLoad = restoreKey
-                        self.sourceChanged(self.sourceText, immediate: true)
+                        self.sourceChanged(self.sourceText, immediate: true, restoring: true)
                     }
                     self.loadNext()
                     if reattached || recoveringFromSnapshotFailure { self.clearSnapshotFailure() }
