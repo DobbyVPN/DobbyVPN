@@ -19,17 +19,24 @@ REQUIRED_CI_JOB_NAMES = (
     "Go source build (Linux x86_64)",
     "Go source build (Linux ARM64)",
     "Go source build (Windows)",
-    "Go source build (macOS)",
     "Android lint",
     "Go source analysis",
-    "Swift source analysis",
+    "Apple development checks",
     "Dependency and credential scans",
     "GitHub workflow validation",
     "Android product build and native library checks / Compile Android APK artifacts",
     "Android product build and native library checks / Verify Android APK artifacts",
-    "iOS production analysis and archive",
     "Complete CI",
 )
+# Job success alone also describes an Apple-only run. Require actual full substeps.
+REQUIRED_CI_JOB_STEPS = {
+    "Apple development checks": (
+        "Build Go product packages (macOS)",
+        "Run Swift source analysis",
+        "Check production iOS source",
+        "Require selected Apple checks",
+    ),
+}
 API_ROOT = "https://api.github.com"
 API_TIMEOUT_SECONDS = 30
 PAGE_SIZE = 100
@@ -53,6 +60,18 @@ def missing_or_failed_required_jobs(
             raise ValueError("GitHub CI job name is invalid")
         if name in required:
             passed = job.get("status") == "completed" and job.get("conclusion") == "success"
+            required_steps = REQUIRED_CI_JOB_STEPS.get(name, ())
+            if required_steps:
+                steps = job.get("steps")
+                if not isinstance(steps, list):
+                    passed = False
+                else:
+                    for step_name in required_steps:
+                        matching = [step for step in steps if isinstance(step, dict) and step.get("name") == step_name]
+                        passed = passed and bool(matching) and all(
+                            step.get("status") == "completed" and step.get("conclusion") == "success"
+                            for step in matching
+                        )
             seen[name] = seen.get(name, True) and passed
     return [name for name in required_job_names if not seen.get(name, False)]
 

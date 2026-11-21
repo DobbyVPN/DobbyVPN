@@ -49,11 +49,10 @@ public enum DobbyProfileStatus: String {
 public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
     @Published public private(set) var busy = false
-    @Published public private(set) var onDemandEnabled = false
-    @Published public private(set) var onDemandBusy = false
-    private var onDemandRefreshPending = false
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
+    /// An import link waits here until the user confirms that it may replace the saved subscription.
+    @Published public private(set) var pendingImport: String?
     @Published var logEntries: [DobbyLogEntry] = []
     #if os(macOS)
     private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
@@ -100,6 +99,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private var logsClearInFlight = false
     private var logsRevision = 0
     private let logViewCache = LogViewCache()
+    @Published private var disconnectFailure = ""
     private var lastFailure = ""
     private var errorOrigin: DobbySessionErrorOrigin?
     private var lastSourceErrorIdentity: DobbySourceErrorIdentity?
@@ -133,7 +133,6 @@ public final class DobbySessionViewModel: ObservableObject {
         recordAppStarted()
         if !uploadError.isEmpty { recordError(uploadError) }
         refreshSnapshot()
-        refreshOnDemandPreference()
         if automaticallyPoll {
             timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.refreshForTimerTick() }
@@ -164,7 +163,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public var inventoryReady: Bool {
-        snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && loadError.isEmpty
+        snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && (loadError.isEmpty || snapshot.sourceURL == sourceText)
     }
 
     private var protectedRetryState: Bool {
@@ -194,8 +193,8 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func actionTitle(_ index: Int? = nil) -> String {
-        if isStopTarget(index) { return snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Disconnect" : "Stop" }
-        return index == nil ? "Auto connect" : "Connect"
+        if isStopTarget(index) { return snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Connected" : "Stop" }
+        return index == nil ? "Auto connect" : snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Switch" : "Connect"
     }
 
     public func canAct(_ index: Int? = nil) -> Bool {
@@ -267,18 +266,35 @@ public final class DobbySessionViewModel: ObservableObject {
         paste(first)
     }
 
+    private var importRevision: UInt64 = 0
+    private(set) var parsingImport = false
+
     public func importLink(_ url: URL) {
-        do {
-            let source = try subscriptionFromLink(url.absoluteString)
-            guard let source else { return }
-            if !importError.isEmpty {
-                if error == importError { setError("", origin: .other) }
-                importError = ""
+        importRevision &+= 1
+        let revision = importRevision
+        parsingImport = true
+        let link = url.absoluteString
+        worker.async { [weak self, client] in
+            let result = Result {
+                try DobbyResponse.result(from: client.call("ParseImportLink", parameters: ["link": link]),
+                                         as: DobbyImportLink.self)
             }
-            paste(source)
-        } catch {
-            importError = error.localizedDescription
-            setError(error.localizedDescription, origin: .other)
+            Task { @MainActor [weak self] in
+                guard let self, self.importRevision == revision else { return }
+                self.parsingImport = false
+                switch result {
+                case let .success(parsed):
+                    guard parsed.kind == "import", let source = parsed.source else { return }
+                    if !self.importError.isEmpty {
+                        if self.error == self.importError { self.setError("", origin: .other) }
+                        self.importError = ""
+                    }
+                    self.pendingImport = source
+                case let .failure(failure):
+                    self.importError = failure.localizedDescription
+                    self.setError(failure.localizedDescription, origin: .other)
+                }
+            }
         }
     }
 
@@ -309,7 +325,13 @@ public final class DobbySessionViewModel: ObservableObject {
                 if revision == self.loadRevision {
                     switch result {
                     case let .success(sequence): self.acceptedSequence = sequence; self.markSourceAccepted(source)
-                    case let .failure(failure): self.loadError = failure.localizedDescription
+                    case let .failure(failure):
+                        let accepted = self.snapshot.sourceURL
+                        let sameSource = self.snapshot.configured && !accepted.isEmpty && accepted == source
+                        if sameSource { self.sourceIsDirty = false }
+                        let owner = self.snapshot.configured && !sameSource && !accepted.isEmpty
+                            ? " Showing profiles from \(accepted)." : ""
+                        self.loadError = "Could not load \(source): \(failure.localizedDescription).\(owner)"
                     }
                 }
                 self.refreshSnapshot()
@@ -330,13 +352,20 @@ public final class DobbySessionViewModel: ObservableObject {
         let recoveringFromSnapshotFailure = currentID.isEmpty && snapshotFailureMessage != nil
         let client = client
         worker.async { [weak self, client] in
+            let observer = client as? DobbyDisconnectObserving
+            let ticket = observer?.beginSnapshotObservation()
             let decoded = readSnapshot(client: client, sessionID: currentID)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.snapshotInFlight = false
+                self.disconnectFailure = observer?.disconnectFailure ?? ""
                 switch decoded {
                 case let .success((value, reattached)):
                     if value.sessionID == self.snapshot.sessionID && value.sequence < max(self.snapshot.sequence, self.acceptedSequence) { return }
+                    if let observer, let ticket {
+                        observer.observedSnapshot(value, ticket: ticket)
+                        self.disconnectFailure = observer.disconnectFailure
+                    }
                     let sameSession = value.sessionID == self.snapshot.sessionID
                     if !sameSession {
                         self.acceptedSequence = 0
@@ -346,6 +375,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     if sameSession && self.sourceIsDirty {
                         displayedValue.configured = self.snapshot.configured
                         displayedValue.sourceURL = self.snapshot.sourceURL
+                        displayedValue.offlineAcceptedAt = self.snapshot.offlineAcceptedAt
                         displayedValue.digest = self.snapshot.digest
                         displayedValue.profiles = self.snapshot.profiles
                     }
@@ -438,7 +468,6 @@ public final class DobbySessionViewModel: ObservableObject {
                     self.dismissedFailures.remove(message)
                     self.setError(message, origin: .other)
                 }
-                if stopping { self.refreshOnDemandPreference() }
                 self.refreshSnapshot()
             }
         }
@@ -498,48 +527,6 @@ public final class DobbySessionViewModel: ObservableObject {
         if visible { refreshLogs() }
     }
 
-    private func recordAppStarted() {
-        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
-        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
-        recordDiagnostic(line, event: "app.started", level: "INFO")
-    }
-
-    private func recordError(_ message: String) {
-        recordDiagnostic(message)
-    }
-
-    private func recordDiagnostic(
-        _ message: String,
-        event: String = "ui.failure",
-        level: String = "ERROR"
-    ) {
-        let path = client.uiDiagnosticPath
-        let excludedPaths = client.diagnosticPaths
-        logWorker.async { [weak self] in
-            do {
-                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
-                Task { @MainActor [weak self] in
-                    guard let self, self.logsVisible else { return }
-                    self.refreshLogs()
-                }
-            } catch {
-                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
-                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
-                    failure += "\nStderr write failed: \(String(reflecting: error))"
-                }
-                Task { @MainActor [weak self] in
-                    self?.diagnosticWriteError = failure
-                    self?.logsError = failure
-                }
-            }
-        }
-    }
-
-    func recordLogsShare(kind: String, phase: String, context: String = "") {
-        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
-                         event: "ui.logs_share", level: "INFO")
-    }
-
     public func refreshLogs() {
         guard !logsInFlight else { logsRefreshPending = true; return }
         logsInFlight = true
@@ -590,6 +577,50 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.refreshLogs()
             }
         }
+    }
+}
+
+extension DobbySessionViewModel {
+    private func recordAppStarted() {
+        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
+        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
+        recordDiagnostic(line, event: "app.started", level: "INFO")
+    }
+
+    private func recordError(_ message: String) {
+        recordDiagnostic(message)
+    }
+
+    private func recordDiagnostic(
+        _ message: String,
+        event: String = "ui.failure",
+        level: String = "ERROR"
+    ) {
+        let path = client.uiDiagnosticPath
+        let excludedPaths = client.diagnosticPaths
+        logWorker.async { [weak self] in
+            do {
+                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
+                Task { @MainActor [weak self] in
+                    guard let self, self.logsVisible else { return }
+                    self.refreshLogs()
+                }
+            } catch {
+                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
+                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
+                    failure += "\nStderr write failed: \(String(reflecting: error))"
+                }
+                Task { @MainActor [weak self] in
+                    self?.diagnosticWriteError = failure
+                    self?.logsError = failure
+                }
+            }
+        }
+    }
+
+    func recordLogsShare(kind: String, phase: String, context: String = "") {
+        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
+                         event: "ui.logs_share", level: "INFO")
     }
 }
 
@@ -688,53 +719,6 @@ extension DobbySessionViewModel {
 }
 
 extension DobbySessionViewModel {
-    public var supportsOnDemand: Bool {
-        client is any DobbyOnDemandClient
-    }
-
-    public func refreshOnDemandPreference() {
-        guard let onDemandClient = client as? any DobbyOnDemandClient else { return }
-        guard !onDemandBusy else {
-            onDemandRefreshPending = true
-            return
-        }
-        onDemandBusy = true
-        Task { @MainActor [weak self, onDemandClient] in
-            guard let self else { return }
-            defer { self.finishOnDemandOperation() }
-            do {
-                self.onDemandEnabled = try await onDemandClient.onDemandEnabled()
-            } catch {
-                self.setError("Could not read Connect on demand preference: \(error.localizedDescription)", origin: .other)
-            }
-        }
-    }
-
-    public func setOnDemandEnabled(_ enabled: Bool) {
-        guard !onDemandBusy, let onDemandClient = client as? any DobbyOnDemandClient else { return }
-        onDemandBusy = true
-        Task { @MainActor [weak self, onDemandClient] in
-            guard let self else { return }
-            defer { self.finishOnDemandOperation() }
-            do {
-                try await onDemandClient.setOnDemandEnabled(enabled)
-                self.onDemandEnabled = try await onDemandClient.onDemandEnabled()
-            } catch {
-                self.setError("Could not update Connect on demand preference: \(error.localizedDescription)", origin: .other)
-            }
-        }
-    }
-
-    private func finishOnDemandOperation() {
-        onDemandBusy = false
-        if onDemandRefreshPending {
-            onDemandRefreshPending = false
-            refreshOnDemandPreference()
-        }
-    }
-}
-
-extension DobbySessionViewModel {
     private func markSourceAccepted(_ source: String) {
         acceptedSource = source
         sourceIsDirty = false
@@ -788,7 +772,7 @@ extension DobbySessionViewModel {
 
     private var failures: [String] {
         var seen = Set<String>()
-        return [importError, loadError, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
+        return [importError, loadError, disconnectFailure, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
             .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
@@ -806,7 +790,10 @@ extension DobbySessionViewModel {
         recordDiagnostic("phase=requested branch=\(branch) scalar_count=\(scalarCount) visible_before=\(!shown.isEmpty)",
                          event: "ui.error_close", level: "DEBUG")
         if !shown.isEmpty {
-            if shown == importError {
+            if shown == disconnectFailure, let observer = client as? DobbyDisconnectObserving {
+                observer.acknowledgeDisconnect(shown)
+                disconnectFailure = observer.disconnectFailure
+            } else if shown == importError {
                 dismissError()
             } else {
                 dismissedFailures.insert(shown)
@@ -859,17 +846,21 @@ func validSubscription(_ value: String) -> Bool {
     return url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty
 }
 
-func subscriptionFromLink(_ value: String) throws -> String? {
-    func invalid() -> DobbyClientError { .command(code: "INVALID_ARGUMENT", message: "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL") }
-    guard value.range(of: "%(?![0-9a-fA-F]{2})", options: .regularExpression) == nil,
-          let link = URLComponents(string: value), link.scheme?.lowercased() == "dobbyvpn",
-          link.user == nil, link.password == nil, link.port == nil, link.fragment == nil else { throw invalid() }
-    if (link.host ?? "").isEmpty && link.path.isEmpty && link.query == nil { return nil }
-    guard link.host == "import", link.path.isEmpty,
-          let parameters = link.queryItems, parameters.count == 1,
-          parameters[0].name == "url", let source = parameters[0].value,
-          validSubscription(source) else { throw invalid() }
-    return source
+private struct DobbyImportLink: Decodable {
+    let kind: String
+    let source: String?
+}
+
+extension DobbySessionViewModel {
+    public func confirmImport() {
+        importRevision &+= 1
+        parsingImport = false
+        guard let source = pendingImport else { return }
+        pendingImport = nil
+        paste(source)
+    }
+
+    public func cancelImport() { importRevision &+= 1; parsingImport = false; pendingImport = nil }
 }
 
 extension DobbySessionViewModel {
@@ -917,6 +908,14 @@ extension DobbySessionViewModel {
             "viewport_size=\(observation.viewportSize) content_size=\(observation.contentSize)",
             event: "logs.frozen-position-restored", level: "DEBUG"
         )
+    }
+}
+#endif
+
+#if os(iOS)
+extension DobbySessionViewModel {
+    func recordLogMenuGesture(_ observation: String) {
+        recordDiagnostic(observation, event: "ui.logs_menu_gesture", level: "DEBUG")
     }
 }
 #endif

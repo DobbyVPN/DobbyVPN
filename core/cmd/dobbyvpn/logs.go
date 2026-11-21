@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -66,7 +67,18 @@ func diagnosticPaths() ([]string, error) {
 	return paths, nil
 }
 
+func logsArgsError(args []string) string {
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "--follow" || args[0] == "clear" || args[0] == "upload")) ||
+		(len(args) == 2 && args[0] == "export") {
+		return ""
+	}
+	return "logs accepts --follow, export <new-file.gz>, upload, or clear"
+}
+
 func runLogs(args []string) int {
+	if message := logsArgsError(args); message != "" {
+		return usage(message)
+	}
 	if len(args) == 1 && args[0] == "clear" {
 		return clearApplicationLog()
 	}
@@ -78,22 +90,19 @@ func runLogs(args []string) int {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		if err := uploadDiagnostics(ctx, dialService(), paths); err != nil {
-			return reportFailure(err)
+			return reportLogsFailure(err, paths[0])
 		}
 		return exitOK
 	}
 	follow := len(args) == 1 && args[0] == "--follow"
 	export := len(args) == 2 && args[0] == "export"
-	if len(args) > 0 && !follow && !export {
-		return usage("logs accepts --follow, export <new-file.gz>, upload, or clear")
-	}
 	paths, err := diagnosticPaths()
 	if err != nil {
 		return reportFailure(err)
 	}
 	if export {
 		if err := exportDiagnostics(args[1], paths); err != nil {
-			return reportFailure(err)
+			return reportLogsFailure(err, paths[0])
 		}
 		fmt.Println(args[1])
 		return exitOK
@@ -111,9 +120,53 @@ func runLogs(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := streamDiagnostics(ctx, os.Stdout, paths, follow); err != nil {
-		return reportFailure(err)
+		return reportLogsFailure(err, paths[0])
 	}
 	return exitOK
+}
+
+func permissionHint(err error, backend string) string {
+	absolute, absErr := filepath.Abs(backend)
+	if absErr != nil {
+		return ""
+	}
+	ours := map[string]bool{
+		absolute:                              true,
+		absolute + ".lock":                    true,
+		absolute + diagnostics.PreviousSuffix: true,
+	}
+	if deniedPath(err, ours) {
+		return fmt.Sprintf("dobby-cli: the service log %s is readable only by root; run this command with sudo", absolute)
+	}
+	return ""
+}
+
+// deniedPath reports whether any joined error is a permission denial on one of paths.
+func deniedPath(err error, paths map[string]bool) bool {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrPermission) && paths[pathErr.Path] {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, inner := range joined.Unwrap() {
+			if deniedPath(inner, paths) {
+				return true
+			}
+		}
+	}
+	if wrapped := errors.Unwrap(err); wrapped != nil {
+		return deniedPath(wrapped, paths)
+	}
+	return false
+}
+
+func reportLogsFailure(err error, backend string) int {
+	if runtime.GOOS == "linux" {
+		if hint := permissionHint(err, backend); hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+		}
+	}
+	return reportFailure(err)
 }
 
 func diagnosticHeader() string {
@@ -272,17 +325,6 @@ func uploadDiagnostics(ctx context.Context, client controljson.Client, paths []s
 }
 
 func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, paths []string, transport *http.Client) (resultErr error) {
-	snapshot, snapshotErr := callSnapshot(ctx, client, "")
-	if snapshotErr != nil {
-		return snapshotErr
-	}
-	var prepared sessionapi.LogUploadPreparation
-	if err := client.Call(ctx, "PrepareLogUpload", struct {
-		SessionID string `json:"session_id"`
-		Digest    string `json:"digest"`
-	}{snapshot.SessionID, snapshot.Digest}, &prepared); err != nil {
-		return err
-	}
 	logPath, pathErr := cliLogPath()
 	if pathErr != nil {
 		return pathErr
@@ -303,6 +345,17 @@ func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, p
 		return fmt.Errorf("lock upload directory: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, releaseUploadLock(lock)) }()
+	snapshot, snapshotErr := callSnapshot(ctx, client, "")
+	if snapshotErr != nil {
+		return snapshotErr
+	}
+	var prepared sessionapi.LogUploadPreparation
+	if err := client.Call(ctx, "PrepareLogUpload", struct {
+		SessionID string `json:"session_id"`
+		Digest    string `json:"digest"`
+	}{snapshot.SessionID, snapshot.Digest}, &prepared); err != nil {
+		return err
+	}
 	if err := cleanupUploadTemps(tempDir); err != nil {
 		return err
 	}

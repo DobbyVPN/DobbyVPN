@@ -10,9 +10,12 @@ public protocol DobbySessionClient: AnyObject, Sendable {
     var sourceCommit: String { get }
 }
 
-public protocol DobbyOnDemandClient: DobbySessionClient {
-    func onDemandEnabled() async throws -> Bool
-    func setOnDemandEnabled(_ enabled: Bool) async throws
+/// Native failure presentation for platforms whose transport may outlive the backend.
+public protocol DobbyDisconnectObserving: DobbySessionClient {
+    var disconnectFailure: String { get }
+    func beginSnapshotObservation() -> UInt64
+    func observedSnapshot(_ snapshot: DobbySessionSnapshot, ticket: UInt64)
+    func acknowledgeDisconnect(_ message: String)
 }
 
 public struct DobbySessionSnapshot: Decodable, Sendable {
@@ -26,6 +29,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let canRetry: Bool
     public internal(set) var configured: Bool
     public internal(set) var sourceURL: String
+    public var offlineAcceptedAt = ""
     public let sourceError: String
     public let activeProfile: DobbyProfile?
     public let lastFailure: DobbyFailure?
@@ -39,6 +43,9 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let canSwitch: Bool
     public let logsUploadAvailable: Bool
 
+    /// Snapshot schema version this app understands; the Go service sends its own.
+    public static let expectedProtocolVersion = 1
+
     public static let empty = Self(
         sessionID: "", sequence: 0, generation: 0, state: "IDLE", primaryAction: "NONE",
         configured: false, sourceURL: "", sourceError: "", activeProfile: nil,
@@ -46,7 +53,12 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     )
 
     private enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
         case sessionID = "session_id"
+        case serviceVersion = "service_version"
+        case sourceKind = "source_kind"
+        case cleanupComplete = "cleanup_complete"
+        case serviceRestorePending = "service_restore_pending"
         case sequence, generation, state, configured
         case networkGeneration = "network_generation"
         case vpnActive = "vpn_active"
@@ -54,6 +66,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         case primaryAction = "primary_action"
         case sourceURL = "source_url"
         case sourceError = "source_error"
+        case offlineAcceptedAt = "offline_accepted_at"
         case activeProfile = "active_profile"
         case lastFailure = "last_failure"
         case recovering, digest, profiles
@@ -67,28 +80,40 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID) ?? ""
-        sequence = try values.decodeIfPresent(Int64.self, forKey: .sequence) ?? 0
-        generation = try values.decodeIfPresent(Int64.self, forKey: .generation) ?? 0
-        networkGeneration = try values.decodeIfPresent(UInt64.self, forKey: .networkGeneration) ?? 0
-        state = try values.decodeIfPresent(String.self, forKey: .state) ?? "IDLE"
-        primaryAction = try values.decodeIfPresent(String.self, forKey: .primaryAction) ?? "NONE"
-        vpnActive = try values.decodeIfPresent(Bool.self, forKey: .vpnActive) ?? false
-        canRetry = try values.decodeIfPresent(Bool.self, forKey: .canRetry) ?? false
-        configured = try values.decodeIfPresent(Bool.self, forKey: .configured) ?? false
-        sourceURL = try values.decodeIfPresent(String.self, forKey: .sourceURL) ?? ""
-        sourceError = try values.decodeIfPresent(String.self, forKey: .sourceError) ?? ""
+        // A service that predates the field has no value, which is also a mismatch.
+        guard try values.decodeIfPresent(Int.self, forKey: .protocolVersion) == Self.expectedProtocolVersion else {
+            throw DobbyClientError.protocolMismatch
+        }
+        _ = try values.decode(String.self, forKey: .serviceVersion)
+        _ = try values.decode(String.self, forKey: .sourceKind)
+        _ = try values.decode(Bool.self, forKey: .cleanupComplete)
+        if values.contains(.serviceRestorePending) {
+            _ = try values.decode(Bool.self, forKey: .serviceRestorePending)
+        }
+        sessionID = try values.decode(String.self, forKey: .sessionID)
+        sequence = try values.decode(Int64.self, forKey: .sequence)
+        generation = try values.decode(Int64.self, forKey: .generation)
+        networkGeneration = try values.decode(UInt64.self, forKey: .networkGeneration)
+        guard sequence >= 0, generation >= 0 else { throw DobbyClientError.invalidResponse }
+        state = try values.decode(String.self, forKey: .state)
+        primaryAction = try values.decode(String.self, forKey: .primaryAction)
+        vpnActive = try values.decode(Bool.self, forKey: .vpnActive)
+        canRetry = try values.decode(Bool.self, forKey: .canRetry)
+        configured = try values.decode(Bool.self, forKey: .configured)
+        sourceURL = values.contains(.sourceURL) ? try values.decode(String.self, forKey: .sourceURL) : ""
+        offlineAcceptedAt = values.contains(.offlineAcceptedAt) ? try values.decode(String.self, forKey: .offlineAcceptedAt) : ""
+        sourceError = values.contains(.sourceError) ? try values.decode(String.self, forKey: .sourceError) : ""
         activeProfile = try values.decodeIfPresent(DobbyProfile.self, forKey: .activeProfile)
         lastFailure = try values.decodeIfPresent(DobbyFailure.self, forKey: .lastFailure)
-        recovering = try values.decodeIfPresent(Bool.self, forKey: .recovering) ?? false
-        digest = try values.decodeIfPresent(String.self, forKey: .digest) ?? ""
-        profiles = try values.decodeIfPresent([DobbyProfile].self, forKey: .profiles) ?? []
-        activeDigest = try values.decodeIfPresent(String.self, forKey: .activeDigest) ?? ""
-        activeMode = try values.decodeIfPresent(String.self, forKey: .activeMode) ?? ""
-        activeIndex = try values.decodeIfPresent(Int.self, forKey: .activeIndex) ?? 0
+        recovering = try values.decode(Bool.self, forKey: .recovering)
+        digest = try values.decode(String.self, forKey: .digest)
+        profiles = try values.decode([DobbyProfile].self, forKey: .profiles)
+        activeDigest = try values.decode(String.self, forKey: .activeDigest)
+        activeMode = try values.decode(String.self, forKey: .activeMode)
+        activeIndex = try values.decode(Int.self, forKey: .activeIndex)
         pendingTarget = try values.decodeIfPresent(DobbySelection.self, forKey: .pendingTarget)
-        canSwitch = try values.decodeIfPresent(Bool.self, forKey: .canSwitch) ?? false
-        logsUploadAvailable = try values.decodeIfPresent(Bool.self, forKey: .logsUploadAvailable) ?? false
+        canSwitch = try values.decode(Bool.self, forKey: .canSwitch)
+        logsUploadAvailable = try values.decode(Bool.self, forKey: .logsUploadAvailable)
     }
 
     public init(
@@ -142,9 +167,9 @@ public struct DobbyProfile: Decodable, Sendable, Identifiable {
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        index = try values.decodeIfPresent(Int.self, forKey: .index) ?? 0
-        protocolName = try values.decodeIfPresent(String.self, forKey: .protocolName) ?? ""
-        description = try values.decodeIfPresent(String.self, forKey: .description) ?? ""
+        index = try values.decode(Int.self, forKey: .index)
+        protocolName = try values.decode(String.self, forKey: .protocolName)
+        description = try values.decode(String.self, forKey: .description)
     }
 }
 
@@ -193,6 +218,7 @@ public enum DobbyClientError: LocalizedError {
     case command(code: String, message: String)
     case noConfiguration
     case diagnostics(String)
+    case protocolMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -204,6 +230,8 @@ public enum DobbyClientError: LocalizedError {
             return "Enter an HTTPS subscription URL"
         case let .diagnostics(message):
             return message
+        case .protocolMismatch:
+            return "The app and the VPN service are different versions. Restart the app."
         }
     }
 }

@@ -4,6 +4,7 @@ case "${1:-}" in
     remove|deconfigure)
         if [ -d /run/systemd/system ] && [ -z "${DPKG_ROOT:-}" ]; then
             deb-systemd-invoke stop dobbyvpn.service
+            LD_LIBRARY_PATH=/opt/dobbyvpn/lib /opt/dobbyvpn/bin/dobbyvpn-backend -mode release-protection
         fi
         ;;
 esac

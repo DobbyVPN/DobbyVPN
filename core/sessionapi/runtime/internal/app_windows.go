@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/dnscache"
+	"core/iprange"
 	"core/log"
 	"core/routing"
 	"core/tunnel"
@@ -70,6 +71,11 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		err = errors.New("Windows network protection owner missing")
 		signalInit(initResult, err)
 		return err
+	}
+	if excluded, ok := guard.(interface {
+		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
+	}); ok {
+		app.Guard = excluded
 	}
 
 	var preferred4, preferred6 atomic.Uint64

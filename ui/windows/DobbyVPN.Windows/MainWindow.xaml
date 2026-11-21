@@ -76,9 +76,18 @@
     <ContentControl x:Name="FocusSink" Width="1" Height="1" Opacity="0" IsTabStop="False" UseSystemFocusVisuals="False"
                     HorizontalAlignment="Left" VerticalAlignment="Top" AutomationProperties.AccessibilityView="Raw" />
 
-    <Grid x:Name="Column" MaxWidth="480" RowDefinitions="Auto,Auto,*">
-      <UserControl IsTabStop="False" AutomationProperties.AutomationId="Connection controls" AutomationProperties.Name="Connection controls">
-      <StackPanel x:Name="Controls" Padding="9,6,9,9" Spacing="6">
+    <Grid x:Name="Column" MaxWidth="480">
+      <UserControl IsTabStop="False" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                   AutomationProperties.AutomationId="Connection controls" AutomationProperties.Name="Connection controls">
+      <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="2*" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" MinHeight="120" />
+      </Grid.RowDefinitions>
+      <StackPanel Padding="9,6,9,0" Spacing="6">
         <Border x:Name="SourceField" MinHeight="33" Padding="9,0,9,0" CornerRadius="6" BorderThickness="1.5"
                 BorderBrush="{StaticResource Ink}" Background="{StaticResource Surface}">
           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
@@ -112,6 +121,9 @@
           </Grid>
         </Border>
 
+        <TextBlock x:Name="OfflineConfigurationText" Foreground="{StaticResource Muted}"
+                   TextWrapping="Wrap" Visibility="Collapsed" AutomationProperties.AutomationId="configuration.offline" />
+
         <Button x:Name="ConnectionButton" Content="Auto connect" Style="{StaticResource PlainButton}" MinHeight="45"
                 CornerRadius="7.5" FontSize="17" FontWeight="SemiBold" Click="ConnectionButton_Click" IsEnabled="False" KeyboardAcceleratorPlacementMode="Hidden"
                 AutomationProperties.AutomationId="VPN connection action">
@@ -127,10 +139,17 @@
                   AutomationProperties.AutomationId="connection.stop" />
         </StackPanel>
 
-        <Border x:Name="ConnectionsTray" Margin="0,6,0,0" CornerRadius="10.5" Background="{StaticResource Tray}">
+        </StackPanel>
+
+        <Border x:Name="ConnectionsTray" Grid.Row="1" Margin="9,6,9,9" MinHeight="54" CornerRadius="10.5" Background="{StaticResource Tray}">
           <Grid>
-            <local:SockIcon x:Name="EmptySock" Width="30" Height="37.5"
-                            AutomationProperties.Name="No subscription yet" AutomationProperties.AccessibilityView="Content" />
+            <StackPanel x:Name="EmptyState" Spacing="7.5" HorizontalAlignment="Center" VerticalAlignment="Center">
+              <local:SockIcon Width="30" Height="37.5"
+                              AutomationProperties.Name="No subscription yet" AutomationProperties.AccessibilityView="Content" />
+              <TextBlock Text="Paste the subscription link from your VPN provider above." FontSize="12.75"
+                         Foreground="{StaticResource Muted}" HorizontalAlignment="Center" TextAlignment="Center"
+                         TextWrapping="Wrap" Margin="12,0" AutomationProperties.AutomationId="tray.empty-hint" />
+            </StackPanel>
             <StackPanel x:Name="LoadFailed" Spacing="7.5" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
               <local:HoleySockIcon Width="30" Height="37.5" HorizontalAlignment="Center" AutomationProperties.AccessibilityView="Raw" />
               <TextBlock Text="Couldn't load the subscription" FontSize="12.75" FontWeight="Medium"
@@ -138,23 +157,16 @@
               <Button Content="Retry" Style="{StaticResource FilledButton}" HorizontalAlignment="Center" MinHeight="30"
                       Padding="16.5,0" Click="Retry_Click" AutomationProperties.AutomationId="tray.retry" />
             </StackPanel>
-            <ScrollViewer x:Name="ProfilesScroll" VerticalScrollBarVisibility="Hidden" Visibility="Collapsed"
+            <ScrollViewer x:Name="ProfilesScroll" VerticalScrollBarVisibility="Auto" Visibility="Collapsed"
                           AutomationProperties.AutomationId="Profile list viewport">
               <StackPanel x:Name="ProfileList" Padding="6" Spacing="6" />
             </ScrollViewer>
           </Grid>
         </Border>
-      </StackPanel>
-      </UserControl>
 
-      <Rectangle Grid.Row="1" Height="1.5" Fill="{StaticResource Ink}" />
+      <Rectangle Grid.Row="2" Height="1.5" Fill="{StaticResource Ink}" />
 
-      <Grid Grid.Row="2">
-      <Grid.RowDefinitions>
-        <RowDefinition Height="Auto" />
-        <RowDefinition Height="*" />
-      </Grid.RowDefinitions>
-      <ScrollViewer Grid.Row="1" x:Name="LogsScroll" Background="{StaticResource Surface}" Padding="9,4.5,9,4.5"
+      <ScrollViewer Grid.Row="4" x:Name="LogsScroll" Background="{StaticResource Surface}" Padding="9,4.5,9,4.5"
                     VerticalScrollBarVisibility="Auto" Loaded="LogsText_Loaded"
                     AutomationProperties.AutomationId="Connection logs">
         <ScrollViewer.ContextFlyout>
@@ -174,7 +186,7 @@
         </ScrollViewer.ContextFlyout>
         <StackPanel x:Name="LogEntries" />
       </ScrollViewer>
-      <Border x:Name="UploadStatusPanel" VerticalAlignment="Top" Background="{StaticResource Surface}" Padding="9,6" Visibility="Collapsed">
+      <Border x:Name="UploadStatusPanel" Grid.Row="3" Background="{StaticResource Surface}" Padding="9,6" Visibility="Collapsed">
         <StackPanel Spacing="4">
           <TextBlock x:Name="UploadStatusText" TextWrapping="Wrap" AutomationProperties.AutomationId="logs.upload.status" />
           <StackPanel Orientation="Horizontal" Spacing="8">
@@ -187,6 +199,7 @@
         </StackPanel>
       </Border>
       </Grid>
+      </UserControl>
     </Grid>
 
     <Grid x:Name="ErrorOverlay" Background="{StaticResource Scrim}" Visibility="Collapsed" Tapped="ErrorOverlay_Tapped"

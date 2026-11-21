@@ -19,6 +19,7 @@ package internal
 import (
 	"context"
 	"core/dnscache"
+	"core/iprange"
 	"core/log"
 	"core/sessionapi"
 	"core/tunnel"
@@ -40,7 +41,11 @@ type App struct {
 	UplinkInterface string
 	DNSCache        *dnscache.Cache
 	BypassPolicy    *tunnel.BypassPolicy
-	RoutingConfig   *RoutingConfig
+	// Guard receives the shared configuration and per-attempt resolved hosts.
+	Guard interface {
+		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
+	}
+	RoutingConfig *RoutingConfig
 }
 
 // retainedNetworkReadyFields identifies the owner independently of whichever

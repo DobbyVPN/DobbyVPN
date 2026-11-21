@@ -24,7 +24,7 @@ private let sizeScale: CGFloat = 1
 #endif
 
 /// A mockup length in points, scaled for the platform.
-private func pt(_ value: CGFloat) -> CGFloat { value * sizeScale }
+func pt(_ value: CGFloat) -> CGFloat { value * sizeScale }
 
 /// Mockup font sizes that still follow the system text size on iOS.
 private struct ScaledFont: ViewModifier {
@@ -73,7 +73,7 @@ private struct DobbyErrorDetailView: UIViewRepresentable {
 }
 #endif
 
-private let buttonShape = RoundedRectangle(cornerRadius: pt(10))
+let buttonShape = RoundedRectangle(cornerRadius: pt(10))
 
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
@@ -101,13 +101,12 @@ public struct DobbyRootView: View {
             VStack(spacing: 0) {
                 VStack(spacing: pt(8)) {
                     subscriptionField
-                    mainButton
-                    if model.supportsOnDemand {
-                        Toggle("Connect on demand", isOn: onDemandBinding)
-                            .dobbyFont(14, .medium)
-                            .accessibilityIdentifier("connection.on-demand")
-                            .disabled(model.onDemandBusy || model.busy)
+                    if !model.snapshot.offlineAcceptedAt.isEmpty {
+                        Text("Using saved profiles from \(model.snapshot.offlineAcceptedAt)")
+                            .font(.caption)
+                            .accessibilityIdentifier("configuration.offline")
                     }
+                    mainButton
                     connections
                         .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))
                         .padding(.top, pt(8))
@@ -139,13 +138,12 @@ public struct DobbyRootView: View {
         .frame(minWidth: 320, minHeight: 460)
         .navigationTitle("doBBYVPN")
 #endif
-        .onAppear { model.setLogsVisible(true); model.refreshOnDemandPreference(); refreshClipboard() }
+        .onAppear { model.setLogsVisible(true); refreshClipboard() }
         .onDisappear { model.setLogsVisible(false) }
         .onChange(of: model.status) { announceStatus($0) }
         .onChange(of: showingError) { if $0 { sourceFocused = false } }
         .onChange(of: scenePhase) { phase in
             model.setLogsVisible(phase == .active)
-            if phase == .active { model.refreshOnDemandPreference() }
             refreshClipboard()
         }
 #if os(macOS)
@@ -154,6 +152,7 @@ public struct DobbyRootView: View {
         }
 #endif
         .onOpenURL { model.importLink($0) }
+        .importConfirmation(model)
 #if os(iOS)
         .sheet(isPresented: $showingReferenceShare, onDismiss: {
             model.recordLogsShare(kind: "reference", phase: "dismissed")
@@ -260,10 +259,6 @@ public struct DobbyRootView: View {
         Binding(get: { model.sourceText }, set: { model.sourceChanged($0) })
     }
 
-    private var onDemandBinding: Binding<Bool> {
-        Binding(get: { model.onDemandEnabled }, set: { model.setOnDemandEnabled($0) })
-    }
-
     private var mainButton: some View {
         let title = model.mainActionTitle
         let enabled = model.mainActionEnabled
@@ -297,78 +292,7 @@ public struct DobbyRootView: View {
     }
 
     private var connections: some View {
-        let snapshot = model.snapshot
-        let orphan = model.orphanProfile
-        return ZStack {
-            Color.tray.onTapGesture { sourceFocused = false }
-            if snapshot.profiles.isEmpty && orphan == nil && !model.loadError.isEmpty {
-                VStack(spacing: pt(10)) {
-                    SockIcon(holey: true).frame(width: pt(40), height: pt(50))
-                    Text("Couldn't load the subscription")
-                        .dobbyFont(15, .medium)
-                        .foregroundColor(.ink)
-                    Button { model.retryLoad() } label: {
-                        Text("Retry")
-                            .dobbyFont(15, .semibold)
-                            .foregroundColor(.surface)
-                            .padding(.horizontal, pt(22))
-                            .frame(minHeight: pt(40))
-                            .background(Color.ink, in: RoundedRectangle(cornerRadius: pt(8)))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("tray.retry")
-                }
-            } else if snapshot.profiles.isEmpty && orphan == nil {
-                SockIcon(holey: false)
-                    .frame(width: pt(40), height: pt(50))
-                    .accessibilityElement()
-                    .accessibilityLabel("No subscription yet")
-            } else {
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: pt(8)) {
-                        if let orphan {
-                            ConnectionButton(
-                                name: orphan.name,
-                                details: [protocolName(orphan.protocolName), model.sessionStatus?.rawValue, "not in subscription"],
-                                on: isOn(model.sessionStatus),
-                                action: model.mainActionTitle
-                            ) { sourceFocused = false; model.mainAction() }
-                            .disabled(!model.mainActionEnabled)
-                            .accessibilityIdentifier("profile.active")
-                        }
-                        ForEach(snapshot.profiles) { profile in
-                            let status = model.profileStatus(profile.index)
-                            ConnectionButton(
-                                name: profile.name,
-                                details: [protocolName(profile.protocolName), status?.rawValue],
-                                on: isOn(status),
-                                action: model.profileActionTitle(profile.index)
-                            ) { sourceFocused = false; model.performPrimaryAction(profile.index) }
-                            .disabled(!model.canAct(profile.index))
-                            .accessibilityIdentifier("profile.\(snapshot.digest).\(profile.index).action")
-                        }
-                    }
-                    .padding(pt(8))
-                }
-                .accessibilityIdentifier("Profile list viewport")
-                .onPreferenceChange(RowHeight.self) { rowHeight = $0 }
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: pt(14)))
-    }
-
-    private func isOn(_ status: DobbyProfileStatus?) -> Bool {
-        status == .connected || status == .reconnecting
-    }
-
-    private func protocolName(_ value: String) -> String? {
-        switch value {
-        case "": return nil
-        case "OUTLINE": return "Outline"
-        case "XRAY": return "Xray"
-        case "TRUST_TUNNEL": return "TrustTunnel"
-        default: return value
-        }
+        DobbyProfileList(model: model, rowHeight: $rowHeight) { sourceFocused = false }
     }
 
     private var logs: some View {
@@ -404,7 +328,9 @@ public struct DobbyRootView: View {
                     .frame(height: min(logActionsHeight, max(0, geometry.size.height - pt(60))))
                     .accessibilityIdentifier("logs.actions.viewport")
                     .onPreferenceChange(LogActionsHeight.self) { logActionsHeight = $0 }
-                    DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs, onShowMenu: { showingLogMenu.toggle() }, onClear: model.clearLogs)
+                    DobbyLogView(entries: model.logEntries, clear: model.clearRevision, onSendLogs: sendLogs,
+                                 onShowMenu: { showingLogMenu.toggle() },
+                                 onMenuGestureObservation: model.recordLogMenuGesture, onClear: model.clearLogs)
                         .accessibilityIdentifier("Connection logs")
                         .frame(minHeight: pt(60), maxHeight: .infinity)
                 }
@@ -623,49 +549,6 @@ private struct PlainPasteButton: View {
     }
 }
 
-private struct ConnectionButton: View {
-    let name: String
-    let details: [String?]
-    let on: Bool
-    let action: String
-    let perform: () -> Void
-
-    var body: some View {
-        Button(action: perform) {
-            HStack(spacing: pt(12)) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(name)
-                        .dobbyFont(17, .medium)
-                        .foregroundColor(.ink)
-                    Text(details.compactMap { $0 }.joined(separator: " · "))
-                        .dobbyFont(13, on ? .semibold : .regular)
-                        .foregroundColor(on ? .ink : .muted)
-                }
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Text(action)
-                    .dobbyFont(15, .semibold)
-                    .foregroundColor(.ink)
-            }
-            .padding(.horizontal, pt(14))
-            .padding(.vertical, pt(8))
-            .frame(minHeight: pt(56))
-            .background(Color.surface, in: buttonShape)
-            .overlay(buttonShape.stroke(Color.ink, lineWidth: on ? 3 : 1.5))
-            .contentShape(buttonShape)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(action)
-        .accessibilityValue(([name] + details.compactMap { $0 }).joined(separator: " · "))
-        .background(GeometryReader { Color.clear.preference(key: RowHeight.self, value: $0.size.height) })
-    }
-}
-
-private struct RowHeight: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
 #if os(iOS)
 private struct LogActionsHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -699,7 +582,7 @@ private struct DialogButton: View {
 }
 
 /// The doBBYVPN sock, drawn in a 40×50 box: plain when there is no subscription, holey on errors.
-private struct SockIcon: View {
+struct SockIcon: View {
     let holey: Bool
 
     var body: some View {
@@ -798,3 +681,19 @@ func copyError(_ text: String, onObservation: (ErrorCopyObservation) -> Void = {
                                        changeCount: pasteboard.changeCount, accepted: nil))
 }
 #endif
+
+private extension View {
+    func importConfirmation(_ model: DobbySessionViewModel) -> some View {
+        alert("Replace subscription?", isPresented: Binding(
+            get: { model.pendingImport != nil },
+            // Both buttons act on their own, and the binding may be reset before the tapped action runs.
+            set: { _ in }
+        )) {
+            Button("Replace") { model.confirmImport() }
+            Button("Cancel", role: .cancel) { model.cancelImport() }
+        } message: {
+            let source = model.pendingImport ?? ""
+            Text("\(URLComponents(string: source)?.host ?? "")\n\n\(source)\n\nThe saved subscription and the log upload address will be replaced.")
+        }
+    }
+}

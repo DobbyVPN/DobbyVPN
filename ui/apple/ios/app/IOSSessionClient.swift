@@ -1,8 +1,17 @@
 import Foundation
 import IOSIntegration
+import DobbyVPNRuntime
 
-final class IOSSessionClient: DobbyOnDemandClient, @unchecked Sendable {
+final class IOSSessionClient: DobbyDisconnectObserving, @unchecked Sendable {
     private let shell = IOSAppCompositionRoot.sessionShell
+
+    private let history = IOSAppCompositionRoot.vpnManager.disconnectHistory
+    var disconnectFailure: String { history.message }
+    func beginSnapshotObservation() -> UInt64 { history.begin("Snapshot") }
+    func observedSnapshot(_ snapshot: DobbySessionSnapshot, ticket: UInt64) {
+        history.observedSnapshot(ticket, state: snapshot.state, recovering: snapshot.recovering)
+    }
+    func acknowledgeDisconnect(_ message: String) { history.acknowledge(message) }
 
     var diagnosticPaths: [URL] { IOSAppCompositionRoot.diagnosticPaths() }
     var uiDiagnosticPath: URL { IOSAppCompositionRoot.goLogFilePath() }
@@ -14,14 +23,12 @@ final class IOSSessionClient: DobbyOnDemandClient, @unchecked Sendable {
     }
 
     func call(_ method: String, parameters: [String: Any]) -> String {
-        shell.call(method: method, parameters: parameters)
-    }
-
-    func onDemandEnabled() async throws -> Bool {
-        try await IOSAppCompositionRoot.vpnManager.onDemandEnabled()
-    }
-
-    func setOnDemandEnabled(_ enabled: Bool) async throws {
-        try await IOSAppCompositionRoot.vpnManager.setOnDemandEnabled(enabled)
+        if method == "ParseImportLink" {
+            return DobbyvpnParseImportLink(parameters["link"] as? String ?? "")
+        }
+        let ticket = history.begin(method)
+        let response = shell.call(method: method, parameters: parameters)
+        if method == "Start", (try? DobbyResponse.check(response)) != nil { history.acceptedStart(ticket) }
+        return response
     }
 }

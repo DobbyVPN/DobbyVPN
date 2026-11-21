@@ -88,6 +88,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.ViewCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import com.dobby.presentation.shownError
 
 internal val Paper = Color(0xFFD9D2C9)
 internal val Ink = Color(0xFF141414)
@@ -104,6 +107,8 @@ private val ControlsHeight = 180.dp
 @Composable
 internal fun DobbyApp(controller: SessionController) {
     val focus = LocalFocusManager.current
+    // A field left focused would bring the keyboard back when the app returns.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { focus.clearFocus() }
     MaterialTheme(colorScheme = lightColorScheme(primary = Ink, background = Paper)) {
         BoxWithConstraints(
             Modifier.fillMaxSize()
@@ -126,6 +131,13 @@ internal fun DobbyApp(controller: SessionController) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SubscriptionField(controller)
+                    if (controller.state.session.offlineAcceptedAt.isNotEmpty()) {
+                        Text("Using saved profiles from " + controller.state.session.offlineAcceptedAt,
+                            color = Muted, fontSize = 12.sp, modifier = Modifier.testTag("configuration.offline"))
+                    }
+                    if (controller.state.source.isEmpty()) {
+                        Text("Enter a subscription URL to connect.", color = Muted, fontSize = 13.sp)
+                    }
                     MainActions(controller)
                     Connections(controller, Modifier.padding(top = 8.dp).height(trayHeight))
                 }
@@ -133,7 +145,21 @@ internal fun DobbyApp(controller: SessionController) {
             }
         }
         ErrorDialog(controller)
+        ImportDialog(controller)
     }
+}
+
+@Composable
+private fun ImportDialog(controller: SessionController) {
+    val source = controller.state.pendingImport ?: return
+    val host = runCatching { java.net.URI(source).host }.getOrNull().orEmpty()
+    AlertDialog(
+        onDismissRequest = { controller.cancelImport() },
+        title = { Text("Replace subscription?") },
+        text = { Text("$host\n\n$source\n\nThe saved subscription and the log upload address will be replaced.") },
+        confirmButton = { TextButton(onClick = { controller.confirmImport() }) { Text("Replace") } },
+        dismissButton = { TextButton(onClick = { controller.cancelImport() }) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -296,14 +322,13 @@ private fun Connections(controller: SessionController, modifier: Modifier) {
 @Composable
 private fun ConnectionRow(controller: SessionController, profile: ProfileData, digest: String) {
     val status = controller.profileStatus(profile.index)
+    val title = controller.actionTitle(profile.index)
     ConnectionButton(
         name = profile.name,
         details = listOfNotNull(protocolName(profile.protocol), status?.label),
         status = status,
-        action = controller.actionTitle(profile.index).let {
-            if (status == ProfileStatus.CONNECTING || it == "Stop") "Connecting…" else it
-        },
-        enabled = controller.canAct(profile.index),
+        action = if (title == "Disconnect") "Connected" else if (status == ProfileStatus.CONNECTING || title == "Stop") "Connecting…" else title,
+        enabled = title != "Disconnect" && controller.canAct(profile.index),
         onClick = { controller.connectOrDisconnect(profile.index) },
         modifier = Modifier.testTag("profile.$digest.index.${profile.index}.role.action")
             .semantics { contentDescription = "Profile ${profile.index + 1} action" },
@@ -317,8 +342,8 @@ private fun OrphanRow(controller: SessionController, profile: ProfileData) {
         name = profile.name,
         details = listOfNotNull(protocolName(profile.protocol), status?.label, "not in subscription"),
         status = status,
-        action = controller.mainActionTitle,
-        enabled = controller.mainActionEnabled,
+        action = if (controller.mainActionTitle == "Disconnect") "Connected" else controller.mainActionTitle,
+        enabled = controller.mainActionTitle != "Disconnect" && controller.mainActionEnabled,
         onClick = controller::mainAction,
         modifier = Modifier.testTag("profile.active"),
     )
@@ -466,8 +491,8 @@ internal fun displayErrorDetail(raw: String): String {
 @Composable
 private fun ErrorDialog(controller: SessionController) {
     val errors = controller.errors
-    LaunchedEffect(errors) { controller.forgetClearedErrors() }
-    val detail = errors.firstOrNull { it !in controller.dismissedErrors } ?: return
+    LaunchedEffect(controller.rawErrors, controller.state.session.sessionId) { controller.forgetClearedErrors() }
+    val detail = shownError(errors, controller.dismissedErrors) ?: return
     val loadFailed = detail == controller.state.loadError
     val protectedFailure = controller.isProtectedFailure
     val showStop = controller.state.session.primaryAction == "STOP" && controller.state.session.vpnActive

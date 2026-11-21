@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"core/dnscache"
@@ -63,8 +64,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			return ownedEngine.Stop(ctx)
 		}
 		return nil
-	}, func(context.Context) error { protected_dialer.ResetDefaultRoute(); return nil })
+	}, func(context.Context) error {
+		protected_dialer.SetDestinationPermissions(nil)
+		protected_dialer.ResetDefaultRoute()
+		return nil
+	})
 
+	var killSwitch atomic.Pointer[routing.MacOSKillSwitch]
 	physicalRoutes, err := plan.AcquireMacOSPhysicalRoutes()
 	if err != nil {
 		signalInit(initResult, err)
@@ -81,12 +87,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			protected_dialer.ResetDefaultRoute()
 			return physical, nil, err
 		}
-		protected_dialer.SetPhysicalInterfaces(physical.IPv4, physical.IPv6)
-		index := physical.IPv4
-		if index == 0 {
-			index = physical.IPv6
+		if guard := killSwitch.Load(); guard != nil {
+			if err := guard.SetResolvers(queryCtx, physical.DNSServers); err != nil {
+				return physical, nil, err
+			}
 		}
-		resolve := dnscache.AppleLinkResolver(index)
+		protected_dialer.SetPhysicalInterfaces(physical.IPv4, physical.IPv6)
+		resolve := dnscache.MacOSLinkResolver(physical.IPv4, physical.IPv6, physical.DNSServers, physical.NAT64Prefixes)
 		fenced := func(lookupCtx context.Context, host string) ([]net.IPAddr, error) {
 			addresses, err := resolve(lookupCtx, host)
 			after, inspectErr := routing.CaptureMacOSPhysicalNetwork(lookupCtx)
@@ -127,6 +134,16 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
+	guard, err := plan.AcquireMacOSKillSwitch(ctx, name, physical.DNSServers)
+	if guard != nil {
+		killSwitch.Store(guard)
+		app.Guard = guard
+		protected_dialer.SetDestinationPermissions(guard)
+	}
+	if err != nil {
+		signalInit(initResult, err)
+		return err
+	}
 	if err = plan.AcquireMacOSIPv4Default(ctx, name); err == nil {
 		err = plan.AcquireMacOSIPv6Default(ctx, name)
 	}
@@ -162,13 +179,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 					observed = current
 					source = "current"
 				}
-				if err.Error() != previousError || observed != previousFailureNetwork {
+				if err.Error() != previousError || observed.Identity != previousFailureNetwork.Identity {
 					log.Error(Category, "macOS network maintenance failed; interface retained", macOSMaintenanceFailureFields(observed, app.NetworkRef, name, source, err))
 					previousError = err.Error()
 					previousFailureNetwork = observed
 				}
 			} else {
-				if current != physical || repaired || previousError != "" {
+				if current.Identity != physical.Identity || repaired || previousError != "" {
 					log.Info(Category, "macOS physical network refreshed", macOSRefreshFields(current, app.NetworkRef, repaired))
 					physical = current
 				}

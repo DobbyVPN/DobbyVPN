@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SERVICES = ROOT / "runtime" / "services"
 LOGO = ROOT / "publishing" / "assets" / "logo.png"
 MACOS_ICON = ROOT / "ui" / "apple" / "macos" / "AppIcon.icns"
+MACOS_PRIVACY_MANIFEST = ROOT / "ui" / "apple" / "macos" / "PrivacyInfo.xcprivacy"
 LINUX_INSTALLER = ROOT / "ui" / "linux" / "installer"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
@@ -63,6 +64,14 @@ def copy_license_documents(destination: Path) -> None:
     for name in ("LICENSE", "THIRD_PARTY_NOTICES"):
         copy_file(ROOT / name, destination / name)
     copy_directory(ROOT / "LICENSES", destination / "LICENSES")
+
+
+def normalize_macos_payload_permissions(bundle: Path) -> None:
+    """Public app data is readable and directories/executables traversable by users."""
+    for path in (bundle, *sorted(bundle.rglob("*"))):
+        if path.is_symlink():
+            fail(f"unexpected symbolic link in unsigned macOS payload: {path}")
+        path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
 
 
 def write_zip(root: Path, output: Path) -> None:
@@ -120,6 +129,7 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
         copy_file(source / "dobbyvpn-backend", resources / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", resources / "dobby-cli", executable=True)
         copy_file(MACOS_ICON, resources / "AppIcon.icns")
+        copy_file(MACOS_PRIVACY_MANIFEST, resources / "PrivacyInfo.xcprivacy")
         copy_license_documents(resources / "licenses")
         if debug:
             copy_directory(source / "DebugSymbols", resources / "DebugSymbols")
@@ -138,6 +148,7 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
         }
         with (contents / "Info.plist").open("wb") as handle:
             plistlib.dump(info, handle, sort_keys=True)
+        normalize_macos_payload_permissions(bundle)
         write_zip(root, output / f"dobby-vpn-{version}-mac-{arch}.zip")
 
 
@@ -147,7 +158,7 @@ def write_linux_control(debian: Path, version: str) -> None:
         required(LINUX_INSTALLER / "control").read_text(encoding="utf-8").replace("@VERSION@", version),
         encoding="utf-8",
     )
-    for name in ("postinst", "prerm", "postrm"):
+    for name in ("preinst", "postinst", "prerm", "postrm"):
         copy_file(LINUX_INSTALLER / name, debian / name, executable=True)
 
 

@@ -27,8 +27,9 @@ type SourceDirectoryOwner struct {
 }
 
 type FileSourceStore struct {
-	Path           string
-	DirectoryOwner *SourceDirectoryOwner
+	ProtectedDirectory string
+	Path               string
+	DirectoryOwner     *SourceDirectoryOwner
 }
 
 func (s FileSourceStore) Load(ctx context.Context) ([]byte, error) {
@@ -111,6 +112,16 @@ func (s FileSourceStore) Clear(ctx context.Context) error {
 		return fmt.Errorf("remove saved configuration URL: %w", err)
 	}
 	return nil
+}
+
+// RemoveInstallation clears the saved selection before removing its source.
+func (s FileSourceStore) RemoveInstallation(ctx context.Context) error {
+	activation := s
+	activation.Path += activationSuffix
+	if err := activation.Clear(ctx); err != nil {
+		return err
+	}
+	return errors.Join(s.Clear(ctx), s.ClearAccepted(ctx))
 }
 
 func (s FileSourceStore) read(path string) ([]byte, error) {

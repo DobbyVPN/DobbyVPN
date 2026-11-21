@@ -12,6 +12,7 @@ import (
 	"core/clientserver/controlplane"
 	"core/sessionapi"
 	"core/sessionapi/mobilebinding"
+	"core/sessionapi/runtime"
 	"core/sessionapi/runtimebridge"
 )
 
@@ -28,17 +29,51 @@ func shutdownDesktop(closeControl func() error, serveErr error, owner *mobilebin
 var (
 	processOnce    sync.Once
 	processBinding *mobilebinding.Binding
+	// startupFailure is set before the first desktopProcessBinding call by
+	// platforms whose startup recovery failed without stopping the service.
+	startupFailure     error
+	retainedProtection bool
+	// connectionSourceStore is a seam for the startup-path test.
+	connectionSourceStore = controlplane.ConnectionSourceStore
 )
+
+func removeDesktopInstallationState(ctx context.Context, installationStore func() (sessionapi.SourceStore, error)) error {
+	var policyErr error
+	if desktopProtection != nil {
+		policyErr = desktopProtection.SetEnabled(ctx, false)
+	}
+	store, err := installationStore()
+	if err != nil {
+		return errors.Join(policyErr, err)
+	}
+	file, ok := store.(sessionapi.FileSourceStore)
+	if !ok {
+		return errors.Join(policyErr, errors.New("installed configuration storage unavailable"))
+	}
+	return errors.Join(policyErr, file.RemoveInstallation(ctx))
+}
+
+func prepareServiceProtection() error {
+	if desktopProtection == nil {
+		return nil
+	}
+	var err error
+	retainedProtection, err = desktopProtection.Recover(context.Background())
+	return err
+}
 
 func desktopProcessBinding() *mobilebinding.Binding {
 	processOnce.Do(func() {
-		sourceStore, err := controlplane.ConnectionSourceStore()
+		sourceStore, err := connectionSourceStore()
 		if err != nil {
 			panic(fmt.Sprintf("failed to locate desktop connection URL storage: %v", err))
 		}
 		manager := sessionapi.NewManager(sessionapi.ManagerOptions{
-			Runtime:     runtimebridge.New(nil),
-			SourceStore: sourceStore,
+			Runtime:        runtimebridge.New(nil),
+			SourceStore:    sourceStore,
+			RestoreLoader:  runtime.ProtectedRestoreLoader(),
+			StartupFailure: startupFailure,
+			Protection:     desktopProtection, RetainedProtection: retainedProtection,
 		})
 		processBinding = mobilebinding.NewForDesktop(manager)
 	})

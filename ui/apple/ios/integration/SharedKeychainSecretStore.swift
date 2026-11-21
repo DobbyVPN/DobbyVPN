@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -66,6 +67,34 @@ public final class SharedKeychainSecretStore {
         }
         reportFailure("create", key, createStatus)
         return false
+    }
+
+    /// A lost or inaccessible key for an existing record is a storage error.
+    /// On first creation multiple processes share the winning keychain item.
+    func acceptedConfigurationKey(create: Bool) throws -> SymmetricKey {
+        let query = baseQuery("sessionapi.accepted-configuration.key.v1")
+        var read = query
+        read[kSecReturnData as String] = true
+        read[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(read as CFDictionary, &result)
+        if status == errSecSuccess {
+            guard let data = result as? Data, data.count == 32 else {
+                throw NSError(domain: NSOSStatusErrorDomain, code: Int(errSecDecode))
+            }
+            return SymmetricKey(data: data)
+        }
+        guard status == errSecItemNotFound && create else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        let key = SymmetricKey(size: .bits256)
+        var attributes = query
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        attributes[kSecValueData as String] = key.withUnsafeBytes { Data($0) }
+        let added = SecItemAdd(attributes as CFDictionary, nil)
+        if added == errSecDuplicateItem { return try acceptedConfigurationKey(create: false) }
+        guard added == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(added)) }
+        return key
     }
 
     public func string(for key: String) -> String? {

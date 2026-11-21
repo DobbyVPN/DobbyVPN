@@ -97,6 +97,24 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
         return SharedKeychainSecretStore.shared.set(value, for: SharedKeychainSecretStore.activationKey)
     }
 
+    func loadAcceptedRecord(_ errorPointer: NSErrorPointer) -> String {
+        do {
+            return try DobbyConfigsRepositoryImpl.shared.loadAcceptedRecord()
+        } catch {
+            errorPointer?.pointee = error as NSError
+            return ""
+        }
+    }
+
+    func saveAcceptedRecord(_ value: String?) throws {
+        guard let value else { throw CocoaError(.fileWriteInvalidFileName) }
+        try DobbyConfigsRepositoryImpl.shared.saveAcceptedRecord(value)
+    }
+
+    func clearAcceptedRecord() throws {
+        try DobbyConfigsRepositoryImpl.shared.clearAcceptedRecord()
+    }
+
     func loadSourceURL() -> String {
         DobbyConfigsRepositoryImpl.shared.getConnectionURL()
     }
@@ -279,6 +297,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return "family=\(addr.pointee.sa_family) getnameinfoErr=\(errno)"
     }
 
+    func logResources(_ event: String) {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout.size(ofValue: info) / MemoryLayout<integer_t>.size)
+        let capacity = Int(count)
+        let result = withUnsafeMutablePointer(to: &info) { ptr in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: capacity) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        let footprint = result == KERN_SUCCESS ? String(info.phys_footprint) : "unavailable(mach=\(result))"
+        logs.writeLog(log: "[tunnel:\(tunnelId)] resources event=\(event) footprint_bytes=\(footprint) \(DobbyvpnResourceDiagnostics())")
+    }
+
     override func startTunnel(options: [String: NSObject]?) async throws {
         guard loggerError.isEmpty else { throw sessionError("LOGGER_INITIALIZATION_FAILED: \(loggerError)") }
         let tid = UInt64(pthread_mach_thread_np(pthread_self()))
@@ -288,6 +319,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logSystemInfo(osVersionString: osVersionString)
         logs.writeLog(log: "[Interfaces] iOS version: \(osVersionString)")
         logs.writeLog(log: "[tunnel:\(tunnelId)] startTunnel tid=\(tid) launchId=\(launchId) optionKeys=\(optionKeys)")
+        logResources("activation")
         logInterfacesDetailed(label: "BEFORE_VPN_TUNNEL")
 
         // Initialize diagnostics before retaining OS callbacks. A failed
@@ -322,6 +354,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        logResources("stop")
         let operationID = "ios-stop-\(UUID().uuidString)"
         logs.writeLog(log: "[tunnel] stopTunnel teardown=begin operation_id=\(operationID) reason=\(reason)")
         Task {
@@ -357,6 +390,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if trace { logs.writeLog(log: "[tunnel:\(tunnelId)] provider command queued \(identity)") }
         commandQueue.async { [weak self] in
             guard let self else { completionHandler?(nil); return }
+            if trace && command?.method == "Snapshot" { self.logResources("snapshot") }
             completionHandler?(self.dispatchProviderCommand(messageData, trace: trace))
         }
     }

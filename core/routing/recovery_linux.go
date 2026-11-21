@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"core/log"
 
@@ -14,10 +15,14 @@ import (
 )
 
 type linuxRecoveryRoutes struct {
-	deletes                 []netlink.Route
+	deletes []netlink.Route
+	// gatewayRecords are the marked routes that carry the uplink gateway. They
+	// are removed only after the default route is restored.
+	gatewayRecords          []netlink.Route
 	hasIndependentDefault   bool
 	restoreDefault          *netlink.Route
 	restoreDefaultAmbiguous bool
+	markedDefaults          []netlink.Route
 }
 
 func linuxOwnedProxyRoute(route netlink.Route) bool {
@@ -103,7 +108,7 @@ func collectLinuxRecoveryRoutes(ipv4Routes, ipv6Routes []netlink.Route, tableID 
 		if !linuxOwnedMarkedGatewayRoute(route, tableID) {
 			continue
 		}
-		recovered.deletes = append(recovered.deletes, linuxRecoveryRouteForDelete(route, netlink.FAMILY_V4))
+		recovered.gatewayRecords = append(recovered.gatewayRecords, linuxRecoveryRouteForDelete(route, netlink.FAMILY_V4))
 		candidate := netlink.Route{
 			Dst:       linuxDefaultIPNet(netlink.FAMILY_V4),
 			Gw:        append(net.IP(nil), route.Gw.To4()...),
@@ -114,6 +119,7 @@ func collectLinuxRecoveryRoutes(ipv4Routes, ipv6Routes []netlink.Route, tableID 
 			Type:      unix.RTN_UNICAST,
 			Scope:     netlink.SCOPE_UNIVERSE,
 		}
+		recovered.markedDefaults = append(recovered.markedDefaults, candidate)
 		if recovered.restoreDefault == nil {
 			recovered.restoreDefault = &candidate
 		} else if recovered.restoreDefault.LinkIndex != candidate.LinkIndex ||
@@ -153,11 +159,11 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 			}
 		}
 	}
-	if len(routes.deletes) == 0 && len(ownedRules) == 0 && ruleListErr == nil {
+	if len(routes.deletes) == 0 && len(routes.gatewayRecords) == 0 && len(ownedRules) == 0 && ruleListErr == nil {
 		return nil
 	}
 
-	log.Debugf(Category, "[Linux][Recovery] removing %d tagged route(s) and %d owned rule(s) after process loss", len(routes.deletes), len(ownedRules))
+	log.Debugf(Category, "[Linux][Recovery] removing %d tagged route(s) and %d owned rule(s) after process loss", len(routes.deletes)+len(routes.gatewayRecords), len(ownedRules))
 	var errs []error
 	if ruleListErr != nil {
 		errs = append(errs, fmt.Errorf("inspect owned fwmark rule: %w", ruleListErr))
@@ -168,17 +174,38 @@ func RecoverLinuxOwnedRoutes(tableID, priority int, tunName string) error {
 			errs = append(errs, fmt.Errorf("remove owned fwmark rule: %w", deleteErr))
 		}
 	}
-	for _, route := range routes.deletes {
+	// Restore the default route before removing the marked routes that carry
+	// the uplink gateway. If the restore is ambiguous or fails, keep those
+	// routes: they are the only record, so the next recovery reports it again.
+	// Other owned routes, such as the IPv6 blackholes, go either way.
+	toDelete := routes.deletes
+	if restoreErr := restoreLinuxInterruptedDefault(routes); restoreErr != nil {
+		errs = append(errs, restoreErr)
+	} else {
+		toDelete = append(append([]netlink.Route(nil), toDelete...), routes.gatewayRecords...)
+	}
+	for _, route := range toDelete {
 		if deleteErr := linuxRouteOperation("delete", &route, linuxRouteDel); deleteErr != nil && !linuxRouteAlreadyGone(deleteErr) {
 			errs = append(errs, fmt.Errorf("remove owned route %s: %w", route.String(), deleteErr))
 		}
 	}
-	if routes.restoreDefaultAmbiguous {
-		errs = append(errs, fmt.Errorf("restore interrupted default route: owned marked routes disagree"))
-	} else if routes.restoreDefault != nil && !routes.hasIndependentDefault {
-		if restoreErr := linuxRouteOperation("replace", routes.restoreDefault, linuxRouteReplace); restoreErr != nil {
-			errs = append(errs, fmt.Errorf("restore interrupted default route: %w", restoreErr))
-		}
-	}
 	return errors.Join(errs...)
+}
+
+func restoreLinuxInterruptedDefault(routes linuxRecoveryRoutes) error {
+	if routes.restoreDefaultAmbiguous {
+		candidates := make([]string, 0, len(routes.markedDefaults))
+		for _, route := range routes.markedDefaults {
+			candidates = append(candidates, fmt.Sprintf("gateway %s via interface index %d", route.Gw, route.LinkIndex))
+		}
+		return fmt.Errorf("restore interrupted default route: owned marked routes disagree (%s); the routes were left in place",
+			strings.Join(candidates, "; "))
+	}
+	if routes.restoreDefault == nil || routes.hasIndependentDefault {
+		return nil
+	}
+	if err := linuxRouteOperation("replace", routes.restoreDefault, linuxRouteReplace); err != nil {
+		return fmt.Errorf("restore interrupted default route: %w", err)
+	}
+	return nil
 }

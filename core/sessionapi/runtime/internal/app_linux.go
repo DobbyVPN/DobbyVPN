@@ -75,14 +75,15 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	if err != nil {
 		return fail(err)
 	}
+	app.Guard = guard
 	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
-		return captureLinuxResolver(queryCtx, config.TunDeviceName, guard)
+		return captureLinuxResolver(queryCtx, config.TunDeviceName, config.RoutingTableID)
 	}
 	if _, _, captureErr := capture(ctx); captureErr != nil {
 		return fail(captureErr)
 	}
 	app.DNSCache.SetResolverSource(capture)
-	tun, err = newTunDevice(config.TunDeviceName, config.TunDeviceIP)
+	tun, err = newTunDevice(config.TunDeviceName, config.TunDeviceIP, config.TunDeviceMTU)
 	if err != nil {
 		return fail(err)
 	}
@@ -113,19 +114,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	return maintainLinuxResolver(ctx, capture)
 }
 
-func captureLinuxResolver(ctx context.Context, tunName string, guard *routing.LinuxOutputGuard) (string, dnscache.Resolver, error) {
+func captureLinuxResolver(ctx context.Context, tunName string, mark int) (string, dnscache.Resolver, error) {
 	index, err := routing.LinuxPhysicalInterface(tunName)
 	if err != nil {
-		return "", nil, errors.Join(err, guard.UpdateBootstrap(ctx, "unavailable", nil))
-	}
-	identity, servers, err := dnscache.CaptureLinuxLink(ctx, index)
-	if err != nil {
 		return "", nil, err
 	}
-	if err := guard.UpdateBootstrap(ctx, identity, servers); err != nil {
-		return "", nil, err
-	}
-	return identity, dnscache.LinuxLinkResolver(index), nil
+	return dnscache.CaptureLinuxBootstrap(ctx, index, mark, routing.OpenLinuxResolverQuery)
 }
 
 func maintainLinuxResolver(ctx context.Context, capture func(context.Context) (string, dnscache.Resolver, error)) error {

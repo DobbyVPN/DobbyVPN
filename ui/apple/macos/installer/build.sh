@@ -50,26 +50,40 @@ build_package() {
 
     mkdir Scripts
     cp ../../postinstall.sh Scripts/postinstall
-    chmod +x Scripts/postinstall
+    sed -e "s/@PACKAGE_ARCH@/$service_arch/" -e "s/@PACKAGE_VERSION@/$APP_VERSION/" \
+      ../../preinstall.sh > Scripts/preinstall
+    chmod +x Scripts/postinstall Scripts/preinstall
     cp ../../vpnservice.plist "$APP_BUNDLE/Contents/Resources/"
     install_service \
       "$service_path" \
       "$service_arch" \
       "$APP_BUNDLE/Contents/Resources/dobbyvpn-backend"
 
+    [[ -x "$APP_BUNDLE/Contents/Resources/dobby-cli" ]] || {
+      echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
+      exit 1
+    }
     if [[ "$payload_arch" == "amd64" ]]; then
-      [[ -x "$APP_BUNDLE/Contents/Resources/dobby-cli" ]] || {
-        echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
-        exit 1
-      }
       ln -s ../Resources/dobby-cli "$APP_BUNDLE/Contents/MacOS/dobby-cli"
     fi
 
-    mkdir -p Payload/Applications Payload/usr/local/libexec
+    mkdir -p Payload/Applications Payload/usr/local/libexec Payload/usr/local/bin
     cp -R "$APP_BUNDLE" Payload/Applications/
+    # Same path on Intel and Apple silicon: put dobby-cli on the default PATH.
+    ln -s "/Applications/$APP_BUNDLE/Contents/Resources/dobby-cli" Payload/usr/local/bin/dobby-cli
     cp ../../uninstall.sh Payload/usr/local/libexec/dobbyvpn-uninstall
     chmod 755 Payload/usr/local/libexec/dobbyvpn-uninstall
+    # Normalize only the public staged payload, before signing/packaging. The
+    # caller's umask continues to protect private scratch and credential files.
+    find Payload -type d -exec chmod 755 {} +
+    find Payload -type f -perm -100 -exec chmod 755 {} +
+    find Payload -type f ! -perm -100 -exec chmod 644 {} +
+    chmod 755 Scripts Scripts/preinstall Scripts/postinstall
     write_fixed_payload_component_plist
+    # Release CI sets this after preparing Developer ID signing; local builds stay unsigned.
+    if [[ -n "${MACOS_SIGNING_SCRIPT:-}" ]]; then
+      /bin/bash "$MACOS_SIGNING_SCRIPT" sign-app "Payload/Applications/$APP_BUNDLE"
+    fi
     pkgbuild --root Payload \
              --component-plist component.plist \
              --scripts Scripts \

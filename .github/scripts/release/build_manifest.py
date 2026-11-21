@@ -14,6 +14,7 @@ import sys
 from typing import Any
 
 from artifact_attempts import ArtifactAttemptError, select_artifacts
+from require_ci import find_reusable_ci_run
 
 BUILD_WORKFLOW_PATH = ".github/workflows/build.yml"
 MANIFEST_ARTIFACT = "build-manifest"
@@ -332,7 +333,16 @@ def main(argv: list[str] | None = None) -> int:
             manifest = resolve_build(args.repository, args.run_id, args.download_dir, require_main=args.require_main)
             _write_output(args.output, manifest)
         else:
-            _current_build_run(args.repository, args.run_id, args.run_number, args.source_sha)
+            run = _current_build_run(args.repository, args.run_id, args.run_number, args.source_sha)
+            if run.get("head_branch") != "main" or run.get("head_repository", {}).get("full_name") != args.repository:
+                raise BuildManifestError("Build requires the main branch of the selected repository")
+            token = os.environ.get("GH_TOKEN")
+            if not token:
+                raise BuildManifestError("GH_TOKEN is required to verify full CI")
+            ci_id, reason = find_reusable_ci_run(args.repository, args.source_sha, token)
+            if ci_id is None:
+                raise BuildManifestError(f"full CI unavailable for {args.source_sha}: {reason}")
+            print(f"Complete CI run {ci_id} passed for {args.source_sha}")
     except (BuildManifestError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"Build manifest error: {error}", file=sys.stderr)
         return 1

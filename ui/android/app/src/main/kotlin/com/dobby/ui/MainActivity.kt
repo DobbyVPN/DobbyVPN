@@ -29,7 +29,9 @@ import androidx.lifecycle.ViewModelProvider
 import com.dobby.nativebridge.LogUploader
 import com.dobby.nativebridge.NativeGoSession
 import com.dobby.nativebridge.NativeVpnBridge
+import com.dobby.presentation.ConsentRecovery
 import com.dobby.presentation.LoadTrigger
+import com.dobby.presentation.PendingConsent
 import com.dobby.presentation.LogFollowState
 import com.dobby.presentation.PermissionSnapshot
 import com.dobby.presentation.PermissionTarget
@@ -39,6 +41,9 @@ import com.dobby.presentation.CallbackLifetime
 import com.dobby.presentation.SelectionAdmission
 import com.dobby.presentation.SubscriptionRequest
 import com.dobby.presentation.UiOperationDiagnostics
+import com.dobby.presentation.forgetClearedDismissals
+import com.dobby.presentation.sessionFailureVisible
+import com.dobby.presentation.shownError
 import com.dobby.vpn.BuildConfig
 import com.dobby.vpn.R
 import org.json.JSONObject
@@ -85,6 +90,8 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val LOG_VIEW_STATE = "com.dobby.ui.LOG_VIEW_STATE"
         private const val DISMISSED_ERRORS = "com.dobby.ui.DISMISSED_ERRORS"
+        private const val PENDING_CONSENT = "com.dobby.ui.PENDING_CONSENT"
+        private const val PENDING_IMPORT = "com.dobby.ui.PENDING_IMPORT"
         private const val EXPORT_NAME = "com.dobby.ui.EXPORT_NAME"
         private const val EXPORT_LAUNCHED = "com.dobby.ui.EXPORT_LAUNCHED"
         private const val EXPORT_RETURNED = "com.dobby.ui.EXPORT_RETURNED"
@@ -119,7 +126,10 @@ class MainActivity : ComponentActivity() {
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        NativeVpnBridge.consentResult(result.resultCode == android.app.Activity.RESULT_OK)
+        val granted = result.resultCode == android.app.Activity.RESULT_OK
+        // Always release the bridge's consent slot; a recreated Activity's request was cancelled.
+        NativeVpnBridge.consentResult(granted)
+        if (::controller.isInitialized) controller.consentReturned(granted)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -261,6 +271,7 @@ class MainActivity : ComponentActivity() {
                     savedInstanceState?.getBundle(SOURCE_EDITOR_STATE),
                     retainedLogViewModel,
                     savedInstanceState?.getStringArrayList(DISMISSED_ERRORS).orEmpty().toSet(),
+                    restoredConsent = savedInstanceState?.getBundle(PENDING_CONSENT)?.toPendingConsent(),
                     backendAvailable = backendFailure == null,
                     backendUnavailableMessage = backendFailure?.message.orEmpty(),
                 )
@@ -268,6 +279,7 @@ class MainActivity : ComponentActivity() {
                 if (savedInstanceState == null && intent?.action == Intent.ACTION_VIEW) {
                     controller.importLink(intent.dataString.orEmpty())
                 }
+                savedInstanceState?.getString(PENDING_IMPORT)?.let(controller::restorePendingImport)
             }
             startupDiagnostics.observe("MainActivity.onCreate.setContent") {
                 setContent { DobbyApp(controller) }
@@ -289,6 +301,9 @@ class MainActivity : ComponentActivity() {
             controller.saveSourceEditorState()?.let { outState.putBundle(SOURCE_EDITOR_STATE, it) }
                 ?: outState.remove(SOURCE_EDITOR_STATE)
             outState.putStringArrayList(DISMISSED_ERRORS, ArrayList(controller.dismissedErrors))
+            controller.pendingConsent()?.let { outState.putBundle(PENDING_CONSENT, it.toBundle()) }
+                ?: outState.remove(PENDING_CONSENT)
+            controller.state.pendingImport?.let { outState.putString(PENDING_IMPORT, it) } ?: outState.remove(PENDING_IMPORT)
         }
     }
 
@@ -388,6 +403,7 @@ class MainActivity : ComponentActivity() {
     }
 
     internal fun launchVpnConsent(permission: Intent) {
+        if (::controller.isInitialized) controller.consentLaunched()
         vpnConsentLauncher.launch(permission)
     }
 
@@ -578,6 +594,25 @@ internal enum class ProfileStatus(val label: String) {
     CONNECTING("connecting"), CONNECTED("connected"), RECONNECTING("reconnecting"), STOPPING("stopping"), FAILED("failed")
 }
 
+// Profile indexes are never negative; -1 stands for auto-select.
+private fun PendingConsent.toBundle() = Bundle().apply {
+    putInt("index", index ?: -1)
+    putBoolean("retry", retry)
+    putString("sessionId", sessionId)
+    putString("digest", digest)
+    putLong("generation", generation)
+    putBoolean("granted", granted)
+}
+
+private fun Bundle.toPendingConsent() = PendingConsent(
+    index = getInt("index", -1).takeIf { it >= 0 },
+    retry = getBoolean("retry"),
+    sessionId = getString("sessionId").orEmpty(),
+    digest = getString("digest").orEmpty(),
+    generation = getLong("generation"),
+    granted = getBoolean("granted"),
+)
+
 private data class PendingPermissionAction(
     val session: SessionData,
     val selection: SelectionData,
@@ -609,6 +644,7 @@ internal data class SessionData(
     val cleanupComplete: Boolean = true,
     val failure: String = "",
     val sourceError: String = "",
+    val offlineAcceptedAt: String = "",
 ) {
     val protectedFailure: Boolean
         get() = state == "FAILED" && vpnActive && canRetry && primaryAction == "RETRY" && !cleanupComplete
@@ -648,6 +684,8 @@ internal data class ScreenState(
     val uploadedProvider: String = "",
     val uploadedTime: String = "",
     val showUploadSuccess: Boolean = false,
+    // An import link waits here until the user confirms that it may replace the saved subscription.
+    val pendingImport: String? = null,
 )
 
 internal class SessionController(
@@ -658,7 +696,14 @@ internal class SessionController(
     restoredDismissedErrors: Set<String> = emptySet(),
     backendAvailable: Boolean = true,
     backendUnavailableMessage: String = "",
+    restoredConsent: PendingConsent? = null,
 ) {
+    private val consentRecovery = ConsentRecovery(
+        restoredConsent,
+        enqueue = { task -> worker.execute { refreshSnapshot(); post { task.run() } } },
+        resume = ::resumeConnection,
+        refuse = { report("VPN permission was not granted") },
+    )
     @Volatile private var backendAvailable = backendAvailable
     @Volatile private var backendUnavailableMessage = backendUnavailableMessage
 
@@ -672,10 +717,17 @@ internal class SessionController(
     ))
         private set
 
-    val errors: List<String> get() =
-        listOf(state.loadError, state.error, state.session.failure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
+    private fun errorsWith(sessionFailure: String) =
+        listOf(state.loadError, state.error, sessionFailure, state.logsError, state.uploadError).filter(String::isNotEmpty).distinct()
 
-    /** Messages the user closed; they stay hidden until they clear or the user makes a new attempt. */
+    val rawErrors: List<String> get() = errorsWith(state.session.failure)
+
+    /** The session failure is hidden while a new attempt starts, including one restored after Activity recreation. */
+    val errors: List<String> get() = errorsWith(
+        state.session.failure.takeIf { sessionFailureVisible(state.session.state, state.busy || permissionTarget != null || consentRecovery.pending != null) }.orEmpty(),
+    )
+
+    /** Messages the user closed; they stay hidden until they clear from the snapshot or the user makes a new attempt. */
     var dismissedErrors by mutableStateOf(restoredDismissedErrors)
         private set
 
@@ -684,7 +736,11 @@ internal class SessionController(
     private val closed: Boolean get() = lifetime.isClosed
     private fun post(action: () -> Unit) = lifetime.post(action)
     private var preparation: NativeVpnBridge.Preparation? = null
-    private fun cancelPreparation() { preparation?.cancel(); preparation = null }
+    /** A user-initiated cancel ends a resumed request; recreation (close) and a new preparation keep it. */
+    private fun cancelPreparation(keepRecovery: Boolean = false) {
+        if (!keepRecovery) consentRecovery.cancel()
+        preparation?.cancel(); preparation = null; consentRecovery.dialogClosed()
+    }
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val logWorker = Executors.newSingleThreadScheduledExecutor()
     private val uploadWorker = Executors.newSingleThreadExecutor()
@@ -727,8 +783,10 @@ internal class SessionController(
         clipboard.addPrimaryClipChangedListener(clipboardListener)
         if (backendAvailable) {
             worker.scheduleWithFixedDelay({
-                refreshSnapshot()
-                if (visible) refreshClipboard()
+                if (visible) {
+                    refreshSnapshot()
+                    refreshClipboard()
+                }
             }, 0, 500, TimeUnit.MILLISECONDS)
         } else {
             post {
@@ -737,6 +795,7 @@ internal class SessionController(
         }
         NativeVpnBridge.recordDiagnostic(activity, "startup.diagnostic_store_ready", "Android diagnostic store resolved")
         logWorker.scheduleWithFixedDelay({ if (visible) readLogs() }, 0, 750, TimeUnit.MILLISECONDS)
+        consentRecovery.resumeInterrupted()
     }
 
     fun sourceChanged(value: String, trigger: LoadTrigger = LoadTrigger.TYPED) {
@@ -752,8 +811,7 @@ internal class SessionController(
         restoredPendingSource = null
         if (trigger != LoadTrigger.RESTORE && trigger != LoadTrigger.TYPED) dismissedErrors = emptySet()
         val source = value.trim()
-        val uri = runCatching { java.net.URI(source) }.getOrNull()
-        val valid = uri?.scheme?.lowercase() == "https" && !uri.host.isNullOrEmpty()
+        val valid = isHttpsSubscription(source)
         val alreadyAccepted = trigger == LoadTrigger.TYPED && valid &&
             state.loadError.isEmpty() && !sourceLoads.inFlight &&
             sourceLoads.isAlreadyAccepted(source, latest.configured, latest.sourceUrl)
@@ -785,12 +843,13 @@ internal class SessionController(
         state = state.copy(loading = true)
         loadWorker.execute {
             val outcome = runCatching {
-                val snapshotResponse = JSONObject(NativeGoSession.snapshot(""))
+                val envelope = NativeGoSession.snapshot("")
+                val snapshotResponse = JSONObject(envelope)
                 requireOK(snapshotResponse)
-                val current = snapshotResponse.getJSONObject("result")
+                val current = decodeSessionSnapshot(snapshotResponse, envelope)
                 val configured = JSONObject(NativeGoSession.configure(
-                    current.getString("session_id"),
-                    current.getLong("sequence"),
+                    current.sessionId,
+                    current.sequence,
                     request.source.toByteArray(Charsets.UTF_8),
                 ))
                 requireOK(configured)
@@ -809,10 +868,17 @@ internal class SessionController(
             post {
                 sourceLoads.complete(request, succeeded = outcome.isSuccess) { current ->
                     state = state.copy(loading = false)
-                    if (outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
+                    if (current && outcome.isSuccess) acceptedSequence = maxOf(acceptedSequence, outcome.getOrThrow())
                     if (current) {
                         state = if (outcome.isSuccess) state.copy(sourceDirty = false, loadError = "")
-                        else state.copy(loadError = outcome.exceptionOrNull()?.message ?: "Subscription could not be loaded")
+                        else {
+                            val accepted = state.session.sourceUrl
+                            val sameSource = state.session.configured && accepted.isNotEmpty() && accepted == request.source
+                            val owner = if (state.session.configured && !sameSource && accepted.isNotEmpty())
+                                " Showing profiles from $accepted." else ""
+                            val detail = failure?.message ?: "Subscription could not be loaded"
+                            state.copy(sourceDirty = !sameSource, loadError = "Could not load ${request.source}: $detail.$owner")
+                        }
                     }
                     worker.execute { refreshSnapshot() }
                 }
@@ -882,7 +948,7 @@ internal class SessionController(
     }
 
     fun canAct(index: Int? = null): Boolean = !state.busy && permissionTarget == null &&
-        (isStopTarget(index) || (!state.sourceDirty && !state.loading && state.loadError.isEmpty() && state.session.sequence >= acceptedSequence && state.session.configured &&
+        (isStopTarget(index) || (!state.sourceDirty && !state.loading && (state.loadError.isEmpty() || state.source.trim() == state.session.sourceUrl) && state.session.sequence >= acceptedSequence && state.session.configured &&
             (state.session.primaryAction == "START" || state.session.canSwitch)))
 
     val isProtectedFailure: Boolean get() = state.session.protectedFailure
@@ -959,7 +1025,13 @@ internal class SessionController(
     fun dismissError(message: String) { dismissedErrors = dismissedErrors + message }
 
     fun forgetClearedErrors() {
-        if (latest.sessionId.isNotEmpty()) dismissedErrors = dismissedErrors.intersect(errors.toSet())
+        val before = dismissedErrors
+        val sessionId = latest.sessionId
+        if (sessionId.isNotEmpty()) dismissedErrors = forgetClearedDismissals(before, rawErrors)
+        NativeVpnBridge.recordDiagnostic(activity, "ui.error_reconciliation",
+            "session_id=$sessionId displayed_session_id=${state.session.sessionId} " +
+                "raw_error_count=${rawErrors.size} dismissed_before=${before.size} " +
+                "dismissed_after=${dismissedErrors.size} awaiting_snapshot=${sessionId.isEmpty()}", level = "DEBUG")
     }
 
     fun copyToClipboard(text: String) {
@@ -1032,13 +1104,14 @@ internal class SessionController(
             report(backendUnavailableMessage.ifBlank { "Go backend is unavailable" })
             return
         }
+        // Read before cancelling: cancelling un-hides the session failure the user has not seen.
+        val displayed = shownError(errors, dismissedErrors)
         selectionAdmission.invalidate()
         cancelPreparation()
         permissionTarget = null
         val current = latest
         if (state.busy || (current.primaryAction != "STOP" && !current.vpnActive)) return
         // Preserve closed errors and acknowledge only the displayed transport failure.
-        val displayed = errors.firstOrNull { it !in dismissedErrors }
         if (!displayed.isNullOrEmpty() && displayed == state.session.failure) dismissError(displayed)
         state = state.copy(busy = true, error = "")
         worker.execute {
@@ -1049,23 +1122,26 @@ internal class SessionController(
     }
 
     private fun preparePermission() {
-        cancelPreparation()
+        cancelPreparation(keepRecovery = true)
         val target = permissionTarget ?: return
-        if (!selectionAdmission.register(target, target.fence.sourceRevision)) return
+        if (!selectionAdmission.register(target, target.fence.sourceRevision)) { consentRecovery.handoffComplete(); return }
         val details = "session_id=${target.session.sessionId} generation=${target.session.generation} " +
             "source_revision=${target.fence.sourceRevision} selection=${target.selection} retry=${target.retry}"
         preparation = NativeVpnBridge.prepareForSelection(activity, details) { result ->
             if (closed || permissionTarget !== target) return@prepareForSelection
             when (result) {
                 NativeVpnBridge.PreparationResult.Ready -> { preparation = null; continuePermission(true) }
-                NativeVpnBridge.PreparationResult.PermissionRequired ->
+                NativeVpnBridge.PreparationResult.PermissionRequired -> {
+                    consentRecovery.handoffComplete()
                     state = state.copy(busy = false, error = "Approve the Android VPN permission to connect")
-                NativeVpnBridge.PreparationResult.Cancelled -> { selectionAdmission.invalidate(target); preparation = null; permissionTarget = null; state = state.copy(busy = false) }
+                }
+                NativeVpnBridge.PreparationResult.Cancelled -> { consentRecovery.handoffComplete(); selectionAdmission.invalidate(target); preparation = null; permissionTarget = null; state = state.copy(busy = false) }
                 NativeVpnBridge.PreparationResult.PermissionDenied -> {
                     preparation = null
                     continuePermission(false)
                 }
                 is NativeVpnBridge.PreparationResult.Failed -> {
+                    consentRecovery.handoffComplete()
                     selectionAdmission.invalidate(target)
                     preparation = null
                     permissionTarget = null
@@ -1075,16 +1151,59 @@ internal class SessionController(
         }
     }
 
+    /** The connection the user asked for, from the click until the start command is issued. */
+    fun pendingConsent(): PendingConsent? = permissionTarget?.let { consentRecovery.save(pendingOf(it)) }
+        ?: consentRecovery.pending
+
+    private fun pendingOf(target: PendingPermissionAction) = PendingConsent(
+        index = if (target.selection.mode == "PROFILE_INDEX") target.selection.index else null,
+        retry = target.retry,
+        sessionId = target.fence.sessionId,
+        digest = target.fence.digest,
+        generation = target.fence.generation,
+    )
+
+    /** Continues the connection saved by a previous Activity instance, or reports a refusal. */
+    fun consentReturned(granted: Boolean) = consentRecovery.result(granted)
+
+    fun consentLaunched() = consentRecovery.dialogLaunched()
+
+    /**
+     * The recovery state stays saved until the start command was issued (or the attempt ended),
+     * so an Activity recreated while the preparation is still running resumes it again.
+     */
+    private fun resumeConnection(intent: PendingConsent) {
+        if (closed) return
+        val current = latest
+        if (!intent.stillCurrent(current.sessionId, current.digest, current.generation)) {
+            consentRecovery.handoffComplete()
+            report("VPN connection was not started. Try again")
+            return
+        }
+        if (intent.retry) {
+            if (!retryActionEnabled) { consentRecovery.handoffComplete(); report("VPN connection was not started. Try again"); return }
+            retry()
+        } else {
+            if (isStopTarget(intent.index)) { consentRecovery.handoffComplete(); return }
+            if (!canAct(intent.index)) { consentRecovery.handoffComplete(); report("VPN connection was not started. Try again"); return }
+            connectOrDisconnect(intent.index)
+        }
+        // No preparation was queued, so nothing will complete the handoff later.
+        if (permissionTarget == null) consentRecovery.handoffComplete()
+    }
+
     private fun continuePermission(granted: Boolean) {
         val target = permissionTarget ?: return
+        if (granted) consentRecovery.hold(pendingOf(target))
         permissionTarget = null
-        if (!granted) { selectionAdmission.invalidate(target); report("VPN permission was not granted"); return }
+        if (!granted) { consentRecovery.handoffComplete(); selectionAdmission.invalidate(target); report("VPN permission was not granted"); return }
         val selected = target.session
         val current = latest
         if (!target.retry && !PermissionTargetFence.stillCurrent(
                 target.fence,
                 current.permissionSnapshot(sourceLoads.revision, state.sourceDirty),
             )) {
+            consentRecovery.handoffComplete()
             selectionAdmission.invalidate(target)
             worker.execute { refreshSnapshot(clearBusy = true) }
             return
@@ -1093,27 +1212,24 @@ internal class SessionController(
         worker.execute {
             var admitted = false
             val command = runCatching {
-                val response = JSONObject(NativeGoSession.snapshot(selected.sessionId))
+                val envelope = NativeGoSession.snapshot(selected.sessionId)
+                val response = JSONObject(envelope)
                 requireOK(response)
-                val snapshot = response.getJSONObject("result")
-                val sessionId = snapshot.getString("session_id")
-                val sequence = snapshot.getLong("sequence")
-                val generation = snapshot.getLong("generation")
-                val digest = snapshot.getString("digest")
-                val primaryAction = snapshot.optString("primary_action", "NONE")
-                val canSwitch = snapshot.optBoolean("can_switch")
-                val hasPendingTarget = snapshot.optJSONObject("pending_target") != null
+                val snapshot = decodeSessionSnapshot(response, envelope)
+                val sessionId = snapshot.sessionId
+                val sequence = snapshot.sequence
+                val generation = snapshot.generation
+                val digest = snapshot.digest
+                val primaryAction = snapshot.primaryAction
+                val canSwitch = snapshot.canSwitch
+                val hasPendingTarget = snapshot.pendingTarget != null
                 val retryStillCurrent = target.retry &&
                     sessionId == selected.sessionId &&
                     generation == selected.generation &&
-                    snapshot.optString("state", "IDLE") == "FAILED" &&
-                    snapshot.optBoolean("vpn_active") &&
-                    snapshot.optBoolean("can_retry") &&
-                    primaryAction == "RETRY" &&
-                    !snapshot.optBoolean("cleanup_complete", true) &&
-                    snapshot.optString("active_digest") == target.selection.digest &&
-                    snapshot.optString("active_mode") == target.selection.mode &&
-                    snapshot.optInt("active_index") == target.selection.index
+                    snapshot.protectedFailure &&
+                    snapshot.activeDigest == target.selection.digest &&
+                    snapshot.activeMode == target.selection.mode &&
+                    snapshot.activeIndex == target.selection.index
                 val freshRevision = sourceLoads.revision
                 val freshSnapshot = PermissionSnapshot(
                     sessionId = sessionId,
@@ -1159,6 +1275,8 @@ internal class SessionController(
                     )
                 }
             }
+            // The start command is issued (or rejected); the backend now owns the attempt.
+            consentRecovery.handoffComplete()
             if (!admitted) selectionAdmission.invalidate(target)
             if (admitted) {
                 NativeVpnBridge.recordDiagnostic(activity.applicationContext, "ui.selection_completed",
@@ -1173,7 +1291,13 @@ internal class SessionController(
         }
     }
 
-    fun setVisible(value: Boolean) { visible = value; if (value) refreshClipboard() }
+    fun setVisible(value: Boolean) {
+        visible = value
+        if (value) {
+            worker.execute { if (visible) refreshSnapshot() }
+            refreshClipboard()
+        }
+    }
 
     private fun refreshClipboard() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
@@ -1216,8 +1340,7 @@ internal class SessionController(
     }
 
     private fun importSubscription(value: String, trigger: LoadTrigger) {
-        val uri = runCatching { java.net.URI(value) }.getOrNull()
-        if (uri?.scheme?.lowercase() != "https" || uri.host.isNullOrEmpty()) { report("Paste an HTTPS subscription URL with a host"); return }
+        if (!isHttpsSubscription(value)) { report("Paste an HTTPS subscription URL with a host"); return }
         val source = value.trim()
         if (source == state.source && sourceLoads.hasOutstanding(source)) return
         val noOutstandingLoad = !sourceLoads.hasWork
@@ -1230,26 +1353,45 @@ internal class SessionController(
         sourceChanged(value, trigger)
     }
 
+    private fun isHttpsSubscription(value: String) =
+        runCatching { java.net.URI(value) }.getOrNull().let { it?.scheme?.lowercase() == "https" && !it.host.isNullOrEmpty() }
+
     fun importLink(value: String) {
-        if (value.equals("dobbyvpn://", ignoreCase = true)) return
         try {
-            val uri = java.net.URI(value)
-            require(uri.scheme.equals("dobbyvpn", true) && uri.host == "import" && uri.rawPath.isNullOrEmpty() && uri.rawFragment == null && uri.rawUserInfo == null && uri.port == -1)
-            val query = uri.rawQuery.orEmpty().split('&')
-            require(query.size == 1)
-            val pair = query.single().split('=', limit = 2)
-            require(pair.size == 2 && pair[0] == "url")
-            importSubscription(
-                java.net.URLDecoder.decode(pair[1].replace("+", "%2B"), "UTF-8"),
-                LoadTrigger.IMPORT,
-            )
+            val response = JSONObject(NativeGoSession.parseImportLink(value))
+            if (!response.getBoolean("ok")) {
+                val failure = response.getJSONObject("error")
+                throw IllegalArgumentException(failure.getString("message"))
+            }
+            val result = response.getJSONObject("result")
+            if (result.getString("kind") == "import") {
+                state = state.copy(pendingImport = result.getString("source"))
+            }
+        } catch (failure: LinkageError) {
+            handleNativeLinkageFailure(failure, "import_parse")
         } catch (failure: Exception) { report("Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL", failure) }
     }
 
+    fun confirmImport() {
+        val source = state.pendingImport ?: return
+        state = state.copy(pendingImport = null)
+        importSubscription(source, LoadTrigger.IMPORT)
+    }
+
+    fun cancelImport() { state = state.copy(pendingImport = null) }
+
+    fun restorePendingImport(source: String) { state = state.copy(pendingImport = source) }
+
+
+    private var logStamp: List<Long>? = null
+    private var logStampRetained: Any? = null
 
     private fun readLogs() {
         val retained = retainedLogViewState
+        val stamp = diagnosticView.stamp()
+        if (stamp == logStamp && retained === logStampRetained) return
         val result = diagnosticView.readWithRetainedBoundary(retained?.entries, retained?.clearBoundary)
+        if (result.error.isEmpty()) { logStamp = stamp; logStampRetained = retained }
         post {
             latestClearBoundary = result.clearBoundary
             if (retained != null && retainedLogViewState === retained) {
@@ -1321,7 +1463,7 @@ internal class SessionController(
             lifetime.close()
             sourceLoads.close()
         }
-        cancelPreparation()
+        cancelPreparation(keepRecovery = true)
         permissionTarget = null
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         uploader?.cancel()
@@ -1340,63 +1482,28 @@ internal class SessionController(
         try {
             val sessionId = latest.sessionId
             var reattached = false
-            var response = JSONObject(NativeGoSession.snapshot(sessionId))
+            var envelope = NativeGoSession.snapshot(sessionId)
+            var response = JSONObject(envelope)
             val failureCode = response.optJSONObject("error")?.optString("code").orEmpty()
             if (!response.optBoolean("ok") && sessionId.isNotEmpty() && failureCode == "NOT_FOUND") {
-                response = JSONObject(NativeGoSession.snapshot(""))
+                envelope = NativeGoSession.snapshot("")
+                response = JSONObject(envelope)
                 reattached = true
             }
             requireOK(response)
-            val snapshot = response.getJSONObject("result")
-            val active = snapshot.optJSONObject("active_profile")
-            val failure = snapshot.optJSONObject("last_failure")
-            val current = SessionData(
-                sessionId = snapshot.optString("session_id"),
-                sequence = snapshot.optLong("sequence"),
-                generation = snapshot.optLong("generation"),
-                networkGeneration = snapshot.opt("network_generation")?.toString()?.toULongOrNull() ?: 0uL,
-                vpnActive = snapshot.optBoolean("vpn_active"),
-                canRetry = snapshot.optBoolean("can_retry"),
-                state = snapshot.optString("state", "IDLE"),
-                primaryAction = snapshot.optString("primary_action", "NONE"),
-                configured = snapshot.optBoolean("configured"),
-                logsUploadAvailable = snapshot.optBoolean("logs_upload_available"),
-                sourceUrl = snapshot.optString("source_url"),
-                digest = snapshot.optString("digest"),
-                profiles = snapshot.optJSONArray("profiles")?.let { profiles ->
-                    (0 until profiles.length()).map { profiles.getJSONObject(it) }.map {
-                        ProfileData(it.getInt("index"), it.optString("description"), it.optString("protocol"))
-                    }
-                }.orEmpty(),
-                activeDigest = snapshot.optString("active_digest"),
-                activeMode = snapshot.optString("active_mode"),
-                activeIndex = snapshot.optInt("active_index"),
-                activeProfileIndex = active?.optInt("index", -1) ?: -1,
-                pendingTarget = snapshot.optJSONObject("pending_target")?.let { SelectionData(it.getString("digest"), it.getString("mode"), it.getInt("index")) },
-                canSwitch = snapshot.optBoolean("can_switch"),
-                activeProfile = active?.let {
-                    ProfileData(it.optInt("index"), it.optString("description"), it.optString("protocol"))
-                },
-                recovering = snapshot.optBoolean("recovering"),
-                cleanupComplete = snapshot.optBoolean("cleanup_complete", true),
-                failure = failure?.let {
-                    val message = it.optString("message")
-                    val code = it.optString("code")
-                    if (message.isBlank()) code else "$message ($code)"
-                }.orEmpty(),
-                sourceError = snapshot.optString("source_error"),
-            )
+            val current = decodeSessionSnapshot(response, envelope)
             // Command policy consumes only the backend snapshot. The UI projection
             // below preserves inventory while a source edit is still pending.
             post {
-                latest = current
                 if (current.sessionId == state.session.sessionId && current.sequence < maxOf(state.session.sequence, acceptedSequence)) return@post
+                latest = current
                 if (current.sessionId != state.session.sessionId) acceptedSequence = 0
                 sourceLoads.snapshotObserved()
                 val displayedSession = if (state.sourceDirty && current.sessionId == state.session.sessionId) {
                     current.copy(
                         configured = state.session.configured,
                         sourceUrl = state.session.sourceUrl,
+                        offlineAcceptedAt = state.session.offlineAcceptedAt,
                         digest = state.session.digest,
                         profiles = state.session.profiles,
                     )
@@ -1433,9 +1540,9 @@ internal class SessionController(
         }
     }
 
-    internal fun handleNativeLinkageFailure(failure: LinkageError) {
+    internal fun handleNativeLinkageFailure(failure: LinkageError, operation: String = "snapshot") {
         val message = failure.message?.takeIf(String::isNotBlank) ?: "Go backend is unavailable"
-        NativeVpnBridge.recordNativeFailure(activity.applicationContext, "go.snapshot_linkage_failed", failure)
+        NativeVpnBridge.recordNativeFailure(activity.applicationContext, "go.${operation}_linkage_failed", failure)
         if (closed) return
         post {
             backendUnavailableMessage = message

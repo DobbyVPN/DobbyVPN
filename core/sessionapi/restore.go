@@ -9,6 +9,8 @@ import (
 	"core/log"
 )
 
+const activationSuffix = ".activation.json"
+
 // ActivationStore persists Go-owned selection intent for OS-started mobile
 // restoration. Native storage never interprets profiles or chooses a protocol.
 type ActivationStore interface {
@@ -26,11 +28,11 @@ type savedActivation struct {
 }
 
 func (s FileSourceStore) LoadActivation(ctx context.Context) ([]byte, error) {
-	s.Path += ".activation.json"
+	s.Path += activationSuffix
 	return s.Load(ctx)
 }
 func (s FileSourceStore) SaveActivation(ctx context.Context, raw []byte) error {
-	s.Path += ".activation.json"
+	s.Path += activationSuffix
 	return s.Save(ctx, raw)
 }
 
@@ -72,6 +74,9 @@ func (m *Manager) saveActivationLocked(ctx context.Context, kind ConfigSourceKin
 	if err != nil {
 		return failureWithCause(FailurePlatform, "automatic startup selection could not be saved", err)
 	}
+	if m.protection != nil {
+		return m.protection.SetEnabled(ctx, true)
+	}
 	return nil
 }
 func (m *Manager) stopActivationLocked(ctx context.Context) error {
@@ -101,6 +106,12 @@ func (m *Manager) stopActivationLocked(ctx context.Context) error {
 // Manual selections require the exact inventory, so a changed subscription
 // can never silently connect a different profile at the same numeric index.
 func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (StartResult, error) {
+	return m.restoreAttempt(ctx, onlyPreviouslyEnabled, nil)
+}
+
+// restoreAttempt is one restore. A non-nil fixedEpoch pins the user-intent
+// epoch of a first attempt, so a retry never overrides a later user action.
+func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool, fixedEpoch *uint64) (StartResult, error) {
 	s := m.session
 	s.mu.Lock()
 	if s.vpnActive && !s.stopRequested && !s.closing {
@@ -114,24 +125,28 @@ func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (Star
 	}
 	store, ok := m.sourceStore.(ActivationStore)
 	sessionID, sequence, epoch := s.id, s.sequence, s.restoreEpoch
+	if fixedEpoch != nil {
+		epoch = *fixedEpoch
+	}
 	s.mu.Unlock()
 	if !ok {
 		return StartResult{}, failure(FailureNotConfigured, "automatic startup storage is unavailable")
 	}
-	raw, err := store.LoadActivation(ctx)
-	if err != nil {
-		return StartResult{}, failureWithCause(FailurePlatform, "saved activation could not be read", err)
-	}
-	saved, err := decodeActivation(raw)
+	saved, err := m.loadRestoreActivation(ctx, store)
 	if err != nil {
 		return StartResult{}, err
 	}
 	if !saved.Enabled && (onlyPreviouslyEnabled || saved.Version == 1 || saved.Source == "") {
-		return StartResult{}, nil
+		return StartResult{}, m.reconcileDisabledRestore(ctx, s, epoch)
+	}
+	sequence, err = m.prepareRestoreProtection(ctx, s, sequence, epoch)
+	if err != nil {
+		return StartResult{}, err
 	}
 	configured, err := m.configure(ctx, sessionID, sequence, []byte(saved.Source), &epoch)
 	if err != nil {
-		return StartResult{}, err
+		// Marks a failure before any connection attempt exists, the only kind a startup retry may repeat.
+		return StartResult{}, fmt.Errorf("%w: %w", errRestoreLoad, err)
 	}
 	if saved.Mode == ProfileIndex && configured.Digest != saved.Digest {
 		return StartResult{}, failure(FailureConflict, "saved profile inventory changed; select the profile again")
@@ -142,6 +157,62 @@ func (m *Manager) Restore(ctx context.Context, onlyPreviouslyEnabled bool) (Star
 		return result, err
 	}
 	return result, waitForRestoredNetwork(ctx, s, result.Generation)
+}
+
+func (m *Manager) loadRestoreActivation(ctx context.Context, store ActivationStore) (savedActivation, error) {
+	raw, err := store.LoadActivation(ctx)
+	if err != nil {
+		return savedActivation{}, failureWithCause(FailurePlatform, "saved activation could not be read", err)
+	}
+	if len(raw) == 0 && m.hasRetainedProtection() {
+		return savedActivation{}, failure(FailurePlatform, "VPN protection is still active, but its saved activation is missing. Stop to restore ordinary connectivity.")
+	}
+	return decodeActivation(raw)
+}
+
+// The kernel can have no existing policy after reboot or installation upgrade.
+// Rebuild it from enabled Go intent before the first network operation. Publish
+// an actionable generation so that Stop can cancel the fetch on a cold boot.
+func (m *Manager) prepareRestoreProtection(ctx context.Context, s *session, sequence, epoch uint64) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restoreEpoch != epoch || s.sequence != sequence || s.closing {
+		return 0, failure(FailureConflict, "automatic startup was superseded")
+	}
+	if m.protection == nil || s.retainedProtection {
+		return sequence, nil
+	}
+	if err := m.protection.PrepareRestore(ctx); err != nil {
+		return 0, failureWithCause(FailurePlatform, "could not establish network protection before subscription recovery", err)
+	}
+	s.retainedProtection = true
+	if s.generation == 0 {
+		s.generation++
+	}
+	m.appendLocked(s)
+	return s.sequence, nil
+}
+
+func (m *Manager) hasRetainedProtection() bool {
+	s := m.session
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return m.protection != nil && s.retainedProtection
+}
+func (m *Manager) reconcileDisabledRestore(ctx context.Context, s *session, epoch uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restoreEpoch != epoch {
+		return failure(FailureConflict, "automatic startup was superseded")
+	}
+	if s.retainedProtection && m.protection != nil {
+		if err := m.protection.SetEnabled(ctx, false); err != nil {
+			return err
+		}
+		s.retainedProtection = false
+		m.appendLocked(s)
+	}
+	return nil
 }
 
 func waitForRestoredNetwork(ctx context.Context, s *session, expectedGeneration uint64) error {

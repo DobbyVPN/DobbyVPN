@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"core/dnscache"
+	"core/iprange"
 	"core/log"
 	"core/probe"
 	"core/protocol"
@@ -42,10 +43,11 @@ type TunnelLease interface {
 	Release(context.Context) error
 }
 
-// InputProvider resolves the bypass CIDRs and hostnames for one start attempt.
-// Its returned policy is immutable and is carried by that attempt's tunnel.
+// InputProvider resolves the bypass host names for one start attempt; the
+// configuration's ranges are shared. Its returned policy is immutable and is
+// carried by that attempt's tunnel.
 type InputProvider interface {
-	Resolve(context.Context, []string) (*tunnel.BypassPolicy, error)
+	Resolve(context.Context, *iprange.Set, []string) (*tunnel.BypassPolicy, error)
 }
 
 // DeviceFactory receives only the normalized config for every protocol and
@@ -175,6 +177,10 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 	if r.network != nil || r.active {
 		return nil, errors.New("previous network is still owned")
 	}
+	// Retry leftover-state recovery on every Connect; no tunnel on failure.
+	if err := recoverBeforeNetwork(); err != nil {
+		return nil, err
+	}
 	n := &networkOwner{ref: ref, cache: dnscache.New()}
 	r.network = n
 	n.lease.setOnDone(func(error) {
@@ -186,11 +192,11 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 	})
 	// The stack starts without a transport or bypass target. Resolve the actual
 	// attempt policy only after native setup has captured the physical resolver.
-	entries := profile.ExcludeCIDRs
+	excluded, hosts := profile.ExcludeSet, profile.ExcludeHosts
 	if _, native := r.options.Inputs.(defaultInputProvider); native {
-		entries = nil
+		excluded, hosts = nil, nil
 	}
-	bypass, err := r.options.Inputs.Resolve(ctx, entries)
+	bypass, err := r.options.Inputs.Resolve(ctx, excluded, hosts)
 	if err != nil {
 		return n, fmt.Errorf("resolve network bypass: %w", err)
 	}
@@ -363,9 +369,9 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	var bypass *tunnel.BypassPolicy
 	var err error
 	if _, native := r.options.Inputs.(defaultInputProvider); native {
-		bypass, err = tunnel.ResolveBypassPolicyWithResolver(ctx, profile.ExcludeCIDRs, r.network.cache.ResolveAddresses)
+		bypass, err = tunnel.ResolveBypassPolicyWithResolver(ctx, profile.ExcludeSet, profile.ExcludeHosts, r.network.cache.ResolveAddresses)
 	} else {
-		bypass, err = r.options.Inputs.Resolve(ctx, profile.ExcludeCIDRs)
+		bypass, err = r.options.Inputs.Resolve(ctx, profile.ExcludeSet, profile.ExcludeHosts)
 	}
 	if err != nil {
 		return fail(fmt.Errorf("resolve bypass policy: %w", err))
@@ -408,6 +414,9 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		if err != nil {
 			return fail(fmt.Errorf("extend bypass policy with numeric protocol upstreams: %w", err))
 		}
+	}
+	if capability, ok := device.(interface{ IPv6Unavailable() bool }); ok {
+		bypass = bypass.WithIPv6Availability(capability.IPv6Unavailable)
 	}
 	owned.proxyAddr, owned.bypass = device.GetProxyAddr(), bypass
 	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {
@@ -696,8 +705,8 @@ func (l *lease) Stop(ctx context.Context) error {
 
 type defaultInputProvider struct{}
 
-func (defaultInputProvider) Resolve(ctx context.Context, cidrs []string) (*tunnel.BypassPolicy, error) {
-	policy, err := tunnel.ResolveBypassPolicy(ctx, cidrs)
+func (defaultInputProvider) Resolve(ctx context.Context, excluded *iprange.Set, hosts []string) (*tunnel.BypassPolicy, error) {
+	policy, err := tunnel.ResolveBypassPolicy(ctx, excluded, hosts)
 	if err != nil {
 		return nil, fmt.Errorf("resolve exclusion policy: %w", err)
 	}

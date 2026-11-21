@@ -27,6 +27,14 @@ type rawCapture struct {
 	openReplacement     func(string) (*os.File, error)
 	prepareReplacement  func(*os.File, os.FileInfo) error
 	redirectReplacement func(*os.File) error
+	now                 func() time.Time // test seam; nil means time.Now
+}
+
+func (capture *rawCapture) clock() time.Time {
+	if capture.now != nil {
+		return capture.now()
+	}
+	return time.Now()
 }
 
 // Raw descriptors have no whole-record framing. Preserve their file identities;
@@ -206,21 +214,28 @@ func (capture *rawCapture) writeHeader(file *os.File) error {
 }
 
 func (capture *rawCapture) monitor() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	capture.watch(ticker.C)
+}
+
+func (capture *rawCapture) watch(ticks <-chan time.Time) {
 	failures := 0
-	skip := 0
-	for range ticker.C {
-		if skip > 0 {
-			skip--
+	var retryAt time.Time
+	for range ticks {
+		// The back-off runs from the actual end of the failed attempt, not
+		// from its tick: a late or slow attempt must not shorten it.
+		if capture.clock().Before(retryAt) {
 			continue
 		}
 		err := capture.rotate()
+		failedAt := capture.clock()
 		if err == nil {
 			if failures > 0 {
 				_, _ = fmt.Fprintf(Stderr, "stderr rotation recovered after %d failed attempts\n", failures)
 			}
 			failures = 0
+			retryAt = time.Time{}
 			continue
 		}
 		// A transient failure (for example "too many open files") must not
@@ -232,23 +247,28 @@ func (capture *rawCapture) monitor() {
 			// Direct stderr only: never recurse through the structured sink.
 			_, _ = fmt.Fprintf(Stderr, "stderr rotation failed (attempt %d), will retry: %v\n", failures, err)
 		}
-		skip = rotationRetryDelayTicks(failures)
+		retryAt = failedAt.Add(time.Duration(rotationRetryDelayTicks(failures)) * time.Second)
 	}
 }
 
-// rotationRetryDelayTicks returns how many 100 ms monitor ticks to skip after
-// the given number of consecutive failures: 1 s, 2 s, 4 s, ... capped at 30 s.
+// rotationRetryDelayTicks returns how many seconds pass until the next attempt
+// after the given number of consecutive failures: 1 s, 2 s, 4 s, ... capped
+// at 30 s.
 func rotationRetryDelayTicks(failures int) int {
-	const maxTicks = 300
+	const maxTicks = 30
 	if failures >= 6 {
 		return maxTicks
 	}
-	return 10 << (failures - 1)
+	return 1 << (failures - 1)
 }
 
 func (capture *rawCapture) rotate() error {
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
+	// Idle ticks only compare the size; the lock file is for an actual rotation.
+	if info, err := capture.file.Stat(); err == nil && !capture.pending && info.Size() < capture.limit {
+		return nil
+	}
 	return withFileLock(capture.path, func() error {
 		info, err := capture.file.Stat()
 		if err != nil {
