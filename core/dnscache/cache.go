@@ -25,17 +25,25 @@ const (
 	staleAnswerEntries = 64
 )
 
+// staleAnswerWait is the client response timer of RFC 8767: with a remembered
+// answer at hand, a caller waits this long for the resolver before using it.
+// A resolver that hangs would otherwise hold every new connection for the
+// whole ServerResolveTimeout.
+var staleAnswerWait = 1500 * time.Millisecond
+
 // now is a test seam for answer ages.
 var now = time.Now
 
 // Resolver is scoped to the physical network. Its native resolver or captured
 // DNS servers own caching and DNS64 answers; Dobby must not pin another CDN TTL.
 // The only exception is serve-stale on resolver failure (RFC 8767): when a
-// query fails with an error or timeout, the last successful answer for the
-// host from the same resolver revision may be used, at most StaleAnswerLimit
-// old. Any resolver or network change starts a new revision, so an answer is
-// never used on another network. With working DNS every lookup still goes to
-// the resolver.
+// query fails with an error or timeout, or has not answered within
+// staleAnswerWait, the last successful answer for the host from the same
+// resolver revision may be used, at most StaleAnswerLimit old. The query then
+// finishes in the background and its answer replaces the remembered one. Any
+// resolver or network change starts a new revision, so an answer is never
+// used on another network. With working DNS every lookup still goes to the
+// resolver.
 type Resolver func(context.Context, string) ([]net.IPAddr, error)
 
 // ResolverSource captures a current physical network before each lookup. The
@@ -51,8 +59,22 @@ type Cache struct {
 	revision uint64
 	source   ResolverSource
 	// lastGood holds the last successful answer per host, used only when a
-	// later query in the same revision fails.
+	// later query in the same revision fails or is slow.
 	lastGood map[string]staleAnswer
+	// refreshing holds at most one background query per host for the current
+	// revision; a revision change cancels them.
+	refreshing map[string]*refresh
+}
+
+// refresh is one query that may outlive its caller. Its fields are written
+// before done is closed.
+type refresh struct {
+	revision  uint64
+	cancel    context.CancelFunc
+	done      chan struct{}
+	addresses []net.IPAddr
+	err       error
+	failed    bool
 }
 
 type staleAnswer struct {
@@ -70,7 +92,17 @@ func (c *Cache) NetworkChanged() {
 	c.mu.Lock()
 	c.revision++
 	c.lastGood = nil
+	c.cancelRefreshesLocked()
 	c.mu.Unlock()
+}
+
+// cancelRefreshesLocked stops background queries of an old revision; their
+// answers could not be remembered anyway.
+func (c *Cache) cancelRefreshesLocked() {
+	for _, r := range c.refreshing {
+		r.cancel()
+	}
+	c.refreshing = nil
 }
 
 func New() *Cache { return &Cache{revision: 1} }
@@ -80,6 +112,7 @@ func (c *Cache) SetResolverSource(source ResolverSource) {
 	c.source = source
 	c.resolver = nil
 	c.revision++
+	c.cancelRefreshesLocked()
 	c.mu.Unlock()
 }
 
@@ -91,6 +124,7 @@ func (c *Cache) SetResolver(identity string, resolver Resolver) {
 	}
 	c.identity, c.resolver = identity, resolver
 	c.revision++
+	c.cancelRefreshesLocked()
 	log.Infof(Category, "underlying resolver changed network=%s revision=%d", identity, c.revision)
 }
 
@@ -127,16 +161,37 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 	if resolve == nil {
 		return nil, errors.New("underlying network resolver is unavailable")
 	}
+	if c.hasStaleAnswer(host, revision) {
+		return c.resolveWithStaleAnswer(parent, source, resolve, identity, host, revision)
+	}
+	addresses, failed, err := c.lookup(ctx, resolve, identity, host, revision)
+	if err != nil {
+		// Only a failed query in the same revision may use the last answer: not
+		// a negative answer, a replaced network or a caller that gave up.
+		if failed && parent.Err() == nil {
+			revision = c.recapture(parent, source, revision)
+			if stale, ok := c.staleAnswer(host, revision, err); ok {
+				return stale, nil
+			}
+		}
+		return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
+	}
+	return addresses, nil
+}
+
+// lookup runs one query. A successful answer is remembered; failed reports a
+// query that failed in this revision, as opposed to a negative answer.
+func (c *Cache) lookup(ctx context.Context, resolve Resolver, identity, host string, revision uint64) ([]net.IPAddr, bool, error) {
 	started := time.Now()
 	addresses, err := resolve(ctx, host)
-	// A query that failed, as opposed to an empty or negative answer.
 	var dnsErr *net.DNSError
-	queryFailed := (err != nil && (!errors.As(err, &dnsErr) || !dnsErr.IsNotFound)) || ctx.Err() != nil
+	failed := (err != nil && (!errors.As(err, &dnsErr) || !dnsErr.IsNotFound)) || ctx.Err() != nil
 	c.mu.RLock()
 	current := c.revision
 	c.mu.RUnlock()
 	if current != revision {
 		err = errors.Join(err, errors.New("underlying network changed during resolution"))
+		failed = false
 	}
 	if ctx.Err() != nil {
 		err = errors.Join(err, ctx.Err())
@@ -146,18 +201,76 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 	}
 	log.Debugf(Category, "underlying lookup network=%s revision=%d host=%s addresses=%v elapsed=%s err=%v", identity, revision, host, addresses, time.Since(started), err)
 	if err != nil {
-		// Only a failed query in the same revision may use the last answer: not
-		// a negative answer, a replaced network or a caller that gave up.
-		if queryFailed && current == revision && parent.Err() == nil {
-			revision = c.recapture(parent, source, revision)
-			if stale, ok := c.staleAnswer(host, revision, err); ok {
-				return stale, nil
-			}
-		}
-		return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
+		return nil, failed, err
 	}
 	c.remember(host, revision, addresses)
-	return addresses, nil
+	return addresses, false, nil
+}
+
+// hasStaleAnswer reports a remembered answer that could be served now.
+func (c *Cache) hasStaleAnswer(host string, revision uint64) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	answer, ok := c.lastGood[host]
+	return ok && answer.revision == revision && c.revision == revision && now().Sub(answer.at) <= StaleAnswerLimit
+}
+
+// resolveWithStaleAnswer waits at most staleAnswerWait for the resolver while a
+// remembered answer is at hand. The query keeps running in the background,
+// bounded by ServerResolveTimeout, and a later answer replaces the remembered
+// one. Concurrent callers for the same host share one query.
+func (c *Cache) resolveWithStaleAnswer(parent context.Context, source ResolverSource, resolve Resolver, identity, host string, revision uint64) ([]net.IPAddr, error) {
+	r := c.startRefresh(resolve, identity, host, revision)
+	timer := time.NewTimer(staleAnswerWait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-r.done:
+			if r.err == nil {
+				return append([]net.IPAddr(nil), r.addresses...), nil
+			}
+			if r.failed && parent.Err() == nil {
+				if stale, ok := c.staleAnswer(host, c.recapture(parent, source, revision), r.err); ok {
+					return stale, nil
+				}
+			}
+			return nil, fmt.Errorf("resolve endpoint %s: %w", host, r.err)
+		case <-timer.C:
+			slow := fmt.Errorf("underlying DNS has not answered within %s", staleAnswerWait)
+			if stale, ok := c.staleAnswer(host, c.recapture(parent, source, revision), slow); ok {
+				return stale, nil
+			}
+			// The network changed: only the query's own result may be used.
+		case <-parent.Done():
+			return nil, fmt.Errorf("resolve endpoint %s: %w", host, parent.Err())
+		}
+	}
+}
+
+func (c *Cache) startRefresh(resolve Resolver, identity, host string, revision uint64) *refresh {
+	c.mu.Lock()
+	if r := c.refreshing[host]; r != nil && r.revision == revision {
+		c.mu.Unlock()
+		return r
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ServerResolveTimeout)
+	r := &refresh{revision: revision, cancel: cancel, done: make(chan struct{})}
+	if c.refreshing == nil {
+		c.refreshing = make(map[string]*refresh)
+	}
+	c.refreshing[host] = r
+	c.mu.Unlock()
+	go func() {
+		defer cancel()
+		r.addresses, r.failed, r.err = c.lookup(ctx, resolve, identity, host, revision)
+		c.mu.Lock()
+		if c.refreshing[host] == r {
+			delete(c.refreshing, host)
+		}
+		c.mu.Unlock()
+		close(r.done)
+	}()
+	return r
 }
 
 // remember stores a successful answer unless the revision changed meanwhile.
