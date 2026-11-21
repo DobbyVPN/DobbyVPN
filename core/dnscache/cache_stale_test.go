@@ -463,3 +463,28 @@ func TestBackgroundQueryIsBoundToCurrentRevision(t *testing.T) {
 		t.Fatal("an answer of a replaced revision must not be returned")
 	}
 }
+
+// The platform may replace the network without telling the cache (Android
+// advances its own revision). When the timer fires, the network is read again
+// and a remembered answer of the old network is not used.
+func TestTimerConfirmsNetworkBeforeServing(t *testing.T) {
+	useClock(t)
+	fire := fakeTimer(t)
+	resolver := newBlockingResolver(true)
+	cache := New()
+	t.Cleanup(cache.Close)
+	var captures atomic.Int32
+	cache.SetResolverSource(func(context.Context) (string, Resolver, error) {
+		if captures.Add(1) >= 3 { // the capture when the timer fires
+			return "network-b", resolver.resolve, nil
+		}
+		return "network-a", resolver.resolve, nil
+	})
+	addressesOf(t, cache)
+	result := resolveAsync(context.Background(), cache)
+	<-resolver.started
+	close(fire)
+	if got := <-result; got.err == nil {
+		t.Fatalf("an answer of the replaced network must not be used: %+v", got)
+	}
+}

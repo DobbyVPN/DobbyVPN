@@ -26,7 +26,8 @@ const (
 )
 
 // staleAnswerWait is the client response timer of RFC 8767: with a remembered
-// answer at hand, a caller waits this long for the resolver before using it.
+// answer at hand, a caller waits this long for the resolver before using it,
+// plus at most staleRecaptureWait to confirm the network.
 // A resolver that hangs would otherwise hold every new connection for the
 // whole ServerResolveTimeout.
 var staleAnswerWait = 1500 * time.Millisecond
@@ -36,6 +37,11 @@ var staleTimer = func() (<-chan time.Time, func() bool) {
 	timer := time.NewTimer(staleAnswerWait)
 	return timer.C, timer.Stop
 }
+
+// staleRecaptureWait bounds the network capture that must confirm the network
+// before a remembered answer is served; the platform may change its network
+// without telling the cache (Android advances its own revision).
+var staleRecaptureWait = 250 * time.Millisecond
 
 var errNetworkChanged = errors.New("underlying network changed during resolution")
 
@@ -258,11 +264,8 @@ func (c *Cache) resolveWithStaleAnswer(parent context.Context, source ResolverSo
 				return nil, fmt.Errorf("resolve endpoint %s: %w", host, errNetworkChanged)
 			}
 			if r.failed && c.life.Err() == nil {
-				// The failure may come from a replaced network; read it again
-				// within what is left of the wait.
-				capture, cancel := context.WithDeadline(parent, waitEnd)
-				current := c.recapture(capture, source, revision)
-				cancel()
+				// The failure may come from a replaced network; read it again.
+				current := c.confirmNetwork(parent, source, revision, waitEnd)
 				if parent.Err() == nil {
 					if stale, ok := c.staleAnswer(host, current, r.err); ok {
 						return stale, nil
@@ -274,7 +277,9 @@ func (c *Cache) resolveWithStaleAnswer(parent context.Context, source ResolverSo
 			timer = nil
 			slow := fmt.Errorf("underlying DNS has not answered within %s", staleAnswerWait)
 			if parent.Err() == nil && c.life.Err() == nil {
-				if stale, ok := c.staleAnswer(host, revision, slow); ok {
+				// The network may have changed while waiting; confirm it.
+				current := c.confirmNetwork(parent, source, revision, waitEnd)
+				if stale, ok := c.staleAnswer(host, current, slow); ok {
 					return stale, nil
 				}
 			}
@@ -366,6 +371,18 @@ func (c *Cache) remember(host string, revision uint64, addresses []net.IPAddr) {
 		delete(c.lastGood, oldest)
 	}
 	c.lastGood[host] = staleAnswer{addresses: append([]net.IPAddr(nil), addresses...), revision: revision, at: now()}
+}
+
+// confirmNetwork reads the network again within what is left of the wait, but
+// never with less than staleRecaptureWait, and returns the revision to check.
+func (c *Cache) confirmNetwork(parent context.Context, source ResolverSource, revision uint64, waitEnd time.Time) uint64 {
+	deadline := time.Now().Add(staleRecaptureWait)
+	if waitEnd.After(deadline) {
+		deadline = waitEnd
+	}
+	ctx, cancel := context.WithDeadline(parent, deadline)
+	defer cancel()
+	return c.recapture(ctx, source, revision)
 }
 
 // recapture reads the physical network again after a failed query: a native
