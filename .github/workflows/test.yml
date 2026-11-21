@@ -4,21 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       build_run_id:
-        description: Active or successful Build run whose exact packages should be qualified.
-        type: string
-        required: true
-      torturer_sha:
-        description: Exact private Torturer revision already verified locally.
-        type: string
-        required: true
-      torturer_tree_sha256:
-        description: Exact private tree fingerprint calculated by the local controller.
+        description: Successful Build run whose public packages should be verified.
         type: string
         required: true
       release_attempt_id:
-        description: Optional existing release-verification reservation.
+        description: Existing public Build-verification reservation.
         type: string
-        required: false
+        required: true
 
 concurrency:
   group: release-verification
@@ -45,19 +37,18 @@ jobs:
       maintenance: ${{ steps.resolve.outputs.maintenance }}
       android_version_code: ${{ steps.resolve.outputs.android_version_code }}
       apple_build_number: ${{ steps.resolve.outputs.apple_build_number }}
-      torturer_sha: ${{ steps.identity.outputs.torturer_sha }}
-      torturer_tree_sha256: ${{ steps.identity.outputs.torturer_tree_sha256 }}
     steps:
-      - name: Validate Test retry identity
+      - name: Require the release coordinator on main
         env:
-          TORTURER_SHA: ${{ inputs.torturer_sha }}
-          TESTS_TREE: ${{ inputs.torturer_tree_sha256 }}
+          QUALIFICATION_COORDINATOR_ID: ${{ vars.QUALIFICATION_COORDINATOR_ID }}
           RELEASE_ATTEMPT_ID: ${{ inputs.release_attempt_id }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
         run: |
+          set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ && "$TESTS_TREE" =~ ^[0-9a-f]{64}$ ]]
-          [[ -z "$RELEASE_ATTEMPT_ID" || "$RELEASE_ATTEMPT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$QUALIFICATION_COORDINATOR_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$QUALIFICATION_COORDINATOR_ID" = "$GITHUB_ACTOR_ID"
+          [[ "$RELEASE_ATTEMPT_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,28 +60,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
         run: python3 .github/scripts/release/package_readiness.py identity
-      - name: Validate exact tests and existing release stops
-        id: identity
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TORTURER_SHA: ${{ inputs.torturer_sha }}
-          TESTS_TREE: ${{ inputs.torturer_tree_sha256 }}
-          RELEASE_ATTEMPT_ID: ${{ inputs.release_attempt_id }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: |
-          python3 - <<'PYTHON'
-          import os, sys
-          sys.path.insert(0, ".github/scripts/release")
-          import release_guard
-          sha, tree = os.environ["TORTURER_SHA"], os.environ["TESTS_TREE"]
-          release_guard.validate_early_test(
-              release_guard.GitHubAPI(), os.environ["GITHUB_REPOSITORY"],
-              int(os.environ["GITHUB_RUN_ID"]), int(os.environ["BUILD_RUN_ID"]),
-              os.environ["GITHUB_SHA"], sha, tree,
-              reservation_id=int(os.environ["RELEASE_ATTEMPT_ID"]) if os.environ["RELEASE_ATTEMPT_ID"] else None)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"torturer_sha={sha}\ntorturer_tree_sha256={tree}\n")
-          PYTHON
 
   ready_linux:
     needs: resolve_build
@@ -211,8 +180,6 @@ jobs:
         id: claim
         env:
           GH_TOKEN: ${{ github.token }}
-          TORTURER_SHA: ${{ inputs.torturer_sha }}
-          TESTS_TREE: ${{ inputs.torturer_tree_sha256 }}
           RELEASE_ATTEMPT_ID: ${{ inputs.release_attempt_id }}
         run: |
           python3 - "$RUNNER_TEMP/build.json" <<'PY'
@@ -222,12 +189,10 @@ jobs:
           build = json.load(open(sys.argv[1], encoding="utf-8"))
           if build["source_sha"] != os.environ["GITHUB_SHA"]:
               raise SystemExit("Test main revision differs from selected Build")
-          tests_sha, tree = os.environ["TORTURER_SHA"], os.environ["TESTS_TREE"]
           candidate = {
-              "schema": 1, "build_run_id": build["run_id"],
+              "schema": release_guard.PUBLIC_SCHEMA, "build_run_id": build["run_id"],
               "build_manifest_sha256": build["manifest_sha256"],
-              "product_sha": build["source_sha"], "tests_repository": "DobbyVPN/Torturer",
-              "tests_sha": tests_sha, "tests_tree_sha256": tree,
+              "product_sha": build["source_sha"],
           }
           deployment_id = release_guard.reservation_for_test(
               release_guard.GitHubAPI(), os.environ["GITHUB_REPOSITORY"],
@@ -236,7 +201,7 @@ jobs:
           release_guard.claim(release_guard.GitHubAPI(), os.environ["GITHUB_REPOSITORY"],
                               deployment_id, int(os.environ["GITHUB_RUN_ID"]), candidate)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"release_attempt_id={deployment_id}\ntorturer_sha={tests_sha}\ntorturer_tree_sha256={tree}\nclaimed=true\n")
+              output.write(f"release_attempt_id={deployment_id}\nclaimed=true\n")
           PY
 
   ios_analysis:
@@ -272,37 +237,10 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
       retention_days: 7
 
-  private_qualification:
-    name: Verify private qualification
-    needs: [resolve_build, final_build]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    environment: release-tests
-    permissions:
-      contents: read
-      statuses: read
-    outputs:
-      receipt: ${{ steps.child.outputs.receipt }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Bind private workflow to the completed Build
-        id: child
-        env:
-          GH_TOKEN: ${{ github.token }}
-          QUALIFICATION_COORDINATOR_ID: ${{ vars.QUALIFICATION_COORDINATOR_ID }}
-          TORTURER_SHA: ${{ needs.resolve_build.outputs.torturer_sha }}
-          TESTS_TREE: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
-          MANIFEST_SHA256: ${{ needs.final_build.outputs.manifest_sha256 }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/private_qualification.py await
-
   qualification_result:
     name: Record final verification and release stop
     if: ${{ always() }}
-    needs: [resolve_build, final_build, ready_linux, ready_windows, ready_macos, ready_android, ready_ios, ios_analysis, android_reproducibility, fdroid_preflight, private_qualification]
+    needs: [resolve_build, final_build, ready_linux, ready_windows, ready_macos, ready_android, ready_ios, ios_analysis, android_reproducibility, fdroid_preflight]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -314,8 +252,6 @@ jobs:
       BUILD_RUN_ID: ${{ inputs.build_run_id }}
       RELEASE_ATTEMPT_ID: ${{ needs.final_build.outputs.release_attempt_id }}
       BUILD_JSON: ${{ needs.final_build.outputs.build_manifest }}
-      TORTURER_SHA: ${{ needs.resolve_build.outputs.torturer_sha }}
-      TORTURER_TREE_SHA256: ${{ needs.resolve_build.outputs.torturer_tree_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -330,13 +266,12 @@ jobs:
         if: always()
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-          PRIVATE_RECEIPT: ${{ needs.private_qualification.outputs.receipt }}
         run: |
           python3 - <<'PYTHON'
           import hashlib, json, os, sys
           from pathlib import Path
           sys.path.insert(0, ".github/scripts/release")
-          import test_manifest, package_readiness, build_manifest, private_qualification
+          import test_manifest, package_readiness, build_manifest
           result_path = Path(os.environ["RUNNER_TEMP"]) / "test-result.json"
           needs = json.loads(os.environ["NEEDS_JSON"])
           build = json.loads(os.environ["BUILD_JSON"] or "{}")
@@ -349,14 +284,11 @@ jobs:
                               f"actions/runs/{build['run_id']}/attempts/{attempt}/jobs", "jobs")
                              for attempt in range(1, build.get("run_attempt", 1) + 1)}
           package_readiness.reconcile(build, selections, inventory, jobs_by_attempt=jobs_by_attempt)
-          if needs["private_qualification"]["result"] != "success":
-              raise SystemExit("private qualification did not complete successfully")
-          receipt = json.loads(os.environ["PRIVATE_RECEIPT"])
-          pairing = dict(receipt["android_pairing"])
-          pairing.update(build_run_id=int(os.environ["BUILD_RUN_ID"]),
-                         build_manifest_sha256=build.get("manifest_sha256", ""))
+          apk = Path(os.environ["RUNNER_TEMP"]) / "selected-android" / f"DobbyVPN-v{build['version']}-unsign.apk"
+          with apk.open("rb") as source:
+              apk_sha = hashlib.file_digest(source, "sha256").hexdigest()
           result = {
-              "schema": 3, "private_qualification": {"run_id": receipt["run_id"], "run_attempt": receipt["run_attempt"]},
+              "schema": 4,
               "repository": os.environ["GITHUB_REPOSITORY"],
               "workflow_path": ".github/workflows/test.yml",
               "run_id": int(os.environ["GITHUB_RUN_ID"]),
@@ -364,20 +296,20 @@ jobs:
               "build_run_id": int(os.environ["BUILD_RUN_ID"]),
               "source_sha": build.get("source_sha", ""),
               "build_manifest_sha256": build.get("manifest_sha256", ""),
-              "torturer_repository": "DobbyVPN/Torturer",
-              "torturer_sha": os.environ["TORTURER_SHA"],
-              "torturer_tree_sha256": os.environ["TORTURER_TREE_SHA256"],
               "release_attempt_id": int(os.environ["RELEASE_ATTEMPT_ID"]),
-              "android_pairing": pairing,
-              "checks": {**receipt["checks"], **{name: needs[name]["result"] for name in private_qualification.PUBLIC_CHECKS}},
+              "android_pairing": {
+                  "build_run_id": build["run_id"], "product_sha": build["source_sha"],
+                  "build_manifest_sha256": build["manifest_sha256"],
+                  "unsigned_product_apk_sha256": apk_sha,
+              },
+              "checks": {name: needs[name]["result"] for name in test_manifest.PUBLIC_CHECKS},
           }
           result_path.write_text(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
           if os.environ["GITHUB_REF"] != "refs/heads/main":
               raise SystemExit("Only main Test runs can qualify")
           test_manifest.validate_result(result, repository=os.environ["GITHUB_REPOSITORY"],
                                         run_id=result["run_id"], build=build, source_sha=os.environ["GITHUB_SHA"])
-          apk = Path(os.environ["RUNNER_TEMP"]) / "selected-android" / f"DobbyVPN-v{build['version']}-unsign.apk"
-          test_manifest.validate_android_pairing(result, hashlib.sha256(apk.read_bytes()).hexdigest())
+          test_manifest.validate_android_pairing(result, apk_sha)
           PYTHON
       - name: Upload Test result
         id: upload

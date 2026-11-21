@@ -55,6 +55,15 @@ package may re-enable a disabled, unmasked service because that package did
 not retain enablement history; later upgrades preserve the administrator's
 choice. Removing or purging the package preserves subscription data.
 
+On a remotely managed Linux host, configure a systemd drop-in for
+`dobbyvpn.service` before enabling VPN auto-connect. Under `[Service]`, set
+`Environment="DOBBYVPN_LINUX_MANAGEMENT_PEERS=192.0.2.10"`, replacing the
+example with the IP address your administrator connects from. You can list
+multiple exact IPv4 and IPv6 addresses separated by spaces. The service keeps
+the physical return path for TCP connections that those peers initiate.
+Connections initiated by the Linux host continue to follow the VPN policy.
+
+
 ### Uninstalling on macOS
 
 ```sh

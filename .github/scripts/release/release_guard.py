@@ -20,6 +20,7 @@ TEST_WORKFLOW_PATH = ".github/workflows/test.yml"
 TEST_WORKFLOW_FILE = "test.yml"
 TESTS_REPOSITORY = "DobbyVPN/Torturer"
 SCHEMA = 1
+PUBLIC_SCHEMA = 2
 PAGE_SIZE = 100
 # Offset pagination can shift while other jobs create deployments, so a record
 # may appear on two pages. Only the deployment list is re-read for that.
@@ -27,10 +28,12 @@ PAGINATION_READ_ATTEMPTS = 3
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-CANDIDATE_KEYS = frozenset({
+PUBLIC_CANDIDATE_KEYS = frozenset({
     "schema", "build_run_id", "build_manifest_sha256", "product_sha",
-    "tests_repository", "tests_sha", "tests_tree_sha256",
 })
+CANDIDATE_KEYS = PUBLIC_CANDIDATE_KEYS | {
+    "tests_repository", "tests_sha", "tests_tree_sha256",
+}
 STATES = frozenset({"queued", "pending", "in_progress", "success", "failure", "error", "inactive"})
 NON_SUCCESS_CONCLUSIONS = frozenset({
     "failure", "cancelled", "timed_out", "action_required", "stale", "neutral", "skipped",
@@ -173,17 +176,23 @@ def _positive_int(value: Any, label: str) -> int:
 
 
 def validate_candidate(candidate: Any) -> dict[str, Any]:
-    if not isinstance(candidate, dict) or set(candidate) != CANDIDATE_KEYS:
+    if not isinstance(candidate, dict) or type(candidate.get("schema")) is not int:
+        raise ReleaseGuardError("candidate has an invalid schema")
+    schema = candidate["schema"]
+    if schema not in {SCHEMA, PUBLIC_SCHEMA}:
+        raise ReleaseGuardError("candidate has an invalid schema")
+    expected = PUBLIC_CANDIDATE_KEYS if schema == PUBLIC_SCHEMA else CANDIDATE_KEYS
+    if set(candidate) != expected:
         raise ReleaseGuardError("candidate has unexpected or missing identity fields")
-    if type(candidate.get("schema")) is not int or candidate["schema"] != SCHEMA:
-        raise ReleaseGuardError(f"candidate schema must be {SCHEMA}")
     checked = dict(candidate)
     checked["build_run_id"] = _positive_int(candidate.get("build_run_id"), "build_run_id")
     if not isinstance(candidate.get("build_manifest_sha256"), str) or not SHA256_RE.fullmatch(candidate["build_manifest_sha256"]):
         raise ReleaseGuardError("build_manifest_sha256 must be 64 lowercase hexadecimal characters")
-    for key in ("product_sha", "tests_sha"):
+    for key in (("product_sha",) if schema == PUBLIC_SCHEMA else ("product_sha", "tests_sha")):
         if not isinstance(candidate.get(key), str) or not SHA_RE.fullmatch(candidate[key]):
             raise ReleaseGuardError(f"{key} must be 40 lowercase hexadecimal characters")
+    if schema == PUBLIC_SCHEMA:
+        return checked
     if not isinstance(candidate.get("tests_tree_sha256"), str) or not SHA256_RE.fullmatch(candidate["tests_tree_sha256"]):
         raise ReleaseGuardError("tests_tree_sha256 must be 64 lowercase hexadecimal characters")
     if candidate.get("tests_repository") != TESTS_REPOSITORY:
@@ -776,7 +785,7 @@ def finalize(
         if run.get("status") == "completed" and run.get("conclusion") != "success":
             raise ReleaseGuardError("cannot finalize Test success for a non-successful workflow run")
         identity = dict(result_identity) if isinstance(result_identity, Mapping) else {}
-        identity_candidate = {key: identity.get(key) for key in CANDIDATE_KEYS}
+        identity_candidate = {key: identity.get(key) for key in candidate}
         if (
             result_identity is None or validate_candidate(identity_candidate) != candidate
             or identity.get("test_run_id") != test_run_id

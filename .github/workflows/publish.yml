@@ -29,6 +29,7 @@ jobs:
     name: Validate selected Build and Test
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: release-tests
     permissions:
       deployments: read
       actions: read
@@ -44,10 +45,14 @@ jobs:
       test_result_sha256: ${{ steps.selection.outputs.test_result_sha256 }}
       qualified_unsigned_apk_sha256: ${{ steps.selection.outputs.qualified_unsigned_apk_sha256 }}
     steps:
-      - name: Require production branch
+      - name: Require the release coordinator on main
+        env:
+          QUALIFICATION_COORDINATOR_ID: ${{ vars.QUALIFICATION_COORDINATOR_ID }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
+          [[ "$QUALIFICATION_COORDINATOR_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$QUALIFICATION_COORDINATOR_ID" = "$GITHUB_ACTOR_ID"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
