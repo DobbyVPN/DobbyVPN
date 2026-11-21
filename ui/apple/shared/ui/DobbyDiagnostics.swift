@@ -158,9 +158,12 @@ private final class DobbyNoUploadRedirect: NSObject, URLSessionTaskDelegate {
     }
 }
 
+/// Session configuration for uploads started by the view model; tests replace it to inject a URLProtocol.
+var uploadSessionConfiguration: () -> URLSessionConfiguration = { .ephemeral }
+
 /// A file-backed, single-attempt upload. Tests can inject URLProtocol through configuration.
 func uploadDiagnostics(_ preparation: DobbyUploadPreparation, file: URL,
-                       configuration: URLSessionConfiguration = .ephemeral, timeout: TimeInterval = 900) async throws {
+                       configuration: URLSessionConfiguration = uploadSessionConfiguration(), timeout: TimeInterval = 900) async throws {
     guard preparation.destination.scheme?.lowercased() == "https" else {
         throw DobbyClientError.diagnostics("The upload destination must use HTTPS")
     }
