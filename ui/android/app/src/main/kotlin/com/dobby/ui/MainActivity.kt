@@ -125,7 +125,10 @@ class MainActivity : ComponentActivity() {
         retainedLogViewModel.exportReturned = true
         advanceLogExport()
     }
-    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    // A notification posted before the grant stays hidden, so it is redrawn.
+    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) NativeVpnBridge.redrawNotification()
+    }
 
     // Android 13+ hides the VPN notification without POST_NOTIFICATIONS. The
     // app asks once, the first time a connection is allowed to start; a

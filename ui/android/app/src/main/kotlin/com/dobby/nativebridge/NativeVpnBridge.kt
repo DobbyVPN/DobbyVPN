@@ -261,6 +261,9 @@ object NativeVpnBridge {
     @JvmStatic
     fun finishUnderlying(queryID: Long) { service?.finishUnderlying(queryID) }
 
+    // Redraws the VPN notification, for example once the notification permission is granted.
+    fun redrawNotification() { service?.redrawNotification() }
+
     @JvmStatic
     fun publishState(sessionID: String, generation: Long, state: String, failureCode: String) {
         service?.publishState(sessionID, generation, state, failureCode)

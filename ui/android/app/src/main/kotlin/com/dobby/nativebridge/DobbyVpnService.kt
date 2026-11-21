@@ -433,6 +433,10 @@ class DobbyVpnService : VpnService() {
         }
     }
 
+    internal fun redrawNotification() {
+        if (vpnInterface != null) onNotifier(::refreshNotification)
+    }
+
     // Reads the state Go has just published, with the time of a scheduled
     // automatic retry, and redraws the notification once per state change.
     private fun refreshNotification() {
