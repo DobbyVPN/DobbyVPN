@@ -719,8 +719,9 @@ def _build_windows_msi(
         cwd=installer,
         env=env,
     )
+    # The explicit .\ path works with NoDefaultCurrentDirectoryInExePath=1, which hides the current directory from cmd.
     completed = _run(
-        "Windows MSI build", ["cmd.exe", "/c", "build.bat"],
+        "Windows MSI build", ["cmd.exe", "/c", r".\build.bat"],
         cwd=installer, env=env, capture=True, check=False,
     )
     if completed.returncode != 0:
