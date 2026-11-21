@@ -10,8 +10,10 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"os"
 	"os/user"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,7 +58,10 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 	if mark <= 0 || uint64(mark) > math.MaxUint32 {
 		return nil, errors.New("output guard requires an owned socket mark")
 	}
-	var err error
+	managementPeers, err := linuxManagementPeers(os.Getenv("DOBBYVPN_LINUX_MANAGEMENT_PEERS"))
+	if err != nil {
+		return nil, err
+	}
 	g := &LinuxOutputGuard{mark: uint32(mark), dhcpUIDs: []uint32{0}}
 	// NetworkManager/dhclient use root; networkd drops to its dedicated account.
 	// Ports alone are insufficient: unprivileged applications can bind low
@@ -109,6 +114,14 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 		priority := nftables.ChainPriorityMangle
 		g.bootstrap = g.conn.AddChain(&nftables.Chain{Table: g.table, Name: linuxBootstrapChain, Type: nftables.ChainTypeRoute, Hooknum: nftables.ChainHookOutput, Priority: priority})
 		g.addLinkMaintenanceRules()
+		for _, peer := range managementPeers {
+			// Only replies to peer-initiated TCP connections qualify. A
+			// local application dialing the same peer still uses the VPN.
+			matches := append(matchProtocol(unix.IPPROTO_TCP), matchIP(peer, false)...)
+			matches = append(matches, &expr.Ct{Key: expr.CtKeyDIRECTION, Register: 1},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{1}}) // IP_CT_DIR_REPLY
+			g.markTraffic(matches)
+		}
 		policy := nftables.ChainPolicyDrop
 		output := g.conn.AddChain(&nftables.Chain{Table: g.table, Name: "protect", Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityFilter, Policy: &policy})
 		interfaces := []string{"lo"}
@@ -133,9 +146,28 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 		g.created = true
 		linuxGuardLifetime.active = g
 		log.Infof(Category, "persistent output guard active table=%s adopted=%t", g.table.Name, existing != nil)
+		if len(managementPeers) != 0 {
+			log.Info(Category, "Linux management TCP replies enabled", map[string]any{"peer_count": len(managementPeers)})
+		}
 		return nil
 	})
 	return g, err
+}
+
+func linuxManagementPeers(value string) ([]netip.Addr, error) {
+	fields := strings.Fields(value)
+	if len(fields) > 16 {
+		return nil, errors.New("DOBBYVPN_LINUX_MANAGEMENT_PEERS accepts at most 16 IP addresses")
+	}
+	var peers []netip.Addr
+	for index, field := range fields {
+		peer, err := netip.ParseAddr(field)
+		if err != nil || peer.Zone() != "" || !peer.IsGlobalUnicast() {
+			return nil, fmt.Errorf("invalid management IP address at position %d", index+1)
+		}
+		peers = append(peers, peer.Unmap())
+	}
+	return peers, nil
 }
 
 func native32(value uint32) []byte { return binary.NativeEndian.AppendUint32(nil, value) }
