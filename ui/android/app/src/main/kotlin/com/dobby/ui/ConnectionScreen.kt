@@ -20,10 +20,11 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -38,8 +39,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
@@ -83,10 +82,16 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -438,38 +443,7 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
                 },
             )
             menuAt?.let { position ->
-                Box(Modifier.offset { position }) {
-                    DropdownMenu(
-                        expanded = true,
-                        onDismissRequest = { menuAt = null },
-                        modifier = Modifier.semantics { testTagsAsResourceId = true },
-                    ) {
-                        if (state.session.logsUploadAvailable) {
-                            DropdownMenuItem(
-                                text = { Text(if (state.uploadingLogs) "Uploading logs…" else "Upload logs", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = { menuAt = null; controller.uploadLogs() },
-                                enabled = !state.uploadingLogs,
-                                modifier = Modifier.testTag("logs.upload"),
-                            )
-                        }
-                        Row(Modifier.fillMaxWidth()) {
-                            TextButton(onClick = { menuAt = null; controller.clearLogs() }, modifier = Modifier.weight(1f).testTag("logs.clear")) { Text("Clear") }
-                            TextButton(onClick = { menuAt = null; controller.exportLogs() }, enabled = !state.exportingLogs, modifier = Modifier.weight(1f).testTag("logs.export")) { Text("Send logs") }
-                        }
-                        if (state.uploadingLogs) {
-                            DropdownMenuItem(text = { Text("Cancel upload", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = { menuAt = null; controller.cancelUpload() }, modifier = Modifier.testTag("logs.upload.cancel"))
-                        }
-                        if (state.uploadedReference.isNotEmpty()) {
-                            DropdownMenuItem(text = { Text("${state.uploadedReference}\n${state.uploadedProvider}\n${state.uploadedTime}", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = {}, modifier = Modifier.testTag("logs.upload.reference"))
-                            DropdownMenuItem(text = { Text("Copy reference", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = { menuAt = null; controller.copyUploadReference() }, modifier = Modifier.testTag("logs.upload.copy"))
-                            DropdownMenuItem(text = { Text("Share reference", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = { menuAt = null; controller.shareUploadReference() }, modifier = Modifier.testTag("logs.upload.share"))
-                        }
-                    }
-                }
+                LogsMenu(controller, position, close = { menuAt = null })
             }
         }
         if (state.uploadingLogs) {
@@ -479,6 +453,89 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
             }
         }
         Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
+    }
+}
+
+// The logs menu opens at the double-tap point as one panel in the app's button style:
+// optional upload rows on top, then Clear and Send logs edge to edge.
+@Composable
+private fun LogsMenu(controller: SessionController, position: IntOffset, close: () -> Unit) {
+    val state = controller.state
+    val shape = RoundedCornerShape(14.dp)
+    Popup(
+        popupPositionProvider = remember(position) { TapPositionProvider(position) },
+        onDismissRequest = close,
+        properties = PopupProperties(focusable = true),
+    ) {
+        Column(
+            Modifier.semantics { testTagsAsResourceId = true }
+                .width(260.dp)
+                .clip(shape)
+                .background(Surface)
+                .border(1.5.dp, Ink, shape),
+        ) {
+            if (state.session.logsUploadAvailable) {
+                MenuRow(if (state.uploadingLogs) "Uploading logs…" else "Upload logs", "logs.upload", enabled = !state.uploadingLogs) { close(); controller.uploadLogs() }
+                MenuDivider()
+            }
+            if (state.uploadingLogs) {
+                MenuRow("Cancel upload", "logs.upload.cancel") { close(); controller.cancelUpload() }
+                MenuDivider()
+            }
+            if (state.uploadedReference.isNotEmpty()) {
+                Text(
+                    "${state.uploadedReference}\n${state.uploadedProvider}\n${state.uploadedTime}",
+                    Modifier.fillMaxWidth().testTag("logs.upload.reference").padding(horizontal = 12.dp, vertical = 10.dp),
+                    color = Muted, fontSize = 13.sp, lineHeight = 17.sp, textAlign = TextAlign.Center,
+                )
+                MenuDivider()
+                MenuRow("Copy reference", "logs.upload.copy") { close(); controller.copyUploadReference() }
+                MenuDivider()
+                MenuRow("Share reference", "logs.upload.share") { close(); controller.shareUploadReference() }
+                MenuDivider()
+            }
+            Row(Modifier.fillMaxWidth().height(52.dp)) {
+                MenuHalf("Clear", "logs.clear", filled = false, Modifier.weight(1f)) { close(); controller.clearLogs() }
+                MenuHalf("Send logs", "logs.export", filled = true, Modifier.weight(1f), enabled = !state.exportingLogs) { close(); controller.exportLogs() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuRow(title: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(tag)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(title, color = if (enabled) Ink else Muted, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun MenuDivider() = Box(Modifier.fillMaxWidth().height(1.5.dp).background(Ink))
+
+@Composable
+private fun MenuHalf(title: String, tag: String, filled: Boolean, modifier: Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        modifier.fillMaxHeight().testTag(tag)
+            .then(if (filled) Modifier.background(Ink) else Modifier)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(title, color = if (!enabled) Muted else if (filled) Surface else Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+// Places the menu at the tap point like a dropdown: below it when it fits, otherwise above, kept inside the window.
+private class TapPositionProvider(private val tap: IntOffset) : PopupPositionProvider {
+    override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+        val left = anchorBounds.left + tap.x
+        val top = anchorBounds.top + tap.y
+        val x = left.coerceAtMost(windowSize.width - popupContentSize.width).coerceAtLeast(0)
+        val y = (if (top + popupContentSize.height <= windowSize.height) top else top - popupContentSize.height).coerceAtLeast(0)
+        return IntOffset(x, y)
     }
 }
 
