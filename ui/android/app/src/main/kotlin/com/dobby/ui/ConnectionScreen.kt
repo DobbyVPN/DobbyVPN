@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
@@ -62,6 +63,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -463,6 +465,8 @@ private fun LogsMenu(controller: SessionController, position: IntOffset, close: 
     val state = controller.state
     val shape = RoundedCornerShape(14.dp)
     val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
+    // A large font, a long reference or a short window can make the menu taller than the window.
+    val maxHeight = (LocalConfiguration.current.screenHeightDp - 24).coerceAtLeast(120).dp
     Popup(
         popupPositionProvider = remember(position, margin) { TapPositionProvider(position, margin) },
         onDismissRequest = close,
@@ -471,9 +475,11 @@ private fun LogsMenu(controller: SessionController, position: IntOffset, close: 
         Column(
             Modifier.semantics { testTagsAsResourceId = true }
                 .width(260.dp)
+                .heightIn(max = maxHeight)
                 .clip(shape)
                 .background(Surface)
-                .border(1.5.dp, Ink, shape),
+                .border(1.5.dp, Ink, shape)
+                .verticalScroll(rememberScrollState()),
         ) {
             if (state.session.logsUploadAvailable) {
                 MenuRow(if (state.uploadingLogs) "Uploading logs…" else "Upload logs", "logs.upload", enabled = !state.uploadingLogs) { close(); controller.uploadLogs() }
@@ -495,7 +501,7 @@ private fun LogsMenu(controller: SessionController, position: IntOffset, close: 
                 MenuRow("Share reference", "logs.upload.share") { close(); controller.shareUploadReference() }
                 MenuDivider()
             }
-            Row(Modifier.fillMaxWidth().height(52.dp)) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).height(IntrinsicSize.Min)) {
                 MenuHalf("Clear", "logs.clear", filled = false, Modifier.weight(1f)) { close(); controller.clearLogs() }
                 MenuHalf("Send logs", "logs.export", filled = true, Modifier.weight(1f), enabled = !state.exportingLogs) { close(); controller.exportLogs() }
             }
@@ -507,10 +513,11 @@ private fun LogsMenu(controller: SessionController, position: IntOffset, close: 
 private fun MenuRow(title: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
     Box(
         Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(tag)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(title, color = if (enabled) Ink else Muted, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(title, color = if (enabled) Ink else Muted, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
     }
 }
 
@@ -522,10 +529,18 @@ private fun MenuHalf(title: String, tag: String, filled: Boolean, modifier: Modi
     Box(
         modifier.fillMaxHeight().testTag(tag)
             .then(if (filled) Modifier.background(Ink) else Modifier)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(title, color = if (!enabled) Muted else if (filled) Surface else Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        // Disabled text stays readable on both fills (about 6:1 on Ink) while looking dimmed.
+        val color = when {
+            filled && !enabled -> Surface.copy(alpha = 0.55f)
+            filled -> Surface
+            !enabled -> Muted
+            else -> Ink
+        }
+        Text(title, color = color, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
     }
 }
 
