@@ -131,7 +131,7 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 	addresses, err := resolve(ctx, host)
 	// A query that failed, as opposed to an empty or negative answer.
 	var dnsErr *net.DNSError
-	queryFailed := (err != nil && !(errors.As(err, &dnsErr) && dnsErr.IsNotFound)) || ctx.Err() != nil
+	queryFailed := (err != nil && (!errors.As(err, &dnsErr) || !dnsErr.IsNotFound)) || ctx.Err() != nil
 	c.mu.RLock()
 	current := c.revision
 	c.mu.RUnlock()

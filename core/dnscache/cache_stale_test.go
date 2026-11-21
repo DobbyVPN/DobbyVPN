@@ -49,7 +49,7 @@ func addressesOf(t *testing.T, cache *Cache) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var text []string
+	text := make([]string, 0, len(addresses))
 	for _, address := range addresses {
 		text = append(text, address.IP.String())
 	}
