@@ -488,3 +488,24 @@ func TestTimerConfirmsNetworkBeforeServing(t *testing.T) {
 		t.Fatalf("an answer of the replaced network must not be used: %+v", got)
 	}
 }
+
+// Changing the bytes of a returned address does not change what is remembered.
+func TestRememberedAnswerIsIsolatedFromCallers(t *testing.T) {
+	useClock(t)
+	cache := New()
+	t.Cleanup(cache.Close)
+	cache.SetResolver("network-a", scriptedResolver([]string{"192.0.2.1"}, nil, nil))
+	fresh, err := cache.ResolveAddresses(context.Background(), "endpoint.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh[0].IP[len(fresh[0].IP)-1] = 99
+	stale, err := cache.ResolveAddresses(context.Background(), "endpoint.example")
+	if err != nil || stale[0].IP.String() != "192.0.2.1" {
+		t.Fatalf("remembered answer changed through a returned one: %v %v", stale, err)
+	}
+	stale[0].IP[len(stale[0].IP)-1] = 98
+	if got := addressesOf(t, cache); got != "192.0.2.1" {
+		t.Fatalf("remembered answer changed through a served one: %s", got)
+	}
+}

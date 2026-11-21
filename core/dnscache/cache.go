@@ -338,7 +338,17 @@ func (c *Cache) ofRevision(addresses []net.IPAddr, revision uint64) ([]net.IPAdd
 	if c.revision != revision {
 		return nil, false
 	}
-	return append([]net.IPAddr(nil), addresses...), true
+	return cloneAddresses(addresses), true
+}
+
+// cloneAddresses copies the address structs and their IP bytes, so callers and
+// the remembered answers never share memory.
+func cloneAddresses(addresses []net.IPAddr) []net.IPAddr {
+	clone := make([]net.IPAddr, len(addresses))
+	for i, address := range addresses {
+		clone[i] = net.IPAddr{IP: append(net.IP(nil), address.IP...), Zone: address.Zone}
+	}
+	return clone
 }
 
 // forget drops the remembered answer after a negative answer in revision.
@@ -370,7 +380,7 @@ func (c *Cache) remember(host string, revision uint64, addresses []net.IPAddr) {
 		}
 		delete(c.lastGood, oldest)
 	}
-	c.lastGood[host] = staleAnswer{addresses: append([]net.IPAddr(nil), addresses...), revision: revision, at: now()}
+	c.lastGood[host] = staleAnswer{addresses: cloneAddresses(addresses), revision: revision, at: now()}
 }
 
 // confirmNetwork reads the network again within what is left of the wait, but
@@ -420,7 +430,7 @@ func (c *Cache) staleAnswer(host string, revision uint64, cause error) ([]net.IP
 			"host": host, "answer_age_ms": age.Milliseconds(), "cause": cause.Error(),
 		})
 	}
-	return append([]net.IPAddr(nil), answer.addresses...), true
+	return cloneAddresses(answer.addresses), true
 }
 
 func NormalizeHost(host string) string {
