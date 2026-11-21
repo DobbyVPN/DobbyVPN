@@ -9,6 +9,7 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.dobby.presentation.PartialTunnelCleanup
+import com.dobby.vpn.R
 import com.dobby.ui.decodeSessionSnapshot
 import java.util.concurrent.Executors
 import org.json.JSONArray
@@ -477,10 +478,10 @@ class DobbyVpnService : VpnService() {
         val state = if (vpnInterface == null) "CONNECTING" else shownState
         val retryAt = if (state == "FAILED") shownRetryAt else 0L
         val title = when (state) {
-            "CONNECTED" -> "Connected"
-            "FAILED" -> "No connection"
-            "STOPPING" -> "Disconnecting…"
-            else -> "Connecting…"
+            "CONNECTED" -> getString(R.string.vpn_notification_connected)
+            "FAILED" -> getString(R.string.vpn_notification_no_connection)
+            "STOPPING" -> getString(R.string.vpn_notification_disconnecting)
+            else -> getString(R.string.vpn_notification_connecting)
         }
         val builder = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
@@ -491,7 +492,7 @@ class DobbyVpnService : VpnService() {
                 PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE)
             })
         if (state == "FAILED") {
-            builder.setContentText(if (retryAt > 0) "Retrying automatically" else "Tap Retry to try again")
+            builder.setContentText(getString(if (retryAt > 0) R.string.vpn_notification_retrying else R.string.vpn_notification_retry_hint))
         }
         // The system draws the countdown; nothing redraws the notification every second.
         if (retryAt > System.currentTimeMillis()) {
@@ -499,8 +500,8 @@ class DobbyVpnService : VpnService() {
         } else {
             builder.setShowWhen(false)
         }
-        if (state == "FAILED" && shownCanRetry) builder.addAction(notificationAction("Retry", ACTION_RETRY, 1))
-        if (state != "STOPPING") builder.addAction(notificationAction("Disconnect", ACTION_DISCONNECT, 2))
+        if (state == "FAILED" && shownCanRetry) builder.addAction(notificationAction(getString(R.string.vpn_notification_retry), ACTION_RETRY, 1))
+        if (state != "STOPPING") builder.addAction(notificationAction(getString(R.string.vpn_notification_disconnect), ACTION_DISCONNECT, 2))
         return builder.build()
     }
 

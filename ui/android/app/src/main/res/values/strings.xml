@@ -1,3 +1,12 @@
 <resources>
     <string name="app_name">Dobby VPN</string>
+    <!-- VPN service notification -->
+    <string name="vpn_notification_connected">Connected</string>
+    <string name="vpn_notification_connecting">Connecting…</string>
+    <string name="vpn_notification_disconnecting">Disconnecting…</string>
+    <string name="vpn_notification_no_connection">No connection</string>
+    <string name="vpn_notification_retrying">Retrying automatically</string>
+    <string name="vpn_notification_retry_hint">Tap Retry to try again</string>
+    <string name="vpn_notification_retry">Retry</string>
+    <string name="vpn_notification_disconnect">Disconnect</string>
 </resources>
