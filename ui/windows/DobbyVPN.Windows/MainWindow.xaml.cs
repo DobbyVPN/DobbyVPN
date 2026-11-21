@@ -2155,9 +2155,9 @@ public sealed partial class MainWindow : Window
 
     // Same file and JSON as dobby-cli (`<ui log>.upload`), so an upload made in either place is visible in both.
     private sealed record LastLogUpload(
-        [property: JsonPropertyName("reference")] string Reference,
-        [property: JsonPropertyName("provider")] string Provider,
-        [property: JsonPropertyName("time")] DateTimeOffset Time);
+        [property: JsonPropertyName("reference"), JsonRequired] string Reference,
+        [property: JsonPropertyName("provider"), JsonRequired] string Provider,
+        [property: JsonPropertyName("time"), JsonRequired] DateTimeOffset Time);
     private static string LatestUploadPath => NativeDiagnostics.Current.UiPath + ".upload";
     private static string LogUploadDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "LogUploads");
     private void RestoreLogUpload()
@@ -2191,7 +2191,7 @@ public sealed partial class MainWindow : Window
             var metadata = LatestUploadPath;
             if (!File.Exists(metadata)) return;
             var latest = JsonSerializer.Deserialize<LastLogUpload>(File.ReadAllText(metadata));
-            if (latest is null || string.IsNullOrEmpty(latest.Reference)) return;
+            if (latest is null || string.IsNullOrEmpty(latest.Reference) || latest.Provider is null) return;
             _lastLogReference = latest.Reference;
             UploadStatusText.Text = $"Uploaded: {latest.Reference} · {latest.Time.LocalDateTime:g} · {latest.Provider}";
             UploadStatusPanel.Visibility = Visibility.Visible;
@@ -2306,9 +2306,18 @@ public sealed partial class MainWindow : Window
             ShareUploadItem.Visibility = Visibility.Visible;
             var metadata = LatestUploadPath;
             Directory.CreateDirectory(Path.GetDirectoryName(metadata)!);
-            var staging = metadata + ".tmp";
-            await File.WriteAllTextAsync(staging, JsonSerializer.Serialize(latest));
-            File.Move(staging, metadata, true);
+            // A unique name per write: several windows (or dobby-cli) may save at the same time.
+            var staging = metadata + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                await File.WriteAllTextAsync(staging, JsonSerializer.Serialize(latest));
+                File.Move(staging, metadata, true);
+            }
+            finally
+            {
+                try { File.Delete(staging); }
+                catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.latest.cleanup"); }
+            }
         }
         catch (OperationCanceledException) when (upload.IsCancellationRequested) { UploadStatusPanel.Visibility = Visibility.Collapsed; }
         catch (Exception error) when (!_lifetime.IsClosing)
