@@ -1,5 +1,7 @@
 package com.dobby.ui
 
+import android.content.pm.PackageManager
+import android.os.Build
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ClipDescription
@@ -123,6 +125,20 @@ class MainActivity : ComponentActivity() {
         retainedLogViewModel.exportReturned = true
         advanceLogExport()
     }
+    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+    // Android 13+ hides the VPN notification without POST_NOTIFICATIONS. The
+    // app asks once, the first time a connection is allowed to start; a
+    // refusal changes nothing else and is never asked again.
+    internal fun offerNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        val asked = getSharedPreferences("notification-permission", MODE_PRIVATE)
+        if (asked.getBoolean("asked", false)) return
+        asked.edit().putBoolean("asked", true).apply()
+        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     private val vpnConsentLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -1130,7 +1146,11 @@ internal class SessionController(
         preparation = NativeVpnBridge.prepareForSelection(activity, details) { result ->
             if (closed || permissionTarget !== target) return@prepareForSelection
             when (result) {
-                NativeVpnBridge.PreparationResult.Ready -> { preparation = null; continuePermission(true) }
+                NativeVpnBridge.PreparationResult.Ready -> {
+                    preparation = null
+                    continuePermission(true)
+                    activity.offerNotificationPermissionOnce()
+                }
                 NativeVpnBridge.PreparationResult.PermissionRequired -> {
                     consentRecovery.handoffComplete()
                     state = state.copy(busy = false, error = "Approve the Android VPN permission to connect")
