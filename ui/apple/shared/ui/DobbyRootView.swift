@@ -259,14 +259,28 @@ public struct DobbyRootView: View {
         Binding(get: { model.sourceText }, set: { model.sourceChanged($0) })
     }
 
+    @ViewBuilder
     private var mainButton: some View {
+        if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
+            // Retry and Stop share one row, 2:1 as Android's weights 1 and 0.5.
+            Color.clear.frame(maxWidth: .infinity).frame(height: pt(60)).overlay(GeometryReader { row in
+                HStack(spacing: pt(8)) {
+                    primaryButton.frame(width: max(0, row.size.width - pt(8)) * 2 / 3)
+                    stopButton
+                }
+            })
+        } else {
+            primaryButton
+        }
+    }
+
+    private var primaryButton: some View {
         let title = model.mainActionTitle
         let enabled = model.mainActionEnabled
         let idle = title == "Auto connect"
         let filled = enabled && idle
         let outlined = enabled || !idle
-        return VStack(spacing: pt(8)) {
-        Button {
+        return Button {
             sourceFocused = false
             model.mainAction()
         } label: {
@@ -283,12 +297,21 @@ public struct DobbyRootView: View {
         .accessibilityIdentifier("VPN connection action")
         .accessibilityValue(model.status)
         .keyboardShortcut(.return, modifiers: .command)
-        if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
-            Button("Stop", action: model.stop)
-                .disabled(!model.canStop)
-                .accessibilityIdentifier("connection.stop")
+    }
+
+    private var stopButton: some View {
+        let enabled = model.canStop
+        return Button(action: model.stop) {
+            Text("Stop")
+                .dobbyFont(18, .semibold)
+                .foregroundColor(enabled ? .ink : .muted)
+                .frame(maxWidth: .infinity, minHeight: pt(60))
+                .overlay(buttonShape.stroke(enabled ? Color.ink : .rule, lineWidth: enabled ? 2 : 1.5))
+                .contentShape(buttonShape)
         }
-        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityIdentifier("connection.stop")
     }
 
     private var connections: some View {
