@@ -403,15 +403,12 @@ def android_check_tools() -> tuple[Path, Path]:
     return gradle, go
 
 
-def android_security(tools: Tools, *, output_dir: Path | None = None, require_tests: bool = False) -> None:
-    gradle, go = android_check_tools()
-    directory = (output_dir or tools.root / "android-security").resolve()
+def android_dependency_inventory(
+    gradle: Path, go: Path, directory: Path, *, require_tests: bool = False,
+) -> dict[str, set[str]]:
     directory.mkdir(parents=True, exist_ok=True)
     inventory = directory / "resolved-gradle.json"
-    report = directory / "trivy.json"
-    # Only this check's known outputs are replaced. A previous successful scan
-    # cannot satisfy a failed resolution or missing scanner result.
-    for path in (inventory, report, *(directory / f"{group}.gradle.lockfile" for group in GROUPS)):
+    for path in (inventory, *(directory / f"{group}.gradle.lockfile" for group in GROUPS)):
         path.unlink(missing_ok=True)
     resolver = SCRIPT_DIR / "android" / "resolve_dependencies.gradle"
     run_dependency_fetch(
@@ -426,6 +423,15 @@ def android_security(tools: Tools, *, output_dir: Path | None = None, require_te
     except (OSError, ValueError) as error:
         raise CheckError(f"invalid resolved Android dependency inventory: {error}") from error
     _forward(sys.stdout, inventory.read_bytes())
+    return expected
+
+
+def android_security(tools: Tools, *, output_dir: Path | None = None) -> None:
+    gradle, go = android_check_tools()
+    directory = (output_dir or tools.root / "android-security").resolve()
+    report = directory / "trivy.json"
+    report.unlink(missing_ok=True)
+    expected = android_dependency_inventory(gradle, go, directory)
     trivy = tools.get("trivy")
     try:
         run([
@@ -518,7 +524,7 @@ def _collect_android_lint_reports(
 
 
 def lint_android(tools: Tools, *, output_dir: Path | None = None, require_tests: bool = False) -> None:
-    output_directory = (output_dir or tools.root / "android-security").resolve()
+    output_directory = (output_dir or tools.root / "android-lint").resolve()
     android_root = ROOT / "ui" / "android"
     report_paths = _android_lint_report_paths(android_root)
     try:
@@ -526,8 +532,9 @@ def lint_android(tools: Tools, *, output_dir: Path | None = None, require_tests:
     except OSError as error:
         raise CheckError(f"could not create Android check output directory {output_directory}: {error}") from error
     _clear_android_lint_reports((*report_paths, *(output_directory / path.name for path in report_paths)))
-    android_security(tools, output_dir=output_dir, require_tests=require_tests)
     gradle, go = android_check_tools()
+    if require_tests:
+        android_dependency_inventory(gradle, go, output_directory, require_tests=True)
     primary_error: BaseException | None = None
     try:
         run([str(gradle), f"-PdobbyGoBinary={go}", ":app:lintRelease", "--no-daemon", "--stacktrace"], cwd=ROOT / "ui" / "android")
@@ -638,13 +645,13 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--git-repository", type=Path, help="Checkout whose full history TruffleHog scans")
-    parser.add_argument("--output-dir", type=Path, help="Retain Android dependency inventories and scanner reports")
+    parser.add_argument("--output-dir", type=Path, help="Retain Android check reports")
     parser.add_argument("--require-test-dependencies", action="store_true", help="Require resolved unit/instrumentation test inventories")
     args = parser.parse_args()
-    if args.require_test_dependencies and args.check not in {"android-security", "lint-android"}:
-        parser.error("--require-test-dependencies requires an Android source check")
-    if args.output_dir is not None and args.check not in {"android-security", "lint-android"}:
-        parser.error("--output-dir requires an Android source check")
+    if args.require_test_dependencies and args.check != "lint-android":
+        parser.error("--require-test-dependencies requires lint-android")
+    if args.output_dir is not None and args.check not in {"android-security", "lint-android", "trivy"}:
+        parser.error("--output-dir requires an Android check or trivy")
     return args
 
 
@@ -667,13 +674,14 @@ def main() -> int:
             lint_android(tools, output_dir=args.output_dir, require_tests=args.require_test_dependencies)
         elif args.check == "android-security":
             assert tools is not None
-            android_security(tools, output_dir=args.output_dir, require_tests=args.require_test_dependencies)
+            android_security(tools, output_dir=args.output_dir)
         elif args.check == "lint-swift":
             assert tools is not None
             lint_swift(tools)
         elif args.check == "trivy":
             assert tools is not None
             trivy_scan(tools)
+            android_security(tools, output_dir=args.output_dir)
         elif args.check == "security":
             assert tools is not None
             trufflehog_scan(tools, args.git_repository)

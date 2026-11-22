@@ -184,17 +184,17 @@ jobs:
             build-tools;${{ steps.pins.outputs.android_build_tools }}
             ndk;${{ steps.pins.outputs.android_ndk }}
 
-      - name: Run Android lint and dependency scan
+      - name: Run Android lint
         run: |
           export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
-          python3 .github/scripts/source_checks.py lint-android --output-dir "$RUNNER_TEMP/android-security"
+          python3 .github/scripts/source_checks.py lint-android --output-dir "$RUNNER_TEMP/android-lint"
 
-      - name: Retain Android dependency inventories and scan
+      - name: Retain Android lint reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-security-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/android-security
+          name: android-lint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-lint
           if-no-files-found: warn
           retention-days: 1
 
