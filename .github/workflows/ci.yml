@@ -219,7 +219,7 @@ jobs:
         run: python3 .github/scripts/source_checks.py lint-go
 
   security:
-    name: Dependency and credential scans
+    name: Git history secret scan
     needs: ci_scope
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: ubuntu-24.04
@@ -255,7 +255,7 @@ jobs:
           go-modules: 'false'
           pinned-tools: 'true'
 
-      - name: Scan dependencies and Git history
+      - name: Scan Git history for secrets
         run: python3 .github/scripts/source_checks.py security
 
   actionlint:
@@ -462,7 +462,7 @@ jobs:
             fi
           }
           require_common() {
-            require_result 'Dependency and credential scans' success "$SECURITY_RESULT"
+            require_result 'Git history secret scan' success "$SECURITY_RESULT"
             require_result 'GitHub workflow validation' success "$ACTIONLINT_RESULT"
           }
           require_unselected_platform_jobs() {

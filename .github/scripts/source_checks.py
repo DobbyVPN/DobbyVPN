@@ -633,7 +633,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "check",
         choices=(
-            "go-build", "lint-go", "lint-android", "android-security", "lint-swift", "security",
+            "go-build", "lint-go", "lint-android", "android-security", "lint-swift", "trivy", "security",
             "actionlint", "cache-clean",
         ),
     )
@@ -650,7 +650,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    needs_tools = args.check in {"lint-go", "lint-android", "android-security", "lint-swift", "security", "actionlint"}
+    needs_tools = args.check in {"lint-go", "lint-android", "android-security", "lint-swift", "trivy", "security", "actionlint"}
     temporary_tools: tempfile.TemporaryDirectory[str] | None = None
     try:
         tools: Tools | None = None
@@ -671,9 +671,11 @@ def main() -> int:
         elif args.check == "lint-swift":
             assert tools is not None
             lint_swift(tools)
-        elif args.check == "security":
+        elif args.check == "trivy":
             assert tools is not None
             trivy_scan(tools)
+        elif args.check == "security":
+            assert tools is not None
             trufflehog_scan(tools, args.git_repository)
         elif args.check == "actionlint":
             assert tools is not None

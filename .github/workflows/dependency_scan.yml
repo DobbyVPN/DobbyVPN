@@ -1,0 +1,43 @@
+name: Product dependency vulnerabilities
+
+on:
+  pull_request:
+    branches: [main]
+    paths: &scan_inputs
+      - core/go.mod
+      - core/go.sum
+      - .github/scripts/requirements-native-ui.txt
+      - .github/scripts/android/requirements-fdroid.txt
+      - .github/scripts/source_checks.py
+      - .github/scripts/bounded_process.py
+      - .github/scripts/dependency_fetch.py
+      - .github/scripts/android/android_dependency_provenance.py
+      - .github/workflows/dependency_scan.yml
+  push:
+    branches: [main]
+    paths: *scan_inputs
+  schedule:
+    - cron: '37 4 * * *'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan public Product dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check candidate revision and scan fresh advisory data
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 .github/scripts/source_checks.py trivy

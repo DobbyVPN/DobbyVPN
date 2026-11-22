@@ -22,7 +22,7 @@ REQUIRED_CI_JOB_NAMES = (
     "Android lint",
     "Go source analysis",
     "Apple development checks",
-    "Dependency and credential scans",
+    "Git history secret scan",
     "GitHub workflow validation",
     "Android product build and native library checks / Compile Android APK artifacts",
     "Android product build and native library checks / Verify Android APK artifacts",
