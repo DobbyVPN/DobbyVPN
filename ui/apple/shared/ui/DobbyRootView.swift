@@ -263,9 +263,11 @@ public struct DobbyRootView: View {
     private var mainButton: some View {
         if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
             // Retry and Stop share one row, 2:1 as Android's weights 1 and 0.5. A hidden
-            // copy of the Retry title sets the row height, so larger text grows the row.
+            // copy of the Retry title sets the row height, so larger text grows the row;
+            // both titles stay on one line, so the copy's width does not change the height.
             Text(model.mainActionTitle)
                 .dobbyFont(20, .semibold)
+                .lineLimit(1)
                 .frame(maxWidth: .infinity, minHeight: pt(60))
                 .hidden()
                 .overlay(GeometryReader { row in
@@ -292,6 +294,9 @@ public struct DobbyRootView: View {
         } label: {
             Text(title)
                 .dobbyFont(20, .semibold)
+                // In the row the title keeps one line and shrinks rather than wrapping past its height.
+                .lineLimit(fillHeight ? 1 : nil)
+                .minimumScaleFactor(fillHeight ? 0.5 : 1)
                 .foregroundColor(filled ? .surface : outlined ? .ink : .muted)
                 .frame(maxWidth: .infinity, minHeight: pt(60), maxHeight: fillHeight ? .infinity : nil)
                 .background(filled ? Color.ink : .clear, in: buttonShape)
