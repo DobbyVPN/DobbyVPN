@@ -262,19 +262,25 @@ public struct DobbyRootView: View {
     @ViewBuilder
     private var mainButton: some View {
         if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
-            // Retry and Stop share one row, 2:1 as Android's weights 1 and 0.5.
-            Color.clear.frame(maxWidth: .infinity).frame(height: pt(60)).overlay(GeometryReader { row in
-                HStack(spacing: pt(8)) {
-                    primaryButton.frame(width: max(0, row.size.width - pt(8)) * 2 / 3)
-                    stopButton
-                }
-            })
+            // Retry and Stop share one row, 2:1 as Android's weights 1 and 0.5. A hidden
+            // copy of the Retry title sets the row height, so larger text grows the row.
+            Text(model.mainActionTitle)
+                .dobbyFont(20, .semibold)
+                .frame(maxWidth: .infinity, minHeight: pt(60))
+                .hidden()
+                .overlay(GeometryReader { row in
+                    HStack(spacing: pt(8)) {
+                        primaryButton(fillHeight: true).frame(width: max(0, row.size.width - pt(8)) * 2 / 3)
+                        stopButton
+                    }
+                })
         } else {
-            primaryButton
+            primaryButton()
         }
     }
 
-    private var primaryButton: some View {
+    /// `fillHeight` lets the button match a taller neighbour in the Retry and Stop row.
+    private func primaryButton(fillHeight: Bool = false) -> some View {
         let title = model.mainActionTitle
         let enabled = model.mainActionEnabled
         let idle = title == "Auto connect"
@@ -287,7 +293,7 @@ public struct DobbyRootView: View {
             Text(title)
                 .dobbyFont(20, .semibold)
                 .foregroundColor(filled ? .surface : outlined ? .ink : .muted)
-                .frame(maxWidth: .infinity, minHeight: pt(60))
+                .frame(maxWidth: .infinity, minHeight: pt(60), maxHeight: fillHeight ? .infinity : nil)
                 .background(filled ? Color.ink : .clear, in: buttonShape)
                 .overlay(buttonShape.stroke(outlined ? Color.ink : .rule, lineWidth: filled ? 0 : outlined ? 2 : 1.5))
                 .contentShape(buttonShape)
@@ -304,8 +310,12 @@ public struct DobbyRootView: View {
         return Button(action: model.stop) {
             Text("Stop")
                 .dobbyFont(18, .semibold)
+                // The third of the row stays narrow; large text shrinks instead of clipping.
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
                 .foregroundColor(enabled ? .ink : .muted)
-                .frame(maxWidth: .infinity, minHeight: pt(60))
+                .padding(.horizontal, pt(4))
+                .frame(maxWidth: .infinity, minHeight: pt(60), maxHeight: .infinity)
                 .overlay(buttonShape.stroke(enabled ? Color.ink : .rule, lineWidth: enabled ? 2 : 1.5))
                 .contentShape(buttonShape)
         }
