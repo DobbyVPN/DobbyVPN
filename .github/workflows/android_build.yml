@@ -108,7 +108,7 @@ jobs:
       # build the pinned Go 1.26.10 toolchain from source. It never compiles the
       # application; the version and binary used for that are verified below.
       - name: Set up bootstrap Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.24.6'
           # This Go only bootstraps make.bash; there is no root go.mod to cache.
@@ -380,7 +380,7 @@ jobs:
         with:
           gradle: 'true'
           pinned-tools: 'true'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .go-version
           cache: false
