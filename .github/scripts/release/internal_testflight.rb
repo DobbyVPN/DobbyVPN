@@ -14,6 +14,7 @@ class InternalTestflight
   end
 
   def distribute(app_id:, build_id:, version:, number:, notes:, deadline:)
+    @deadline = deadline
     IosReleaseNotes.validate!(notes)
     build = request("GET", "/v1/builds/#{build_id}").fetch("data")
     attributes = build.fetch("attributes")
@@ -57,6 +58,7 @@ class InternalTestflight
 
   def wait_until(message, deadline)
     loop do
+      raise(message.respond_to?(:call) ? message.call : message) if @clock.call >= deadline
       return if yield
       remaining = deadline - @clock.call
       raise(message.respond_to?(:call) ? message.call : message) if remaining <= 0
@@ -65,7 +67,10 @@ class InternalTestflight
   end
 
   def request(method, path, body = nil)
-    @transport.call(method, path, body)
+    raise "Internal distribution deadline expired before #{method} #{path}" if @clock.call >= @deadline
+    result = @transport.call(method, path, body)
+    raise "Internal distribution deadline expired after #{method} #{path}" if @clock.call >= @deadline
+    result
   end
 
   def all(path)
@@ -88,7 +93,9 @@ class InternalTestflight
     request["Authorization"] = "Bearer #{@token}"
     request["Content-Type"] = "application/json"
     request.body = JSON.generate(body) if body
-    response = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 30, read_timeout: 30) do |http|
+    timeout = [30, @deadline - @clock.call].min
+    raise "Internal distribution deadline expired" if timeout <= 0
+    response = Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: timeout, read_timeout: timeout) do |http|
       http.max_retries = 0
       http.request(request)
     end
