@@ -237,6 +237,7 @@ jobs:
           set -euo pipefail
           ruby -I publishing/fastlane/test -e 'Dir["publishing/fastlane/test/*_test.rb"].sort.each { |file| require_relative file }'
           python3 -m compileall -q .github/scripts/release
+          ruby -c .github/scripts/release/internal_testflight.rb
           PYTHONPATH=.github/scripts:.github/scripts/release python3 - <<'PY'
           import artifact_attempts
           import build_manifest
