@@ -60,13 +60,17 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	plan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
 	var ownedEngine *tunnel.Engine
 	var killSwitch atomic.Pointer[routing.MacOSKillSwitch]
-	app.setCleanup(func(ctx context.Context) error {
+	// A network that adopts protection kept by a rebuild keeps it for the
+	// session if it fails before it is ready, whatever cleanup context ends it.
+	adoptsKept := sessionapi.KeepsProtection(ctx)
+	var ready atomic.Bool
+	app.setCleanup(func(cleanupCtx context.Context) error {
 		// A network released for a rebuild keeps the kill switch applied
 		// until the next network adopts it.
-		if guard := killSwitch.Load(); guard != nil && sessionapi.KeepsProtection(ctx) {
+		if guard := killSwitch.Load(); guard != nil && (sessionapi.KeepsProtection(cleanupCtx) || adoptsKept && !ready.Load()) {
 			guard.HandOver()
 		}
-		return plan.Close(ctx)
+		return plan.Close(cleanupCtx)
 	}, func(ctx context.Context) error {
 		if ownedEngine != nil {
 			return ownedEngine.Stop(ctx)
@@ -165,6 +169,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	log.Info(Category, "macOS retained network ready", macOSReadyFields(physical, app.NetworkRef, name))
+	ready.Store(true)
 	signalInit(initResult, nil)
 
 	ticker := time.NewTicker(time.Second)

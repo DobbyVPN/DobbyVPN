@@ -1077,6 +1077,11 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 		return err
 	}
 	s.mu.Lock()
+	if s.protectionKept {
+		// The new network adopts the kept protection and, if it fails before
+		// it is ready, keeps it for the session instead of removing it.
+		ctx = WithKeptProtection(ctx)
+	}
 	if s.vpnActive {
 		s.mu.Unlock()
 		return nil

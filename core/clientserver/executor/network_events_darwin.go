@@ -134,7 +134,17 @@ func reportWakeWhenNetworkReady(parent context.Context, emit func(reason string)
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
-		err := capture(ctx)
+		// SystemConfiguration calls may not honour ctx; the wait is bounded
+		// by the budget even if a capture blocks, and its late result is
+		// dropped.
+		result := make(chan error, 1)
+		go func() { result <- capture(ctx) }()
+		var err error
+		select {
+		case err = <-result:
+		case <-ctx.Done():
+			err = ctx.Err()
+		}
 		if err == nil {
 			log.Infof(desktopLogCategory, "physical network available after wake attempt=%d", attempt)
 			break

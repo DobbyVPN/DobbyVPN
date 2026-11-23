@@ -93,7 +93,9 @@ func (m *Manager) releaseNetworkForRebuild(s *session) error {
 	if !rebuild {
 		return nil
 	}
-	err := work.release(WithKeptProtection(m.cleanupContext(s)))
+	// The release has its own cleanup budget: the attempt's budget starts
+	// only when the attempt is stopped or rolled back.
+	err := work.release(WithKeptProtection((&cleanupBudget{}).begin()))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
