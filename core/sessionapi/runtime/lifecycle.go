@@ -572,6 +572,8 @@ type lease struct {
 	// networkLostSince reads whether server lookups saw the physical network
 	// missing or replaced after a time; nil when unknown.
 	networkLostSince func(time.Time) bool
+	// now is the health monitor's clock; nil means time.Now.
+	now func() time.Time
 }
 
 // transportResetRecheck is how soon the health monitor checks again after it
@@ -600,21 +602,36 @@ func (l *lease) dropTransport(reason string) bool {
 
 // healthyRun measures how long an attempt stayed healthy before its current
 // failing checks, so the session can tell a recovered attempt from one that
-// failed right after it connected.
+// failed right after it connected, and whether the network changed meanwhile.
 type healthyRun struct {
-	checks       int
-	start        time.Time
-	lastPass     time.Time
+	now func() time.Time
+	// checks counts consecutive passing scheduled checks since start. Checks
+	// triggered by a network event or run early after a transport reset do
+	// not count, so they cannot make a flapping server look healthy.
+	checks   int
+	start    time.Time
+	lastPass time.Time // last passing check of any kind
+	// eventSincePass is set by a network event and cleared by a passing
+	// check: a check that passes after the event shows the attempt survived it.
+	eventSincePass bool
+
 	streakChecks int
 	streakFor    time.Duration
-	// streakFrom is the last moment the attempt was known healthy.
-	streakFrom time.Time
+	streakFrom   time.Time // the last moment the attempt was known healthy
 }
 
-func newHealthyRun() healthyRun { return healthyRun{lastPass: time.Now()} }
+func newHealthyRun(now func() time.Time) healthyRun {
+	if now == nil {
+		now = time.Now
+	}
+	return healthyRun{now: now, lastPass: now()}
+}
 
-func (h *healthyRun) passed() {
-	h.lastPass = time.Now()
+func (h *healthyRun) passed(scheduled bool) {
+	h.lastPass, h.eventSincePass = h.now(), false
+	if !scheduled {
+		return
+	}
 	if h.checks == 0 {
 		h.start = h.lastPass
 	}
@@ -625,15 +642,19 @@ func (h *healthyRun) passed() {
 func (h *healthyRun) failed() {
 	h.streakChecks, h.streakFor, h.streakFrom = h.checks, 0, h.lastPass
 	if h.checks > 0 {
-		h.streakFor = time.Since(h.start)
+		h.streakFor = h.now().Sub(h.start)
 	}
 	h.checks = 0
 }
 
+func (h *healthyRun) networkEvent() { h.eventSincePass = true }
+
+// failure reports the streak. A network event counts only if no check passed
+// after it, so it exempts only the failures it caused.
 func (h *healthyRun) failure(failures []error, networkLostSince func(time.Time) bool) error {
 	return &sessionapi.HealthFailure{
 		Err: errors.Join(failures...), HealthyChecks: h.streakChecks, HealthyFor: h.streakFor,
-		NetworkLost: networkLostSince != nil && networkLostSince(h.streakFrom),
+		NetworkLost: h.eventSincePass || networkLostSince != nil && networkLostSince(h.streakFrom),
 	}
 }
 
@@ -667,7 +688,8 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 		defer close(l.healthFailed)
 		var failures []error
 		var eventReason string
-		healthy := newHealthyRun()
+		healthy := newHealthyRun(l.now)
+		scheduled := true
 		for {
 			var started time.Time
 			if eventReason != "" {
@@ -698,7 +720,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				}
 			} else {
 				failures = nil
-				healthy.passed()
+				healthy.passed(scheduled)
 			}
 			wait := interval
 			// A multiplexed transport can keep a dead connection that looks
@@ -707,6 +729,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 			if err != nil && len(failures) == 1 && l.dropTransport("connected health check failed") {
 				wait = transportResetRecheck
 			}
+			scheduled = wait == interval
 			if wait <= 0 {
 				select {
 				case <-ctx.Done():
@@ -726,7 +749,8 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				if !timer.Stop() {
 					<-timer.C
 				}
-				eventReason = reason
+				eventReason, scheduled = reason, false
+				healthy.networkEvent()
 				log.Infof(category, "health check triggered by %s generation=%d", reason, ref.Generation)
 				l.dropTransport("network event: " + reason)
 			case <-timer.C:

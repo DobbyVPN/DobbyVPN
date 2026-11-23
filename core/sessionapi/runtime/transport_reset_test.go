@@ -166,3 +166,81 @@ func TestHealthFailureReportsObservedNetworkLoss(t *testing.T) {
 		}
 	}
 }
+
+// scriptedCheck is one connected health check in a monitor script: its result,
+// and whether a network event arrives right after it (the check queues it, so
+// the monitor sees it before its next timer).
+type scriptedCheck struct {
+	ok    bool
+	event bool
+}
+
+// The recovery rules are decided from the monitor's real check counting, on a
+// fake clock that moves step per check: only consecutive scheduled checks
+// prove health (not event-triggered checks, not early rechecks after a
+// transport reset), and a network event exempts a failure only if no check
+// passed after it.
+func TestHealthFailureCountsOnlyScheduledChecks(t *testing.T) {
+	useTransportResetRecheck(t, time.Millisecond)
+	pass, fail := scriptedCheck{ok: true}, scriptedCheck{}
+	passThenEvent, failThenEvent := scriptedCheck{ok: true, event: true}, scriptedCheck{event: true}
+	for _, test := range []struct {
+		name        string
+		script      []scriptedCheck
+		reset       bool
+		threshold   int
+		checks      int
+		proved      bool
+		networkLost bool
+	}{
+		{name: "four scheduled checks over 40 s", script: []scriptedCheck{pass, pass, pass, pass, fail, fail}, threshold: 2, checks: 4, proved: true},
+		{name: "two scheduled checks within 20 s", script: []scriptedCheck{pass, pass, fail, fail}, threshold: 2, checks: 2},
+		{name: "event-triggered checks do not count", script: []scriptedCheck{passThenEvent, passThenEvent, passThenEvent, pass, fail, fail}, threshold: 2, checks: 1},
+		{name: "rechecks after a reset do not count", script: []scriptedCheck{pass, fail, pass, pass, fail, fail}, reset: true, threshold: 2, checks: 1},
+		{name: "event survived by a passing check", script: []scriptedCheck{passThenEvent, pass, fail, fail}, threshold: 2, checks: 1},
+		{name: "event right before the failures", script: []scriptedCheck{pass, passThenEvent, fail, fail}, threshold: 2, checks: 2, networkLost: true},
+		{name: "event during the failures", script: []scriptedCheck{pass, pass, failThenEvent, fail}, threshold: 2, checks: 2, networkLost: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var clock atomic.Int64 // seconds on the fake clock
+			var calls atomic.Int32
+			l := &lease{now: func() time.Time { return time.Unix(clock.Load(), 0) }}
+			if test.reset {
+				l.resetTransport = func(string) {}
+			}
+			check := func(context.Context, sessionapi.SessionRef, string) error {
+				index := int(calls.Add(1)) - 1
+				if index > 0 {
+					clock.Add(10)
+				}
+				step := test.script[min(index, len(test.script)-1)]
+				if step.event {
+					l.ProbeNow("test event")
+				}
+				if step.ok {
+					return nil
+				}
+				return errors.New("probe failed")
+			}
+			l.startHealthMonitor(context.Background(), sessionapi.SessionRef{Generation: 1}, "", check, 5*time.Millisecond, test.threshold)
+			var cause error
+			select {
+			case cause = <-l.healthFailed:
+			case <-time.After(5 * time.Second):
+				t.Fatal("no health failure")
+			}
+			stopHealthMonitor(t, l)
+			var health *sessionapi.HealthFailure
+			if !errors.As(cause, &health) {
+				t.Fatalf("cause %T is not a HealthFailure", cause)
+			}
+			if int(calls.Load()) != len(test.script) {
+				t.Fatalf("ran %d checks, script has %d", calls.Load(), len(test.script))
+			}
+			if health.HealthyChecks != test.checks || health.ProvedHealthy() != test.proved || health.NetworkLost != test.networkLost {
+				t.Fatalf("got checks=%d for=%s proved=%t network_lost=%t, want checks=%d proved=%t network_lost=%t",
+					health.HealthyChecks, health.HealthyFor, health.ProvedHealthy(), health.NetworkLost, test.checks, test.proved, test.networkLost)
+			}
+		})
+	}
+}

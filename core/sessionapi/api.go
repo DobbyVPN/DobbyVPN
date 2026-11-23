@@ -89,9 +89,17 @@ type HealthFailure struct {
 	Err           error
 	HealthyChecks int           // consecutive successful checks before the failing ones
 	HealthyFor    time.Duration // from the first of those checks to the first failure
-	// NetworkLost is set when the physical-network captures made by server
-	// lookups during the failing checks found no network or a different one.
+	// NetworkLost is set when a network event (wake, path change) arrived, or
+	// the physical-network captures made by server lookups found no network
+	// or a different one, after the last passing check.
 	NetworkLost bool
+}
+
+// ProvedHealthy reports whether the attempt passed at least
+// recoveryHealthyChecks consecutive scheduled checks over at least
+// recoveryHealthyFor before it failed.
+func (e *HealthFailure) ProvedHealthy() bool {
+	return e != nil && e.HealthyChecks >= recoveryHealthyChecks && e.HealthyFor >= recoveryHealthyFor
 }
 
 func (e *HealthFailure) Error() string { return e.Err.Error() }
@@ -309,12 +317,13 @@ type Manager struct {
 }
 
 const (
-	autoRecoveryLimit  = 3
-	autoRecoveryStable = 5 * time.Minute
-	// An attempt that stayed healthy for at least this many scheduled checks
-	// and this long before failing resets the recovery count: the failure was
-	// transient, as after a network drop. A server that hangs right after
-	// accepting the connection never gets there and still reaches the limit.
+	autoRecoveryLimit = 3
+	// An attempt that stayed healthy for at least this many consecutive
+	// scheduled checks and this long before failing resets the recovery count
+	// and the restart delays: the failure was transient, as after a network
+	// drop. This is the only reset while the session runs: time connected
+	// alone does not count, so a server that hangs right after accepting the
+	// connection, or flaps between checks, still reaches the limit.
 	recoveryHealthyChecks = 2
 	recoveryHealthyFor    = 30 * time.Second
 	autoRecoveryMessage   = "Automatic reconnect limit reached. Check your connection and connect again."
@@ -377,7 +386,6 @@ type session struct {
 	// proved healthy; it picks the growing pause before the next restart.
 	recoveryRestarts int
 	nextStartDelay   time.Duration
-	networkEventAt   time.Time
 	lastConnectedAt  time.Time
 	hasConnectedAt   bool
 	lastTransitionAt time.Time
@@ -836,8 +844,11 @@ func (m *Manager) retryLocked(requestCtx context.Context, s *session, target Sta
 	if err := m.saveActivationLocked(requestCtx, s.activeSourceKind, s.activeSourceURL, s.activeDigest, s.activeTarget); err != nil {
 		return StartResult{}, err
 	}
+	// Retry (manual or automatic) gives a fresh recovery budget but keeps the
+	// restart delays: only an attempt that proved healthy resets them, so a
+	// server that connects and then hangs keeps backing off.
 	s.recoveryCount, s.recoveryOriginGeneration = 0, 0
-	s.recoveryRestarts, s.nextStartDelay = 0, 0
+	s.nextStartDelay = 0
 	ctx, generation := m.beginAttemptLocked(s, s.activeTarget)
 	s.startOriginGeneration = generation
 	go m.runStart(ctx, s, generation, target)
@@ -1037,15 +1048,15 @@ func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cau
 	if !errors.As(cause, &health) {
 		health = &HealthFailure{}
 	}
-	provedHealthy := health.HealthyChecks >= recoveryHealthyChecks && health.HealthyFor >= recoveryHealthyFor
-	if provedHealthy || s.hasConnectedAt && m.now().Sub(s.lastConnectedAt) >= autoRecoveryStable {
+	provedHealthy := health.ProvedHealthy()
+	if provedHealthy {
 		s.recoveryCount, s.recoveryRestarts = 0, 0
 		s.recoveryOriginGeneration = 0
 	}
-	// A failure after a reported network change (wake, path change), or one
-	// during which the physical network was seen missing or replaced, is the
-	// network's, not the server's, and does not count toward the limit.
-	networkChanged := health.NetworkLost || s.hasConnectedAt && s.networkEventAt.After(s.lastConnectedAt)
+	// A failure that follows a network change (event or observed loss) since
+	// the last passing check is the network's, not the server's, and does not
+	// count toward the limit.
+	networkChanged := health.NetworkLost
 	log.Info("SESSION", "connected health recovery", map[string]any{
 		logGeneration: generation, "recovery_count": s.recoveryCount, "limit": autoRecoveryLimit,
 		"proved_healthy": provedHealthy, "network_changed": networkChanged, "restarts": s.recoveryRestarts,
@@ -1079,7 +1090,6 @@ func (m *Manager) NetworkEvent(_ context.Context, sessionID, reason string) erro
 		reason = reason[:64]
 	}
 	s.mu.Lock()
-	s.networkEventAt = m.now()
 	state, generation := s.state, s.generation
 	if s.offlineRefreshPending && s.attemptCtx != nil && s.vpnActive && state == StateConnected && !s.stopRequested && !s.closing {
 		s.offlineRefreshPending = false
@@ -1160,14 +1170,7 @@ func waitStartDelay(ctx context.Context, s *session) bool {
 	if delay <= 0 {
 		return true
 	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return true
-	case <-ctx.Done():
-		return false
-	}
+	return sleepStartDelay(ctx, delay)
 }
 
 // prepareStart waits any health-recovery pause, then acquires the network.
