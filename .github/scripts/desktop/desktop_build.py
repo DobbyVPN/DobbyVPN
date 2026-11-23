@@ -222,10 +222,12 @@ def run(
     return result
 
 
-def run_capture(command: list[str], cwd: Path = ROOT_DIR) -> str | None:
+def run_capture(
+    command: list[str], cwd: Path = ROOT_DIR, *, env: dict[str, str] | None = None,
+) -> str | None:
     printable = " ".join(command)
     try:
-        result = run_bounded_capture(command, cwd)
+        result = run_bounded_capture(command, cwd, env=env) if env is not None else run_bounded_capture(command, cwd)
     except FileNotFoundError as error:
         emit_process_diagnostic(f"[!] Probe command was not found: {printable}: {error}")
         return None
