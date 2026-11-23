@@ -135,3 +135,34 @@ func TestHealthFailureReportsHealthyChecksBeforeFailing(t *testing.T) {
 		t.Fatal("no health failure")
 	}
 }
+
+// The health failure says whether server lookups saw the physical network
+// missing or replaced since the attempt was last known healthy.
+func TestHealthFailureReportsObservedNetworkLoss(t *testing.T) {
+	for _, lost := range []bool{true, false} {
+		var asked time.Time
+		var checks atomic.Int32
+		l := &lease{networkLostSince: func(since time.Time) bool { asked = since; return lost }}
+		check := func(context.Context, sessionapi.SessionRef, string) error {
+			if checks.Add(1) == 1 {
+				return nil
+			}
+			return errors.New("probe failed")
+		}
+		started := time.Now()
+		l.startHealthMonitor(context.Background(), sessionapi.SessionRef{Generation: 1}, "", check, time.Millisecond, 2)
+		select {
+		case cause := <-l.healthFailed:
+			var health *sessionapi.HealthFailure
+			if !errors.As(cause, &health) || health.NetworkLost != lost {
+				t.Fatalf("lost=%t: got %#v", lost, cause)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no health failure")
+		}
+		stopHealthMonitor(t, l)
+		if asked.Before(started) {
+			t.Fatalf("the loss must be read from the last healthy check, asked since %v (monitor started %v)", asked, started)
+		}
+	}
+}

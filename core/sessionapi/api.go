@@ -89,6 +89,9 @@ type HealthFailure struct {
 	Err           error
 	HealthyChecks int           // consecutive successful checks before the failing ones
 	HealthyFor    time.Duration // from the first of those checks to the first failure
+	// NetworkLost is set when the physical-network captures made by server
+	// lookups during the failing checks found no network or a different one.
+	NetworkLost bool
 }
 
 func (e *HealthFailure) Error() string { return e.Err.Error() }
@@ -1031,14 +1034,18 @@ func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cau
 	s.lastFailure = FailureRuntime
 	s.lastFailureMessage = healthFailure
 	var health *HealthFailure
-	provedHealthy := errors.As(cause, &health) && health.HealthyChecks >= recoveryHealthyChecks && health.HealthyFor >= recoveryHealthyFor
+	if !errors.As(cause, &health) {
+		health = &HealthFailure{}
+	}
+	provedHealthy := health.HealthyChecks >= recoveryHealthyChecks && health.HealthyFor >= recoveryHealthyFor
 	if provedHealthy || s.hasConnectedAt && m.now().Sub(s.lastConnectedAt) >= autoRecoveryStable {
 		s.recoveryCount, s.recoveryRestarts = 0, 0
 		s.recoveryOriginGeneration = 0
 	}
-	// A failure after a reported network change (wake, path change) is the
+	// A failure after a reported network change (wake, path change), or one
+	// during which the physical network was seen missing or replaced, is the
 	// network's, not the server's, and does not count toward the limit.
-	networkChanged := s.hasConnectedAt && s.networkEventAt.After(s.lastConnectedAt)
+	networkChanged := health.NetworkLost || s.hasConnectedAt && s.networkEventAt.After(s.lastConnectedAt)
 	log.Info("SESSION", "connected health recovery", map[string]any{
 		logGeneration: generation, "recovery_count": s.recoveryCount, "limit": autoRecoveryLimit,
 		"proved_healthy": provedHealthy, "network_changed": networkChanged, "restarts": s.recoveryRestarts,

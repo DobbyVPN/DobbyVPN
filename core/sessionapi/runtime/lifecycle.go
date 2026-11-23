@@ -339,6 +339,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	lease.push(func(ctx context.Context) error { return core.Detach(ctx, ref.Generation) })
 	lease.setOnDone(r.releaseActive)
 	healthInterval, healthFailureThreshold := testHealthMonitorTiming(r.options.HealthInterval, r.options.HealthFailureThreshold)
+	lease.networkLostSince = r.network.cache.NetworkLostSince
 	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, healthInterval, healthFailureThreshold)
 	return lease, nil
 }
@@ -568,6 +569,9 @@ type lease struct {
 	// resetTransport drops the protocol's pooled multiplexed connections
 	// (Xray gRPC, XHTTP); nil for per-flow transports such as Outline.
 	resetTransport func(reason string)
+	// networkLostSince reads whether server lookups saw the physical network
+	// missing or replaced after a time; nil when unknown.
+	networkLostSince func(time.Time) bool
 }
 
 // transportResetRecheck is how soon the health monitor checks again after it
@@ -600,28 +604,37 @@ func (l *lease) dropTransport(reason string) bool {
 type healthyRun struct {
 	checks       int
 	start        time.Time
+	lastPass     time.Time
 	streakChecks int
 	streakFor    time.Duration
+	// streakFrom is the last moment the attempt was known healthy.
+	streakFrom time.Time
 }
 
+func newHealthyRun() healthyRun { return healthyRun{lastPass: time.Now()} }
+
 func (h *healthyRun) passed() {
+	h.lastPass = time.Now()
 	if h.checks == 0 {
-		h.start = time.Now()
+		h.start = h.lastPass
 	}
 	h.checks++
 }
 
 // failed is called on the first failure of a streak.
 func (h *healthyRun) failed() {
-	h.streakChecks, h.streakFor = h.checks, 0
+	h.streakChecks, h.streakFor, h.streakFrom = h.checks, 0, h.lastPass
 	if h.checks > 0 {
 		h.streakFor = time.Since(h.start)
 	}
 	h.checks = 0
 }
 
-func (h *healthyRun) failure(failures []error) error {
-	return &sessionapi.HealthFailure{Err: errors.Join(failures...), HealthyChecks: h.streakChecks, HealthyFor: h.streakFor}
+func (h *healthyRun) failure(failures []error, networkLostSince func(time.Time) bool) error {
+	return &sessionapi.HealthFailure{
+		Err: errors.Join(failures...), HealthyChecks: h.streakChecks, HealthyFor: h.streakFor,
+		NetworkLost: networkLostSince != nil && networkLostSince(h.streakFrom),
+	}
 }
 
 func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
@@ -654,7 +667,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 		defer close(l.healthFailed)
 		var failures []error
 		var eventReason string
-		var healthy healthyRun
+		healthy := newHealthyRun()
 		for {
 			var started time.Time
 			if eventReason != "" {
@@ -678,7 +691,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				})
 				if len(failures) >= threshold {
 					select {
-					case l.healthFailed <- healthy.failure(failures):
+					case l.healthFailed <- healthy.failure(failures, l.networkLostSince):
 					case <-ctx.Done():
 					}
 					return
