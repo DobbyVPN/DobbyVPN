@@ -48,8 +48,20 @@ func createStack(dev stack.LinkEndpoint, handler stackAdapter.TransportHandler, 
 	return s, nil
 }
 
+const (
+	iosActiveTCPLimit  = 64
+	iosPendingTCPLimit = 64
+	iosTCPWait         = 10 * time.Second
+)
+
 func newTCPForwarder(s *stack.Stack, handler stackAdapter.TransportHandler, rejecter tcpRejecter, admission *tcpAdmission) *tcp.Forwarder {
-	return tcp.NewForwarder(s, 0, tcpMaxConnAttempts, func(r *tcp.ForwarderRequest) {
+	maxInFlight := tcpMaxConnAttempts
+	if admission != nil {
+		// gVisor retains the SYN and starts a goroutine before the callback.
+		// Leave one extra slot for the callback to refuse an overflow request.
+		maxInFlight = iosActiveTCPLimit + iosPendingTCPLimit + 1
+	}
+	return tcp.NewForwarder(s, 0, maxInFlight, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
 		if dst, ok := netip.AddrFromSlice(id.LocalAddress.AsSlice()); ok && rejecter != nil && rejecter.RejectTCP(dst) {
 			r.Complete(true)
@@ -57,7 +69,7 @@ func newTCPForwarder(s *stack.Stack, handler stackAdapter.TransportHandler, reje
 		}
 		var release func()
 		if admission != nil {
-			release = admission.acquire(64, 64, 10*time.Second)
+			release = admission.acquire(iosActiveTCPLimit, iosPendingTCPLimit, iosTCPWait)
 			if release == nil {
 				r.Complete(true)
 				return
