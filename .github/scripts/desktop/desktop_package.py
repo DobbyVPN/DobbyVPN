@@ -634,7 +634,7 @@ def _describe(args: argparse.Namespace) -> int:
         with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-package-check-") as temporary:
             work = Path(temporary)
             _verify_pkg(package, version, work)
-            _verify_macos_package_source(package, source_sha, architecture, work)
+            _verify_macos_package_source(package, source_sha, architecture, work, debug=getattr(args, "debug", False))
 
     package_record = {
         "file_name": package.name,
@@ -657,11 +657,13 @@ def _describe(args: argparse.Namespace) -> int:
     return 0
 
 
-def _verify_macos_package_source(package: Path, source_sha: str, architecture: str, work: Path) -> None:
+def _verify_macos_package_source(
+    package: Path, source_sha: str, architecture: str, work: Path, *, debug: bool = False,
+) -> None:
     expanded = work / "expanded-pkg"
     if not expanded.is_dir():
         _run("expand macOS package for source identity check", ["pkgutil", "--expand-full", str(package), str(expanded)])
-    info_plists = list(expanded.rglob("Info.plist"))
+    info_plists = list(expanded.glob("**/Dobby VPN.app/Contents/Info.plist"))
     if len(info_plists) != 1:
         _fail(f"expected one application Info.plist in macOS package, found {len(info_plists)}")
     import plistlib
@@ -683,6 +685,11 @@ def _verify_macos_package_source(package: Path, source_sha: str, architecture: s
             metadata = _run("read macOS deployment target", ["xcrun", "vtool", "-arch", arch, "-show-build", str(binary)], capture=True)
             if not re.search(rb"(?m)^\s*minos\s+12\.0\s*$", metadata.stdout or b""):
                 _fail(f"{rel} {arch} does not declare macOS 12.0")
+        if debug:
+            symbols = contents / "Resources" / "DebugSymbols" / f"{binary.name}.dSYM"
+            ids = _macos_uuids(binary)
+            if len(ids) != len(expected) or ids != _macos_uuids(symbols):
+                _fail(f"installed payload debug symbols do not match {rel}")
 
 
 def _ensure_windows_pillow(work: Path, env: dict[str, str]) -> dict[str, str]:
