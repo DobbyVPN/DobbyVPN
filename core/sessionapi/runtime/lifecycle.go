@@ -419,12 +419,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		bypass = bypass.WithIPv6Availability(capability.IPv6Unavailable)
 	}
 	owned.proxyAddr, owned.bypass = device.GetProxyAddr(), bypass
-	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {
-		owned.waitReady = ready.WaitReady
-	}
-	if transport, ok := device.(interface{ ResetTransport(string) }); ok {
-		owned.resetTransport = transport.ResetTransport
-	}
+	owned.bindDeviceHooks(device)
 	if owned.proxyAddr == "" {
 		return fail(errors.New("protocol device returned an empty SOCKS endpoint"))
 	}
@@ -579,6 +574,56 @@ type lease struct {
 // dropped a multiplexed transport's connections, instead of the full interval.
 var transportResetRecheck = time.Second
 
+// bindDeviceHooks keeps the optional capabilities a protocol device offers.
+func (l *lease) bindDeviceHooks(device any) {
+	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {
+		l.waitReady = ready.WaitReady
+	}
+	if transport, ok := device.(interface{ ResetTransport(string) }); ok {
+		l.resetTransport = transport.ResetTransport
+	}
+}
+
+// dropTransport drops pooled multiplexed connections; it reports whether the
+// protocol has any.
+func (l *lease) dropTransport(reason string) bool {
+	if l.resetTransport == nil {
+		return false
+	}
+	l.resetTransport(reason)
+	return true
+}
+
+// healthyRun measures how long an attempt stayed healthy before its current
+// failing checks, so the session can tell a recovered attempt from one that
+// failed right after it connected.
+type healthyRun struct {
+	checks       int
+	start        time.Time
+	streakChecks int
+	streakFor    time.Duration
+}
+
+func (h *healthyRun) passed() {
+	if h.checks == 0 {
+		h.start = time.Now()
+	}
+	h.checks++
+}
+
+// failed is called on the first failure of a streak.
+func (h *healthyRun) failed() {
+	h.streakChecks, h.streakFor = h.checks, 0
+	if h.checks > 0 {
+		h.streakFor = time.Since(h.start)
+	}
+	h.checks = 0
+}
+
+func (h *healthyRun) failure(failures []error) error {
+	return &sessionapi.HealthFailure{Err: errors.Join(failures...), HealthyChecks: h.streakChecks, HealthyFor: h.streakFor}
+}
+
 func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
 func (l *lease) setOnDone(fn func(error))            { l.onDone = fn }
 
@@ -609,6 +654,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 		defer close(l.healthFailed)
 		var failures []error
 		var eventReason string
+		var healthy healthyRun
 		for {
 			var started time.Time
 			if eventReason != "" {
@@ -624,26 +670,28 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 			}
 			if err != nil {
 				failures = append(failures, err)
+				if len(failures) == 1 {
+					healthy.failed()
+				}
 				log.Warn(category, "connected health check failed", map[string]any{
 					"generation": ref.Generation, "consecutive_failures": len(failures), "threshold": threshold, "cause": err.Error(),
 				})
 				if len(failures) >= threshold {
-					cause := errors.Join(failures...)
 					select {
-					case l.healthFailed <- cause:
+					case l.healthFailed <- healthy.failure(failures):
 					case <-ctx.Done():
 					}
 					return
 				}
 			} else {
 				failures = nil
+				healthy.passed()
 			}
 			wait := interval
 			// A multiplexed transport can keep a dead connection that looks
 			// ready after a short network drop; drop it on the first failure
 			// and check again soon instead of waiting for the threshold.
-			if err != nil && len(failures) == 1 && l.resetTransport != nil {
-				l.resetTransport("connected health check failed")
+			if err != nil && len(failures) == 1 && l.dropTransport("connected health check failed") {
 				wait = transportResetRecheck
 			}
 			if wait <= 0 {
@@ -667,9 +715,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				}
 				eventReason = reason
 				log.Infof(category, "health check triggered by %s generation=%d", reason, ref.Generation)
-				if l.resetTransport != nil {
-					l.resetTransport("network event: " + reason)
-				}
+				l.dropTransport("network event: " + reason)
 			case <-timer.C:
 			}
 		}

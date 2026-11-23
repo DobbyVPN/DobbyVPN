@@ -110,3 +110,28 @@ func TestNetworkEventDropsMultiplexedConnectionsBeforeCheck(t *testing.T) {
 		t.Fatalf("order = %v, want check, reset on the network event, check", order)
 	}
 }
+
+// The health failure tells how long the attempt was healthy before the
+// failing checks, so the session can tell a transient failure from a server
+// that never stays healthy.
+func TestHealthFailureReportsHealthyChecksBeforeFailing(t *testing.T) {
+	var checks atomic.Int32
+	l := &lease{}
+	check := func(context.Context, sessionapi.SessionRef, string) error {
+		if checks.Add(1) <= 2 {
+			return nil
+		}
+		return errors.New("probe failed")
+	}
+	l.startHealthMonitor(context.Background(), sessionapi.SessionRef{Generation: 1}, "", check, time.Millisecond, 3)
+	t.Cleanup(func() { stopHealthMonitor(t, l) })
+	select {
+	case cause := <-l.healthFailed:
+		var health *sessionapi.HealthFailure
+		if !errors.As(cause, &health) || health.HealthyChecks != 2 || health.HealthyFor <= 0 {
+			t.Fatalf("want 2 healthy checks before failing, got %#v", cause)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no health failure")
+	}
+}
