@@ -17,10 +17,6 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
-    <!-- The bundled runtime must not be older than the newest one a release shipped (installer/dotnet-runtime-floor.json:
-         an MSI upgrade silently drops runtime files that are older than the installed ones). The SDK default would be
-         its own latest known patch, so the version is explicit. -->
-    <RuntimeFrameworkVersion>10.0.15</RuntimeFrameworkVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>DobbyVPN</AssemblyName>
@@ -31,4 +27,15 @@
     <AssemblyMetadata Include="DobbySourceCommit" Value="$(SourceCommit)" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.7.0" />
   </ItemGroup>
+
+  <!-- The bundled .NET runtime must not be older than the newest one a release shipped (installer/dotnet-runtime-floor.json:
+       an MSI upgrade silently drops runtime files that are older than the installed ones). Without a pin the runtime follows the
+       SDK's latest known patch, which is how the older runtime got in. The version is set on the Microsoft.NETCore.App framework
+       reference only: the RuntimeFrameworkVersion property would also be applied to the Windows SDK projection package
+       (Microsoft.Windows.SDK.NET.Ref), which has its own version line and does not exist as 10.0.15. -->
+  <Target Name="PinBundledNetCoreRuntime" BeforeTargets="ProcessFrameworkReferences">
+    <ItemGroup>
+      <FrameworkReference Update="Microsoft.NETCore.App" RuntimeFrameworkVersion="10.0.15" />
+    </ItemGroup>
+  </Target>
 </Project>
