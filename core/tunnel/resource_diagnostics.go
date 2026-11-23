@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"core/tunnel/platform_engine"
 	"fmt"
 	"runtime/metrics"
 )
@@ -24,6 +25,11 @@ func ResourceDiagnostics() string {
 		activeTCP, peakTCP = proxy.activeTCP.Load(), proxy.peakTCP.Load()
 		activeUDP, peakUDP = proxy.activeUDP.Load(), proxy.peakUDP.Load()
 	}
-	return fmt.Sprintf("go_heap_bytes=%d go_runtime_bytes=%d generation=%d activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d",
+	sample := fmt.Sprintf("go_heap_bytes=%d go_runtime_bytes=%d generation=%d activeTCP=%d peakTCP=%d activeUDP=%d peakUDP=%d",
 		heap, total-released, generation, activeTCP, peakTCP, activeUDP, peakUDP)
+	// Only the iOS stack limits TCP admission; other platforms keep the sample unchanged.
+	if active, pending, waited, refused, ok := platform_engine.TCPAdmissionDiagnostics(); ok {
+		sample += fmt.Sprintf(" admitActiveTCP=%d admitPendingTCP=%d admitWaitedTCP=%d admitRefusedTCP=%d", active, pending, waited, refused)
+	}
+	return sample
 }
