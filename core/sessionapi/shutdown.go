@@ -86,7 +86,10 @@ func (m *Manager) StopAndWait(ctx context.Context) error {
 			return failure(FailureCleanup, message)
 		}
 		if complete {
-			return nil
+			s.mu.Lock()
+			err := m.releaseKeptProtectionLocked(ctx, s)
+			s.mu.Unlock()
+			return err
 		}
 		select {
 		case <-changed:

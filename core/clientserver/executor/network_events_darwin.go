@@ -3,14 +3,72 @@
 package executor
 
 import (
+	"context"
+	"time"
+
 	"golang.org/x/sys/unix"
 
 	"core/log"
+	"core/routing"
 )
+
+const (
+	// macOS reports sleep only through IOKit. A wall clock that moves far more
+	// than the short check interval means the system slept.
+	wakeCheckInterval = 2 * time.Second
+	wakeClockJump     = 10 * time.Second
+	// Right after a wake SystemConfiguration may not report the physical
+	// network yet; capture it again once a second for up to this many tries.
+	wakeCaptureAttempts = 30
+	wakeCaptureTimeout  = 5 * time.Second
+)
+
+// watchWake reports a wake once the physical network is back, so a connected
+// session checks its tunnel at once instead of on its next periodic check.
+func watchWake(emit func(reason string)) {
+	last := time.Now().Round(0)
+	for range time.Tick(wakeCheckInterval) {
+		now := time.Now().Round(0)
+		if woke(last, now) {
+			log.Infof(desktopLogCategory, "system woke after %s", now.Sub(last).Round(time.Second))
+			go reportWakeWhenNetworkReady(emit, captureMacOSPhysicalNetwork, time.Sleep)
+		}
+		last = now
+	}
+}
+
+func woke(last, now time.Time) bool { return now.Sub(last) > wakeCheckInterval+wakeClockJump }
+
+func captureMacOSPhysicalNetwork(ctx context.Context) error {
+	_, err := routing.CaptureMacOSPhysicalNetwork(ctx)
+	return err
+}
+
+// reportWakeWhenNetworkReady retries the physical network capture that fails
+// right after a wake, then reports the wake. It reports even when the network
+// never returns, so the tunnel check still runs and its failure is shown.
+func reportWakeWhenNetworkReady(emit func(reason string), capture func(context.Context) error, sleep func(time.Duration)) {
+	for attempt := 1; attempt <= wakeCaptureAttempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), wakeCaptureTimeout)
+		err := capture(ctx)
+		cancel()
+		if err == nil {
+			log.Infof(desktopLogCategory, "physical network available after wake attempt=%d", attempt)
+			break
+		}
+		if attempt == wakeCaptureAttempts {
+			log.Errorf(desktopLogCategory, "physical network still unavailable after wake attempts=%d: %v", attempt, err)
+			break
+		}
+		sleep(time.Second)
+	}
+	emit(eventWake)
+}
 
 // Interface and address messages, and default route messages for a new
 // gateway. Other route messages arrive constantly from neighbour-cache churn.
 func watchNetworkChanges(emit func(reason string)) {
+	go watchWake(emit)
 	fd, err := unix.Socket(unix.AF_ROUTE, unix.SOCK_RAW, 0)
 	if err != nil {
 		log.Errorf(desktopLogCategory, "network change watcher unavailable: %v", err)

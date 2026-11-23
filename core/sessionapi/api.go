@@ -359,6 +359,11 @@ type session struct {
 
 	probeGeneration uint64
 	prober          ProbingLease
+
+	// rebuildNetwork asks the next attempt to replace the kept network;
+	// protectionKept is protection a released network left for the next one.
+	rebuildNetwork bool
+	protectionKept bool
 }
 
 // NewManager never starts a real core.  Its default runtime fails with the
@@ -809,7 +814,7 @@ func (m *Manager) retryLocked(requestCtx context.Context, s *session, target Sta
 	if err := m.saveActivationLocked(requestCtx, s.activeSourceKind, s.activeSourceURL, s.activeDigest, s.activeTarget); err != nil {
 		return StartResult{}, err
 	}
-	s.recoveryCount, s.recoveryOriginGeneration = 0, 0
+	m.prepareRetryLocked(s)
 	ctx, generation := m.beginAttemptLocked(s, s.activeTarget)
 	s.startOriginGeneration = generation
 	go m.runStart(ctx, s, generation, target)
@@ -917,6 +922,7 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 		return StopResult{Generation: generation, Sequence: s.sequence}, nil
 	}
 	if s.state == StateIdle || s.state == StateConfigured || s.state == StateFailed {
+		persistErr = errors.Join(persistErr, m.releaseKeptProtectionLocked(ctx, s))
 		return m.acknowledgeStoppedLocked(s, generation)
 	}
 	result = StopResult{Generation: generation, Sequence: s.sequence}
@@ -1097,7 +1103,7 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 		}
 	}
 	s.mu.Lock()
-	s.vpnActive = true
+	s.vpnActive, s.protectionKept = true, false
 	if m.protection != nil && !s.stopRequested && !s.closing {
 		s.retainedProtection = true
 	}
@@ -1109,6 +1115,10 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 // runStart owns acquisition and cleanup, including canceled late callbacks.
 func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
 	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
+	if err := m.releaseNetworkForRebuild(s); err != nil {
+		m.finish(s, generation, err)
+		return
+	}
 	if err := m.prepareNetwork(ctx, s); err != nil {
 		m.finish(s, generation, err)
 		return
@@ -1365,9 +1375,21 @@ func (m *Manager) retireFinishedResources(s *session, work *ledger, cause error)
 	s.mu.Lock()
 	releaseNetwork = s.stopRequested || s.closing || !s.vpnActive
 	network := s.networkLedger
+	// A rebuild that did not finish keeps the protection for the next Retry;
+	// Stop and shutdown release it.
+	keep := s.protectionKept && !s.stopRequested && !s.closing
 	s.mu.Unlock()
+	networkCtx := m.cleanupContext(s)
+	if keep {
+		networkCtx = WithKeptProtection(networkCtx)
+	}
 	if cleanupErr == nil && CodeOf(cause) != FailureCleanup && releaseNetwork && network != nil {
-		cleanupErr = network.release(m.cleanupContext(s))
+		cleanupErr = network.release(networkCtx)
+	}
+	if cleanupErr == nil && releaseNetwork && !keep {
+		s.mu.Lock()
+		cleanupErr = m.releaseKeptProtectionLocked(networkCtx, s)
+		s.mu.Unlock()
 	}
 	return releaseNetwork, cleanupErr
 }
@@ -1437,7 +1459,7 @@ func snapshotLocked(s *session) SnapshotResult {
 	}
 	return SnapshotResult{
 		SessionID: s.id, Sequence: s.sequence, Generation: s.generation, State: s.state,
-		VPNActive: s.vpnActive, NetworkGeneration: s.networkGeneration, CanRetry: canRetry(s),
+		VPNActive: s.vpnActive || s.protectionKept, NetworkGeneration: s.networkGeneration, CanRetry: canRetry(s),
 		Configured: s.configured, LogsUploadAvailable: s.logsEndpoint != "", Digest: s.digest, SourceKind: s.sourceKind, SourceURL: s.sourceURL, SourceError: s.sourceError,
 		ActiveDigest: s.activeDigest, ActiveMode: s.activeTarget.Mode, ActiveIndex: s.activeTarget.Index, PendingTarget: pending, CanSwitch: canSwitch(s),
 		Profiles:      summaries(s.profiles),
@@ -1453,7 +1475,7 @@ func canSwitch(s *session) bool {
 }
 
 func canRetry(s *session) bool {
-	return !s.closing && s.state == StateFailed && s.vpnActive && !s.cleanupFailed && s.ledger == nil
+	return !s.closing && s.state == StateFailed && (s.vpnActive || s.protectionKept) && !s.cleanupFailed && s.ledger == nil
 }
 
 const primaryActionStop = "STOP"

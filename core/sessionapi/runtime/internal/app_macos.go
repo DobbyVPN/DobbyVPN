@@ -59,7 +59,15 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	plan := routing.NewPlan(fmt.Sprintf("darwin:%p", app))
 	var ownedEngine *tunnel.Engine
-	app.setCleanup(plan.Close, func(ctx context.Context) error {
+	var killSwitch atomic.Pointer[routing.MacOSKillSwitch]
+	app.setCleanup(func(ctx context.Context) error {
+		// A network released for a rebuild keeps the kill switch applied
+		// until the next network adopts it.
+		if guard := killSwitch.Load(); guard != nil && sessionapi.KeepsProtection(ctx) {
+			guard.HandOver()
+		}
+		return plan.Close(ctx)
+	}, func(ctx context.Context) error {
 		if ownedEngine != nil {
 			return ownedEngine.Stop(ctx)
 		}
@@ -70,7 +78,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return nil
 	})
 
-	var killSwitch atomic.Pointer[routing.MacOSKillSwitch]
 	physicalRoutes, err := plan.AcquireMacOSPhysicalRoutes()
 	if err != nil {
 		signalInit(initResult, err)

@@ -69,6 +69,9 @@ type MacOSKillSwitch struct {
 	// stale is set when the loaded rules may differ from the state above, so
 	// the next change reloads even if it changes nothing itself.
 	stale bool
+	// handover keeps the rules and the enable token at Close, for the next
+	// network to adopt.
+	handover bool
 }
 
 // AcquireMacOSKillSwitch blocks outbound traffic outside tunName with rules in
@@ -332,10 +335,28 @@ func (k *MacOSKillSwitch) Retire(ctx context.Context, generation uint64) error {
 	})
 }
 
+// HandOver makes Close keep the rules and the enable token, so traffic stays
+// blocked while the network is rebuilt. The next network adopts them like
+// rules left by an interrupted backend; ReleaseUnadoptedMacOSKillSwitch
+// removes them when none does.
+func (k *MacOSKillSwitch) HandOver() {
+	k.mu.Lock()
+	k.handover = true
+	k.mu.Unlock()
+}
+
 func (k *MacOSKillSwitch) Close(ctx context.Context) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.closed {
+		return nil
+	}
+	if k.applied && k.handover {
+		macOSPFOwner.Lock()
+		macOSPFOwner.active = false
+		macOSPFOwner.Unlock()
+		log.Info(Category, "macOS kill switch kept for the next network", map[string]any{"anchor": MacOSPFAnchor})
+		k.closed = true
 		return nil
 	}
 	if k.applied {
