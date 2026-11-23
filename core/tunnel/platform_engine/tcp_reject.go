@@ -34,36 +34,51 @@ const (
 // handler before answering a SYN. The device is attached only after the
 // forwarder is installed, so no packet reaches the default one.
 func createStack(dev stack.LinkEndpoint, handler stackAdapter.TransportHandler) (*stack.Stack, error) {
+	return createStackWithAdmission(dev, handler, nil)
+}
+
+func createStackWithAdmission(dev stack.LinkEndpoint, handler stackAdapter.TransportHandler, admission *tcpAdmission) (*stack.Stack, error) {
 	rejecter, ok := handler.(tcpRejecter)
-	if !ok {
+	if !ok && admission == nil {
 		return core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: handler})
 	}
 	gate := &attachGate{LinkEndpoint: dev}
-	s, err := core.CreateStack(&core.Config{LinkEndpoint: gate, TransportHandler: handler})
+	s, err := core.CreateStack(&core.Config{LinkEndpoint: gate, TransportHandler: handler, Options: tcpStackOptions})
 	if err != nil {
 		return s, err
 	}
-	s.SetTransportProtocolHandler(tcp.ProtocolNumber, newTCPForwarder(s, handler, rejecter).HandlePacket)
+	s.SetTransportProtocolHandler(tcp.ProtocolNumber, newTCPForwarder(s, handler, rejecter, admission).HandlePacket)
 	gate.open()
 	return s, nil
 }
 
-func newTCPForwarder(s *stack.Stack, handler stackAdapter.TransportHandler, rejecter tcpRejecter) *tcp.Forwarder {
+func newTCPForwarder(s *stack.Stack, handler stackAdapter.TransportHandler, rejecter tcpRejecter, admission *tcpAdmission) *tcp.Forwarder {
 	return tcp.NewForwarder(s, 0, tcpMaxConnAttempts, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
-		if dst, ok := netip.AddrFromSlice(id.LocalAddress.AsSlice()); ok && rejecter.RejectTCP(dst) {
+		if dst, ok := netip.AddrFromSlice(id.LocalAddress.AsSlice()); ok && rejecter != nil && rejecter.RejectTCP(dst) {
 			r.Complete(true)
 			return
+		}
+		var release func()
+		if admission != nil {
+			release = admission.acquire(64, 64, 10*time.Second)
+			if release == nil {
+				r.Complete(true)
+				return
+			}
 		}
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)
 		if err != nil {
+			if release != nil {
+				release()
+			}
 			r.Complete(true)
 			return
 		}
 		defer r.Complete(false)
 		setTCPSocketOptions(s, ep)
-		handler.HandleTCP(&tcpConn{TCPConn: gonet.NewTCPConn(&wq, ep), id: id})
+		handler.HandleTCP(&tcpConn{TCPConn: gonet.NewTCPConn(&wq, ep), id: id, release: release})
 	})
 }
 
@@ -86,7 +101,16 @@ func setTCPSocketOptions(s *stack.Stack, ep tcpip.Endpoint) {
 
 type tcpConn struct {
 	*gonet.TCPConn
-	id stack.TransportEndpointID
+	id      stack.TransportEndpointID
+	release func()
+}
+
+func (c *tcpConn) Close() error {
+	err := c.TCPConn.Close()
+	if c.release != nil {
+		c.release()
+	}
+	return err
 }
 
 func (c *tcpConn) ID() *stack.TransportEndpointID { return &c.id }

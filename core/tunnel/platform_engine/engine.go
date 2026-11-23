@@ -42,6 +42,7 @@ func InterfaceName() string { return platformInterfaceName() }
 // hooks, global logger replacement, REST listener, or fatal-exit path.
 var ownedDevice device.Device
 var ownedStack *stack.Stack
+var ownedTCPAdmission *tcpAdmission
 
 func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, error) {
 	if ownedDevice != nil || ownedStack != nil {
@@ -74,7 +75,10 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 	if handler == nil {
 		handler = tunnel.T()
 	}
-	ownedStack, err = createStack(dev, handler)
+	if len(tcpStackOptions) != 0 {
+		ownedTCPAdmission = &tcpAdmission{changed: make(chan struct{})}
+	}
+	ownedStack, err = createStackWithAdmission(dev, handler, ownedTCPAdmission)
 	if err == nil {
 		log.Infof(Category, "packet stack ready interface=%s mtu=%d ipv4=true ipv6=true", dev.Name(), dev.MTU())
 	}
@@ -139,6 +143,11 @@ func drainStack(ctx context.Context) error {
 }
 
 func stopStack(ctx context.Context) error {
+	if ownedTCPAdmission != nil {
+		waited, refused := ownedTCPAdmission.seal()
+		log.Infof(Category, "TCP admission totals waited=%d refused=%d", waited, refused)
+		ownedTCPAdmission = nil
+	}
 	if ownedDevice != nil {
 		if err := stopPhaseCtx(ctx, "device-close", ownedDevice.Close); err != nil {
 			return err
