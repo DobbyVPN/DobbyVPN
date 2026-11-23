@@ -332,20 +332,6 @@ public final class DobbySessionViewModel: ObservableObject {
         if !message.isEmpty { recordError(message) }
     }
 
-    public var canRetryVPNSetup: Bool {
-        snapshot.sessionID.isEmpty && setupFailure != nil && !setupRetryPending && !setupRetryRunning
-    }
-
-    public func retryVPNSetup() {
-        guard canRetryVPNSetup else { return }
-        resetClosedFailures()
-        if snapshotInFlight {
-            setupRetryPending = true
-        } else {
-            refreshSnapshot(retryingVPNSetup: true)
-        }
-    }
-
     public func refreshSnapshot() {
         refreshSnapshot(retryingVPNSetup: false)
     }
@@ -874,6 +860,22 @@ extension DobbySessionViewModel {
     }
 
     /// Closes the error the popup shows first: import guidance, then the last command error.
+}
+
+extension DobbySessionViewModel {
+    public var canRetryVPNSetup: Bool {
+        snapshot.sessionID.isEmpty && setupFailure != nil && !setupRetryPending && !setupRetryRunning
+    }
+
+    public func retryVPNSetup() {
+        guard canRetryVPNSetup else { return }
+        resetClosedFailures()
+        if snapshotInFlight {
+            setupRetryPending = true
+        } else {
+            refreshSnapshot(retryingVPNSetup: true)
+        }
+    }
 }
 
 private func readSnapshot(

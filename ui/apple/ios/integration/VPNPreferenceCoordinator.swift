@@ -147,7 +147,9 @@ final class VPNPreferenceCoordinator {
                 if let error {
                     let operation = phase == .save ? "save" : "reload"
                     if let setup {
-                        self.log("ERROR", "[provider] VPN setup trigger=\(setup.trigger) operation=\(operation) profile=\(setup.profile) elapsed=\(ProcessInfo.processInfo.systemUptime - setup.started) on_demand=\(onDemand) rule_count=\(ruleCount): \(self.describeError(error))")
+                        let elapsed = ProcessInfo.processInfo.systemUptime - setup.started
+                        self.log("ERROR", "[provider] VPN setup trigger=\(setup.trigger) operation=\(operation) profile=\(setup.profile) " +
+                                 "elapsed=\(elapsed) on_demand=\(onDemand) rule_count=\(ruleCount): \(self.describeError(error))")
                         completion(saved, VPNSetupFailure(operation: operation, profile: setup.profile, original: error))
                         return
                     }
