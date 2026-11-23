@@ -212,11 +212,13 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 	var sum int64
 	successes := 0
 	var endpointErrors []error
-	// transportOnly stays true while every failed endpoint failed before a
-	// response: at connect or at TLS.
+	// transportOnly stays true while every endpoint failed before a response:
+	// at connect or at TLS.
 	transportOnly := true
+	read := 0
 	for finished := range len(httpProbeURLs) {
 		received := <-completed
+		read++
 		result := received.result
 		if result.err != nil {
 			endpointErr := fmt.Errorf(
@@ -228,8 +230,7 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 				result.err,
 			)
 			endpointErrors = append(endpointErrors, endpointErr)
-			transportOnly = transportOnly && result.errorClass != probeErrorCanceled &&
-				(result.failureStage == probeStageConnect || result.failureStage == probeStageTLS)
+			transportOnly = transportOnly && transportFailure(result)
 		} else {
 			successes++
 			sum += result.latencyMs
@@ -253,6 +254,13 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 		}
 	}
 
+	// The network-level marker needs every endpoint: one that reached HTTP,
+	// in any order, means the network under the tunnel works.
+	if successes == 0 && transportOnly {
+		for ; read < len(httpProbeURLs); read++ {
+			transportOnly = transportOnly && transportFailure((<-completed).result)
+		}
+	}
 	log.Debugf("PROBE", "Tunnel probe latency samples successful=%d/%d required=%d", successes, len(httpProbeURLs), requiredSuccesses)
 	writeLog := log.Warnf
 	if errors.Is(ctx.Err(), context.Canceled) {
@@ -267,10 +275,17 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 		requiredSuccesses,
 		errors.Join(endpointErrors...),
 	)
-	if successes == 0 && transportOnly && len(endpointErrors) > 0 {
+	if successes == 0 && transportOnly {
 		return 0, transportUnreachableError{err}
 	}
 	return 0, err
+}
+
+// transportFailure reports an endpoint that failed before a response, at
+// connect or at TLS, and was not canceled by its caller.
+func transportFailure(result probeEndpointResult) bool {
+	return result.err != nil && result.errorClass != probeErrorCanceled &&
+		(result.failureStage == probeStageConnect || result.failureStage == probeStageTLS)
 }
 
 // transportUnreachableError marks a probe in which no endpoint got past
