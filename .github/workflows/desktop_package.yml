@@ -91,22 +91,35 @@ jobs:
           REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
         run: bash .github/scripts/desktop/macos_signing.sh prepare
 
-      # The runtime check in desktop_package.py compares the new MSI with the last release. A release that cannot
-      # be downloaded (the first release, no network) leaves the committed floor as the only gate.
+      # The runtime check in desktop_package.py compares the new MSI with the last release. Only a confirmed "no release
+      # exists yet" may skip it; any other failure to fetch it fails a release build (other builds only warn).
       - name: Fetch the previous release MSI for the bundled runtime check
         if: ${{ inputs.platform == 'windows' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          PRODUCTION_BUILD: ${{ github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' }}
         run: |
           set -uo pipefail
           directory="$RUNNER_TEMP/previous-release"
+          error="$RUNNER_TEMP/previous-release.err"
           mkdir -p "$directory"
-          if gh release download --repo "$GITHUB_REPOSITORY" --pattern dobbyVPN-windows-amd64.msi --dir "$directory" --clobber; then
-            echo "DOBBYVPN_PREVIOUS_RELEASE_MSI=$directory/dobbyVPN-windows-amd64.msi" >> "$GITHUB_ENV"
+          if gh release view --repo "$GITHUB_REPOSITORY" --json tagName > /dev/null 2> "$error"; then
+            if gh release download --repo "$GITHUB_REPOSITORY" --pattern dobbyVPN-windows-amd64.msi --dir "$directory" --clobber \
+                && test -s "$directory/dobbyVPN-windows-amd64.msi"; then
+              echo "DOBBYVPN_PREVIOUS_RELEASE_MSI=$directory/dobbyVPN-windows-amd64.msi" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "::error::The latest release exists but its MSI could not be downloaded."
+          elif grep -qi 'release not found' "$error"; then
+            echo "No release exists yet; only the committed runtime floor applies."
+            exit 0
           else
-            echo "No previous release MSI could be downloaded; only the committed runtime floor applies."
+            cat "$error"
+            echo "::error::Could not determine whether a previous release exists."
           fi
+          if [[ "$PRODUCTION_BUILD" == true ]]; then exit 1; fi
+          echo "::warning::Continuing without the previous release; only the committed runtime floor applies."
 
       - name: Build package with the local platform command
         id: build

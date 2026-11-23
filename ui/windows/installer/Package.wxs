@@ -28,7 +28,14 @@
 		<Property Id="ARPNOMODIFY" Value="yes" />
 		<Property Id="DISABLEADVTSHORTCUTS" Value="yes" />
 		<Property Id="MSIDISABLERMRESTART" Value="1" />
+
 		<Property Id="MSIRMSHUTDOWN" Value="1" />
+		<!-- Copy every file regardless of the version already installed. Windows Installer applies the reinstall mode to a normal install too
+		     (https://learn.microsoft.com/en-us/windows/win32/msi/reinstallmode), and a major upgrade installs the new package while the old one is
+		     still costed, so "omus" (the default: copy only if missing or older) skipped runtime files older than the installed ones. "a" forces
+		     all files; m, u and s keep the default registry and shortcut rules. Costs: ICE40 warns that REINSTALLMODE is in the Property table
+		     (suppressed in build.bat), and a repair or reinstall copies all files again. -->
+		<Property Id="REINSTALLMODE" Value="amus" />
 		<Property Id="DOBBYVPN_CONTROL_PIPE_SID" Secure="yes" />
 		<SetProperty
 			Id="DOBBYVPN_CONTROL_PIPE_SID"
@@ -41,10 +48,9 @@
 
 		<!-- Remove the old product before installing components with changed key files: v1.5.0 and the current MSI
 		     put dobby_bridge.dll and wintun.dll at the same path in components with different ids, so afterInstallExecute
-		     or afterInstallFinalize would delete the new copies. Costing always runs before any of these positions, so a bundled
-		     file that is older than the installed one is skipped and then removed with the old product (v1.5.15 over v1.5.11
-		     lost 186 runtime files). The bundled .NET runtime is therefore never allowed to go backwards:
-		     dotnet-runtime-floor.json and the check in desktop_package.py. -->
+		     or afterInstallFinalize would delete the new copies. Costing always runs before these positions, and it skips a
+		     bundled file that is older than the installed one; the removal of the old product then deletes it (v1.5.15 over
+		     v1.5.11 lost 186 runtime files). REINSTALLMODE below makes the file copy independent of versions. -->
 		<MajorUpgrade
 			AllowDowngrades="no"
 			AllowSameVersionUpgrades="yes"
