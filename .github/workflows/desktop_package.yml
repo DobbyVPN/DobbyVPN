@@ -91,6 +91,23 @@ jobs:
           REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
         run: bash .github/scripts/desktop/macos_signing.sh prepare
 
+      # The runtime check in desktop_package.py compares the new MSI with the last release. A release that cannot
+      # be downloaded (the first release, no network) leaves the committed floor as the only gate.
+      - name: Fetch the previous release MSI for the bundled runtime check
+        if: ${{ inputs.platform == 'windows' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          directory="$RUNNER_TEMP/previous-release"
+          mkdir -p "$directory"
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern dobbyVPN-windows-amd64.msi --dir "$directory" --clobber; then
+            echo "DOBBYVPN_PREVIOUS_RELEASE_MSI=$directory/dobbyVPN-windows-amd64.msi" >> "$GITHUB_ENV"
+          else
+            echo "No previous release MSI could be downloaded; only the committed runtime floor applies."
+          fi
+
       - name: Build package with the local platform command
         id: build
         shell: bash

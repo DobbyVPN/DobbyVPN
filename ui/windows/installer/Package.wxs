@@ -39,7 +39,12 @@
 
 		<MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-		<!-- Remove v1.5.0 before installing components with changed key files. -->
+		<!-- Remove the old product before installing components with changed key files: v1.5.0 and the current MSI
+		     put dobby_bridge.dll and wintun.dll at the same path in components with different ids, so afterInstallExecute
+		     or afterInstallFinalize would delete the new copies. Costing always runs before any of these positions, so a bundled
+		     file that is older than the installed one is skipped and then removed with the old product (v1.5.15 over v1.5.11
+		     lost 186 runtime files). The bundled .NET runtime is therefore never allowed to go backwards:
+		     dotnet-runtime-floor.json and the check in desktop_package.py. -->
 		<MajorUpgrade
 			AllowDowngrades="no"
 			AllowSameVersionUpgrades="yes"

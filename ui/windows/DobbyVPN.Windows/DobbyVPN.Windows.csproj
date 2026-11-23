@@ -17,6 +17,10 @@
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
+    <!-- The bundled runtime must not be older than the newest one a release shipped (installer/dotnet-runtime-floor.json:
+         an MSI upgrade silently drops runtime files that are older than the installed ones). The SDK default would be
+         its own latest known patch, so the version is explicit. -->
+    <RuntimeFrameworkVersion>10.0.15</RuntimeFrameworkVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>DobbyVPN</AssemblyName>
