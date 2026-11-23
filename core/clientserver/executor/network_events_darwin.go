@@ -2,8 +2,55 @@
 
 package executor
 
+/*
+#cgo LDFLAGS: -framework IOKit -framework CoreFoundation
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOMessage.h>
+#include <IOKit/pwr_mgt/IOPMLib.h>
+#include <unistd.h>
+
+static io_connect_t dobby_power_root;
+static int dobby_power_fd = -1;
+
+static void dobby_power_callback(void *ref, io_service_t service, natural_t type, void *argument) {
+	char event;
+	switch (type) {
+	case kIOMessageCanSystemSleep:
+		IOAllowPowerChange(dobby_power_root, (long)argument);
+		break;
+	case kIOMessageSystemWillSleep:
+		event = 's';
+		(void)write(dobby_power_fd, &event, 1);
+		IOAllowPowerChange(dobby_power_root, (long)argument);
+		break;
+	case kIOMessageSystemHasPoweredOn:
+		event = 'w';
+		(void)write(dobby_power_fd, &event, 1);
+		break;
+	}
+}
+
+// Registers for system power notifications and runs this thread's run loop.
+// It returns only when the registration fails.
+static int dobby_watch_system_power(int fd) {
+	IONotificationPortRef port;
+	io_object_t notifier;
+	dobby_power_fd = fd;
+	dobby_power_root = IORegisterForSystemPower(NULL, &port, dobby_power_callback, &notifier);
+	if (dobby_power_root == MACH_PORT_NULL) {
+		return -1;
+	}
+	CFRunLoopAddSource(CFRunLoopGetCurrent(), IONotificationPortGetRunLoopSource(port), kCFRunLoopDefaultMode);
+	CFRunLoopRun();
+	return 0;
+}
+*/
+import "C"
+
 import (
 	"context"
+	"os"
+	"runtime"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -13,48 +60,65 @@ import (
 )
 
 const (
-	// kern.waketime is checked this often; it changes only when the system
-	// wakes, so clock changes and scheduling delays cannot fake or hide one.
-	wakeCheckInterval = 2 * time.Second
 	// Right after a wake SystemConfiguration may not report the physical
 	// network yet. Capture it again once a second, for at most this long.
 	wakeNetworkBudget = 30 * time.Second
 	wakeCapturePause  = time.Second
+
+	powerSleep = 's'
+	powerWake  = 'w'
 )
 
 // watchWake reports a wake once the physical network is back, so a connected
 // session checks its tunnel at once instead of on its next periodic check.
-// macOS records each wake in kern.waketime; polling it needs no cgo, unlike
-// IOKit power notifications, which need a run loop thread.
+// The power notifications come from IOKit on a thread of their own and reach
+// Go through a pipe.
 func watchWake(emit func(reason string)) {
-	last, err := lastWakeTime()
+	read, write, err := os.Pipe()
 	if err != nil {
 		log.Errorf(desktopLogCategory, "wake watcher unavailable: %v", err)
 		return
 	}
-	cancelPrevious := func() {}
-	for range time.Tick(wakeCheckInterval) {
-		current, err := lastWakeTime()
-		if err != nil || current == last {
-			continue
+	go func() {
+		runtime.LockOSThread()
+		if C.dobby_watch_system_power(C.int(write.Fd())) != 0 {
+			log.Errorf(desktopLogCategory, "wake watcher unavailable: IORegisterForSystemPower failed")
+			_ = write.Close()
 		}
-		last = current
-		log.Infof(desktopLogCategory, "system woke at %s", current.Format(time.RFC3339))
-		// Only the newest wake waits for the network; an older wait ends
-		// without reporting.
-		cancelPrevious()
-		ctx, cancel := context.WithCancel(context.Background())
-		cancelPrevious = cancel
-		go reportWakeWhenNetworkReady(ctx, emit, captureMacOSPhysicalNetwork, wakeNetworkBudget, wakeCapturePause)
+	}()
+	waiter := &wakeWaiter{emit: emit, capture: captureMacOSPhysicalNetwork, budget: wakeNetworkBudget, pause: wakeCapturePause}
+	event := make([]byte, 1)
+	for {
+		if _, err := read.Read(event); err != nil {
+			log.Errorf(desktopLogCategory, "wake watcher stopped: %v", err)
+			return
+		}
+		waiter.power(event[0])
 	}
 }
 
-func lastWakeTime() (time.Time, error) {
-	value, err := unix.SysctlTimeval("kern.waketime")
-	if err != nil {
-		return time.Time{}, err
+// wakeWaiter keeps one wait for the physical network at a time: a new wake
+// or a sleep ends an older wait, which then reports nothing.
+type wakeWaiter struct {
+	emit          func(reason string)
+	capture       func(context.Context) error
+	budget, pause time.Duration
+	cancel        context.CancelFunc
+}
+
+func (w *wakeWaiter) power(event byte) {
+	if w.cancel != nil {
+		w.cancel()
+		w.cancel = nil
 	}
-	return time.Unix(value.Sec, int64(value.Usec)*int64(time.Microsecond)), nil
+	if event != powerWake {
+		log.Infof(desktopLogCategory, "system is going to sleep")
+		return
+	}
+	log.Infof(desktopLogCategory, "system woke")
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancel = cancel
+	go reportWakeWhenNetworkReady(ctx, w.emit, w.capture, w.budget, w.pause)
 }
 
 func captureMacOSPhysicalNetwork(ctx context.Context) error {
@@ -65,7 +129,7 @@ func captureMacOSPhysicalNetwork(ctx context.Context) error {
 // reportWakeWhenNetworkReady retries the physical network capture that fails
 // right after a wake for at most budget, then reports the wake. It reports
 // even when the network does not return, so the tunnel check still runs and
-// its failure is shown. A canceled parent means a newer wake took over.
+// its failure is shown. A canceled parent means a newer event took over.
 func reportWakeWhenNetworkReady(parent context.Context, emit func(reason string), capture func(context.Context) error, budget, pause time.Duration) {
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
