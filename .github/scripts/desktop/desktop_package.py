@@ -44,6 +44,7 @@ WIX_VERSION = "6.0.0"
 
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 sys.path.insert(0, str(SCRIPT_DIR))
+import windows_msi_runtime
 import windows_runtime_guard
 from bounded_process import (
     COMMAND_DEADLINE_ENV,
@@ -796,6 +797,13 @@ def _build_windows_msi(
     log_path = installer / "bin" / "amd64" / "dobbyVPN-windows-amd64.msi.log"
     try:
         _verify_msi(package, version, env, debug)
+        # After the checks, which read the real versions: make the install of the bundled runtime files
+        # independent of the versions on the machine (see windows_msi_runtime.py).
+        try:
+            changed, runtime = windows_msi_runtime.force_harvested_versions(package, env)
+        except windows_msi_runtime.MsiRuntimeError as error:
+            _fail(str(error))
+        _log(f"forced the File table version of {changed} harvested files; bundled runtime {runtime}")
     finally:
         if log_path.exists():
             _emit_file("Windows MSI build log", log_path)
@@ -858,6 +866,14 @@ $ErrorActionPreference = "Stop"
 $msi = (Resolve-Path $env:DOBBYVPN_PACKAGE).Path
 $installer = New-Object -ComObject WindowsInstaller.Installer
 $database = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @($msi, 0))
+# The File table versions of the harvested files are forced after the build; the real runtime is a property then.
+$view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, "SELECT `Value` FROM `Property` WHERE `Property` = 'DobbyVPNBundledRuntime'")
+$view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
+$record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+if ($null -ne $record) {
+  Write-Output ("RUNTIME_VERSION=" + $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1))
+  exit 0
+}
 $view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, 'SELECT `FileName`, `Version` FROM `File`')
 $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
 while ($true) {
