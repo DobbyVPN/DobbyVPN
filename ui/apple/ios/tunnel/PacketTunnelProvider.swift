@@ -136,6 +136,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var resourceTimer: DispatchSourceTimer?
     private var resourceRecord: IOSProviderRunRecord?
     private var savedResourcePeak: UInt64 = 0
+    private var savedAdmission = ""
     private var lastResourceWrite: TimeInterval = 0
     private var resourcePath: URL { IOSAppCompositionRoot.sharedLogPath("provider-run.json") }
     let tunnelId = UUID().uuidString
@@ -338,7 +339,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let previous = try IOSProviderRunRecord.load(from: resourcePath)
                 if let previous, previous.launchID != launchId, previous.protected {
                     logs.writeLog(level: "WARN", log: "[tunnel] unexpected previous launch=\(previous.launchID) " +
-                                  "peak_footprint_bytes=\(previous.peakBytes) \(previous.peakResources)")
+                                  "peak_footprint_bytes=\(previous.peakBytes) \(previous.peakResources) " +
+                                  "latest=[\(previous.latestResources ?? "")]")
                 }
                 resourceRecord = IOSProviderRunRecord(launchID: launchId, replacing: previous)
             } catch {
@@ -368,14 +370,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func sampleResourcePeak() {
         guard var record = resourceRecord, record.protected else { return }
+        let resources = DobbyvpnResourceDiagnostics()
         if let bytes = physicalFootprint().0, bytes > record.peakBytes {
             record.peakBytes = bytes
-            record.peakResources = DobbyvpnResourceDiagnostics()
-            resourceRecord = record
+            record.peakResources = resources
         }
+        // TCP admission counters keep changing after the footprint peak, so the
+        // latest sample is kept too and saved when those counters change.
+        record.latestResources = resources
+        resourceRecord = record
+        let admission = resources.range(of: " admitActiveTCP=").map { String(resources[$0.lowerBound...]) } ?? ""
         let elapsed = ProcessInfo.processInfo.systemUptime - lastResourceWrite
-        if record.peakBytes > savedResourcePeak,
-           elapsed >= 1 || record.peakBytes - savedResourcePeak >= 4 * 1024 * 1024 {
+        let peakChanged = record.peakBytes > savedResourcePeak &&
+            (elapsed >= 1 || record.peakBytes - savedResourcePeak >= 4 * 1024 * 1024)
+        if peakChanged || (admission != savedAdmission && elapsed >= 1) {
+            savedAdmission = admission
             persistResources()
         }
     }

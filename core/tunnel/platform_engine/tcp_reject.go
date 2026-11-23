@@ -68,12 +68,23 @@ func newTCPForwarder(s *stack.Stack, handler stackAdapter.TransportHandler, reje
 			return
 		}
 		var release func()
+		var epoch uint64
+		var waited bool
 		if admission != nil {
-			release = admission.acquire()
+			release, epoch, waited = admission.acquire()
 			if release == nil {
 				r.Complete(true)
 				return
 			}
+		}
+		// A connection that waited belongs to the profile it waited under. If a
+		// profile switch canceled pending admissions after its slot was handed
+		// over, it is refused rather than dispatched to the next profile.
+		switchedAway := func() bool { return waited && admission.canceledSince(epoch) }
+		if switchedAway() {
+			release()
+			r.Complete(true)
+			return
 		}
 		var wq waiter.Queue
 		ep, err := r.CreateEndpoint(&wq)
@@ -85,6 +96,11 @@ func newTCPForwarder(s *stack.Stack, handler stackAdapter.TransportHandler, reje
 			return
 		}
 		defer r.Complete(false)
+		if switchedAway() {
+			ep.Abort()
+			release()
+			return
+		}
 		setTCPSocketOptions(s, ep)
 		handler.HandleTCP(&tcpConn{TCPConn: gonet.NewTCPConn(&wq, ep), id: id, release: release})
 	})
