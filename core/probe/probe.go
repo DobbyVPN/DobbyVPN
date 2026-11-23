@@ -212,6 +212,9 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 	var sum int64
 	successes := 0
 	var endpointErrors []error
+	// transportOnly stays true while every failed endpoint failed before a
+	// response: at connect or at TLS.
+	transportOnly := true
 	for finished := range len(httpProbeURLs) {
 		received := <-completed
 		result := received.result
@@ -225,6 +228,8 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 				result.err,
 			)
 			endpointErrors = append(endpointErrors, endpointErr)
+			transportOnly = transportOnly && result.errorClass != probeErrorCanceled &&
+				(result.failureStage == probeStageConnect || result.failureStage == probeStageTLS)
 		} else {
 			successes++
 			sum += result.latencyMs
@@ -255,14 +260,27 @@ func measureTunnelProbe(ctx context.Context, timeout time.Duration, dialContext 
 	}
 	writeLog("PROBE", "Tunnel probe failed: not enough latency endpoints succeeded passed=%d required=%d total=%d", successes, requiredSuccesses, len(httpProbeURLs))
 	cancel(errProbeDecided)
-	return 0, fmt.Errorf(
+	err := fmt.Errorf(
 		"tunnel probe reached %d/%d successful endpoints; %d required: %w",
 		successes,
 		len(httpProbeURLs),
 		requiredSuccesses,
 		errors.Join(endpointErrors...),
 	)
+	if successes == 0 && transportOnly && len(endpointErrors) > 0 {
+		return 0, transportUnreachableError{err}
+	}
+	return 0, err
 }
+
+// transportUnreachableError marks a probe in which no endpoint got past
+// connect or TLS. The network binding under the tunnel may be stale, for
+// example after a wake; the session can rebuild it on Retry. The text is
+// unchanged.
+type transportUnreachableError struct{ error }
+
+func (e transportUnreachableError) Unwrap() error    { return e.error }
+func (transportUnreachableError) NetworkLevel() bool { return true }
 
 func probeEndpoint(parent context.Context, endpointURL string, timeout time.Duration, dialContext func(context.Context, string, string) (net.Conn, error)) probeEndpointResult {
 	startedAt := time.Now()

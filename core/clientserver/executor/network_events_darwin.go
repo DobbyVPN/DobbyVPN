@@ -13,31 +13,49 @@ import (
 )
 
 const (
-	// macOS reports sleep only through IOKit. A wall clock that moves far more
-	// than the short check interval means the system slept.
+	// kern.waketime is checked this often; it changes only when the system
+	// wakes, so clock changes and scheduling delays cannot fake or hide one.
 	wakeCheckInterval = 2 * time.Second
-	wakeClockJump     = 10 * time.Second
 	// Right after a wake SystemConfiguration may not report the physical
-	// network yet; capture it again once a second for up to this many tries.
-	wakeCaptureAttempts = 30
-	wakeCaptureTimeout  = 5 * time.Second
+	// network yet. Capture it again once a second, for at most this long.
+	wakeNetworkBudget = 30 * time.Second
+	wakeCapturePause  = time.Second
 )
 
 // watchWake reports a wake once the physical network is back, so a connected
 // session checks its tunnel at once instead of on its next periodic check.
+// macOS records each wake in kern.waketime; polling it needs no cgo, unlike
+// IOKit power notifications, which need a run loop thread.
 func watchWake(emit func(reason string)) {
-	last := time.Now().Round(0)
+	last, err := lastWakeTime()
+	if err != nil {
+		log.Errorf(desktopLogCategory, "wake watcher unavailable: %v", err)
+		return
+	}
+	cancelPrevious := func() {}
 	for range time.Tick(wakeCheckInterval) {
-		now := time.Now().Round(0)
-		if woke(last, now) {
-			log.Infof(desktopLogCategory, "system woke after %s", now.Sub(last).Round(time.Second))
-			go reportWakeWhenNetworkReady(emit, captureMacOSPhysicalNetwork, time.Sleep)
+		current, err := lastWakeTime()
+		if err != nil || current == last {
+			continue
 		}
-		last = now
+		last = current
+		log.Infof(desktopLogCategory, "system woke at %s", current.Format(time.RFC3339))
+		// Only the newest wake waits for the network; an older wait ends
+		// without reporting.
+		cancelPrevious()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancelPrevious = cancel
+		go reportWakeWhenNetworkReady(ctx, emit, captureMacOSPhysicalNetwork, wakeNetworkBudget, wakeCapturePause)
 	}
 }
 
-func woke(last, now time.Time) bool { return now.Sub(last) > wakeCheckInterval+wakeClockJump }
+func lastWakeTime() (time.Time, error) {
+	value, err := unix.SysctlTimeval("kern.waketime")
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(value.Sec, int64(value.Usec)*int64(time.Microsecond)), nil
+}
 
 func captureMacOSPhysicalNetwork(ctx context.Context) error {
 	_, err := routing.CaptureMacOSPhysicalNetwork(ctx)
@@ -45,24 +63,32 @@ func captureMacOSPhysicalNetwork(ctx context.Context) error {
 }
 
 // reportWakeWhenNetworkReady retries the physical network capture that fails
-// right after a wake, then reports the wake. It reports even when the network
-// never returns, so the tunnel check still runs and its failure is shown.
-func reportWakeWhenNetworkReady(emit func(reason string), capture func(context.Context) error, sleep func(time.Duration)) {
-	for attempt := 1; attempt <= wakeCaptureAttempts; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), wakeCaptureTimeout)
+// right after a wake for at most budget, then reports the wake. It reports
+// even when the network does not return, so the tunnel check still runs and
+// its failure is shown. A canceled parent means a newer wake took over.
+func reportWakeWhenNetworkReady(parent context.Context, emit func(reason string), capture func(context.Context) error, budget, pause time.Duration) {
+	ctx, cancel := context.WithTimeout(parent, budget)
+	defer cancel()
+	for attempt := 1; ; attempt++ {
 		err := capture(ctx)
-		cancel()
 		if err == nil {
 			log.Infof(desktopLogCategory, "physical network available after wake attempt=%d", attempt)
 			break
 		}
-		if attempt == wakeCaptureAttempts {
-			log.Errorf(desktopLogCategory, "physical network still unavailable after wake attempts=%d: %v", attempt, err)
-			break
+		select {
+		case <-time.After(pause):
+			continue
+		case <-ctx.Done():
 		}
-		sleep(time.Second)
+		if parent.Err() != nil {
+			return
+		}
+		log.Errorf(desktopLogCategory, "physical network still unavailable after wake attempts=%d: %v", attempt, err)
+		break
 	}
-	emit(eventWake)
+	if parent.Err() == nil {
+		emit(eventWake)
+	}
 }
 
 // Interface and address messages, and default route messages for a new

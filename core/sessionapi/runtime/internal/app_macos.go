@@ -125,6 +125,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	// The same source is refreshed for every endpoint lookup and link observation.
 	physical, _, err := capturePhysical(ctx)
 	if err != nil {
+		// After a wake macOS may not report the physical network yet; a
+		// later Retry can capture it.
+		err = sessionapi.NetworkLevelError(err)
 		signalInit(initResult, err)
 		return err
 	}

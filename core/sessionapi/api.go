@@ -364,6 +364,10 @@ type session struct {
 	// protectionKept is protection a released network left for the next one.
 	rebuildNetwork bool
 	protectionKept bool
+	// lastFailureNetwork marks a FAILED state whose cause was network-level;
+	// failureNetworkAfterCleanup carries it for a health failure.
+	lastFailureNetwork         bool
+	failureNetworkAfterCleanup bool
 }
 
 // NewManager never starts a real core.  Its default runtime fails with the
@@ -1026,6 +1030,7 @@ func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cau
 	}
 	s.failureAfterCleanup = FailureRuntime
 	s.failureMessageAfterCleanup = fmt.Sprintf("%s: %s", autoRecoveryMessage, healthFailure)
+	s.failureNetworkAfterCleanup = HasNetworkLevelCause(cause)
 	s.recovering = false
 	s.recoveryOriginGeneration = 0
 }
@@ -1357,14 +1362,17 @@ func (m *Manager) recoverPartialProtectionLocked(s *session, cause error) error 
 func (m *Manager) finishProtectedFailureLocked(s *session, cause error) {
 	message := errorMessage(cause)
 	code := CodeOf(cause)
+	s.lastFailureNetwork = HasNetworkLevelCause(cause)
 	if s.failureAfterCleanup != "" {
 		code, message = s.failureAfterCleanup, s.failureMessageAfterCleanup
+		s.lastFailureNetwork = s.failureNetworkAfterCleanup
 	} else if s.recovering && s.lastFailureMessage != "" {
 		message = s.lastFailureMessage + "; automatic recovery failed: " + message
 	}
 	s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, code, message
 	s.recovering, s.recoveryOriginGeneration = false, 0
 	s.failureAfterCleanup, s.failureMessageAfterCleanup = "", ""
+	s.failureNetworkAfterCleanup = false
 	m.appendLocked(s)
 }
 
@@ -1386,11 +1394,13 @@ func (m *Manager) retireFinishedResources(s *session, work *ledger, cause error)
 	if cleanupErr == nil && CodeOf(cause) != FailureCleanup && releaseNetwork && network != nil {
 		cleanupErr = network.release(networkCtx)
 	}
-	if cleanupErr == nil && releaseNetwork && !keep {
-		s.mu.Lock()
+	// Stop may arrive while the network is released with its protection
+	// kept; check again so stopping always removes it.
+	s.mu.Lock()
+	if cleanupErr == nil && releaseNetwork && (s.stopRequested || s.closing) {
 		cleanupErr = m.releaseKeptProtectionLocked(networkCtx, s)
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 	return releaseNetwork, cleanupErr
 }
 

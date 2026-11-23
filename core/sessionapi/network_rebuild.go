@@ -36,11 +36,29 @@ func KeepsProtection(ctx context.Context) bool {
 	return kept
 }
 
-// networkLevelFailure reports failures where the network binding itself may
-// be stale: no profile became ready, or the runtime or its health checks
-// failed. Other codes cannot be fixed by a new binding.
-func networkLevelFailure(code FailureCode) bool {
-	return code == FailureRuntime || code == FailureProbe
+// networkLevelCause is implemented by causes which mean the network binding
+// itself may be stale: every probe endpoint failed at connect or TLS, or the
+// physical network could not be captured. The marker keeps the error text and
+// the failure code unchanged.
+type networkLevelCause interface{ NetworkLevel() bool }
+
+type networkLevelError struct{ error }
+
+func (e networkLevelError) Unwrap() error    { return e.error }
+func (networkLevelError) NetworkLevel() bool { return true }
+
+// NetworkLevelError marks err as a network-level cause; nil stays nil.
+func NetworkLevelError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return networkLevelError{err}
+}
+
+// HasNetworkLevelCause reports a network-level cause anywhere in err.
+func HasNetworkLevelCause(err error) bool {
+	var cause networkLevelCause
+	return errors.As(err, &cause) && cause.NetworkLevel()
 }
 
 // prepareRetryLocked readies a Retry from FAILED; an automatic retry uses it
@@ -49,7 +67,7 @@ func networkLevelFailure(code FailureCode) bool {
 func (m *Manager) prepareRetryLocked(s *session) {
 	s.recoveryCount, s.recoveryOriginGeneration = 0, 0
 	_, rebuilds := m.runtime.(NetworkRebuilder)
-	s.rebuildNetwork = rebuilds && s.vpnActive && networkLevelFailure(s.lastFailure)
+	s.rebuildNetwork = rebuilds && s.vpnActive && s.lastFailureNetwork
 	if !s.vpnActive {
 		// Only kept protection is left after a failed rebuild; the attempt
 		// acquires a new network that adopts it.
@@ -66,6 +84,11 @@ func (m *Manager) releaseNetworkForRebuild(s *session) error {
 	rebuild := s.rebuildNetwork && s.vpnActive && !s.stopRequested && !s.closing
 	s.rebuildNetwork = false
 	work := s.networkLedger
+	if rebuild {
+		// Owned from the moment the release may hand the protection over, so
+		// Stop releases it even when another cleanup step fails.
+		s.protectionKept = true
+	}
 	s.mu.Unlock()
 	if !rebuild {
 		return nil
@@ -77,7 +100,7 @@ func (m *Manager) releaseNetworkForRebuild(s *session) error {
 		return wrapFailure(FailureCleanup, err)
 	}
 	s.networkGeneration++
-	s.networkLedger, s.vpnActive, s.protectionKept = &ledger{}, false, true
+	s.networkLedger, s.vpnActive = &ledger{}, false
 	log.Info("SESSION", "network released for rebuild; protection kept", map[string]any{"network_generation": s.networkGeneration})
 	m.appendLocked(s)
 	return nil
