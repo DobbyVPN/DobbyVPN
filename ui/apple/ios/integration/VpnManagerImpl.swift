@@ -39,6 +39,15 @@ public final class VpnManagerImpl: NSObject {
         return coordinator
     }
     private var snapshotReadinessFailureCooldown = IOSReadinessFailureCooldown()
+    private var setupFailure: String?
+    private var cachedFailureReads = 0
+
+    public var vpnSetupFailure: String? {
+        condition.lock()
+        defer { condition.unlock() }
+        return setupFailure
+    }
+
     public let disconnectHistory = IOSDisconnectHistory()
     private let diagnosticSampler = IOSCommandLogSampler()
     private var observer: NSObjectProtocol?
@@ -89,7 +98,7 @@ public final class VpnManagerImpl: NSObject {
     }
 
     /// Sends one command to the provider. The inner Go payload is never rewritten.
-    public func sendProviderMessage(_ messageData: Data) -> Data {
+    public func sendProviderMessage(_ messageData: Data, bypassReadinessFailureCooldown: Bool = false) -> Data {
         guard !messageData.isEmpty else {
             logs.writeLog(level: "ERROR", log: "[provider-message] rejected empty command")
             return Self.transportFailure("INTERNAL", message: "provider command is empty")
@@ -103,9 +112,9 @@ public final class VpnManagerImpl: NSObject {
         if trace { logs.writeLog(log: "[provider-message] begin \(identity)") }
         defer { if trace { logs.writeLog(log: "[provider-message] end \(identity) stage=\(stage) elapsed=\(monotonicNow() - started)") } }
         let useSnapshotReadinessCooldown = commandMethod == "Snapshot" && !Thread.isMainThread
-        if useSnapshotReadinessCooldown,
+        let manualSetupRetry = useSnapshotReadinessCooldown && bypassReadinessFailureCooldown
+        if useSnapshotReadinessCooldown && !manualSetupRetry,
            let readinessFailure = cachedSnapshotReadinessFailure() {
-            logs.writeLog(level: "ERROR", log: "[provider-message] cached readiness failure \(identity) stage=cached-readiness elapsed=\(monotonicNow() - started): \(readinessFailure)")
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
@@ -127,8 +136,26 @@ public final class VpnManagerImpl: NSObject {
         }
         stage = "readiness"
         if trace { logs.writeLog(log: "[provider-message] readiness begin \(identity)") }
-        if let readinessFailure = ensureProviderReady(until: deadline, identity: identity, trace: trace, stage: &stage) {
-            logs.writeLog(level: "ERROR", log: "[provider-message] readiness failed \(identity) stage=\(stage) elapsed=\(monotonicNow() - started): \(readinessFailure)")
+        condition.lock()
+        let repeats = cachedFailureReads
+        cachedFailureReads = 0
+        condition.unlock()
+        if repeats > 0 {
+            logs.writeLog(log: "[provider-message] cached readiness failure repeats=\(repeats)")
+        }
+        var preferenceFailure: String?
+        let trigger = manualSetupRetry ? "manual_retry" : commandMethod ?? "unknown"
+        let readinessFailure = ensureProviderReady(until: deadline, identity: identity, trace: trace,
+                                                   trigger: trigger, stage: &stage, preferenceFailure: &preferenceFailure)
+        if useSnapshotReadinessCooldown {
+            condition.lock()
+            setupFailure = preferenceFailure
+            condition.unlock()
+        }
+        if let readinessFailure {
+            if preferenceFailure == nil {
+                logs.writeLog(level: "ERROR", log: "[provider-message] readiness failed \(identity) stage=\(stage) elapsed=\(monotonicNow() - started): \(readinessFailure)")
+            }
             if commandMethod != nil && !Thread.isMainThread {
                 condition.lock()
                 snapshotReadinessFailureCooldown.recordFailure(readinessFailure, at: monotonicNow())
@@ -272,11 +299,12 @@ public final class VpnManagerImpl: NSObject {
             return nil
         }
         let failure = snapshotReadinessFailureCooldown.cachedFailure(at: monotonicNow())
+        if failure != nil { cachedFailureReads += 1 }
         condition.unlock()
         return failure
     }
 
-    private func ensureProviderReady(until deadline: TimeInterval, identity: String, trace: Bool, stage: inout String) -> String? {
+    private func ensureProviderReady(until deadline: TimeInterval, identity: String, trace: Bool, trigger: String, stage: inout String, preferenceFailure: inout String?) -> String? {
         if Thread.isMainThread {
             // Provider readiness waits must never freeze the UI thread. Refuse
             // a main-thread call if a caller violates that boundary.
@@ -302,7 +330,7 @@ public final class VpnManagerImpl: NSObject {
         var loadedManager: NETunnelProviderManager?
         var loadError: Error?
         if trace { logs.writeLog(log: "[provider-message] preferences begin \(identity)") }
-        getOrCreateManager { value, error in
+        preferences.getOrCreateManager(trigger: trigger) { value, error in
             loadedManager = value
             loadError = error
             loaded.signal()
@@ -312,7 +340,7 @@ public final class VpnManagerImpl: NSObject {
             logs.writeLog(level: "ERROR", log: "[provider] timed out loading NetworkExtension preferences")
             return "timed out loading NetworkExtension preferences"
         }
-        if trace || loadError != nil { logs.writeLog(level: loadError == nil ? "INFO" : "ERROR", log: "[provider-message] preferences end \(identity) error=\(loadError.map(diagnosticErrorDescription) ?? "none")") }
+        if trace && loadError == nil { logs.writeLog(log: "[provider-message] preferences end \(identity)") }
         condition.lock()
         // getOrCreateManager returns the post-save reloaded object. Never
         // prefer an older in-memory manager after a provider-process restart.
@@ -329,7 +357,8 @@ public final class VpnManagerImpl: NSObject {
         if let loadError {
             // The preference operation records its precise phase and original
             // OS error. Propagate that error without logging it a second time.
-            return String(reflecting: loadError)
+            preferenceFailure = (loadError as? VPNSetupFailure)?.localizedDescription
+            return preferenceFailure ?? String(reflecting: loadError)
         }
         guard let current else {
             logs.writeLog(level: "ERROR", log: "[provider] NetworkExtension manager is unavailable without an error")

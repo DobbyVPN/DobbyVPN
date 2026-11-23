@@ -10,6 +10,11 @@ public protocol DobbySessionClient: AnyObject, Sendable {
     var sourceCommit: String { get }
 }
 
+public protocol DobbyVPNSetupRetrying: DobbySessionClient {
+    var vpnSetupFailure: String? { get }
+    func retryVPNSetupSnapshot() -> String
+}
+
 /// Native failure presentation for platforms whose transport may outlive the backend.
 public protocol DobbyDisconnectObserving: DobbySessionClient {
     var disconnectFailure: String { get }

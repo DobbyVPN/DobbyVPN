@@ -505,6 +505,10 @@ public struct DobbyRootView: View {
     private func failureActions(loadFailed: Bool) -> some View {
         DialogButton(title: "Close", filled: false, action: model.closeFailure)
             .accessibilityIdentifier("error.close")
+        if model.canRetryVPNSetup {
+            DialogButton(title: "Retry VPN setup", filled: true, action: model.retryVPNSetup)
+                .accessibilityIdentifier("vpn.setup.retry")
+        }
         if model.canRetryActiveSelection {
             DialogButton(title: "Retry", filled: true, action: model.retryActiveSelection)
                 .accessibilityIdentifier("connection.retry")

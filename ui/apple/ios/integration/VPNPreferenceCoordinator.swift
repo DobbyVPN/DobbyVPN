@@ -1,6 +1,18 @@
 import Foundation
 import NetworkExtension
 
+struct VPNSetupFailure: LocalizedError {
+    let operation: String
+    let profile: String
+    let original: Error
+
+    var errorDescription: String? {
+        let native = original as NSError
+        let target = profile == "unknown" ? "VPN configurations" : "the \(profile) VPN configuration"
+        return "Couldn’t \(operation) \(target). \(native.localizedDescription) (\(native.domain) \(native.code))."
+    }
+}
+
 /// Serial production preference workflow. Tests replace native API boundaries,
 /// retaining real manager/protocol objects without invoking OS preference storage.
 final class VPNPreferenceCoordinator {
@@ -81,21 +93,23 @@ final class VPNPreferenceCoordinator {
         }
     }
 
-    func getOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
+    func getOrCreateManager(trigger: String = "readiness", completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
         withPreferences { finished in
-            self.loadOrCreateManager { manager, error in
+            self.loadOrCreateManager(trigger: trigger) { manager, error in
                 completion(manager, error)
                 finished()
             }
         }
     }
 
-    private func loadOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
+    private func loadOrCreateManager(trigger: String, completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
+        let started = ProcessInfo.processInfo.systemUptime
         self.loadInventory { [weak self] managers, error in
             guard let self else { completion(nil, error); return }
             if let error {
-                self.log("ERROR", "[provider] preference load failed:\n\(self.describeError(error))")
-                completion(nil, error)
+                let failure = VPNSetupFailure(operation: "load", profile: "unknown", original: error)
+                self.log("ERROR", "[provider] VPN setup trigger=\(trigger) operation=load profile=unknown elapsed=\(ProcessInfo.processInfo.systemUptime - started): \(self.describeError(error))")
+                completion(nil, failure)
                 return
             }
             let matching = self.matchingManagers(managers ?? [])
@@ -107,11 +121,11 @@ final class VPNPreferenceCoordinator {
                 // Persist control-mode routing defaults before any start. An
                 // in-memory fix is not sufficient because NetworkExtension
                 // may reload the saved manager for the provider process.
-                self.saveAndReload(existing, completion: completion)
+                self.saveAndReload(existing, setup: (trigger, "existing", started), completion: completion)
                 return
             }
             let created = self.createManager()
-            self.saveAndReload(created, completion: completion)
+            self.saveAndReload(created, setup: (trigger, "new", started), completion: completion)
         }
     }
 
@@ -120,8 +134,11 @@ final class VPNPreferenceCoordinator {
     private func saveAndReload(
         _ manager: NETunnelProviderManager,
         bind: Bool = true,
+        setup: (trigger: String, profile: String, started: TimeInterval)? = nil,
         completion: @escaping (NETunnelProviderManager?, Error?) -> Void
     ) {
+        let onDemand = manager.isOnDemandEnabled
+        let ruleCount = manager.onDemandRules?.count ?? 0
         NativeVPNManagerPreferences.saveAndReload(
             manager,
             save: save, reload: reload,
@@ -129,6 +146,11 @@ final class VPNPreferenceCoordinator {
             completion: { saved, phase, error in
                 if let error {
                     let operation = phase == .save ? "save" : "reload"
+                    if let setup {
+                        self.log("ERROR", "[provider] VPN setup trigger=\(setup.trigger) operation=\(operation) profile=\(setup.profile) elapsed=\(ProcessInfo.processInfo.systemUptime - setup.started) on_demand=\(onDemand) rule_count=\(ruleCount): \(self.describeError(error))")
+                        completion(saved, VPNSetupFailure(operation: operation, profile: setup.profile, original: error))
+                        return
+                    }
                     self.log("ERROR", "[provider] preference \(operation) failed:\n\(self.describeError(error))")
                 }
                 completion(saved, error)
@@ -149,8 +171,7 @@ final class VPNPreferenceCoordinator {
         manager.localizedDescription = name
         manager.protocolConfiguration = makeDefaultProtocol()
         manager.isEnabled = true
-        // Rules are stored now; the first Connect turns On Demand on.
-        applyOnDemandRules(manager, enabled: false)
+        manager.isOnDemandEnabled = false
         return manager
     }
 

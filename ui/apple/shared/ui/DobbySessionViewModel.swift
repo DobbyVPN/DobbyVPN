@@ -104,6 +104,9 @@ public final class DobbySessionViewModel: ObservableObject {
     private var errorOrigin: DobbySessionErrorOrigin?
     private var lastSourceErrorIdentity: DobbySourceErrorIdentity?
     private var snapshotFailureMessage: String?
+    @Published private var setupFailure: String?
+    @Published private var setupRetryPending = false
+    @Published private var setupRetryRunning = false
     private var diagnosticWriteError = ""
     private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
 
@@ -329,19 +332,43 @@ public final class DobbySessionViewModel: ObservableObject {
         if !message.isEmpty { recordError(message) }
     }
 
+    public var canRetryVPNSetup: Bool {
+        snapshot.sessionID.isEmpty && setupFailure != nil && !setupRetryPending && !setupRetryRunning
+    }
+
+    public func retryVPNSetup() {
+        guard canRetryVPNSetup else { return }
+        resetClosedFailures()
+        if snapshotInFlight {
+            setupRetryPending = true
+        } else {
+            refreshSnapshot(retryingVPNSetup: true)
+        }
+    }
+
     public func refreshSnapshot() {
+        refreshSnapshot(retryingVPNSetup: false)
+    }
+
+    private func refreshSnapshot(retryingVPNSetup: Bool) {
         guard !snapshotInFlight else { return }
         snapshotInFlight = true
+        setupRetryRunning = retryingVPNSetup
         let currentID = snapshot.sessionID
         let recoveringFromSnapshotFailure = currentID.isEmpty && snapshotFailureMessage != nil
         let client = client
         worker.async { [weak self, client] in
             let observer = client as? DobbyDisconnectObserving
             let ticket = observer?.beginSnapshotObservation()
-            let decoded = readSnapshot(client: client, sessionID: currentID)
+            let decoded = readSnapshot(client: client, sessionID: currentID, retryingVPNSetup: retryingVPNSetup)
+            let latestSetupFailure = (client as? DobbyVPNSetupRetrying)?.vpnSetupFailure
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.snapshotInFlight = false
+                self.setupRetryRunning = false
+                let retryPending = self.setupRetryPending
+                self.setupRetryPending = false
+                self.setupFailure = nil
                 self.disconnectFailure = observer?.disconnectFailure ?? ""
                 switch decoded {
                 case let .success((value, reattached)):
@@ -396,10 +423,14 @@ public final class DobbySessionViewModel: ObservableObject {
                     self.observeSourceError(value.sourceError, sessionID: value.sessionID)
                 case let .failure(failure):
                     self.snapshot = .empty
+                    self.setupFailure = latestSetupFailure
                     self.snapshotFailureMessage = failure.localizedDescription
                     self.setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
                 }
                 self.pruneClosedFailures()
+                if retryPending, case .failure = decoded {
+                    self.refreshSnapshot(retryingVPNSetup: true)
+                }
             }
         }
     }
@@ -847,9 +878,15 @@ extension DobbySessionViewModel {
 
 private func readSnapshot(
     client: DobbySessionClient,
-    sessionID: String
+    sessionID: String,
+    retryingVPNSetup: Bool = false
 ) -> Result<(DobbySessionSnapshot, reattached: Bool), Error> {
-    let response = client.call("Snapshot", parameters: ["session_id": sessionID])
+    let response: String
+    if retryingVPNSetup, let setup = client as? DobbyVPNSetupRetrying {
+        response = setup.retryVPNSetupSnapshot()
+    } else {
+        response = client.call("Snapshot", parameters: ["session_id": sessionID])
+    }
     do {
         return .success((try DobbyResponse.result(from: response, as: DobbySessionSnapshot.self), false))
     } catch DobbyClientError.command(let code, _) where code == "NOT_FOUND" && !sessionID.isEmpty {
