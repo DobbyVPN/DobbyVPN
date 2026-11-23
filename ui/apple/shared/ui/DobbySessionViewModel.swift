@@ -339,7 +339,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private func refreshSnapshot(retryingVPNSetup: Bool) {
         guard !snapshotInFlight else { return }
         snapshotInFlight = true
-        setupRetryRunning = retryingVPNSetup
+        if retryingVPNSetup { setupRetryRunning = true }
         let currentID = snapshot.sessionID
         let recoveringFromSnapshotFailure = currentID.isEmpty && snapshotFailureMessage != nil
         let client = client
@@ -351,14 +351,14 @@ public final class DobbySessionViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.snapshotInFlight = false
-                self.setupRetryRunning = false
+                if retryingVPNSetup { self.setupRetryRunning = false }
                 let retryPending = self.setupRetryPending
-                self.setupRetryPending = false
-                self.setupFailure = nil
+                if retryPending { self.setupRetryPending = false }
                 self.disconnectFailure = observer?.disconnectFailure ?? ""
                 switch decoded {
                 case let .success((value, reattached)):
                     if value.sessionID == self.snapshot.sessionID && value.sequence < max(self.snapshot.sequence, self.acceptedSequence) { return }
+                    if self.setupFailure != nil { self.setupFailure = nil }
                     if let observer, let ticket {
                         observer.observedSnapshot(value, ticket: ticket)
                         self.disconnectFailure = observer.disconnectFailure
@@ -409,7 +409,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     self.observeSourceError(value.sourceError, sessionID: value.sessionID)
                 case let .failure(failure):
                     self.snapshot = .empty
-                    self.setupFailure = latestSetupFailure
+                    if self.setupFailure != latestSetupFailure { self.setupFailure = latestSetupFailure }
                     self.snapshotFailureMessage = failure.localizedDescription
                     self.setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
                 }
