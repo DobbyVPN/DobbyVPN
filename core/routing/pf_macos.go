@@ -66,9 +66,10 @@ type MacOSKillSwitch struct {
 	retiredThrough    uint64
 	applied           bool
 	closed            bool
-	// stale is set when the loaded rules may differ from the state above, so
-	// the next change reloads even if it changes nothing itself.
-	stale bool
+	// broken holds the first failed rule load. The network cannot be relied
+	// on after it: no further load is tried, cleanup does not reload, and the
+	// session releases the network (see Broken).
+	broken error
 }
 
 // AcquireMacOSKillSwitch blocks outbound traffic outside tunName with rules in
@@ -240,30 +241,42 @@ func (k *MacOSKillSwitch) reload(ctx context.Context) error {
 	}
 	rules := MacOSPFRules(k.tunName, k.servers, k.excluded, destinations)
 	if _, _, err := macOSPFCommand(ctx, rules, "-a", MacOSPFAnchor, "-f", "-"); err != nil {
-		k.stale = true
-		return err
+		k.broken = fmt.Errorf("load leak protection rules: %w", err)
+		log.Error(Category, "macOS kill switch rules could not be loaded; the network will be released", map[string]any{"cause": err.Error()})
+		return k.broken
 	}
-	k.stale = false
 	log.Debugf(Category, "macOS kill switch rules loaded:\n%s", rules)
 	return nil
 }
 
-// update applies change and loads the result in one step under k.mu. A load
-// failure marks the rules stale, so a retried change reloads them.
+// update applies change and loads the result in one step under k.mu. After a
+// failed load nothing is changed or loaded any more.
 func (k *MacOSKillSwitch) update(ctx context.Context, change func() (bool, error)) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.closed {
 		return errors.New("macOS kill switch is closed")
 	}
+	if k.broken != nil {
+		return k.broken
+	}
 	changed, err := change()
 	if err != nil {
 		return err
 	}
-	if !k.applied || !changed && !k.stale {
+	if !k.applied || !changed {
 		return nil
 	}
 	return k.reload(ctx)
+}
+
+// Broken reports the failed rule load that makes this network unusable, or
+// nil. The runtime turns it into a network failure, so the session releases
+// the routes instead of keeping a network that only blocks traffic.
+func (k *MacOSKillSwitch) Broken() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.broken
 }
 
 // SetResolvers admits the backend's queries to the physical DNS servers.
@@ -325,9 +338,9 @@ func (k *MacOSKillSwitch) Authorize(ctx context.Context, generation uint64, netw
 
 func (k *MacOSKillSwitch) Retire(ctx context.Context, generation uint64) error {
 	k.mu.Lock()
-	closed := k.closed
+	done := k.closed || k.broken != nil // cleanup never reloads broken rules
 	k.mu.Unlock()
-	if closed {
+	if done {
 		return nil
 	}
 	return k.update(ctx, func() (bool, error) {
@@ -349,14 +362,21 @@ func (k *MacOSKillSwitch) Close(ctx context.Context) error {
 	if k.applied {
 		macOSPFOwner.Lock()
 		err := releaseMacOSPF(ctx, k.token)
-		if err == nil {
+		// After a failed load the network is being released because pf does
+		// not work as expected; a removal that fails as well is reported but
+		// must not keep the network. The saved token stays for a later retry.
+		if err == nil || k.broken != nil {
 			macOSPFOwner.active = false
 		}
 		macOSPFOwner.Unlock()
-		if err != nil {
+		if err != nil && k.broken == nil {
 			return err
 		}
-		log.Info(Category, "macOS kill switch removed", map[string]any{"anchor": MacOSPFAnchor})
+		if err != nil {
+			log.Error(Category, "macOS kill switch rules could not be removed after a failed load", map[string]any{"cause": err.Error()})
+		} else {
+			log.Info(Category, "macOS kill switch removed", map[string]any{"anchor": MacOSPFAnchor})
+		}
 	}
 	k.closed = true
 	return nil

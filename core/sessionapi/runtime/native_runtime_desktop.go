@@ -279,6 +279,15 @@ func (c *nativeRuntime) generationValue() uint64 {
 // protection; empty when it is in place. Run sets it before Connect returns.
 func (c *nativeRuntime) LeakProtectionUnavailable() string { return c.app.LeakProtectionOff }
 
+// NetworkFailure reports a failed leak protection rule load (SetExcluded,
+// Authorize, SetResolvers) that leaves this network unusable, or nil.
+func (c *nativeRuntime) NetworkFailure() error {
+	if guard, ok := c.app.Guard.(interface{ Broken() error }); ok {
+		return guard.Broken()
+	}
+	return nil
+}
+
 func (c *nativeRuntime) Attach(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *tunnel.BypassPolicy) error {
 	if c.app.Guard == nil {
 		return c.app.Engine.Attach(ctx, generation, address, cache, bypass)

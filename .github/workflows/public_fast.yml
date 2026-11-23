@@ -31,7 +31,7 @@ jobs:
         run: go test -race -count=1 -tags=ci -p 2 ./protocol ./sessionapi ./outline
 
   macos_pf:
-    name: macOS pf rules parse (pfctl -n)
+    name: macOS pf rules (pfctl parse and load)
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -43,9 +43,13 @@ jobs:
         with:
           go-version-file: .go-version
           cache: false
-      - name: Parse generated kill switch rules with pfctl (nothing is loaded)
+      # Parses the rules with pfctl -n, then loads them into the top-level
+      # anchor dobbyvpn-ci, which the main ruleset never evaluates, checks the
+      # kernel table size and flushes the anchor. Runner only.
+      - name: Parse and load generated kill switch rules with pfctl
         working-directory: core
         env:
           GOTOOLCHAIN: local
           DOBBY_PFCTL_PARSE: "1"
+          DOBBY_PFCTL_LOAD: "1"
         run: go test -count=1 -run '^TestMacOSPFRulesParseWithPfctl$' -v ./routing

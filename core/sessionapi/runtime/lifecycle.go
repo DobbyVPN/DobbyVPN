@@ -286,6 +286,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	r.active = true
 	lease, err := r.startLocked(ctx, ref, profile)
 	if err != nil {
+		err = r.networkFailure(err)
 		if lease != nil {
 			// The native startup is still the sole owner of its TUN/device.
 			// Keep r.active asserted until the transferred lease is stopped;
@@ -328,7 +329,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		} else {
 			log.Debugf(category, "initial readiness rollback complete generation=%d", ref.Generation)
 		}
-		cause := errors.Join(fmt.Errorf("wait for initial tunnel readiness: %w", err), markCleanupFailure(cleanupErr))
+		cause := r.networkFailure(errors.Join(fmt.Errorf("wait for initial tunnel readiness: %w", err), markCleanupFailure(cleanupErr)))
 		if cleanupErr != nil {
 			lease.setOnDone(r.releaseActive)
 			return lease, cause
@@ -336,6 +337,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		return nil, cause
 	}
 	if err := r.network.core.Attach(lease.socketContext, ref.Generation, lease.proxyAddr, r.network.cache, lease.bypass); err != nil {
+		err = r.networkFailure(err)
 		cleanupErr := lease.Stop(sessionapi.CleanupContext(ctx))
 		if cleanupErr == nil {
 			r.active = false
@@ -350,6 +352,25 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	healthInterval, healthFailureThreshold := testHealthMonitorTiming(r.options.HealthInterval, r.options.HealthFailureThreshold)
 	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, healthInterval, healthFailureThreshold)
 	return lease, nil
+}
+
+// networkFailure marks err as a sessionapi.NetworkFailure when the network
+// core reports that the network itself failed, for example macOS leak
+// protection rules that could not be loaded when a connection opened. The
+// session then releases the network instead of retrying on it.
+func (r *runtime) networkFailure(err error) error {
+	if err == nil || r.network == nil {
+		return err
+	}
+	core, ok := r.network.core.(interface{ NetworkFailure() error })
+	if !ok {
+		return err
+	}
+	var marked *sessionapi.NetworkFailure
+	if cause := core.NetworkFailure(); cause != nil && !errors.As(err, &marked) {
+		return errors.Join(err, &sessionapi.NetworkFailure{Err: cause})
+	}
+	return err
 }
 
 func (r *runtime) releaseActive(err error) {
