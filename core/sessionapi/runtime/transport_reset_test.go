@@ -176,10 +176,12 @@ type scriptedCheck struct {
 }
 
 // The recovery rules are decided from the monitor's real check counting, on a
-// fake clock that moves step per check: only consecutive scheduled checks
-// prove health (not event-triggered checks, not early rechecks after a
-// transport reset), and a network event exempts a failure only if no check
-// passed after it.
+// fake clock that moves 10 s per check: an attempt proves healthy once two or
+// more consecutive scheduled checks span 30 s (event-triggered checks and
+// early rechecks after a transport reset do not count, a failing scheduled
+// check starts the window over), it stays proven for the rest of the
+// attempt, and a network event exempts a failure only if no check passed
+// after it.
 func TestHealthFailureCountsOnlyScheduledChecks(t *testing.T) {
 	useTransportResetRecheck(t, time.Millisecond)
 	pass, fail := scriptedCheck{ok: true}, scriptedCheck{}
@@ -193,8 +195,10 @@ func TestHealthFailureCountsOnlyScheduledChecks(t *testing.T) {
 		proved      bool
 		networkLost bool
 	}{
-		{name: "four scheduled checks over 40 s", script: []scriptedCheck{pass, pass, pass, pass, fail, fail}, threshold: 2, checks: 4, proved: true},
-		{name: "two scheduled checks within 20 s", script: []scriptedCheck{pass, pass, fail, fail}, threshold: 2, checks: 2},
+		{name: "four scheduled checks over 30 s", script: []scriptedCheck{pass, pass, pass, pass, fail, fail}, threshold: 2, checks: 4, proved: true},
+		{name: "two scheduled checks within 10 s", script: []scriptedCheck{pass, pass, fail, fail}, threshold: 2, checks: 2},
+		{name: "proved earlier, short run before the failures", script: []scriptedCheck{pass, pass, pass, pass, fail, pass, fail, fail}, threshold: 2, checks: 1, proved: true},
+		{name: "a failing scheduled check inside the window", script: []scriptedCheck{pass, pass, pass, fail, pass, pass, pass, fail, fail}, threshold: 2, checks: 3},
 		{name: "event-triggered checks do not count", script: []scriptedCheck{passThenEvent, passThenEvent, passThenEvent, pass, fail, fail}, threshold: 2, checks: 1},
 		{name: "rechecks after a reset do not count", script: []scriptedCheck{pass, fail, pass, pass, fail, fail}, reset: true, threshold: 2, checks: 1},
 		{name: "event survived by a passing check", script: []scriptedCheck{passThenEvent, pass, fail, fail}, threshold: 2, checks: 1},

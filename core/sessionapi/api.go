@@ -83,23 +83,33 @@ func (e *CleanupFailure) Error() string { return "cleanup failed: " + e.Err.Erro
 func (e *CleanupFailure) Unwrap() error { return e.Err }
 
 // HealthFailure is the connected-health failure of a runtime lease. It tells
-// how long the attempt was healthy before the failing checks began: an
-// attempt that proved healthy does not count toward autoRecoveryLimit.
+// whether the attempt proved healthy before it failed: such an attempt resets
+// the recovery count and the restart delays.
 type HealthFailure struct {
-	Err           error
-	HealthyChecks int           // consecutive successful checks before the failing ones
-	HealthyFor    time.Duration // from the first of those checks to the first failure
+	Err error
+	// Proven is set when the attempt proved healthy at some point (see
+	// ProvenHealthy); a later scheduled check failing does not unset it.
+	Proven bool
+	// HealthyChecks and HealthyFor describe the passing scheduled checks
+	// right before the failing ones, for the log.
+	HealthyChecks int
+	HealthyFor    time.Duration
 	// NetworkLost is set when a network event (wake, path change) arrived, or
 	// the physical-network captures made by server lookups found no network
 	// or a different one, after the last passing check.
 	NetworkLost bool
 }
 
-// ProvedHealthy reports whether the attempt passed at least
-// recoveryHealthyChecks consecutive scheduled checks over at least
-// recoveryHealthyFor before it failed.
-func (e *HealthFailure) ProvedHealthy() bool {
-	return e != nil && e.HealthyChecks >= recoveryHealthyChecks && e.HealthyFor >= recoveryHealthyFor
+// ProvedHealthy reports whether the attempt proved healthy before it failed.
+func (e *HealthFailure) ProvedHealthy() bool { return e != nil && e.Proven }
+
+// ProvenHealthy reports whether a run of consecutive passing scheduled checks
+// proves a connected attempt healthy: at least provenHealthyChecks checks
+// spanning at least autoRetryProvenHealthy, whichever is longer. A scheduled
+// check that fails inside the window ends the run, so the window starts over.
+// The health monitor calls it after each passing scheduled check.
+func ProvenHealthy(scheduledChecks int, span time.Duration) bool {
+	return scheduledChecks >= provenHealthyChecks && span >= autoRetryProvenHealthy
 }
 
 func (e *HealthFailure) Error() string { return e.Err.Error() }
@@ -318,15 +328,17 @@ type Manager struct {
 
 const (
 	autoRecoveryLimit = 3
-	// An attempt that stayed healthy for at least this many consecutive
-	// scheduled checks and this long before failing resets the recovery count
-	// and the restart delays: the failure was transient, as after a network
+	// An attempt proves healthy after at least provenHealthyChecks consecutive
+	// passing scheduled checks spanning autoRetryProvenHealthy (two checks
+	// every 10 s or 30 s, whichever is longer). That resets the recovery count
+	// and the restart delays: a later failure is transient, as after a network
 	// drop. This is the only reset while the session runs: time connected
 	// alone does not count, so a server that hangs right after accepting the
-	// connection, or flaps between checks, still reaches the limit.
-	recoveryHealthyChecks = 2
-	recoveryHealthyFor    = 30 * time.Second
-	autoRecoveryMessage   = "Automatic reconnect limit reached. Check your connection and connect again."
+	// connection, or flaps between checks, still reaches the limit. The name
+	// and value of autoRetryProvenHealthy match the automatic retry (#508).
+	provenHealthyChecks    = 2
+	autoRetryProvenHealthy = 30 * time.Second
+	autoRecoveryMessage    = "Automatic reconnect limit reached. Check your connection and connect again."
 )
 
 type session struct {

@@ -611,6 +611,9 @@ type healthyRun struct {
 	checks   int
 	start    time.Time
 	lastPass time.Time // last passing check of any kind
+	// proven latches once a run of scheduled checks proves the attempt
+	// healthy (sessionapi.ProvenHealthy).
+	proven bool
 	// eventSincePass is set by a network event and cleared by a passing
 	// check: a check that passes after the event shows the attempt survived it.
 	eventSincePass bool
@@ -636,6 +639,12 @@ func (h *healthyRun) passed(scheduled bool) {
 		h.start = h.lastPass
 	}
 	h.checks++
+	if !h.proven && sessionapi.ProvenHealthy(h.checks, h.lastPass.Sub(h.start)) {
+		h.proven = true
+		log.Info(category, "connected attempt proved healthy", map[string]any{
+			"scheduled_checks": h.checks, "healthy_ms": h.lastPass.Sub(h.start).Milliseconds(),
+		})
+	}
 }
 
 // failed is called on the first failure of a streak.
@@ -653,7 +662,7 @@ func (h *healthyRun) networkEvent() { h.eventSincePass = true }
 // after it, so it exempts only the failures it caused.
 func (h *healthyRun) failure(failures []error, networkLostSince func(time.Time) bool) error {
 	return &sessionapi.HealthFailure{
-		Err: errors.Join(failures...), HealthyChecks: h.streakChecks, HealthyFor: h.streakFor,
+		Err: errors.Join(failures...), Proven: h.proven, HealthyChecks: h.streakChecks, HealthyFor: h.streakFor,
 		NetworkLost: h.eventSincePass || networkLostSince != nil && networkLostSince(h.streakFrom),
 	}
 }
