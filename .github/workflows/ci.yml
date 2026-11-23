@@ -184,17 +184,17 @@ jobs:
             build-tools;${{ steps.pins.outputs.android_build_tools }}
             ndk;${{ steps.pins.outputs.android_ndk }}
 
-      - name: Run Android lint and dependency scan
+      - name: Run Android lint
         run: |
           export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
-          python3 .github/scripts/source_checks.py lint-android --output-dir "$RUNNER_TEMP/android-security"
+          python3 .github/scripts/source_checks.py lint-android --output-dir "$RUNNER_TEMP/android-lint"
 
-      - name: Retain Android dependency inventories and scan
+      - name: Retain Android lint reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-security-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/android-security
+          name: android-lint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-lint
           if-no-files-found: warn
           retention-days: 1
 
@@ -219,7 +219,7 @@ jobs:
         run: python3 .github/scripts/source_checks.py lint-go
 
   security:
-    name: Dependency and credential scans
+    name: Git history secret scan
     needs: ci_scope
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: ubuntu-24.04
@@ -237,6 +237,7 @@ jobs:
           set -euo pipefail
           ruby -I publishing/fastlane/test -e 'Dir["publishing/fastlane/test/*_test.rb"].sort.each { |file| require_relative file }'
           python3 -m compileall -q .github/scripts/release
+          ruby -c .github/scripts/release/internal_testflight.rb
           PYTHONPATH=.github/scripts:.github/scripts/release python3 - <<'PY'
           import artifact_attempts
           import build_manifest
@@ -255,7 +256,7 @@ jobs:
           go-modules: 'false'
           pinned-tools: 'true'
 
-      - name: Scan dependencies and Git history
+      - name: Scan Git history for secrets
         run: python3 .github/scripts/source_checks.py security
 
   actionlint:
@@ -462,7 +463,7 @@ jobs:
             fi
           }
           require_common() {
-            require_result 'Dependency and credential scans' success "$SECURITY_RESULT"
+            require_result 'Git history secret scan' success "$SECURITY_RESULT"
             require_result 'GitHub workflow validation' success "$ACTIONLINT_RESULT"
           }
           require_unselected_platform_jobs() {

@@ -27,6 +27,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let primaryAction: String
     public let vpnActive: Bool
     public let canRetry: Bool
+    public let serviceRestorePending: Bool
     public internal(set) var configured: Bool
     public internal(set) var sourceURL: String
     public var offlineAcceptedAt = ""
@@ -87,9 +88,8 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         _ = try values.decode(String.self, forKey: .serviceVersion)
         _ = try values.decode(String.self, forKey: .sourceKind)
         _ = try values.decode(Bool.self, forKey: .cleanupComplete)
-        if values.contains(.serviceRestorePending) {
-            _ = try values.decode(Bool.self, forKey: .serviceRestorePending)
-        }
+        serviceRestorePending = values.contains(.serviceRestorePending)
+            ? try values.decode(Bool.self, forKey: .serviceRestorePending) : false
         sessionID = try values.decode(String.self, forKey: .sessionID)
         sequence = try values.decode(Int64.self, forKey: .sequence)
         generation = try values.decode(Int64.self, forKey: .generation)
@@ -130,6 +130,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         self.primaryAction = primaryAction
         self.vpnActive = vpnActive
         self.canRetry = canRetry
+        serviceRestorePending = false
         self.configured = configured
         self.sourceURL = sourceURL
         self.sourceError = sourceError

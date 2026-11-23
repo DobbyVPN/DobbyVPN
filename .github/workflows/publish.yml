@@ -16,6 +16,11 @@ on:
         required: true
         type: string
 
+      ios_testflight_notes:
+        description: Reviewed English iOS-only TestFlight notes (at most 4000 characters).
+        required: true
+        type: string
+
 concurrency:
   group: release-verification
   cancel-in-progress: false
@@ -269,11 +274,14 @@ jobs:
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
           APP_STORE_IPA_PATH: ${{ github.workspace }}/selected-release/DobbyVPN.ipa
+          IOS_TESTFLIGHT_NOTES: ${{ inputs.ios_testflight_notes }}
         run: |
           cd publishing
           bundle exec ruby <<'RUBY'
           require "spaceship"
           require "net/http"
+          require_relative "../.github/scripts/release/internal_testflight"
+          IosReleaseNotes.validate!(ENV.fetch("IOS_TESTFLIGHT_NOTES"))
           Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
             key_id: ENV.fetch("APP_STORE_KEY_ID"),
             issuer_id: ENV.fetch("APP_STORE_ISSUER_ID"),
@@ -325,7 +333,10 @@ jobs:
               state = build.processing_state
               abort "Apple build processing failed: #{state}" if %w[FAILED INVALID].include?(state)
               if state == "VALID"
-                puts "Build #{version} (#{number}) is ready for internal TestFlight testing"
+                InternalTestflight.new(Spaceship::ConnectAPI.token.text).distribute(
+                  app_id: app.id, build_id: build.id, version: version, number: number,
+                  notes: ENV.fetch("IOS_TESTFLIGHT_NOTES"), deadline: deadline
+                )
                 break
               end
             end

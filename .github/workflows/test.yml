@@ -237,10 +237,15 @@ jobs:
       build_run_id: ${{ inputs.build_run_id }}
       retention_days: 7
 
+  dependency_scan:
+    uses: ./.github/workflows/dependency_scan.yml
+    permissions:
+      contents: read
+
   qualification_result:
     name: Record final verification and release stop
     if: ${{ always() }}
-    needs: [resolve_build, final_build, ready_linux, ready_windows, ready_macos, ready_android, ready_ios, ios_analysis, android_reproducibility, fdroid_preflight]
+    needs: [resolve_build, final_build, ready_linux, ready_windows, ready_macos, ready_android, ready_ios, ios_analysis, android_reproducibility, fdroid_preflight, dependency_scan]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -277,6 +282,8 @@ jobs:
           build = json.loads(os.environ["BUILD_JSON"] or "{}")
           if any(needs[name]["result"] != "success" for name in ("final_build", *["ready_" + group for group in package_readiness.PACKAGES])):
               raise SystemExit("Build completion or package readiness failed")
+          if needs["dependency_scan"]["result"] != "success":
+              raise SystemExit("Fresh candidate dependency scan failed")
           selections = {group: json.loads(needs["ready_" + group]["outputs"].get("packages") or "{}")
                         for group in package_readiness.PACKAGES}
           inventory = build_manifest._artifact_inventory(os.environ["GITHUB_REPOSITORY"], int(os.environ["BUILD_RUN_ID"]), build.get("run_attempt", 1), tuple(name for group in package_readiness.PACKAGES.values() for name in group))
