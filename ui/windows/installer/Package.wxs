@@ -33,8 +33,9 @@
 		<!-- Copy every file regardless of the version already installed. Windows Installer applies the reinstall mode to a normal install too
 		     (https://learn.microsoft.com/en-us/windows/win32/msi/reinstallmode), and a major upgrade installs the new package while the old one is
 		     still costed, so "omus" (the default: copy only if missing or older) skipped runtime files older than the installed ones. "a" forces
-		     all files; m, u and s keep the default registry and shortcut rules. Costs: ICE40 warns that REINSTALLMODE is in the Property table
-		     (suppressed in build.bat), and a repair or reinstall copies all files again. -->
+		     all files; m, u and s keep the default registry and shortcut rules. Costs: a repair or reinstall copies all files again, and validating the built MSI with
+		     "wix msi validate" or Orca reports ICE40 (REINSTALLMODE in the Property table); "wix build" does not validate, and this build has no
+		     validation step. -->
 		<Property Id="REINSTALLMODE" Value="amus" />
 		<Property Id="DOBBYVPN_CONTROL_PIPE_SID" Secure="yes" />
 		<SetProperty
