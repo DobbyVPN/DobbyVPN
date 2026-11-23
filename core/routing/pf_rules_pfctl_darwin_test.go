@@ -3,6 +3,7 @@
 package routing
 
 import (
+	"context"
 	"fmt"
 	"net/netip"
 	"os"
@@ -46,7 +47,7 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 			if err := os.WriteFile(path, []byte(rules), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			output, err := pfctl(t, "-n", "-a", MacOSPFAnchor, "-f", path)
+			output, err := pfctl(t.Context(), "-n", "-a", MacOSPFAnchor, "-f", path)
 			if err != nil {
 				t.Fatalf("pfctl rejected the %s rules (%d bytes, longest line %d bytes): %v\n%s", name, len(rules), longestLine(rules), err, output)
 			}
@@ -54,23 +55,34 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 				return
 			}
 			t.Cleanup(func() {
+				// t.Context is already canceled when cleanup runs.
 				for _, kind := range []string{"rules", "Tables"} {
-					if flushed, flushErr := pfctl(t, "-a", pfCILoadAnchor, "-F", kind); flushErr != nil {
+					if flushed, flushErr := pfctl(context.Background(), "-a", pfCILoadAnchor, "-F", kind); flushErr != nil {
 						t.Errorf("flush %s of %s: %v\n%s", kind, pfCILoadAnchor, flushErr, flushed)
 					}
 				}
 			})
-			if loaded, loadErr := pfctl(t, "-a", pfCILoadAnchor, "-f", path); loadErr != nil {
+			if loaded, loadErr := pfctl(t.Context(), "-a", pfCILoadAnchor, "-f", path); loadErr != nil {
 				t.Fatalf("pf did not load the %s rules: %v\n%s", name, loadErr, loaded)
 			}
 			if len(excluded) == 0 {
 				return
 			}
-			output, err = pfctl(t, "-a", pfCILoadAnchor, "-t", "dobbyvpn_excluded", "-T", "show")
+			output, err = pfctl(t.Context(), "-a", pfCILoadAnchor, "-t", "dobbyvpn_excluded", "-T", "show")
 			if err != nil {
 				t.Fatalf("show the loaded %s table: %v\n%s", name, err, output)
 			}
-			if entries := len(strings.Fields(string(output))); entries != len(excluded) {
+			// pfctl also prints notices such as "No ALTQ support in kernel";
+			// count only the table's address lines.
+			entries := 0
+			for _, line := range strings.Split(string(output), "\n") {
+				if _, err := netip.ParsePrefix(strings.TrimSpace(line)); err == nil {
+					entries++
+				} else if _, err := netip.ParseAddr(strings.TrimSpace(line)); err == nil {
+					entries++
+				}
+			}
+			if entries != len(excluded) {
 				t.Fatalf("the kernel table holds %d entries, want %d", entries, len(excluded))
 			}
 		})
@@ -80,9 +92,8 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 // pfCILoadAnchor is a top-level anchor the main ruleset never refers to.
 const pfCILoadAnchor = "dobbyvpn-ci"
 
-func pfctl(t *testing.T, args ...string) ([]byte, error) {
-	t.Helper()
-	return exec.CommandContext(t.Context(), "sudo", append([]string{"-n", "/sbin/pfctl"}, args...)...).CombinedOutput()
+func pfctl(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "sudo", append([]string{"-n", "/sbin/pfctl"}, args...)...).CombinedOutput()
 }
 
 func longestLine(text string) int {
