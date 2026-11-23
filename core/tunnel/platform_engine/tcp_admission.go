@@ -90,6 +90,16 @@ func (a *tcpAdmission) canceledSince(epoch uint64) bool {
 	return a.sealed || a.epoch != epoch
 }
 
+// refuse releases the slot of an admitted connection that is answered with
+// RST instead of being dispatched, and counts it as refused. release is a
+// once-function, so the slot cannot be returned twice.
+func (a *tcpAdmission) refuse(release func()) {
+	a.mu.Lock()
+	a.refused++
+	a.mu.Unlock()
+	release()
+}
+
 func (a *tcpAdmission) releaser() func() {
 	return sync.OnceFunc(func() {
 		a.mu.Lock()

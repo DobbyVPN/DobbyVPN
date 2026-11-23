@@ -82,7 +82,7 @@ func newTCPForwarder(s *stack.Stack, handler stackAdapter.TransportHandler, reje
 		// over, it is refused rather than dispatched to the next profile.
 		switchedAway := func() bool { return waited && admission.canceledSince(epoch) }
 		if switchedAway() {
-			release()
+			admission.refuse(release)
 			r.Complete(true)
 			return
 		}
@@ -98,7 +98,7 @@ func newTCPForwarder(s *stack.Stack, handler stackAdapter.TransportHandler, reje
 		defer r.Complete(false)
 		if switchedAway() {
 			ep.Abort()
-			release()
+			admission.refuse(release)
 			return
 		}
 		setTCPSocketOptions(s, ep)
