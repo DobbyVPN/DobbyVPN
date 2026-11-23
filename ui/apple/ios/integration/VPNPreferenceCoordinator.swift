@@ -113,7 +113,9 @@ final class VPNPreferenceCoordinator {
     /// Only `.setUp`, which follows an explicit user action and a short
     /// explanation, may create a profile; that save shows the iOS
     /// "Add VPN Configurations" prompt. Passive readiness never creates one.
-    func prepareManager(access: VPNPreferenceAccess, trigger: String,
+    /// `access` is read when the queued operation runs, so a request queued
+    /// before a failed setup cannot save after it.
+    func prepareManager(access: @escaping @autoclosure () -> VPNPreferenceAccess, trigger: String,
                         completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
         withPreferences { finished in
             self.loadOrCreateManager(access: access, trigger: trigger) { manager, error in
@@ -123,7 +125,7 @@ final class VPNPreferenceCoordinator {
         }
     }
 
-    private func loadOrCreateManager(access: VPNPreferenceAccess, trigger: String,
+    private func loadOrCreateManager(access currentAccess: @escaping () -> VPNPreferenceAccess, trigger: String,
                                      completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
         let started = ProcessInfo.processInfo.systemUptime
         self.loadInventory { [weak self] managers, error in
@@ -134,6 +136,7 @@ final class VPNPreferenceCoordinator {
                 completion(nil, failure)
                 return
             }
+            let access = currentAccess()
             let matching = self.matchingManagers(managers ?? [])
             let selected: NETunnelProviderManager?
             do { selected = try self.selectManager(matching) }

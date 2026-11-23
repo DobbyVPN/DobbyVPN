@@ -770,10 +770,11 @@ extension DobbySessionViewModel {
         return busy ? "Stopping…" : "Stop"
     }
 
-    public var mainActionEnabled: Bool { canRetryActiveSelection || canStop || canAct() }
+    public var mainActionEnabled: Bool { canRetryActiveSelection || canStop || canAct() || canStartVPNSetup }
 
     public func mainAction() {
-        if protectedRetryState { retryActiveSelection() }
+        if canStartVPNSetup { if vpnSetup.failure == nil { requestVPNSetup() } else { retryVPNSetup() } }
+        else if protectedRetryState { retryActiveSelection() }
         else if networkCanBeStopped { stop() }
         else { performPrimaryAction() }
     }
@@ -866,6 +867,7 @@ extension DobbySessionViewModel {
     public var vpnPermissionNeeded: Bool { snapshot.sessionID.isEmpty && vpnSetup.failure != nil }
     public var vpnSetupFailureDetail: String { vpnSetup.failure ?? "" }
     public var canRetryVPNSetup: Bool { snapshot.sessionID.isEmpty && vpnSetup.canRetry }
+    var canStartVPNSetup: Bool { snapshot.sessionID.isEmpty && vpnSetup.notSetUp && !vpnSetup.retryPending && !vpnSetup.retryRunning }
 
     /// "Allow VPN": after a refusal only this tap saves again.
     public func retryVPNSetup() {

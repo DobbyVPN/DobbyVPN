@@ -187,10 +187,7 @@ public final class VpnManagerImpl: NSObject {
         if repeats > 0 {
             logs.writeLog(log: "[provider-message] cached readiness failure repeats=\(repeats)")
         }
-        condition.lock()
-        // After a failed setup, polls only load: the next save waits for the user's tap.
-        let access: VPNPreferenceAccess = userSetup ? .setUp : setupFailure == nil ? .passive : .loadOnly
-        condition.unlock()
+        let access: VPNPreferenceAccess = userSetup ? .setUp : passiveAccess()
         let trigger = userSetup ? "user_setup" : commandMethod ?? "unknown"
         let readinessFailure: String
         switch ensureProviderReady(until: deadline, identity: identity, trace: trace,
@@ -358,6 +355,13 @@ public final class VpnManagerImpl: NSObject {
 
     private func monotonicNow() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
+    /// After a failed setup, polls only load: the next save waits for the user's tap.
+    private func passiveAccess() -> VPNPreferenceAccess {
+        condition.lock()
+        defer { condition.unlock() }
+        return setupFailure == nil ? .passive : .loadOnly
+    }
+
     private func cachedSnapshotReadinessFailure() -> String? {
         condition.lock()
         if let current = vpnManager {
@@ -402,7 +406,13 @@ public final class VpnManagerImpl: NSObject {
         var loadError: Error?
         if trace { logs.writeLog(log: "[provider-message] preferences begin \(identity)") }
         let preferencesStarted = monotonicNow()
-        preferences.prepareManager(access: access, trigger: trigger) { value, error in
+        preferences.prepareManager(access: access == .setUp ? .setUp : self.passiveAccess(), trigger: trigger) { value, error in
+            if let setup = error as? VPNSetupFailure {
+                // Record it before the next queued operation reads the access kind.
+                self.condition.lock()
+                self.setupFailure = setup.localizedDescription
+                self.condition.unlock()
+            }
             resultLock.lock()
             loadedManager = value
             loadError = error
@@ -412,7 +422,7 @@ public final class VpnManagerImpl: NSObject {
         guard let loadRemaining = remaining(until: deadline),
               loaded.wait(timeout: .now() + loadRemaining) == .success else {
             let elapsed = monotonicNow() - preferencesStarted
-            switch access {
+            switch access == .setUp ? .setUp : passiveAccess() {
             case .setUp:
                 // Usually the iOS permission prompt is still open. This is the same
                 // setup failure as a refusal: the user can tap Allow VPN again.
