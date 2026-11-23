@@ -55,6 +55,16 @@ def parse_version(raw: str) -> VersionMetadata:
     return metadata
 
 
+def macos_package_names(version: str) -> tuple[str, ...]:
+    value = parse_version(version)
+    release = (value.major, value.minor, value.maintenance)
+    architectures = ("universal",) if release >= (1, 5, 16) else ("aarch64", "amd64")
+    return tuple(
+        f"dobbyVPN-macos-{arch}{suffix}.pkg"
+        for arch in architectures for suffix in ("", "-debug")
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     source = parser.add_mutually_exclusive_group(required=True)
