@@ -43,10 +43,8 @@
 		     put dobby_bridge.dll and wintun.dll at the same path in components with different ids, so afterInstallExecute
 		     or afterInstallFinalize would delete the new copies. Costing always runs before any of these positions, so a bundled
 		     file that is older than the installed one is skipped and then removed with the old product (v1.5.15 over v1.5.11
-		     lost 186 runtime files). Costing compares the File table Version of each file with the installed file, so the
-		     build writes the highest version into the harvested bin\** files after the checks (windows_msi_runtime.py) and the
-		     upgrade installs them whatever runtime was installed. The bundled .NET runtime is also never allowed to go
-		     backwards: dotnet-runtime-floor.json and the check in desktop_package.py. -->
+		     lost 186 runtime files). The bundled .NET runtime is therefore never allowed to go backwards:
+		     dotnet-runtime-floor.json and the check in desktop_package.py. -->
 		<MajorUpgrade
 			AllowDowngrades="no"
 			AllowSameVersionUpgrades="yes"
