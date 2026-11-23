@@ -113,8 +113,8 @@ public final class VpnManagerImpl: NSObject {
         defer { if trace { logs.writeLog(log: "[provider-message] end \(identity) stage=\(stage) elapsed=\(monotonicNow() - started)") } }
         let useSnapshotReadinessCooldown = commandMethod == "Snapshot" && !Thread.isMainThread
         let manualSetupRetry = useSnapshotReadinessCooldown && bypassReadinessFailureCooldown
-        if useSnapshotReadinessCooldown && !manualSetupRetry,
-           let readinessFailure = cachedSnapshotReadinessFailure() {
+        if useSnapshotReadinessCooldown,
+           let readinessFailure = cachedSnapshotReadinessFailure(bypass: manualSetupRetry) {
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
@@ -288,7 +288,7 @@ public final class VpnManagerImpl: NSObject {
 
     private func monotonicNow() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
-    private func cachedSnapshotReadinessFailure() -> String? {
+    private func cachedSnapshotReadinessFailure(bypass: Bool) -> String? {
         condition.lock()
         if let current = vpnManager {
             providerStatus = current.connection.status
@@ -298,7 +298,7 @@ public final class VpnManagerImpl: NSObject {
             condition.unlock()
             return nil
         }
-        let failure = snapshotReadinessFailureCooldown.cachedFailure(at: monotonicNow())
+        let failure = snapshotReadinessFailureCooldown.cachedFailure(at: monotonicNow(), bypass: bypass)
         if failure != nil { cachedFailureReads += 1 }
         condition.unlock()
         return failure

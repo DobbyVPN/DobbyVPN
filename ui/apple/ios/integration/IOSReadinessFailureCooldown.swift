@@ -11,8 +11,8 @@ public struct IOSReadinessFailureCooldown: Equatable {
 
     public init() {}
 
-    public func cachedFailure(at monotonicTime: TimeInterval) -> String? {
-        guard let failure, let retryAfter, monotonicTime < retryAfter else { return nil }
+    public func cachedFailure(at monotonicTime: TimeInterval, bypass: Bool = false) -> String? {
+        guard !bypass, let failure, let retryAfter, monotonicTime < retryAfter else { return nil }
         return failure
     }
 
