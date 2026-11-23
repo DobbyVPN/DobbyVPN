@@ -322,15 +322,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] resources event=\(event) footprint_bytes=\(footprint) \(DobbyvpnResourceDiagnostics())")
     }
 
-    private func persistResources() {
-        guard let resourceRecord else { return }
+    @discardableResult
+    private func persistResources() -> Bool {
+        guard let resourceRecord else { return false }
+        defer { lastResourceWrite = ProcessInfo.processInfo.systemUptime }
         do {
             try resourceRecord.save(to: resourcePath)
             savedResourcePeak = resourceRecord.peakBytes
+            return true
         } catch {
             logs.writeLog(level: "ERROR", log: "[tunnel] resource checkpoint failed: \(error)")
+            return false
         }
-        lastResourceWrite = ProcessInfo.processInfo.systemUptime
     }
 
     private func beginResourceRecord() {
@@ -383,9 +386,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let elapsed = ProcessInfo.processInfo.systemUptime - lastResourceWrite
         let peakChanged = record.peakBytes > savedResourcePeak &&
             (elapsed >= 1 || record.peakBytes - savedResourcePeak >= 4 * 1024 * 1024)
-        if peakChanged || (admission != savedAdmission && elapsed >= 1) {
+        // A failed save keeps the old value, so the counters are retried later.
+        if peakChanged || (admission != savedAdmission && elapsed >= 1), persistResources() {
             savedAdmission = admission
-            persistResources()
         }
     }
 
