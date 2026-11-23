@@ -55,13 +55,13 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 			}
 			t.Cleanup(func() {
 				for _, kind := range []string{"rules", "Tables"} {
-					if output, err := pfctl(t, "-a", pfCILoadAnchor, "-F", kind); err != nil {
-						t.Errorf("flush %s of %s: %v\n%s", kind, pfCILoadAnchor, err, output)
+					if flushed, err := pfctl(t, "-a", pfCILoadAnchor, "-F", kind); err != nil {
+						t.Errorf("flush %s of %s: %v\n%s", kind, pfCILoadAnchor, err, flushed)
 					}
 				}
 			})
-			if output, err := pfctl(t, "-a", pfCILoadAnchor, "-f", path); err != nil {
-				t.Fatalf("pf did not load the %s rules: %v\n%s", name, err, output)
+			if loaded, err := pfctl(t, "-a", pfCILoadAnchor, "-f", path); err != nil {
+				t.Fatalf("pf did not load the %s rules: %v\n%s", name, err, loaded)
 			}
 			if len(excluded) == 0 {
 				return
