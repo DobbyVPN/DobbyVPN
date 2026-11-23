@@ -10,6 +10,10 @@ final class IOSSessionClient: DobbyDisconnectObserving, DobbyVPNSetupRetrying, @
     func beginSnapshotObservation() -> UInt64 { history.begin("Snapshot") }
     func observedSnapshot(_ snapshot: DobbySessionSnapshot, ticket: UInt64) {
         history.observedSnapshot(ticket, state: snapshot.state, recovering: snapshot.recovering)
+        let path = IOSAppCompositionRoot.sharedLogPath("provider-run.json")
+        if let previous = (try? IOSProviderRunRecord.load(from: path))?.unexpectedPreviousLaunch {
+            history.observedReplacement(of: previous)
+        }
     }
     func acknowledgeDisconnect(_ message: String) { history.acknowledge(message) }
 

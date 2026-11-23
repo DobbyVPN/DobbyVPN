@@ -110,6 +110,18 @@ public final class IOSDisconnectHistory: @unchecked Sendable {
     private var stopping = false
     private var failure = ""
 
+    private var reportedReplacement: String?
+    private var replacementFailure = false
+
+    public func observedReplacement(of previousLaunch: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard reportedReplacement != previousLaunch, !stopping else { return }
+        reportedReplacement = previousLaunch
+        replacementFailure = true
+        failure = "The VPN extension restarted unexpectedly."
+    }
+
     public func begin(_ method: String) -> UInt64 {
         lock.lock()
         defer { lock.unlock() }
@@ -117,6 +129,8 @@ public final class IOSDisconnectHistory: @unchecked Sendable {
             revision &+= 1
             armed = false
             stopping = true
+            replacementFailure = false
+            failure = ""
         } else if method == "Start" {
             revision &+= 1
             stopping = false
@@ -141,7 +155,7 @@ public final class IOSDisconnectHistory: @unchecked Sendable {
         armed = recovering || ["PROBING", "PREPARING", "CONNECTED"].contains(state)
         if state == "CONNECTED" && !recovering {
             revision &+= 1
-            failure = ""
+            if !replacementFailure { failure = "" }
         }
     }
 
@@ -171,7 +185,35 @@ public final class IOSDisconnectHistory: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard !message.isEmpty, failure == message else { return }
+        replacementFailure = false
         revision &+= 1
         failure = ""
+    }
+}
+
+public struct IOSProviderRunRecord: Codable {
+    public let launchID: String
+    public var protected = false
+    public var peakBytes: UInt64 = 0
+    public var peakResources = ""
+    public var unexpectedPreviousLaunch: String?
+
+    public init(launchID: String, replacing previous: Self?) {
+        self.launchID = launchID
+        if let previous, previous.launchID != launchID, previous.protected {
+            unexpectedPreviousLaunch = previous.launchID
+        }
+    }
+
+    public static func load(from path: URL) throws -> Self? {
+        do {
+            return try JSONDecoder().decode(Self.self, from: Data(contentsOf: path))
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
+        }
+    }
+
+    public func save(to path: URL) throws {
+        try JSONEncoder().encode(self).write(to: path, options: .atomic)
     }
 }

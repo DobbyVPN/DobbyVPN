@@ -132,6 +132,12 @@ private final class IOSPlatformCallbacks: NSObject, DobbyvpnPlatformCallbacksPro
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private let commandDiagnosticSampler = IOSCommandLogSampler()
     private let launchId = UUID().uuidString
+    private let resourceQueue = DispatchQueue(label: "vpn.dobby.provider-resources")
+    private var resourceTimer: DispatchSourceTimer?
+    private var resourceRecord: IOSProviderRunRecord?
+    private var savedResourcePeak: UInt64 = 0
+    private var lastResourceWrite: TimeInterval = 0
+    private var resourcePath: URL { IOSAppCompositionRoot.sharedLogPath("provider-run.json") }
     let tunnelId = UUID().uuidString
 
     // The containing app writes opaque configuration bytes to this shared
@@ -297,7 +303,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return "family=\(addr.pointee.sa_family) getnameinfoErr=\(errno)"
     }
 
-    func logResources(_ event: String) {
+    private func physicalFootprint() -> (UInt64?, kern_return_t) {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout.size(ofValue: info) / MemoryLayout<integer_t>.size)
         let capacity = Int(count)
@@ -306,8 +312,72 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
-        let footprint = result == KERN_SUCCESS ? String(info.phys_footprint) : "unavailable(mach=\(result))"
+        return (result == KERN_SUCCESS ? info.phys_footprint : nil, result)
+    }
+
+    func logResources(_ event: String) {
+        let (bytes, result) = physicalFootprint()
+        let footprint = bytes.map(String.init) ?? "unavailable(mach=\(result))"
         logs.writeLog(log: "[tunnel:\(tunnelId)] resources event=\(event) footprint_bytes=\(footprint) \(DobbyvpnResourceDiagnostics())")
+    }
+
+    private func persistResources() {
+        guard let resourceRecord else { return }
+        do {
+            try resourceRecord.save(to: resourcePath)
+            savedResourcePeak = resourceRecord.peakBytes
+        } catch {
+            logs.writeLog(level: "ERROR", log: "[tunnel] resource checkpoint failed: \(error)")
+        }
+        lastResourceWrite = ProcessInfo.processInfo.systemUptime
+    }
+
+    private func beginResourceRecord() {
+        resourceQueue.sync {
+            do {
+                let previous = try IOSProviderRunRecord.load(from: resourcePath)
+                if let previous, previous.launchID != launchId, previous.protected {
+                    logs.writeLog(level: "WARN", log: "[tunnel] unexpected previous launch=\(previous.launchID) " +
+                                  "peak_footprint_bytes=\(previous.peakBytes) \(previous.peakResources)")
+                }
+                resourceRecord = IOSProviderRunRecord(launchID: launchId, replacing: previous)
+            } catch {
+                logs.writeLog(level: "ERROR", log: "[tunnel] resource checkpoint read failed: \(error)")
+                resourceRecord = IOSProviderRunRecord(launchID: launchId, replacing: nil)
+            }
+            persistResources()
+        }
+    }
+
+    func recordProtection(_ protected: Bool) {
+        resourceQueue.sync {
+            guard resourceRecord?.protected != protected, resourceRecord != nil else { return }
+            resourceRecord?.protected = protected
+            resourceTimer?.cancel()
+            resourceTimer = nil
+            if protected {
+                let timer = DispatchSource.makeTimerSource(queue: resourceQueue)
+                timer.schedule(deadline: .now(), repeating: .milliseconds(250), leeway: .milliseconds(50))
+                timer.setEventHandler { [weak self] in self?.sampleResourcePeak() }
+                resourceTimer = timer
+                timer.resume()
+            }
+            persistResources()
+        }
+    }
+
+    private func sampleResourcePeak() {
+        guard var record = resourceRecord, record.protected else { return }
+        if let bytes = physicalFootprint().0, bytes > record.peakBytes {
+            record.peakBytes = bytes
+            record.peakResources = DobbyvpnResourceDiagnostics()
+            resourceRecord = record
+        }
+        let elapsed = ProcessInfo.processInfo.systemUptime - lastResourceWrite
+        if record.peakBytes > savedResourcePeak,
+           elapsed >= 1 || record.peakBytes - savedResourcePeak >= 4 * 1024 * 1024 {
+            persistResources()
+        }
     }
 
     override func startTunnel(options: [String: NSObject]?) async throws {
@@ -325,6 +395,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Initialize diagnostics before retaining OS callbacks. A failed
         // logger must not leave a callback cycle owning a rejected provider.
         try registerPlatform()
+        beginResourceRecord()
         logs.writeLog(log: "[tunnel:\(tunnelId)] control mode ready; waiting for session command")
         startPathLogging()
         logInitialNetworkPath(timeout: 1.0)

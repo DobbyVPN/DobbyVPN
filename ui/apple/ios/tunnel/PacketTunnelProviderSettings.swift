@@ -53,6 +53,7 @@ extension PacketTunnelProvider {
             guard descriptor >= 0 else {
                 return tunnelResult(error: NSError(domain: NSPOSIXErrorDomain, code: Int(errno)), pending: true)
             }
+            recordProtection(true)
             return tunnelResult(fd: descriptor, pending: true)
         }
     }
@@ -65,6 +66,7 @@ extension PacketTunnelProvider {
             if error == nil && networkSession == sessionID && networkGeneration == generation {
                 networkSession = nil
                 networkGeneration = -1
+                recordProtection(false)
             }
             return tunnelResult(error: error, pending: error != nil)
         }
