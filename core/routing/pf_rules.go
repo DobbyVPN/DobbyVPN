@@ -42,14 +42,15 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Pref
 	var b strings.Builder
 	b.WriteString("# DobbyVPN kill switch: outbound traffic leaves only through the tunnel.\n")
 	if len(excluded) > 0 {
+		// pfctl does not accept line breaks inside the braces.
 		b.WriteString("table <dobbyvpn_excluded> {")
 		for i, prefix := range excluded {
 			if i > 0 {
 				b.WriteString(",")
 			}
-			b.WriteString("\n\t" + prefix.String())
+			b.WriteString(" " + prefix.String())
 		}
-		b.WriteString("\n}\n")
+		b.WriteString(" }\n")
 	}
 	b.WriteString("pass out quick on lo0 all no state\n")
 	if tunName != "" {

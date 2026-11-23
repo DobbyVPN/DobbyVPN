@@ -275,13 +275,21 @@ func (c *nativeRuntime) generationValue() uint64 {
 	return c.generation
 }
 
+// LeakProtectionUnavailable names why the network runs without its leak
+// protection; empty when it is in place. Run sets it before Connect returns.
+func (c *nativeRuntime) LeakProtectionUnavailable() string { return c.app.LeakProtectionOff }
+
 func (c *nativeRuntime) Attach(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *tunnel.BypassPolicy) error {
 	if c.app.Guard == nil {
 		return c.app.Engine.Attach(ctx, generation, address, cache, bypass)
 	}
 	configured, hosts := bypass.Excluded()
 	err := c.app.Guard.SetExcluded(ctx, configured, hosts)
-	if err == nil {
+	if err != nil {
+		// Without its leak protection rules the retained network only blocks
+		// traffic; release it rather than keep the Mac offline for a retry.
+		err = &sessionapi.NetworkFailure{Err: fmt.Errorf("load leak protection rules: %w", err)}
+	} else {
 		err = c.app.Engine.Attach(ctx, generation, address, cache, bypass)
 	}
 	if err != nil {

@@ -106,6 +106,13 @@ public struct DobbyRootView: View {
                             .font(.caption)
                             .accessibilityIdentifier("configuration.offline")
                     }
+#if os(macOS)
+                    if model.snapshot.state == "CONNECTED" && !model.snapshot.leakProtectionOff.isEmpty {
+                        Text("Leak protection is off: the system firewall settings were changed.")
+                            .font(.caption)
+                            .accessibilityIdentifier("connection.leakProtectionOff")
+                    }
+#endif
                     mainButton
                     connections
                         .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))

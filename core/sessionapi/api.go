@@ -82,6 +82,27 @@ type CleanupFailure struct{ Err error }
 func (e *CleanupFailure) Error() string { return "cleanup failed: " + e.Err.Error() }
 func (e *CleanupFailure) Unwrap() error { return e.Err }
 
+// NetworkFailure marks a failure that leaves the retained network unusable,
+// for example leak protection rules that could not be loaded. The network is
+// released instead of being kept for another attempt, so the device is not
+// left offline behind it.
+type NetworkFailure struct{ Err error }
+
+func (e *NetworkFailure) Error() string { return e.Err.Error() }
+func (e *NetworkFailure) Unwrap() error { return e.Err }
+
+func isNetworkFailure(err error) bool {
+	var networkFailure *NetworkFailure
+	return errors.As(err, &networkFailure)
+}
+
+// lastCandidate reports a failed start after which no further profile is
+// tried: a selected profile, an invalid lease, or a network that failed, which
+// another profile cannot help.
+func lastCandidate(err error, invalidLease bool, mode StartMode) bool {
+	return invalidLease || mode == ProfileIndex || isNetworkFailure(err)
+}
+
 func failure(code FailureCode, message string) error { return &Error{Code: code, Message: message} }
 
 func failureWithCause(code FailureCode, message string, cause error) error {
@@ -192,6 +213,9 @@ type SnapshotResult struct {
 	CleanupComplete     bool
 	Recovering          bool
 	PrimaryAction       string
+	// LeakProtectionOff names why the connected network runs without the
+	// platform's leak protection (macOS pf kill switch); empty when it is on.
+	LeakProtectionOff string
 
 	ServiceRestorePending bool
 }
@@ -331,6 +355,7 @@ type session struct {
 	restoreEpoch               uint64
 	restorePrepared            bool
 	serviceRestorePending      bool
+	leakProtectionOff          string
 	activeProfiles             []RuntimeProfile
 	activeDigest               string
 	activeSourceKind           ConfigSourceKind
@@ -1084,6 +1109,7 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 	if platform == nil {
 		return failure(FailurePlatform, "platform returned an empty network lease")
 	}
+	leakProtectionOff := ""
 	if runtime, ok := m.runtime.(NetworkRuntime); ok {
 		network, err := runtime.PrepareNetwork(ctx, ref, profile)
 		if network != nil {
@@ -1095,9 +1121,13 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 		if network == nil {
 			return failure(FailurePlatform, "runtime returned an empty network lease")
 		}
+		if protection, ok := network.(interface{ LeakProtectionUnavailable() string }); ok {
+			leakProtectionOff = protection.LeakProtectionUnavailable()
+		}
 	}
 	s.mu.Lock()
 	s.vpnActive = true
+	s.leakProtectionOff = leakProtectionOff
 	if m.protection != nil && !s.stopRequested && !s.closing {
 		s.retainedProtection = true
 	}
@@ -1168,7 +1198,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 			m.finish(s, generation, failureWithCause(FailureCanceled, "start was canceled", errors.Join(candidateErrors...)))
 			return
 		}
-		if invalidLease || target.Mode == ProfileIndex {
+		if lastCandidate(err, invalidLease, target.Mode) {
 			m.finish(s, generation, wrapFailure(FailureRuntime, errors.Join(candidateErrors...)))
 			return
 		}
@@ -1298,6 +1328,7 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 	s.ledger = nil
 	if releaseNetwork {
 		s.networkLedger, s.vpnActive = nil, false
+		s.leakProtectionOff = ""
 	}
 	// A Stop that arrived during attempt cleanup still owns network release.
 	if !releaseNetwork && (s.stopRequested || s.closing) {
@@ -1363,7 +1394,7 @@ func (m *Manager) retireFinishedResources(s *session, work *ledger, cause error)
 		cleanupErr = work.release(m.cleanupContext(s))
 	}
 	s.mu.Lock()
-	releaseNetwork = s.stopRequested || s.closing || !s.vpnActive
+	releaseNetwork = s.stopRequested || s.closing || !s.vpnActive || isNetworkFailure(cause)
 	network := s.networkLedger
 	s.mu.Unlock()
 	if cleanupErr == nil && CodeOf(cause) != FailureCleanup && releaseNetwork && network != nil {
@@ -1445,6 +1476,7 @@ func snapshotLocked(s *session) SnapshotResult {
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,
 		Recovering: s.recovering, PrimaryAction: primaryActionLocked(s),
 		ServiceRestorePending: s.serviceRestorePending, OfflineAcceptedAt: s.offlineAcceptedAt,
+		LeakProtectionOff: s.leakProtectionOff,
 	}
 }
 

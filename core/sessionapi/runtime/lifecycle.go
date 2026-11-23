@@ -171,6 +171,15 @@ type networkOwner struct {
 
 func (n *networkOwner) Stop(ctx context.Context) error { return n.lease.Stop(ctx) }
 
+// LeakProtectionUnavailable reports the platform core's reason, if any, for
+// running this network without its leak protection.
+func (n *networkOwner) LeakProtectionUnavailable() string {
+	if core, ok := n.core.(interface{ LeakProtectionUnavailable() string }); ok {
+		return core.LeakProtectionUnavailable()
+	}
+	return ""
+}
+
 func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
