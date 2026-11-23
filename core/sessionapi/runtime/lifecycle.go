@@ -422,6 +422,9 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {
 		owned.waitReady = ready.WaitReady
 	}
+	if transport, ok := device.(interface{ ResetTransport(string) }); ok {
+		owned.resetTransport = transport.ResetTransport
+	}
 	if owned.proxyAddr == "" {
 		return fail(errors.New("protocol device returned an empty SOCKS endpoint"))
 	}
@@ -567,7 +570,14 @@ type lease struct {
 	healthDone    chan struct{}
 	healthFailed  chan error
 	probeNow      chan string
+	// resetTransport drops the protocol's pooled multiplexed connections
+	// (Xray gRPC, XHTTP); nil for per-flow transports such as Outline.
+	resetTransport func(reason string)
 }
+
+// transportResetRecheck is how soon the health monitor checks again after it
+// dropped a multiplexed transport's connections, instead of the full interval.
+var transportResetRecheck = time.Second
 
 func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
 func (l *lease) setOnDone(fn func(error))            { l.onDone = fn }
@@ -614,6 +624,9 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 			}
 			if err != nil {
 				failures = append(failures, err)
+				log.Warn(category, "connected health check failed", map[string]any{
+					"generation": ref.Generation, "consecutive_failures": len(failures), "threshold": threshold, "cause": err.Error(),
+				})
 				if len(failures) >= threshold {
 					cause := errors.Join(failures...)
 					select {
@@ -625,7 +638,15 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 			} else {
 				failures = nil
 			}
-			if interval <= 0 {
+			wait := interval
+			// A multiplexed transport can keep a dead connection that looks
+			// ready after a short network drop; drop it on the first failure
+			// and check again soon instead of waiting for the threshold.
+			if err != nil && len(failures) == 1 && l.resetTransport != nil {
+				l.resetTransport("connected health check failed")
+				wait = transportResetRecheck
+			}
+			if wait <= 0 {
 				select {
 				case <-ctx.Done():
 					return
@@ -633,7 +654,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				}
 				continue
 			}
-			timer := time.NewTimer(interval)
+			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				if !timer.Stop() {
@@ -646,6 +667,9 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				}
 				eventReason = reason
 				log.Infof(category, "health check triggered by %s generation=%d", reason, ref.Generation)
+				if l.resetTransport != nil {
+					l.resetTransport("network event: " + reason)
+				}
 			case <-timer.C:
 			}
 		}

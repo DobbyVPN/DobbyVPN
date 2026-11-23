@@ -152,6 +152,19 @@ func (d *XrayDevice) GetProxyAddr() string {
 	return d.proxyAddr
 }
 
+// ResetTransport drops the multiplexed connections xray-core keeps per
+// destination (gRPC, XHTTP), so the next streams dial new ones. After a short
+// network drop the old HTTP/2 connection can still look ready while every new
+// stream on it hangs; a per-flow transport (Outline) does not need this.
+func (d *XrayDevice) ResetTransport(reason string) {
+	if d == nil || d.xrayInstance == nil {
+		return
+	}
+	closeXrayGRPCClients()
+	dropXrayXHTTPClients()
+	log.Info(common.Category, "Xray multiplexed connections dropped", map[string]any{"reason": reason})
+}
+
 func (d *XrayDevice) Close() error {
 	return d.CloseContext(context.Background())
 }

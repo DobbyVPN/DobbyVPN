@@ -24,6 +24,27 @@ var xrayGRPCClients map[struct {
 //go:linkname xrayGRPCClientsLock github.com/xtls/xray-core/transport/internet/grpc.globalDialerAccess
 var xrayGRPCClientsLock sync.Mutex
 
+// xray-core keeps XHTTP (splithttp) clients the same way, one XmuxManager per
+// destination. The map is only replaced, never walked, so its value type does
+// not need to be mirrored; xray-core creates a new map on the next dial.
+
+//go:linkname xrayXHTTPClients github.com/xtls/xray-core/transport/internet/splithttp.globalDialerMap
+var xrayXHTTPClients map[struct {
+	net.Destination
+	*internet.MemoryStreamConfig
+}]*struct{}
+
+//go:linkname xrayXHTTPClientsLock github.com/xtls/xray-core/transport/internet/splithttp.globalDialerAccess
+var xrayXHTTPClientsLock sync.Mutex
+
+// dropXrayXHTTPClients makes the next XHTTP stream dial a new connection.
+// Connections already open close on their own idle and keepalive timeouts.
+func dropXrayXHTTPClients() {
+	xrayXHTTPClientsLock.Lock()
+	defer xrayXHTTPClientsLock.Unlock()
+	xrayXHTTPClients = nil
+}
+
 // closeXrayGRPCClients closes all gRPC connections xray-core has created.
 func closeXrayGRPCClients() {
 	xrayGRPCClientsLock.Lock()
