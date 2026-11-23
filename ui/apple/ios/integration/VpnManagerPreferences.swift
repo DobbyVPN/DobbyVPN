@@ -2,10 +2,6 @@ import Foundation
 import NetworkExtension
 
 extension VpnManagerImpl {
-    func getOrCreateManager(completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
-        preferences.getOrCreateManager(completion: completion)
-    }
-
     func statusName(_ status: NEVPNStatus) -> String {
         switch status {
         case .invalid: return "invalid"

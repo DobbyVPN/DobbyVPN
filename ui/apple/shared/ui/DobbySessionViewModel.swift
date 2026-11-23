@@ -104,9 +104,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private var errorOrigin: DobbySessionErrorOrigin?
     private var lastSourceErrorIdentity: DobbySourceErrorIdentity?
     private var snapshotFailureMessage: String?
-    @Published private var setupFailure: String?
-    @Published private var setupRetryPending = false
-    @Published private var setupRetryRunning = false
+    @Published private var vpnSetup = DobbyVPNSetupFlow()
     private var diagnosticWriteError = ""
     private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
 
@@ -312,6 +310,9 @@ public final class DobbySessionViewModel: ObservableObject {
                         self.markSourceAccepted(source)
                     case .success(nil):
                         self.sourceIsDirty = false
+                    case let .failure(failure) where DobbyVPNSetupFlow.report(failure, client: client) != nil:
+                        // The VPN profile is gone; keep the subscription until setup succeeds.
+                        if self.pendingLoad == nil { self.pendingLoad = (source, automaticOwner) }
                     case let .failure(failure):
                         let accepted = self.snapshot.sourceURL
                         let sameSource = self.snapshot.configured && !accepted.isEmpty && accepted == source
@@ -339,7 +340,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private func refreshSnapshot(retryingVPNSetup: Bool) {
         guard !snapshotInFlight else { return }
         snapshotInFlight = true
-        if retryingVPNSetup { setupRetryRunning = true }
+        if retryingVPNSetup { updateVPNSetup { $0.retryRunning = true } }
         let currentID = snapshot.sessionID
         let recoveringFromSnapshotFailure = currentID.isEmpty && snapshotFailureMessage != nil
         let client = client
@@ -347,18 +348,15 @@ public final class DobbySessionViewModel: ObservableObject {
             let observer = client as? DobbyDisconnectObserving
             let ticket = observer?.beginSnapshotObservation()
             let decoded = readSnapshot(client: client, sessionID: currentID, retryingVPNSetup: retryingVPNSetup)
-            let latestSetupFailure = (client as? DobbyVPNSetupRetrying)?.vpnSetupFailure
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.snapshotInFlight = false
-                if retryingVPNSetup { self.setupRetryRunning = false }
-                let retryPending = self.setupRetryPending
-                if retryPending { self.setupRetryPending = false }
+                let retryPending = self.updateVPNSetup { $0.finishSnapshot(retrying: retryingVPNSetup) }
                 self.disconnectFailure = observer?.disconnectFailure ?? ""
                 switch decoded {
                 case let .success((value, reattached)):
                     if value.sessionID == self.snapshot.sessionID && value.sequence < max(self.snapshot.sequence, self.acceptedSequence) { return }
-                    if self.setupFailure != nil { self.setupFailure = nil }
+                    self.updateVPNSetup { $0.ready() }
                     if let observer, let ticket {
                         observer.observedSnapshot(value, ticket: ticket)
                         self.disconnectFailure = observer.disconnectFailure
@@ -408,10 +406,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     if reattached || recoveringFromSnapshotFailure { self.clearSnapshotFailure() }
                     self.observeSourceError(value.sourceError, sessionID: value.sessionID)
                 case let .failure(failure):
-                    self.snapshot = .empty
-                    if self.setupFailure != latestSetupFailure { self.setupFailure = latestSetupFailure }
-                    self.snapshotFailureMessage = failure.localizedDescription
-                    self.setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
+                    self.observeSnapshotFailure(failure)
                 }
                 self.pruneClosedFailures()
                 if retryPending, case .failure = decoded {
@@ -471,7 +466,7 @@ public final class DobbySessionViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.busy = false
-                if case let .failure(failure) = outcome {
+                if case let .failure(failure) = outcome, DobbyVPNSetupFlow.report(failure, client: client) == nil {
                     let message = failure.localizedDescription
                     self.dismissedFailures.remove(message)
                     self.setError(message, origin: .other)
@@ -608,6 +603,8 @@ private extension DobbySessionViewModel {
             guard let self else { return }
             self.debounce = nil
             self.pendingLoad = (source, automaticOwner)
+            // A subscription entered before setup is the user action that starts it.
+            self.requestVPNSetup()
             self.loadNext()
         }
         if immediate {
@@ -863,41 +860,61 @@ extension DobbySessionViewModel {
 }
 
 extension DobbySessionViewModel {
-    public var canRetryVPNSetup: Bool {
-        snapshot.sessionID.isEmpty && setupFailure != nil && !setupRetryPending && !setupRetryRunning
-    }
+    public var vpnNotSetUp: Bool { vpnSetup.notSetUp }
+    public var vpnSetupExplanationVisible: Bool { vpnSetup.explanationVisible }
+    /// The denied (or timed-out) setup shown inline; its detail is only behind Copy.
+    public var vpnPermissionNeeded: Bool { snapshot.sessionID.isEmpty && vpnSetup.failure != nil }
+    public var vpnSetupFailureDetail: String { vpnSetup.failure ?? "" }
+    public var canRetryVPNSetup: Bool { snapshot.sessionID.isEmpty && vpnSetup.canRetry }
 
+    /// "Allow VPN": after a refusal only this tap saves again.
     public func retryVPNSetup() {
         guard canRetryVPNSetup else { return }
+        recordDiagnostic("VPN setup retried by the user", event: "vpn.setup", level: "INFO")
+        startVPNSetup()
+    }
+
+    /// "Continue" on the explanation: the save that shows the iOS permission prompt.
+    public func continueVPNSetup() {
+        guard updateVPNSetup({ $0.dismissExplanation() }) else { return }
+        recordDiagnostic("VPN setup continued after the explanation", event: "vpn.setup", level: "INFO")
+        startVPNSetup()
+    }
+
+    func requestVPNSetup() {
+        if updateVPNSetup({ $0.request() }) { recordDiagnostic("VPN setup explanation shown", event: "vpn.setup", level: "INFO") }
+    }
+
+    private func startVPNSetup() {
         resetClosedFailures()
         if snapshotInFlight {
-            setupRetryPending = true
+            updateVPNSetup { $0.retryPending = true }
         } else {
             refreshSnapshot(retryingVPNSetup: true)
         }
     }
-}
 
-private func readSnapshot(
-    client: DobbySessionClient,
-    sessionID: String,
-    retryingVPNSetup: Bool = false
-) -> Result<(DobbySessionSnapshot, reattached: Bool), Error> {
-    let response: String
-    if retryingVPNSetup, let setup = client as? DobbyVPNSetupRetrying {
-        response = setup.retryVPNSetupSnapshot()
-    } else {
-        response = client.call("Snapshot", parameters: ["session_id": sessionID])
+    /// Publishes only real changes, so polling does not redraw the window.
+    @discardableResult
+    private func updateVPNSetup<T>(_ change: (inout DobbyVPNSetupFlow) -> T) -> T {
+        var value = vpnSetup
+        let result = change(&value)
+        if value != vpnSetup { vpnSetup = value }
+        return result
     }
-    do {
-        return .success((try DobbyResponse.result(from: response, as: DobbySessionSnapshot.self), false))
-    } catch DobbyClientError.command(let code, _) where code == "NOT_FOUND" && !sessionID.isEmpty {
-        let replacement = client.call("Snapshot", parameters: ["session_id": ""])
-        return Result {
-            (try DobbyResponse.result(from: replacement, as: DobbySessionSnapshot.self), true)
+
+    private func observeSnapshotFailure(_ failure: Error) {
+        snapshot = .empty
+        guard let report = DobbyVPNSetupFlow.report(failure, client: client) else {
+            updateVPNSetup { $0.ready() }
+            snapshotFailureMessage = failure.localizedDescription
+            setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
+            return
         }
-    } catch {
-        return .failure(error)
+        if let newFailure = updateVPNSetup({ $0.observe(report) }) { recordError("VPN setup failed: \(newFailure)") }
+        // An earlier transport error no longer describes this state.
+        clearSnapshotFailure()
+        if report == .notSetUp && pendingLoad != nil { requestVPNSetup() }
     }
 }
 

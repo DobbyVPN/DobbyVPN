@@ -13,6 +13,22 @@ struct VPNSetupFailure: LocalizedError {
     }
 }
 
+/// How far a readiness request may go in OS preferences.
+enum VPNPreferenceAccess: Equatable {
+    /// A user setup action: may create the profile (the iOS permission prompt).
+    case setUp
+    /// Passive readiness: never creates a profile; saves an existing one only
+    /// when its control-mode defaults differ.
+    case passive
+    /// Passive readiness after a failed setup: never writes preferences.
+    case loadOnly
+}
+
+/// No usable provider profile exists, and this request may not create one.
+struct VPNNotSetUp: Error {
+    let reason: String
+}
+
 /// Serial production preference workflow. Tests replace native API boundaries,
 /// retaining real manager/protocol objects without invoking OS preference storage.
 final class VPNPreferenceCoordinator {
@@ -93,16 +109,22 @@ final class VPNPreferenceCoordinator {
         }
     }
 
-    func getOrCreateManager(trigger: String = "readiness", completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
+    /// Loads the provider profile and prepares it for a control-mode start.
+    /// Only `.setUp`, which follows an explicit user action and a short
+    /// explanation, may create a profile; that save shows the iOS
+    /// "Add VPN Configurations" prompt. Passive readiness never creates one.
+    func prepareManager(access: VPNPreferenceAccess, trigger: String,
+                        completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
         withPreferences { finished in
-            self.loadOrCreateManager(trigger: trigger) { manager, error in
+            self.loadOrCreateManager(access: access, trigger: trigger) { manager, error in
                 completion(manager, error)
                 finished()
             }
         }
     }
 
-    private func loadOrCreateManager(trigger: String, completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
+    private func loadOrCreateManager(access: VPNPreferenceAccess, trigger: String,
+                                     completion: @escaping (NETunnelProviderManager?, Error?) -> Void) {
         let started = ProcessInfo.processInfo.systemUptime
         self.loadInventory { [weak self] managers, error in
             guard let self else { completion(nil, error); return }
@@ -117,11 +139,27 @@ final class VPNPreferenceCoordinator {
             do { selected = try self.selectManager(matching) }
             catch { completion(nil, error); return }
             if let existing = selected {
+                let before = self.controlDefaults(existing)
                 self.applyDefaults(existing)
+                guard self.controlDefaults(existing) != before else {
+                    self.bind(existing)
+                    completion(existing, nil)
+                    return
+                }
+                guard access != .loadOnly else {
+                    // After a failed setup only the user's next tap may write preferences.
+                    completion(nil, VPNNotSetUp(reason: "existing profile needs saved control-mode defaults"))
+                    return
+                }
                 // Persist control-mode routing defaults before any start. An
                 // in-memory fix is not sufficient because NetworkExtension
-                // may reload the saved manager for the provider process.
+                // may reload the saved manager for the provider process. Save
+                // only when they differ, so polling does not rewrite the profile.
                 self.saveAndReload(existing, setup: (trigger, "existing", started), completion: completion)
+                return
+            }
+            guard access == .setUp else {
+                completion(nil, VPNNotSetUp(reason: "no matching VPN configuration"))
                 return
             }
             let created = self.createManager()
@@ -175,6 +213,20 @@ final class VPNPreferenceCoordinator {
         manager.isEnabled = true
         manager.isOnDemandEnabled = false
         return manager
+    }
+
+    /// The fields `applyDefaults` controls, so an unchanged profile is not re-saved.
+    private func controlDefaults(_ manager: NETunnelProviderManager) -> String {
+        let proto = manager.protocolConfiguration as? NETunnelProviderProtocol
+        let configuration = (proto?.providerConfiguration ?? [:]).map { "\($0.key)=\($0.value)" }.sorted()
+        var fields = ["\(manager.isEnabled)", "\(proto != nil)", proto?.providerBundleIdentifier ?? "",
+                      proto?.serverAddress ?? "", "\(configuration)", "\(proto?.includeAllNetworks ?? false)",
+                      "\(proto?.excludeLocalNetworks ?? false)", "\(proto?.enforceRoutes ?? false)"]
+        if #available(iOS 16.4, macOS 13.3, *) {
+            fields += ["\(proto?.excludeCellularServices ?? false)", "\(proto?.excludeAPNs ?? false)"]
+        }
+        if #available(iOS 17.4, macOS 14.4, *) { fields.append("\(proto?.excludeDeviceCommunication ?? false)") }
+        return fields.joined(separator: "|")
     }
 
     private func applyProtocolDefaults(manager: NETunnelProviderManager) {

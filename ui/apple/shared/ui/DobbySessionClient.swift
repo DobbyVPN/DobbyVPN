@@ -10,9 +10,98 @@ public protocol DobbySessionClient: AnyObject, Sendable {
     var sourceCommit: String { get }
 }
 
-public protocol DobbyVPNSetupRetrying: DobbySessionClient {
-    var vpnSetupFailure: String? { get }
-    func retryVPNSetupSnapshot() -> String
+/// A platform whose VPN profile is created by the app after the user's consent (iOS).
+/// Snapshot fails with `VPN_NOT_SET_UP` until then, or with `VPN_SETUP_FAILED`
+/// after a refused or timed-out setup. Only `setUpVPNSnapshot` may create the
+/// profile, so the system permission prompt never appears without a user action.
+public protocol DobbyVPNSetupProviding: DobbySessionClient {
+    func setUpVPNSnapshot() -> String
+}
+
+/// iOS VPN setup as the window sees it. Only a `DobbyVPNSetupProviding`
+/// client reports it, through Snapshot codes; other platforms never do.
+struct DobbyVPNSetupFlow: Equatable {
+    enum Report: Equatable { case notSetUp, failed(String) }
+
+    private(set) var notSetUp = false
+    /// Detail of the last setup the user started, until a setup succeeds.
+    private(set) var failure: String?
+    private(set) var explanationVisible = false
+    var retryPending = false
+    var retryRunning = false
+
+    var canRetry: Bool { failure != nil && !retryPending && !retryRunning }
+
+    /// A Snapshot returned; reports whether a setup tap waited for it.
+    mutating func finishSnapshot(retrying: Bool) -> Bool {
+        defer { retryPending = false }
+        if retrying { retryRunning = false }
+        return retryPending
+    }
+
+    static func report(_ error: Error, client: DobbySessionClient) -> Report? {
+        guard client is DobbyVPNSetupProviding,
+              case let DobbyClientError.command(code, message) = error else { return nil }
+        switch code {
+        case "VPN_NOT_SET_UP": return .notSetUp
+        case "VPN_SETUP_FAILED": return .failed(message)
+        default: return nil
+        }
+    }
+
+    /// A Snapshot succeeded, or failed for another reason: no setup state remains.
+    mutating func ready() {
+        notSetUp = false
+        failure = nil
+        explanationVisible = false
+    }
+
+    /// Not set up is the ordinary first screen, not an error. Returns a new failure once, for the log.
+    mutating func observe(_ report: Report) -> String? {
+        notSetUp = true
+        var next: String?
+        if case let .failed(message) = report { next = message }
+        defer { failure = next }
+        if next != nil { explanationVisible = false }
+        return next != failure ? next : nil
+    }
+
+    /// A user action needs the profile: explain the iOS prompt once before saving.
+    mutating func request() -> Bool {
+        guard notSetUp, failure == nil, !explanationVisible, !retryPending, !retryRunning else { return false }
+        explanationVisible = true
+        return true
+    }
+
+    mutating func dismissExplanation() -> Bool {
+        guard explanationVisible else { return false }
+        explanationVisible = false
+        return true
+    }
+}
+
+/// Reads one Snapshot; a user setup action asks the iOS shell to set up the VPN first.
+func readSnapshot(
+    client: DobbySessionClient,
+    sessionID: String,
+    retryingVPNSetup: Bool = false
+) -> Result<(DobbySessionSnapshot, reattached: Bool), Error> {
+    let response: String
+    if retryingVPNSetup, let setup = client as? DobbyVPNSetupProviding {
+        response = setup.setUpVPNSnapshot()
+    } else {
+        response = client.call("Snapshot", parameters: ["session_id": sessionID])
+    }
+    do {
+        return .success((try DobbyResponse.result(from: response, as: DobbySessionSnapshot.self), false))
+    } catch DobbyClientError.command(let code, _) where code == "NOT_FOUND" && !sessionID.isEmpty {
+        let replacement = client.call("Snapshot", parameters: ["session_id": ""])
+        return Result {
+            (try DobbyResponse.result(from: replacement, as: DobbySessionSnapshot.self), true)
+        }
+    } catch {
+        return .failure(error)
+    }
 }
 
 /// Native failure presentation for platforms whose transport may outlive the backend.
