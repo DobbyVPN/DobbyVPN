@@ -1073,6 +1073,9 @@ func (m *Manager) Snapshot(_ context.Context, sessionID string) (result Snapshot
 }
 
 func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
+	if err := m.releaseNetworkForRebuild(s); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.vpnActive {
 		s.mu.Unlock()
@@ -1120,10 +1123,6 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 // runStart owns acquisition and cleanup, including canceled late callbacks.
 func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
 	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
-	if err := m.releaseNetworkForRebuild(s); err != nil {
-		m.finish(s, generation, err)
-		return
-	}
 	if err := m.prepareNetwork(ctx, s); err != nil {
 		m.finish(s, generation, err)
 		return
