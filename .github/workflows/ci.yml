@@ -143,6 +143,34 @@ jobs:
       - name: Build Go product packages
         run: ${{ matrix.python }} .github/scripts/source_checks.py go-build
 
+  windows_ui_restore:
+    name: Windows UI NuGet restore
+    needs: ci_scope
+    # ui/windows/**, global.json and the project's packages.lock.json are shared paths, so a pull request that changes them
+    # always selects the full scope; narrower scopes never touch them.
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && needs.ci_scope.outputs.scope == 'full' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned .NET SDK
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: ui/windows/DobbyVPN.Windows/packages.lock.json
+
+      # Resolves every package and framework pack of the Windows project (the project enforces its lock file), so a
+      # missing or wrongly versioned package fails here instead of in the Windows package build. It does not compile.
+      - name: Restore the Windows UI project
+        run: dotnet restore ui/windows/DobbyVPN.Windows/DobbyVPN.Windows.csproj -r win-x64 -p:Platform=x64 -p:EnableWindowsTargeting=true
+
   android_lint:
     name: Android lint
     needs: ci_scope
@@ -425,6 +453,7 @@ jobs:
     needs:
       - ci_scope
       - go_build
+      - windows_ui_restore
       - android_lint
       - lint_go
       - apple_checks
@@ -440,6 +469,7 @@ jobs:
           REUSED_RUN_ID: ${{ needs.ci_scope.outputs.reused_run_id || '' }}
           CI_SCOPE_RESULT: ${{ needs.ci_scope.result }}
           GO_BUILD_RESULT: ${{ needs.go_build.result }}
+          WINDOWS_UI_RESTORE_RESULT: ${{ needs.windows_ui_restore.result }}
           ANDROID_LINT_RESULT: ${{ needs.android_lint.result }}
           LINT_GO_RESULT: ${{ needs.lint_go.result }}
           APPLE_RESULT: ${{ needs.apple_checks.result }}
@@ -468,6 +498,7 @@ jobs:
           }
           require_unselected_platform_jobs() {
             require_result 'Go source build' skipped "$GO_BUILD_RESULT"
+            require_result 'Windows UI NuGet restore' skipped "$WINDOWS_UI_RESTORE_RESULT"
             require_result 'Android lint' skipped "$ANDROID_LINT_RESULT"
             require_result 'Go source analysis' skipped "$LINT_GO_RESULT"
             require_result 'Apple development checks' skipped "$APPLE_RESULT"
@@ -477,6 +508,7 @@ jobs:
             full)
               require_common
               require_result 'Go source build' success "$GO_BUILD_RESULT"
+              require_result 'Windows UI NuGet restore' success "$WINDOWS_UI_RESTORE_RESULT"
               require_result 'Android lint' success "$ANDROID_LINT_RESULT"
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
               require_result 'Apple development checks' success "$APPLE_RESULT"
@@ -494,6 +526,7 @@ jobs:
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
               require_result 'Android product build' success "$ANDROID_BUILD_RESULT"
               require_result 'Go source build' skipped "$GO_BUILD_RESULT"
+              require_result 'Windows UI NuGet restore' skipped "$WINDOWS_UI_RESTORE_RESULT"
               require_result 'Apple development checks' skipped "$APPLE_RESULT"
               echo "Reduced CI passed: Android build, Android lint, Go analysis, security, and actionlint."
               ;;
@@ -502,6 +535,7 @@ jobs:
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
               require_result 'Apple development checks' success "$APPLE_RESULT"
               require_result 'Go source build' skipped "$GO_BUILD_RESULT"
+              require_result 'Windows UI NuGet restore' skipped "$WINDOWS_UI_RESTORE_RESULT"
               require_result 'Android lint' skipped "$ANDROID_LINT_RESULT"
               require_result 'Android product build' skipped "$ANDROID_BUILD_RESULT"
               echo "Reduced CI passed: Apple production analysis, Swift and Go analysis, security, and actionlint."
