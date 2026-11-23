@@ -83,7 +83,7 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 				}
 			}
 			if entries != len(excluded) {
-				t.Fatalf("the kernel table holds %d entries, want %d", entries, len(excluded))
+				t.Fatalf("the kernel table holds %d entries, want %d; pfctl -T show began:\n%.400s", entries, len(excluded), output)
 			}
 		})
 	}
