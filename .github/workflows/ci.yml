@@ -163,9 +163,8 @@ jobs:
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
-          cache: true
-          cache-dependency-path: ui/windows/DobbyVPN.Windows/packages.lock.json
 
+      # No NuGet cache: the packages are about 570 MB to download and 1.9 GB unpacked, which costs more to save and restore than to fetch.
       # Resolves every package and framework pack of the Windows project (the project enforces its lock file), so a
       # missing or wrongly versioned package fails here instead of in the Windows package build. It does not compile.
       - name: Restore the Windows UI project
