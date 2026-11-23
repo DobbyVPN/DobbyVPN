@@ -78,7 +78,7 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 	if len(tcpStackOptions) != 0 {
 		ownedTCPAdmission = &tcpAdmission{changed: make(chan struct{})}
 	}
-	ownedStack, err = createStackWithAdmission(dev, handler, ownedTCPAdmission)
+	ownedStack, err = createStack(dev, handler, ownedTCPAdmission)
 	if err == nil {
 		log.Infof(Category, "packet stack ready interface=%s mtu=%d ipv4=true ipv6=true", dev.Name(), dev.MTU())
 	}

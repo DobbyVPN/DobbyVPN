@@ -33,11 +33,7 @@ const (
 // createStack is core.CreateStack with a TCP forwarder that consults the
 // handler before answering a SYN. The device is attached only after the
 // forwarder is installed, so no packet reaches the default one.
-func createStack(dev stack.LinkEndpoint, handler stackAdapter.TransportHandler) (*stack.Stack, error) {
-	return createStackWithAdmission(dev, handler, nil)
-}
-
-func createStackWithAdmission(dev stack.LinkEndpoint, handler stackAdapter.TransportHandler, admission *tcpAdmission) (*stack.Stack, error) {
+func createStack(dev stack.LinkEndpoint, handler stackAdapter.TransportHandler, admission *tcpAdmission) (*stack.Stack, error) {
 	rejecter, ok := handler.(tcpRejecter)
 	if !ok && admission == nil {
 		return core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: handler})
