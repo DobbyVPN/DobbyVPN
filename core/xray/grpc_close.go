@@ -45,7 +45,8 @@ func retireXrayGRPCClients() (retired, closed int) {
 		case connectivity.Idle, connectivity.TransientFailure, connectivity.Shutdown:
 			_ = conn.Close()
 			closed++
-		default:
+		case connectivity.Connecting, connectivity.Ready:
+			// It may still carry streams; keep it until it is idle or fails.
 			kept = append(kept, conn)
 		}
 	}
@@ -109,6 +110,7 @@ func retireXrayXHTTPClients() (retired int) {
 		if manager == nil || !ok {
 			continue
 		}
+		// #nosec G103 -- reads the client list at the offset checked by reflection above.
 		for _, client := range *(*[]*splithttp.XmuxClient)(unsafe.Add(unsafe.Pointer(manager), offset)) {
 			client.NotUsed.Store(true)
 			// DoneRunning closes the connection if nothing runs on it.
