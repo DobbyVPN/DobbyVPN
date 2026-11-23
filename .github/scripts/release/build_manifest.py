@@ -28,7 +28,9 @@ class BuildManifestError(ValueError):
 
 
 def required_artifacts(version: str) -> tuple[str, ...]:
-    return tuple(sorted((
+    from version_metadata import macos_package_names
+
+    names = (
         "DobbyVPNRuntime.xcframework",
         "DobbyVPNRuntime-debug.xcframework",
         "DobbyVPN.xcarchive.tar.gz",
@@ -40,11 +42,9 @@ def required_artifacts(version: str) -> tuple[str, ...]:
         "dobbyVPN-linux-debug.deb",
         "dobbyVPN-windows-amd64.msi",
         "dobbyVPN-windows-amd64-debug.msi",
-        "dobbyVPN-macos-aarch64.pkg",
-        "dobbyVPN-macos-aarch64-debug.pkg",
-        "dobbyVPN-macos-amd64.pkg",
-        "dobbyVPN-macos-amd64-debug.pkg",
-    )))
+        *macos_package_names(version),
+    )
+    return tuple(sorted(names))
 
 
 def _workflow_path_matches(value: Any, expected: str) -> bool:

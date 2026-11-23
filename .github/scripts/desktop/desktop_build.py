@@ -671,6 +671,12 @@ def configure_macos_bridge_link(environment: dict[str, str]) -> None:
     )
 
 
+def configure_macos_compiler(environment: dict[str, str], arch: str) -> None:
+    target = {"amd64": "x86_64", "arm64": "arm64"}[arch]
+    triple = f"{target}-apple-macosx{MACOS_MINIMUM_SYSTEM_VERSION}"
+    environment.update(CC=f"clang -target {triple}", CXX=f"clang++ -target {triple}")
+
+
 def configure_macos_deployment_target(
     target_platform: str, environment: dict[str, str]
 ) -> None:
@@ -961,6 +967,7 @@ def build_cli(
         # The CLI shares the runtime's native physical-network resolver and DNS
         # ownership code, so it needs the same cgo framework closure as the service.
         env["CGO_ENABLED"] = "1"
+        configure_macos_compiler(env, target_arch)
         configure_macos_bridge_link(env)
         ldflags += (
             f" -linkmode=external -extldflags "
@@ -1047,6 +1054,7 @@ def build_service(
         if target_platform == "windows":
             ldflags += windows_go_runtime_ldflags(go, "./clientserver/", env, build_tags)
         if target_platform == "macos":
+            configure_macos_compiler(env, target_arch)
             # Keep the package's declared macOS 12 floor valid for both
             # the Go backend and the native operator CLI.
             # CGO_LDFLAGS is repeated for every cgo package, so add libc++
@@ -1249,8 +1257,18 @@ def build_native_ui(
 
     environment = os.environ.copy()
     environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_MINIMUM_SYSTEM_VERSION
-    run(["swift", "build", "--package-path", str(ROOT_DIR / "ui" / "apple"), "--configuration", "debug" if debug else "release", "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
-    binary = ROOT_DIR / "ui" / "apple" / ".build" / ("debug" if debug else "release") / "DobbyVPNMacApp"
+    swift_arch = {"arm64": "arm64", "amd64": "x86_64"}[arch or default_service_arch("macos")]
+    package = ROOT_DIR / "ui" / "apple"
+    command = [
+        "swift", "build", "--package-path", str(package),
+        "--scratch-path", str(package / ".build" / swift_arch),
+        "--arch", swift_arch, "--configuration", "debug" if debug else "release",
+    ]
+    run([*command, "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
+    bin_path = run_capture([*command, "--show-bin-path"], cwd=ROOT_DIR, env=environment)
+    if not bin_path:
+        fail(f"Swift did not report the build path for {swift_arch}")
+    binary = Path(bin_path) / "DobbyVPNMacApp"
     if not binary.is_file():
         fail(f"Swift build did not produce {binary}")
     if output.suffix == ".app":

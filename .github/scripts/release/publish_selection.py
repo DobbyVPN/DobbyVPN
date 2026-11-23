@@ -24,13 +24,9 @@ ASSET_NAMES = (
     "DobbyVPN-v{version}-unsign.apk",
     "version.txt",
     "dobbyVPN-linux.deb",
-    "dobbyVPN-macos-aarch64.pkg",
-    "dobbyVPN-macos-amd64.pkg",
     "dobbyVPN-windows-amd64.msi",
     "dobbyVPN-linux-debug.deb",
     "dobbyVPN-windows-amd64-debug.msi",
-    "dobbyVPN-macos-aarch64-debug.pkg",
-    "dobbyVPN-macos-amd64-debug.pkg",
     "DobbyVPN.xcarchive-debug.tar.gz",
     "DobbyVPN-v{version}-debug.apk",
 )
@@ -45,7 +41,9 @@ def workflow_path_matches(value: Any, expected: str) -> bool:
 
 
 def expected_assets(version: str) -> tuple[str, ...]:
-    return tuple(sorted(name.format(version=version) for name in ASSET_NAMES))
+    from version_metadata import macos_package_names
+
+    return tuple(sorted((*macos_package_names(version), *(name.format(version=version) for name in ASSET_NAMES))))
 
 
 def validate_publish_run(run: Any, *, repository: str, run_id: int) -> dict[str, Any]:

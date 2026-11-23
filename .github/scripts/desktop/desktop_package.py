@@ -427,10 +427,10 @@ def _version(requested: str | None) -> str:
 
 def _select_host(platform: str, architecture: str | None) -> tuple[str, str]:
     observed_platform, observed_arch = _host()
-    selected_arch = architecture or observed_arch
+    selected_arch = architecture or ("universal" if platform == "macos" else observed_arch)
     if platform != observed_platform:
         _fail(f"{platform} packages must be built on a {platform} runner")
-    if selected_arch != observed_arch:
+    if selected_arch != observed_arch and not (platform == "macos" and selected_arch == "universal"):
         _fail(
             f"{platform} {selected_arch} packages must be built on a native {selected_arch} runner; "
             f"this host is {observed_arch}"
@@ -438,6 +438,33 @@ def _select_host(platform: str, architecture: str | None) -> tuple[str, str]:
     if platform in {"linux", "windows"} and selected_arch != "amd64":
         _fail(f"{platform} packages are supported only for amd64")
     return platform, selected_arch
+
+
+MACOS_EXECUTABLES = ("DobbyVPNMacApp", "dobbyvpn-backend", "dobby-cli")
+
+
+def _macos_uuids(path: Path) -> set[tuple[bytes, bytes]]:
+    output = _run("read Mach-O UUIDs", ["dwarfdump", "--uuid", str(path)], capture=True)
+    return set(re.findall(rb"UUID: ([A-Fa-f0-9-]+) \(([^)]+)\)", output.stdout or b""))
+
+
+def _merge_macos_slices(destination: Path, debug: bool) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    arm, intel = SERVICES / "macos-arm64", SERVICES / "macos-amd64"
+    for name in MACOS_EXECUTABLES:
+        binary = destination / name
+        _run("merge executable slices", ["lipo", "-create", str(arm / name), str(intel / name), "-output", str(binary)])
+        if debug:
+            symbols = destination / "DebugSymbols" / f"{name}.dSYM"
+            shutil.copytree(arm / "DebugSymbols" / symbols.name, symbols, dirs_exist_ok=True)
+            dwarf = Path("Contents/Resources/DWARF") / name
+            _run("merge debug symbol slices", ["lipo", "-create",
+                 str(arm / "DebugSymbols" / symbols.name / dwarf),
+                 str(intel / "DebugSymbols" / symbols.name / dwarf),
+                 "-output", str(symbols / dwarf)])
+            ids = _macos_uuids(binary)
+            if {arch for _, arch in ids} != {b"arm64", b"x86_64"} or len(ids) != 2 or ids != _macos_uuids(symbols):
+                _fail(f"universal debug symbols do not match {binary}")
 
 
 def _build(args: argparse.Namespace) -> int:
@@ -456,42 +483,47 @@ def _build(args: argparse.Namespace) -> int:
         _windows_temp_preflight(environment)
 
     output.mkdir(parents=True, exist_ok=True)
-    desktop = SCRIPT_DIR / "desktop_build.py"
-    _run(
-        "Go backend and CLI build",
-        [
-            sys.executable,
-            str(desktop),
-            "libs",
-            "--platform", platform,
-            "--arch", architecture,
-            "--with-cli",
-            *(["--debug"] if args.debug else []),
-            *( ["--skip-deps"] if args.skip_deps else [] ),
-        ],
-        env=environment,
-    )
-    if platform in {"windows", "macos"}:
-        ui_output = service_directory / ("frontend" if platform == "windows" else "DobbyVPNMacApp")
+    for arch in (("arm64", "amd64") if architecture == "universal" else (architecture,)):
+        directory = SERVICES / f"{platform}-{arch}"
+        desktop = SCRIPT_DIR / "desktop_build.py"
         _run(
-            "native desktop UI build",
+            "Go backend and CLI build",
             [
                 sys.executable,
                 str(desktop),
-                "native-ui",
+                "libs",
                 "--platform", platform,
-                "--arch", architecture,
-                "--output", str(ui_output),
+                "--arch", arch,
+                "--with-cli",
                 *(["--debug"] if args.debug else []),
+                *( ["--skip-deps"] if args.skip_deps else [] ),
             ],
             env=environment,
         )
+        if platform in {"windows", "macos"}:
+            ui_output = directory / ("frontend" if platform == "windows" else "DobbyVPNMacApp")
+            _run(
+                "native desktop UI build",
+                [
+                    sys.executable,
+                    str(desktop),
+                    "native-ui",
+                    "--platform", platform,
+                    "--arch", arch,
+                    "--output", str(ui_output),
+                    *(["--debug"] if args.debug else []),
+                ],
+                env=environment,
+            )
 
-    if args.debug and platform == "macos":
-        symbols = service_directory / "DebugSymbols"
-        symbols.mkdir(exist_ok=True)
-        for name in ("DobbyVPNMacApp", "dobbyvpn-backend", "dobby-cli"):
-            _run("macOS debug symbols", ["dsymutil", str(service_directory / name), "-o", str(symbols / f"{name}.dSYM")], env=environment)
+        if args.debug and platform == "macos":
+            symbols = directory / "DebugSymbols"
+            symbols.mkdir(exist_ok=True)
+            for name in ("DobbyVPNMacApp", "dobbyvpn-backend", "dobby-cli"):
+                _run("macOS debug symbols", ["dsymutil", str(directory / name), "-o", str(symbols / f"{name}.dSYM")], env=environment)
+
+    if architecture == "universal":
+        _merge_macos_slices(service_directory, args.debug)
 
     with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-package-") as temporary:
         work = Path(temporary)
@@ -524,7 +556,7 @@ def _build(args: argparse.Namespace) -> int:
             produced = _build_windows_msi(archive, service_directory, version, source_sha, work, build_environment, args.debug)
             target = output / "dobbyVPN-windows-amd64.msi"
         else:
-            archive_arch = "aarch64" if architecture == "arm64" else "amd64"
+            archive_arch = "aarch64" if architecture == "arm64" else architecture
             archive = archives / f"dobby-vpn-{version}-mac-{archive_arch}.zip"
             produced = _build_macos_pkg(archive, service_directory, architecture, version, source_sha, work, environment)
             target = output / f"dobbyVPN-macos-{archive_arch}.pkg"
@@ -594,8 +626,9 @@ def _describe(args: argparse.Namespace) -> int:
             _fail(f"Windows package must be named {expected_name}")
         _verify_msi(package, version, os.environ.copy())
     else:
-        archive_arch = "aarch64" if architecture == "arm64" else "amd64"
-        expected_name = f"dobbyVPN-macos-{archive_arch}.pkg"
+        archive_arch = "aarch64" if architecture == "arm64" else architecture
+        suffix = "-debug" if getattr(args, "debug", False) else ""
+        expected_name = f"dobbyVPN-macos-{archive_arch}{suffix}.pkg"
         if package.name != expected_name:
             _fail(f"macOS package must be named {expected_name}")
         with tempfile.TemporaryDirectory(prefix="dobbyvpn-desktop-package-check-") as temporary:
@@ -637,14 +670,19 @@ def _verify_macos_package_source(package: Path, source_sha: str, architecture: s
         info = plistlib.load(stream)
     if info.get("DobbySourceCommit") != source_sha:
         _fail("macOS package source commit does not match the selected Build checkout")
-    backend = next(expanded.rglob("dobbyvpn-backend"), None)
-    if backend is None:
-        _fail("macOS package does not contain its VPN backend")
-    expected_arch = "arm64" if architecture == "arm64" else "x86_64"
-    observed = _run("read macOS package backend architecture", ["lipo", "-archs", str(backend)], capture=True)
-    architectures = (observed.stdout or b"").decode("utf-8", errors="replace").split()
-    if architectures != [expected_arch]:
-        _fail(f"macOS package backend architecture is {architectures!r}, expected {[expected_arch]!r}")
+    contents = info_plists[0].parent
+    expected = {"arm64", "x86_64"} if architecture == "universal" else {
+        "arm64" if architecture == "arm64" else "x86_64"
+    }
+    for rel in ("MacOS/DobbyVPNMacApp", "Resources/dobbyvpn-backend", "Resources/dobby-cli"):
+        binary = contents / rel
+        observed = _run("read macOS executable architectures", ["lipo", "-archs", str(binary)], capture=True)
+        if set((observed.stdout or b"").decode().split()) != expected:
+            _fail(f"{rel} does not contain exactly {sorted(expected)}")
+        for arch in sorted(expected):
+            metadata = _run("read macOS deployment target", ["xcrun", "vtool", "-arch", arch, "-show-build", str(binary)], capture=True)
+            if not re.search(rb"(?m)^\s*minos\s+12\.0\s*$", metadata.stdout or b""):
+                _fail(f"{rel} {arch} does not declare macOS 12.0")
 
 
 def _ensure_windows_pillow(work: Path, env: dict[str, str]) -> dict[str, str]:
@@ -812,8 +850,8 @@ def _build_macos_pkg(
     work: Path,
     environment: dict[str, str],
 ) -> Path:
-    label = "aarch64" if architecture == "arm64" else "amd64"
-    aliases = {"arm64": "arm64", "amd64": "amd64"}
+    label = "aarch64" if architecture == "arm64" else architecture
+    aliases = {"arm64": "arm64", "amd64": "amd64", "universal": "universal"}
     installer = work / "installer" / "macos"
     installer.mkdir(parents=True)
     # build.sh enters bin/<package-architecture> before it resolves the
@@ -832,6 +870,7 @@ def _build_macos_pkg(
     _run("macOS installer package build", ["/bin/bash", "build.sh", architecture], cwd=installer, env=env)
     package = installer / "bin" / label / f"dobbyVPN-macos-{label}.pkg"
     _verify_pkg(package, version, work)
+    _verify_macos_package_source(package, source_sha, architecture, work)
     return package
 
 
@@ -1082,6 +1121,54 @@ def _uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def _smoke_macos(args: argparse.Namespace) -> int:
+    if _host() != ("macos", "arm64"):
+        _fail("the universal package smoke test requires a native ARM macOS runner")
+    args.run_dir.mkdir(parents=True)
+    build = args.run_dir / "desktop-package.json"
+    installed = args.run_dir / "installed.json"
+    _describe(argparse.Namespace(
+        platform="macos", arch="universal", version=args.version, source_sha=args.source_sha,
+        package=args.package, output=build, debug=args.debug,
+    ))
+    executable = Path("/Applications/Dobby VPN.app/Contents/MacOS/DobbyVPNMacApp")
+    if executable.parent.parent.parent.exists():
+        _fail("the smoke-test runner already has DobbyVPN installed")
+    ui = None
+    failure = None
+    try:
+        _install(argparse.Namespace(
+            build_descriptor=build, run_dir=args.run_dir, output=installed, control_pipe_sid=None,
+        ))
+        ui = subprocess.Popen(["arch", "-arm64", str(executable)], stdin=subprocess.DEVNULL)
+        cli = executable.parent.parent / "Resources/dobby-cli"
+        _run("native ARM CLI and backend Snapshot", ["arch", "-arm64", str(cli), "snapshot"], timeout_seconds=30)
+        if ui.poll() is not None:
+            _fail(f"macOS window exited during the ARM smoke test: {ui.returncode}")
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
+        try:
+            if ui is not None and ui.poll() is None:
+                ui.terminate()
+                try:
+                    ui.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    ui.kill()
+                    ui.wait(timeout=5)
+        finally:
+            if installed.exists():
+                try:
+                    _uninstall(argparse.Namespace(installed_descriptor=installed, run_dir=args.run_dir))
+                except Exception as error:
+                    if failure is None:
+                        raise
+                    failure.add_note(f"ARM package uninstall failed: {error}")
+                    _log(f"ARM package uninstall failed: {error}")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
@@ -1091,7 +1178,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     build = commands.add_parser("build", help="build and package one native desktop target")
     build.add_argument("--platform", choices=PLATFORMS, required=True)
-    build.add_argument("--arch", choices=("amd64", "arm64"))
+    build.add_argument("--arch", choices=("amd64", "arm64", "universal"))
     build.add_argument("--version")
     build.add_argument("--source-sha")
     build.add_argument("--output-dir", type=Path, required=True)
@@ -1099,11 +1186,17 @@ def _parser() -> argparse.ArgumentParser:
     build.add_argument("--skip-deps", action="store_true")
     describe = commands.add_parser("describe", help="validate and record a downloaded Build package")
     describe.add_argument("--platform", choices=PLATFORMS, required=True)
-    describe.add_argument("--arch", choices=("amd64", "arm64"))
+    describe.add_argument("--arch", choices=("amd64", "arm64", "universal"))
     describe.add_argument("--version", required=True)
     describe.add_argument("--source-sha", required=True)
     describe.add_argument("--package", type=Path, required=True)
     describe.add_argument("--output", type=Path, required=True)
+    smoke = commands.add_parser("smoke-macos", help="verify native ARM execution of the exact universal package")
+    smoke.add_argument("--package", type=Path, required=True)
+    smoke.add_argument("--version", required=True)
+    smoke.add_argument("--source-sha", required=True)
+    smoke.add_argument("--run-dir", type=Path, required=True)
+    smoke.add_argument("--debug", action="store_true")
     install = commands.add_parser("install", help="install the package described by a build result")
     install.add_argument("--build-descriptor", type=Path, required=True)
     install.add_argument("--run-dir", type=Path, required=True)
@@ -1126,6 +1219,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.action == "describe":
         return _describe(args)
+    if args.action == "smoke-macos":
+        return _smoke_macos(args)
     if args.action == "install":
         return _install(args)
     if args.action == "uninstall":

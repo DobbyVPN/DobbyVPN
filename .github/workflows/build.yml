@@ -107,29 +107,12 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
       retention_days: 7
 
-  build_macos_arm:
+  build_macos:
     needs: prepare_version
     uses: ./.github/workflows/desktop_package.yml
     with:
       platform: macos
-      architecture: arm64
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-      retention_days: 7
-    secrets:
-      MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
-      MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
-      MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-      APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-      APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-      APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-
-  build_macos_intel:
-    needs: prepare_version
-    uses: ./.github/workflows/desktop_package.yml
-    with:
-      platform: macos
-      architecture: amd64
+      architecture: universal
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.prepare_version.outputs.version_name }}
       retention_days: 7
@@ -156,7 +139,7 @@ jobs:
 
   build_manifest:
     name: Record selected Build artifacts
-    needs: [prepare_version, ios_libraries_build, android_build, ios_build, build_linux, build_windows, build_macos_arm, build_macos_intel, debug_packages]
+    needs: [prepare_version, ios_libraries_build, android_build, ios_build, build_linux, build_windows, build_macos, debug_packages]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

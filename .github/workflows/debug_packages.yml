@@ -44,9 +44,7 @@ jobs:
           - platform: windows
             architecture: amd64
           - platform: macos
-            architecture: arm64
-          - platform: macos
-            architecture: amd64
+            architecture: universal
     uses: ./.github/workflows/desktop_package.yml
     with:
       debug: true

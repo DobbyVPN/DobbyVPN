@@ -4,7 +4,7 @@ set -euo pipefail
 APP_BUNDLE="Dobby VPN.app"
 
 mkdir -p "bin/amd64"
-mkdir -p "bin/aarch64"
+mkdir -p "bin/aarch64" "bin/universal"
 
 APP_VERSION="$APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION"
 
@@ -19,6 +19,9 @@ install_service() {
   for architecture in $actual_arches; do
     if [[ "$architecture" == "$expected_arch" ]]; then found=true; fi
   done
+  if [[ "$expected_arch" == universal ]]; then
+    [[ "$actual_arches" == "arm64 x86_64" || "$actual_arches" == "x86_64 arm64" ]] && found=true
+  fi
   if [[ "$found" != true ]]; then
     echo "[!] Refusing to package $service: expected $expected_arch, found $actual_arches" >&2
     exit 1
@@ -63,7 +66,7 @@ build_package() {
       echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
       exit 1
     }
-    if [[ "$payload_arch" == "amd64" ]]; then
+    if [[ "$payload_arch" == "amd64" || "$payload_arch" == "universal" ]]; then
       ln -s ../Resources/dobby-cli "$APP_BUNDLE/Contents/MacOS/dobby-cli"
     fi
 
@@ -97,6 +100,9 @@ build_package() {
 }
 
 case "${1:-all}" in
+  universal)
+    build_package universal universal ../../services/universal/dobbyvpn-backend
+    ;;
   all)
     build_package aarch64 arm64 ../../services/arm64/dobbyvpn-backend
     build_package amd64 x86_64 ../../services/amd64/dobbyvpn-backend

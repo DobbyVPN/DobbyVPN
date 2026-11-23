@@ -215,7 +215,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--arch",
-        choices=("amd64", "arm64", "aarch64", "x86_64"),
+        choices=("amd64", "arm64", "aarch64", "x86_64", "universal"),
         help="One macOS architecture when --platform=macos.",
     )
     return parser.parse_args()
@@ -245,7 +245,9 @@ def main() -> None:
     elif args.platform == "macos":
         if args.arch is None:
             fail("--arch is required with --platform=macos")
-        if args.arch in {"arm64", "aarch64"}:
+        if args.arch == "universal":
+            package_macos(args.version, output, arch="universal", source=staging / "macos-universal", debug=args.debug)
+        elif args.arch in {"arm64", "aarch64"}:
             package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64", debug=args.debug)
         else:
             package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64", debug=args.debug)

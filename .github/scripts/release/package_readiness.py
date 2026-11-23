@@ -17,8 +17,7 @@ PACKAGES = {
     "linux": {"dobbyVPN-linux.deb": "build_linux / linux / amd64 package"},
     "windows": {"dobbyVPN-windows-amd64.msi": "build_windows / windows / amd64 package"},
     "macos": {
-        "dobbyVPN-macos-aarch64.pkg": "build_macos_arm / macos / arm64 package",
-        "dobbyVPN-macos-amd64.pkg": "build_macos_intel / macos / amd64 package",
+        "dobbyVPN-macos-universal.pkg": "build_macos / macos / universal package",
     },
     "android": {
         "dobbyvpn-android-unsign.apk": "android_build / android_build",

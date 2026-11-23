@@ -41,7 +41,7 @@ permissions:
 jobs:
   package:
     name: ${{ inputs.platform }} / ${{ inputs.architecture }} package
-    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
+    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || 'macos-15' }}
     # Release macOS jobs also wait for notarization (notarytool --timeout 30m).
     timeout-minutes: ${{ inputs.platform == 'macos' && !inputs.debug && 90 || 45 }}
     steps:
@@ -113,8 +113,7 @@ jobs:
           case "$PLATFORM:$ARCHITECTURE" in
             linux:amd64) package=dobbyVPN-linux.deb ;;
             windows:amd64) package=dobbyVPN-windows-amd64.msi ;;
-            macos:arm64) package=dobbyVPN-macos-aarch64.pkg ;;
-            macos:amd64) package=dobbyVPN-macos-amd64.pkg ;;
+            macos:universal) package=dobbyVPN-macos-universal.pkg ;;
             *) exit 1 ;;
           esac
           if [[ "$DEBUG" == true ]]; then package="${package%.*}-debug.${package##*.}"; fi
@@ -130,6 +129,21 @@ jobs:
           APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
         run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
+
+      - name: Exercise the exact universal package on Apple Silicon
+        if: inputs.platform == 'macos'
+        shell: bash
+        env:
+          PACKAGE: ${{ steps.build.outputs.package }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          DEBUG: ${{ inputs.debug }}
+        run: |
+          set -euo pipefail
+          args=(smoke-macos --package "$PACKAGE" --version "$VERSION_NAME" --source-sha "$SOURCE_SHA"
+                --run-dir "$RUNNER_TEMP/macos-package-smoke")
+          if [[ "$DEBUG" == true ]]; then args+=(--debug); fi
+          python3 .github/scripts/desktop/desktop_package.py "${args[@]}"
 
       - name: Remove macOS signing keychain
         if: ${{ always() && steps.macos_signing.outcome != 'skipped' }}
