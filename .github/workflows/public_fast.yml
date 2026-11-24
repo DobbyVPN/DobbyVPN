@@ -28,4 +28,4 @@ jobs:
         working-directory: core
         env:
           GOTOOLCHAIN: local
-        run: go test -race -count=1 -tags=ci -p 2 ./protocol ./sessionapi ./outline
+        run: go test -race -count=1 -tags=ci -p 2 ./protocol ./sessionapi ./outline ./cmd/dobbyvpn

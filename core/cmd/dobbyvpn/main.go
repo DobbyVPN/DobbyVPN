@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -649,13 +650,30 @@ func readSourceFile(path string, limit int) (data []byte, resultErr error) {
 	return data, nil
 }
 
+// Recognize an assignment only at the start of the first content line. The
+// backend decodes the document and decides which keys and values are valid.
+const tomlKeyPart = `(?:[A-Za-z0-9_-]+|'[^']*'|"(?:[^"\\]|\\.)*")`
+
+var tomlAssignment = regexp.MustCompile(`^` + tomlKeyPart + `(?:[ \t]*\.[ \t]*` + tomlKeyPart + `)*[ \t]*=`)
+
 func isInlineTOMLSource(source string) bool {
-	for _, line := range strings.Split(source, "\n") {
-		candidate := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	var sawAssignment bool
+	for line := range strings.SplitSeq(source, "\n") {
+		candidate := strings.TrimSpace(line)
 		if candidate == "" || strings.HasPrefix(candidate, "#") {
 			continue
 		}
-		return strings.HasPrefix(candidate, "[")
+		if strings.HasPrefix(candidate, "[") {
+			return true
+		}
+		if !sawAssignment {
+			if !tomlAssignment.MatchString(candidate) {
+				return false
+			}
+			// A single assignment can also be a filename. Look for the
+			// following table before treating the source as an inline profile.
+			sawAssignment = true
+		}
 	}
 	return false
 }

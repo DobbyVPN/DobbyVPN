@@ -164,7 +164,7 @@ HTTP URLs are rejected, redirects must remain HTTPS, and downloaded or inline
 configuration is limited to 1 MiB. Add each connection variant in an ordered
 `[[Outline]]`, `[[Xray]]`, or `[[TrustTunnel]]` section. The optional root
 `[ExcludeIPs]` section bypasses the VPN for the destinations in its `IPs` list.
-Any other root section or key rejects the whole configuration. TrustTunnel
+An optional `logs_endpoint` root setting enables provider log uploads. Place it before the first table, including when piping the subscription to `dobby-cli configure -`. Other root sections or keys are rejected. TrustTunnel
 certificate verification is required, so keep `skip_verification = false`
 (or omit it). This setting is valid only inside `[TrustTunnel.endpoint]`; a
 profile-level `skip_verification` key is rejected. In `[[Xray]]`, the first
@@ -226,9 +226,8 @@ tunnel becomes ready. Selecting a profile explicitly uses only that profile,
 including during recovery. On desktop,
 `dobby-cli configure <file-or-https-url>` accepts a TOML file or HTTPS
 subscription URL and returns the ordered backend profile inventory as JSON.
-It also accepts a raw TOML value as its source argument; quote that argument
-using your shell's syntax and begin it with a `[[Outline]]`, `[[Xray]]`, or
-`[[TrustTunnel]]` profile table. All three forms are parsed and validated by Go.
+It also accepts a complete TOML subscription as a single argument quoted for
+your shell. Root settings can precede the first profile table in the inline subscription.
 `dobby-cli configure -` reads the HTTPS subscription URL (or a TOML profile)
 from standard input instead, so the URL does not appear in the process list or
 shell history: `printf '%s\n' "$SUBSCRIPTION_URL" | dobby-cli configure -`.
@@ -261,10 +260,10 @@ recovery allowance. The same ordered `[[Outline]]`, `[[Xray]]`, and
 
 `[ExcludeIPs]` intentionally bypasses the VPN for the destinations in `IPs`. The
 traffic still enters the tunnel on some platforms before the runtime routes it
-outside the proxy; platform routing details differ. Protection is tied to the
-running VPN service or provider. Process termination, OS shutdown and reboot
-have platform-specific behavior; DobbyVPN does not promise persistent lockdown
-on every platform. Android's optional system lockdown is controlled in Android
+outside the proxy. On Linux and Windows, base firewall protection can remain
+active after the VPN service exits unexpectedly. On restart, the service
+reconciles that policy. Use Stop to release the protection. Behavior after
+shutdown or reboot depends on the platform. Android's optional system lockdown is controlled in Android
 settings.
 
 **Clean ShadowSocks** (best performance)
