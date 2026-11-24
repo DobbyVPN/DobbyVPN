@@ -479,7 +479,8 @@ func windowsTunnelIPv4Prefix(address string) (netip.Prefix, error) {
 	if err != nil || !addr.Is4() {
 		return netip.Prefix{}, fmt.Errorf("parse tunnel IPv4 address %q", address)
 	}
-	return netip.PrefixFrom(addr, 24), nil
+	// The explicit tunnel routes carry traffic. Claim only the adapter's own address.
+	return netip.PrefixFrom(addr, 32), nil
 }
 
 func getCurrentDNS(luid winipcfg.LUID) ([]netip.Addr, bool, error) {
