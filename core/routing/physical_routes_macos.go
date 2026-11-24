@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
+	"slices"
 	"sync"
 
 	"core/log"
@@ -106,34 +108,75 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 	return nil
 }
 
-// Links reports the physical interface of each address family with the
-// gateway of its retained default, if it has one, for the kill switch's
-// replies to inbound connections from excluded networks.
-func (p *MacOSPhysicalRoutes) Links(physical MacOSPhysicalNetwork) []PFLink {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	var links []PFLink
-	for _, family := range []struct {
-		index int
-		ipv6  bool
-	}{{physical.IPv4, false}, {physical.IPv6, true}} {
-		if family.index == 0 {
-			continue
-		}
-		iface, err := net.InterfaceByIndex(family.index)
+// macOSLinkCandidate is one network interface as MacOSPFLinks sees it.
+type macOSLinkCandidate struct {
+	name      string
+	index     int
+	flags     net.Flags
+	addresses []netip.Addr
+}
+
+// MacOSPFLinks inventories every physical interface that can receive inbound
+// connections, for each address family it has a usable address of, with the
+// gateway of its default route (the primary or the interface-scoped one), so
+// replies to inbound connections from excluded networks can leave through
+// whichever interface the connection came in on, Wi-Fi and Ethernet alike.
+func MacOSPFLinks() ([]PFLink, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("list interfaces: %w", err)
+	}
+	candidates := make([]macOSLinkCandidate, 0, len(interfaces))
+	for _, iface := range interfaces {
+		addresses, err := iface.Addrs()
 		if err != nil {
-			log.Warn(Category, "physical interface for excluded-network replies is unavailable", map[string]any{
-				"interface_index": family.index, "cause": err.Error(),
-			})
-			continue
+			return nil, fmt.Errorf("addresses of %s: %w", iface.Name, err)
 		}
-		link := PFLink{Interface: iface.Name, IPv6: family.ipv6}
-		for _, route := range p.routes {
-			if route.index == family.index && route.prefix.Addr().Is4() != family.ipv6 && route.gateway.IsValid() {
-				link.Gateway = route.gateway
+		candidate := macOSLinkCandidate{name: iface.Name, index: iface.Index, flags: iface.Flags}
+		for _, address := range addresses {
+			if prefix, err := netip.ParsePrefix(address.String()); err == nil {
+				candidate.addresses = append(candidate.addresses, prefix.Addr())
 			}
 		}
-		links = append(links, link)
+		candidates = append(candidates, candidate)
+	}
+	routes, err := macOSReadRoutes()
+	if err != nil {
+		return nil, err
+	}
+	return macOSPFLinks(candidates, routes), nil
+}
+
+// macOSPFLinks keeps interfaces that are up and neither loopback nor
+// point-to-point (the tunnel, IPsec), per family with an address that is not
+// link-local, and takes the gateway from that interface's default route.
+func macOSPFLinks(candidates []macOSLinkCandidate, routes []macOSRoute) []PFLink {
+	var links []PFLink
+	for _, candidate := range candidates {
+		if candidate.flags&net.FlagUp == 0 || candidate.flags&(net.FlagLoopback|net.FlagPointToPoint) != 0 {
+			continue
+		}
+		for _, ipv6 := range []bool{false, true} {
+			if !slices.ContainsFunc(candidate.addresses, func(address netip.Addr) bool {
+				address = address.Unmap()
+				return address.Is6() == ipv6 && !address.IsLinkLocalUnicast() && !address.IsLoopback()
+			}) {
+				continue
+			}
+			link := PFLink{Interface: candidate.name, IPv6: ipv6}
+			for _, route := range routes {
+				if route.index != candidate.index || !route.prefix.IsValid() || route.prefix.Bits() != 0 ||
+					route.prefix.Addr().Is6() != ipv6 || !route.gateway.IsValid() || route.flags&unix.RTF_UP == 0 ||
+					route.flags&(unix.RTF_REJECT|unix.RTF_BLACKHOLE) != 0 {
+					continue
+				}
+				// Prefer the primary (unscoped) default over a scoped copy.
+				if !link.Gateway.IsValid() || route.flags&unix.RTF_IFSCOPE == 0 {
+					link.Gateway = route.gateway
+				}
+			}
+			links = append(links, link)
+		}
 	}
 	return links
 }

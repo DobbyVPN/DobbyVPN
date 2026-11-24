@@ -91,9 +91,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			if err := guard.SetResolvers(queryCtx, physical.DNSServers); err != nil {
 				return physical, nil, err
 			}
-			if err := guard.SetLinks(queryCtx, physicalRoutes.Links(physical)); err != nil {
-				return physical, nil, err
-			}
 		}
 		protected_dialer.SetPhysicalInterfaces(physical.IPv4, physical.IPv6)
 		resolve := dnscache.MacOSLinkResolver(physical.IPv4, physical.IPv6, physical.DNSServers, physical.NAT64Prefixes)
@@ -149,7 +146,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	if !guard.Applied() {
 		app.LeakProtectionOff = "pf_anchor_missing"
-	} else if err = guard.SetLinks(ctx, physicalRoutes.Links(physical)); err != nil {
+	} else if err = refreshMacOSPFLinks(ctx, guard); err != nil {
 		signalInit(initResult, err)
 		return err
 	}
@@ -180,6 +177,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			repaired, repairErr := plan.Repair()
 			refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			current, _, refreshErr := capturePhysical(refreshCtx)
+			if refreshErr == nil && guard.Applied() {
+				refreshErr = refreshMacOSPFLinks(refreshCtx, guard)
+			}
 			cancel()
 			if err := errors.Join(repairErr, refreshErr); err != nil {
 				observed := physical
@@ -202,4 +202,14 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			}
 		}
 	}
+}
+
+// refreshMacOSPFLinks gives the kill switch the current physical interfaces
+// and gateways; an unchanged inventory does not reload pf.
+func refreshMacOSPFLinks(ctx context.Context, guard *routing.MacOSKillSwitch) error {
+	links, err := routing.MacOSPFLinks()
+	if err != nil {
+		return fmt.Errorf("inventory physical interfaces for excluded-network replies: %w", err)
+	}
+	return guard.SetLinks(ctx, links)
 }

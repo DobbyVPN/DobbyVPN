@@ -251,7 +251,7 @@ func (k *MacOSKillSwitch) reload(ctx context.Context) error {
 		log.Error(Category, "macOS kill switch rules could not be loaded; the network will be released", map[string]any{"cause": err.Error()})
 		return k.broken
 	}
-	k.logExcluded(rules)
+	k.logExcluded()
 	log.Debugf(Category, "macOS kill switch rules loaded:\n%s", rules)
 	return nil
 }
@@ -287,30 +287,29 @@ func (k *MacOSKillSwitch) Broken() error {
 }
 
 // logExcluded records how ExcludeIPs is enforced: the size of the excluded
-// table and whether replies to inbound connections from it leave through the
-// physical links. Only changes are logged.
-func (k *MacOSKillSwitch) logExcluded(rules string) {
-	links := make([]string, 0, len(k.links))
-	for _, link := range k.links {
-		gateway := "on-link only"
-		if link.Gateway.IsValid() {
-			gateway = link.Gateway.String()
-		}
-		links = append(links, fmt.Sprintf("%s ipv6=%t gateway=%s", link.Interface, link.IPv6, gateway))
-	}
-	inbound := PFInboundReplyRules(rules)
-	summary := fmt.Sprintf("%d %t %v", len(k.excluded), inbound, links)
+// table and, per physical link and family, which replies to inbound TCP
+// connections from it leave outside the tunnel. Only changes are logged.
+func (k *MacOSKillSwitch) logExcluded() {
+	coverage := PFInboundCoverage(k.excluded, k.links)
+	summary := fmt.Sprintf("%d %v", len(k.excluded), coverage)
 	if summary == k.excludedLogged {
 		return
 	}
 	k.excludedLogged = summary
 	log.Info(Category, "macOS kill switch excluded networks", map[string]any{
-		"excluded_prefixes": len(k.excluded), "inbound_reply_rules": inbound, "physical_links": links,
+		"excluded_prefixes": len(k.excluded), "inbound_reply_coverage": coverage,
+		"inbound_reply_scope": "TCP connections whose SYN arrives after connect",
 	})
 }
 
 // SetLinks sets the physical interfaces and gateways that replies to inbound
-// connections from excluded networks leave through.
+// connections from excluded networks leave through. A reload affects only new
+// connections: a state pf already holds keeps the link and gateway it was
+// created with until the connection ends, so a connection that stays up across
+// a gateway change, or after its network left ExcludeIPs, keeps its old reply
+// path for its own lifetime. Killing those states selectively is not possible
+// with pfctl (-k kills by address, and killing all states would cut the VPN
+// transport), and no new connection can use them.
 func (k *MacOSKillSwitch) SetLinks(ctx context.Context, links []PFLink) error {
 	return k.update(ctx, func() (bool, error) {
 		if slices.Equal(k.links, links) {

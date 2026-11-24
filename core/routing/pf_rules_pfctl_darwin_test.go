@@ -96,8 +96,9 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 
 // checkLoadedExcludedRules reads the loaded rules back with their defaults.
 // The excluded pass out rule for TCP carries the implicit flags S/SA, so it
-// can never pass the SYN+ACK or the ACK-carrying replies of an inbound
-// connection (#525); the inbound rules with reply-to carry those instead.
+// does not pass the SYN+ACK or the ACK-carrying replies of an inbound
+// connection (#525); the inbound rules carry those instead, and only for TCP
+// connections opened by an inbound SYN.
 func checkLoadedExcludedRules(t *testing.T) {
 	t.Helper()
 	listing, err := pfctl(t.Context(), "-a", pfCILoadAnchor, "-s", "rules")
@@ -107,6 +108,9 @@ func checkLoadedExcludedRules(t *testing.T) {
 	t.Logf("loaded rules:\n%s", listing)
 	var outboundTCP, replyTo, onLink bool
 	for _, line := range strings.Split(string(listing), "\n") {
+		if strings.HasPrefix(line, "pass in") && (!strings.Contains(line, "proto tcp") || !strings.Contains(line, "flags S/SA")) {
+			t.Errorf("an inbound rule must be TCP with flags S/SA: %q", line)
+		}
 		switch {
 		case strings.HasPrefix(line, "pass out") && strings.Contains(line, "<dobbyvpn_excluded>") && strings.Contains(line, "proto tcp"):
 			outboundTCP = strings.Contains(line, "flags S/SA")

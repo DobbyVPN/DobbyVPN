@@ -52,14 +52,17 @@ const pfExcludedInTag = "DOBBYVPN_EXCLUDED_IN"
 // Loopback and tunnel rules keep no state: connections that existed before
 // the anchor loaded continue there without a state entry.
 //
-// Connections that come in from excluded networks get a state on the physical
-// link they arrived through, so their replies leave there for any user, like
-// established connections on Linux (LinuxOutputGuard.SetExcluded): through
-// the gateway (reply-to) instead of following the split default routes into
-// the tunnel, or directly on-link. The excluded pass out rule cannot carry
-// those replies: its implicit flags S/SA admit only an initial SYN. No new
-// outbound path opens for applications. links are the physical interfaces;
-// without them no inbound rule is rendered.
+// TCP connections that come in from excluded networks after the anchor loaded
+// get a state on the physical link they arrived through, so their replies
+// leave there for any user: through the gateway (reply-to) instead of
+// following the split default routes into the tunnel, or directly on-link.
+// The excluded pass out rule does not carry those replies: its implicit flags
+// S/SA admit only an initial SYN. Only an inbound SYN (flags S/SA) creates
+// such a state, so a packet from the peer of an application's own connection
+// cannot open one, and a peer's source port 53 never does, so no DNS path
+// opens. Connections open before the anchor loaded, UDP and ICMP are not
+// covered. links are the physical interfaces; without them no inbound rule is
+// rendered.
 func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Prefix, destinations []PFDestination, links ...PFLink) string {
 	var b strings.Builder
 	b.WriteString("# DobbyVPN kill switch: outbound traffic leaves only through the tunnel.\n")
@@ -127,13 +130,28 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Pref
 	return b.String()
 }
 
-// writeExcludedInbound tags inbound packets from excluded networks, then
+// writeExcludedInbound tags inbound TCP SYNs from excluded networks, then
 // keeps state for them: on-link sources without a route option, the others
-// with reply-to through the link's gateway. flags any also picks up
-// connections that existed before the anchor loaded, whose states were
-// flushed. Without a gateway only on-link sources are covered.
+// with reply-to through the link's gateway. Without a gateway only on-link
+// sources are covered.
 func writeExcludedInbound(b *strings.Builder, links []PFLink) {
-	sorted := slices.Clone(links)
+	for _, link := range pfUsableLinks(links) {
+		family := "inet"
+		if link.IPv6 {
+			family = "inet6"
+		}
+		fmt.Fprintf(b, "pass in on %s %s proto tcp from <dobbyvpn_excluded> port != 53 to any flags S/SA no state tag %s\n", link.Interface, family, pfExcludedInTag)
+		fmt.Fprintf(b, "pass in quick on %s %s proto tcp from (%s:network) to any flags S/SA keep state tagged %s\n", link.Interface, family, link.Interface, pfExcludedInTag)
+		if pfLinkHasGateway(link) {
+			fmt.Fprintf(b, "pass in quick on %s reply-to (%s %s) %s proto tcp from any to any flags S/SA keep state tagged %s\n",
+				link.Interface, link.Interface, pfAddress(link.Gateway), family, pfExcludedInTag)
+		}
+	}
+}
+
+// pfUsableLinks sorts the links and drops duplicates and nameless ones.
+func pfUsableLinks(links []PFLink) []PFLink {
+	sorted := slices.DeleteFunc(slices.Clone(links), func(link PFLink) bool { return link.Interface == "" })
 	slices.SortFunc(sorted, func(a, b PFLink) int {
 		if c := strings.Compare(a.Interface, b.Interface); c != 0 {
 			return c
@@ -146,27 +164,34 @@ func writeExcludedInbound(b *strings.Builder, links []PFLink) {
 		}
 		return a.Gateway.Compare(b.Gateway)
 	})
-	for _, link := range slices.Compact(sorted) {
-		if link.Interface == "" {
-			continue
-		}
+	return slices.Compact(sorted)
+}
+
+func pfLinkHasGateway(link PFLink) bool {
+	return link.Gateway.IsValid() && link.Gateway.Unmap().Is4() != link.IPv6
+}
+
+// PFInboundCoverage describes, per physical link and family, which replies to
+// inbound connections from excluded networks the rules carry: "en0 inet
+// on-link and via 192.168.1.1", or "en1 inet6 on-link only" without a gateway.
+// It is empty when no inbound rule is rendered.
+func PFInboundCoverage(excluded []netip.Prefix, links []PFLink) []string {
+	if len(excluded) == 0 {
+		return nil
+	}
+	var coverage []string
+	for _, link := range pfUsableLinks(links) {
 		family := "inet"
 		if link.IPv6 {
 			family = "inet6"
 		}
-		fmt.Fprintf(b, "pass in on %s %s from <dobbyvpn_excluded> to any no state tag %s\n", link.Interface, family, pfExcludedInTag)
-		fmt.Fprintf(b, "pass in quick on %s %s from (%s:network) to any flags any keep state tagged %s\n", link.Interface, family, link.Interface, pfExcludedInTag)
-		if link.Gateway.IsValid() && link.Gateway.Unmap().Is4() != link.IPv6 {
-			fmt.Fprintf(b, "pass in quick on %s reply-to (%s %s) %s from any to any flags any keep state tagged %s\n",
-				link.Interface, link.Interface, pfAddress(link.Gateway), family, pfExcludedInTag)
+		reach := "on-link only"
+		if pfLinkHasGateway(link) {
+			reach = "on-link and via " + pfAddress(link.Gateway)
 		}
+		coverage = append(coverage, fmt.Sprintf("%s %s %s", link.Interface, family, reach))
 	}
-}
-
-// PFInboundReplyRules reports whether rules renders reply rules for inbound
-// connections from excluded networks.
-func PFInboundReplyRules(rules string) bool {
-	return strings.Contains(rules, "tagged "+pfExcludedInTag)
+	return coverage
 }
 
 // pfPrefixes converts merged inclusive ranges to the CIDRs accepted by pfctl.
