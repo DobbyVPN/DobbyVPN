@@ -150,6 +150,8 @@ jobs:
           persist-credentials: false
       - name: Download selected Android package for pairing verification
         if: needs.resolve_build.result == 'success'
+        env:
+          DOBBY_BUILD_PACKAGES: ${{ toJSON(fromJSON(needs.resolve_build.outputs.packages).android) }}
         run: |
           python3 .github/scripts/release/download_artifact.py "$BUILD_RUN_ID" dobbyvpn-android-unsign.apk "$RUNNER_TEMP/selected-android"
       - name: Record and validate complete Test result
@@ -174,9 +176,9 @@ jobs:
           confirmed, current = package_readiness.package_snapshot(
               os.environ["GITHUB_REPOSITORY"], int(os.environ["BUILD_RUN_ID"]),
               Path(os.environ["RUNNER_TEMP"]) / "confirmed-build-manifest")
-          package_readiness.reconcile(selections, current)
           if confirmed["manifest_sha256"] != build["manifest_sha256"]:
-              raise SystemExit("Build manifest changed during verification")
+              raise SystemExit("Build manifest changed during verification; a new reservation is required")
+          package_readiness.reconcile(selections, current)
           apk = Path(os.environ["RUNNER_TEMP"]) / "selected-android" / f"DobbyVPN-v{build['version']}-unsign.apk"
           with apk.open("rb") as source:
               apk_sha = hashlib.file_digest(source, "sha256").hexdigest()

@@ -105,7 +105,7 @@ def download_artifact(run_id, name, destination, repository, expected_digest=Non
     artifact = _artifact_record(artifacts, name, current_attempt)
     if type(artifact.get("id")) is not int or artifact["id"] <= 0:
         raise SystemExit(f"artifact {name!r} has an invalid GitHub artifact ID")
-    # Readiness selections pin exact producer artifacts while Build is active.
+    # Test consumers must download the exact producer artifact selected for this Build.
     selections = json.loads(os.environ.get("DOBBY_BUILD_PACKAGES") or "{}")
     if selections and any(str(item.get("build_run_id")) == str(run_id) for item in selections.values()):
         selected = selections.get(name)
