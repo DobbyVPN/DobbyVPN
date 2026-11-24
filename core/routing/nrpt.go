@@ -16,8 +16,15 @@ import (
 //
 // The rule is a local NRPT rule: one registry key under DnsPolicyConfig, the
 // same storage Add-DnsClientNrptRule writes and Get-DnsClientNrptRule reads.
-// It survives a crash, so it is ours only if it has both the fixed key name
-// and the fixed comment below; any other rule is never changed or removed.
+// It survives a crash. Only the fixed key below is ever changed, and only if
+// it is ours: it carries the fixed comment, or it has no values at all (an
+// interrupted write or removal; such a key is not an active rule).
+//
+// Every change goes through one open handle, so the checked key is the key
+// that is changed. Writing puts the comment first and ConfigOptions, which
+// makes the rule take effect, last; removal goes in reverse and deletes the
+// key only once it is empty. An interruption at any step therefore leaves a
+// key that the next removal still recognizes as ours.
 const (
 	OwnedNRPTRuleKey  = "{6d0b1b5e-7c3a-4f52-9e1d-2a8b4c6f0d17}"
 	OwnedNRPTComment  = "DobbyVPN tunnel DNS. Added while connected and removed by the DobbyVPN service."
@@ -30,76 +37,129 @@ const (
 // write. It is left untouched.
 var ErrForeignNRPTRule = errors.New("NRPT rule at the DobbyVPN key is not owned by DobbyVPN; left untouched")
 
-// NRPTRule holds the registry values of one local NRPT rule.
-type NRPTRule struct {
-	Version       uint32
-	Names         []string
-	Servers       string
-	ConfigOptions uint32
-	Comment       string
-	DisplayName   string
+// nrptValue is one registry value: uint32 (DWORD), string or []string.
+type nrptValue = any
+
+// nrptValues are the values of one rule key, by registry value name.
+type nrptValues map[string]nrptValue
+
+// nrptKey is an open handle to one rule key. A missing value is simply absent
+// from Values; any other read failure is an error.
+type nrptKey interface {
+	Values() (nrptValues, error)
+	Set(name string, value nrptValue) error
+	DeleteValue(name string) error
+	Close() error
 }
 
-func (r NRPTRule) owned() bool { return r.Comment == OwnedNRPTComment }
-
-// nrptStore is the registry seen through one rule key, plus the call that
-// makes the DNS Client use the new table.
+// nrptStore opens rule keys under DnsPolicyConfig and makes the DNS Client
+// use the changed table.
 type nrptStore interface {
-	Read(key string) (rule NRPTRule, exists bool, err error)
-	Write(key string, rule NRPTRule) error
-	Delete(key string) error
+	// Open returns nil, nil when the key is absent and create is false.
+	Open(key string, create bool) (nrptKey, error)
+	// DeleteIfEmpty deletes the key only if it has no values and no subkeys.
+	DeleteIfEmpty(key string) error
 	Reload() error
 }
 
-func ownedNRPTRule(servers []netip.Addr) (NRPTRule, error) {
+// nrptWriteOrder puts the ownership marker first and the value that makes the
+// rule take effect last. Removal uses the reverse order.
+var nrptWriteOrder = []string{"Comment", "DisplayName", "Version", "IPSECCARestriction", "Name", "GenericDNSServers", "ConfigOptions"}
+
+func ownedNRPTValues(servers []netip.Addr) (nrptValues, error) {
 	if len(servers) == 0 {
-		return NRPTRule{}, errors.New("NRPT rule needs at least one tunnel DNS server")
+		return nil, errors.New("NRPT rule needs at least one tunnel DNS server")
 	}
 	text := make([]string, 0, len(servers))
 	for _, server := range servers {
 		if !server.IsValid() || server.Zone() != "" {
-			return NRPTRule{}, fmt.Errorf("invalid tunnel DNS server %q for NRPT", server)
+			return nil, fmt.Errorf("invalid tunnel DNS server %q for NRPT", server)
 		}
 		text = append(text, server.String())
 	}
-	return NRPTRule{
-		Version:       nrptRuleVersion,
-		Names:         []string{"."},
-		Servers:       strings.Join(text, "; "),
-		ConfigOptions: nrptGenericServer,
-		Comment:       OwnedNRPTComment,
-		DisplayName:   ownedNRPTDisplay,
+	return nrptValues{
+		"Comment":            OwnedNRPTComment,
+		"DisplayName":        ownedNRPTDisplay,
+		"Version":            uint32(nrptRuleVersion),
+		"IPSECCARestriction": "",
+		"Name":               []string{"."},
+		"GenericDNSServers":  strings.Join(text, "; "),
+		"ConfigOptions":      uint32(nrptGenericServer),
 	}, nil
 }
 
-func sameNRPTRule(a, b NRPTRule) bool {
-	return a.Version == b.Version && slices.Equal(a.Names, b.Names) && a.Servers == b.Servers &&
-		a.ConfigOptions == b.ConfigOptions && a.Comment == b.Comment && a.DisplayName == b.DisplayName
+// ownedNRPTKey reports whether values belong to a key this service may change.
+func ownedNRPTKey(values nrptValues) bool {
+	if len(values) == 0 {
+		return true // interrupted write or removal; not an active rule
+	}
+	comment, ok := values["Comment"].(string)
+	return ok && comment == OwnedNRPTComment
 }
 
-// installOwnedNRPT writes the owned rule, or replaces an owned rule left by an
-// earlier session, and checks that the registry holds exactly that rule.
+func sameNRPTValues(a, b nrptValues) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, want := range a {
+		switch want := want.(type) {
+		case []string:
+			got, ok := b[name].([]string)
+			if !ok || !slices.Equal(got, want) {
+				return false
+			}
+		default:
+			if b[name] != want {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// installOwnedNRPT writes the owned rule, or rewrites an owned rule left by an
+// earlier session, and checks that the key holds exactly that rule.
 func installOwnedNRPT(store nrptStore, servers []netip.Addr) error {
-	rule, err := ownedNRPTRule(servers)
+	rule, err := ownedNRPTValues(servers)
 	if err != nil {
 		return err
 	}
-	current, exists, err := store.Read(OwnedNRPTRuleKey)
+	key, err := store.Open(OwnedNRPTRuleKey, true)
 	if err != nil {
-		return fmt.Errorf("read NRPT rule: %w", err)
+		return fmt.Errorf("open NRPT rule: %w", err)
 	}
-	if exists && !current.owned() {
-		return ErrForeignNRPTRule
+	writeErr := func() error {
+		current, err := key.Values()
+		if err != nil {
+			return fmt.Errorf("read NRPT rule: %w", err)
+		}
+		if !ownedNRPTKey(current) {
+			return ErrForeignNRPTRule
+		}
+		for name := range current {
+			if _, keep := rule[name]; !keep {
+				if err := key.DeleteValue(name); err != nil {
+					return fmt.Errorf("clear NRPT value %s: %w", name, err)
+				}
+			}
+		}
+		for _, name := range nrptWriteOrder {
+			if err := key.Set(name, rule[name]); err != nil {
+				return fmt.Errorf("write NRPT value %s: %w", name, err)
+			}
+		}
+		return nil
+	}()
+	if err := errors.Join(writeErr, key.Close()); err != nil {
+		return err
 	}
-	if err := store.Write(OwnedNRPTRuleKey, rule); err != nil {
-		return fmt.Errorf("write NRPT rule: %w", err)
-	}
-	written, exists, err := store.Read(OwnedNRPTRuleKey)
+	// A fresh handle shows what the DNS Client sees under the key name.
+	written, err := readNRPTKey(store)
 	if err != nil {
 		return fmt.Errorf("verify NRPT rule: %w", err)
 	}
-	if !exists || !sameNRPTRule(written, rule) {
-		return errors.New("NRPT rule differs from the rule just written")
+	if !sameNRPTValues(rule, written) {
+		return errors.New("NRPT rule at the DobbyVPN key differs from the rule just written")
 	}
 	if err := store.Reload(); err != nil {
 		return fmt.Errorf("reload DNS Client after adding NRPT rule: %w", err)
@@ -107,24 +167,58 @@ func installOwnedNRPT(store nrptStore, servers []netip.Addr) error {
 	return nil
 }
 
-// removeOwnedNRPT deletes the owned rule if it is present. It reports whether
-// a rule was removed. A foreign rule at the key is kept and reported.
-func removeOwnedNRPT(store nrptStore) (bool, error) {
-	current, exists, err := store.Read(OwnedNRPTRuleKey)
-	if err != nil {
-		return false, fmt.Errorf("read NRPT rule: %w", err)
+func readNRPTKey(store nrptStore) (nrptValues, error) {
+	key, err := store.Open(OwnedNRPTRuleKey, false)
+	if err != nil || key == nil {
+		return nil, err
 	}
-	if !exists {
+	values, err := key.Values()
+	return values, errors.Join(err, key.Close())
+}
+
+// removeOwnedNRPT removes the owned rule if it is present. It reports whether
+// a key was removed. A foreign rule at the key is kept and reported.
+func removeOwnedNRPT(store nrptStore) (bool, error) {
+	key, err := store.Open(OwnedNRPTRuleKey, false)
+	if err != nil {
+		return false, fmt.Errorf("open NRPT rule: %w", err)
+	}
+	if key == nil {
 		return false, nil
 	}
-	if !current.owned() {
-		return false, ErrForeignNRPTRule
+	clearErr := func() error {
+		current, err := key.Values()
+		if err != nil {
+			return fmt.Errorf("read NRPT rule: %w", err)
+		}
+		if !ownedNRPTKey(current) {
+			return ErrForeignNRPTRule
+		}
+		for _, name := range slices.Backward(nrptWriteOrder) {
+			if _, present := current[name]; present {
+				if err := key.DeleteValue(name); err != nil {
+					return fmt.Errorf("delete NRPT value %s: %w", name, err)
+				}
+			}
+		}
+		for name := range current {
+			if !slices.Contains(nrptWriteOrder, name) {
+				if err := key.DeleteValue(name); err != nil {
+					return fmt.Errorf("delete NRPT value %s: %w", name, err)
+				}
+			}
+		}
+		return nil
+	}()
+	if err := errors.Join(clearErr, key.Close()); err != nil {
+		return false, err
 	}
-	deleteErr := store.Delete(OwnedNRPTRuleKey)
-	if _, still, err := store.Read(OwnedNRPTRuleKey); err != nil {
+	deleteErr := store.DeleteIfEmpty(OwnedNRPTRuleKey)
+	if left, err := store.Open(OwnedNRPTRuleKey, false); err != nil {
 		return false, errors.Join(deleteErr, fmt.Errorf("verify NRPT rule removal: %w", err))
-	} else if still {
-		return false, errors.Join(deleteErr, errors.New("NRPT rule remained after deletion"))
+	} else if left != nil {
+		_ = left.Close()
+		return false, errors.Join(deleteErr, errors.New("NRPT rule key remained after removal"))
 	}
 	if err := store.Reload(); err != nil {
 		return true, fmt.Errorf("reload DNS Client after removing NRPT rule: %w", err)

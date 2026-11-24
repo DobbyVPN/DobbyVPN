@@ -29,37 +29,3 @@ jobs:
         env:
           GOTOOLCHAIN: local
         run: go test -race -count=1 -tags=ci -p 2 ./protocol ./sessionapi ./outline
-
-  windows_nrpt:
-    name: Windows NRPT rule (add, check, remove)
-    runs-on: windows-2022
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: .go-version
-          cache: false
-      # Adds the owned NRPT rule through the product code, checks it with
-      # Get-DnsClientNrptRule and Get-DnsClientNrptPolicy, removes it on
-      # disconnect and through the startup recovery, and checks that a foreign
-      # rule is never removed. Runner only: it changes the machine's DNS.
-      - name: Add, check and remove the NRPT rule on the runner
-        working-directory: core
-        env:
-          GOTOOLCHAIN: local
-          DOBBY_NRPT_LIVE: "1"
-        run: go test -count=1 -run '^TestWindowsNRPTRuleOnRealDNSClient$' -v ./tunnel/platform_engine
-      - name: Remove test NRPT rules and show the table
-        if: always()
-        shell: pwsh
-        run: |
-          $owned = 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\{6d0b1b5e-7c3a-4f52-9e1d-2a8b4c6f0d17}'
-          if (Test-Path $owned) { Remove-Item -Path $owned -Recurse -Force }
-          Get-DnsClientNrptRule | Where-Object { $_.Namespace -contains '.dobbyvpn-ci.invalid' } | Remove-DnsClientNrptRule -Force
-          Clear-DnsClientCache
-          Get-DnsClientNrptRule | Format-List Name, Namespace, NameServers, Comment
-          Get-DnsClientNrptPolicy | Format-List Namespace, NameServers

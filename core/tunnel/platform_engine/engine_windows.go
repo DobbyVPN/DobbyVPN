@@ -257,6 +257,12 @@ func RecoverStaleWindowsIPv6FirewallRules() error {
 // installWindowsNRPT sends all DNS Client queries to the tunnel servers. If
 // it fails, the session still works with the slower multi-adapter lookups.
 func installWindowsNRPT(servers []netip.Addr) {
+	// Only the process holding the owner mutex changes the rule; the service
+	// takes it at startup.
+	if _, err := routing.AcquireWindowsNRPTOwnership(0); err != nil {
+		log.Errorf(Category, "[Engine][Windows] NRPT rule not installed; DNS lookups may wait for blocked adapter servers err=%v", err)
+		return
+	}
 	windowsNRPTInstalled = true // A failed write may still leave the rule behind.
 	if err := routing.InstallWindowsNRPT(servers); err != nil {
 		if errors.Is(err, routing.ErrForeignNRPTRule) {
@@ -288,13 +294,20 @@ func removeWindowsNRPT() error {
 	return nil
 }
 
-// RecoverStaleWindowsNRPTRule removes the owned NRPT rule that a crashed or
-// killed process left behind. It runs at service start, before any session,
-// and when the installer releases protection.
-func RecoverStaleWindowsNRPTRule() error {
+// RecoverStaleWindowsNRPTRule takes the NRPT owner mutex, waiting up to wait,
+// and removes the owned rule that a crashed or killed process left behind. It
+// runs first at service start, before the control pipe and any session, and
+// when the installer releases protection. If another live DobbyVPN process
+// holds the mutex, that process owns the rule and it is left alone.
+func RecoverStaleWindowsNRPTRule(wait time.Duration) error {
 	if adapter.ownedAdapterName != "" || adapter.lastIface != "" {
 		return fmt.Errorf("cannot recover the NRPT rule while adapter %q is active", adapter.ownedAdapterName)
 	}
+	crashed, err := routing.AcquireWindowsNRPTOwnership(wait)
+	if err != nil {
+		return fmt.Errorf("NRPT recovery skipped: %w", err)
+	}
+	log.Infof(Category, "[Engine][Windows] NRPT owner acquired previous_owner_crashed=%t", crashed)
 	windowsNRPTInstalled = true
 	return removeWindowsNRPT()
 }

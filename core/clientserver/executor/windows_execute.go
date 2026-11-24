@@ -28,6 +28,7 @@ type managerService struct{ initLog func() error }
 
 func prepareDesktopControl() (net.Listener, error) {
 	return prepareDesktopControlWith(
+		func() error { return platform_engine.RecoverStaleWindowsNRPTRule(2 * time.Second) },
 		controlplane.ListenDesktopControlPipe,
 		func() error {
 			startupFailure = prepareServiceProtection()
@@ -36,26 +37,22 @@ func prepareDesktopControl() (net.Listener, error) {
 			} // Open the pipe so the operator sees the retained policy failure.
 			return recoverInterruptedState()
 		},
-		recoverStaleWindowsState,
+		platform_engine.RecoverStaleWindowsIPv6FirewallRules,
 	)
 }
 
-// recoverStaleWindowsState removes what a crashed or killed backend left
-// behind, before any session starts. A stale NRPT rule would keep sending all
-// DNS to the tunnel servers, so it is removed here too; failing to remove it
-// is logged, not fatal, because connect and disconnect retry the removal.
-func recoverStaleWindowsState() error {
-	if err := platform_engine.RecoverStaleWindowsNRPTRule(); err != nil {
-		log.Errorf(desktopLogCategory, "stale NRPT rule recovery failed: %v", err)
-	}
-	return platform_engine.RecoverStaleWindowsIPv6FirewallRules()
-}
-
 func prepareDesktopControlWith(
+	recoverNRPT func() error,
 	listen func() (net.Listener, error),
 	recoverInterrupted func() error,
 	recoverStaleIPv6Rules func() error,
 ) (net.Listener, error) {
+	// A stale NRPT rule sends all of the machine's DNS to the tunnel servers.
+	// Remove it first, whatever else fails at startup. A failure is logged, not
+	// fatal: connect and disconnect retry the removal.
+	if err := recoverNRPT(); err != nil {
+		log.Errorf(desktopLogCategory, "stale NRPT rule recovery failed: %v", err)
+	}
 	listener, err := listen()
 	if err != nil {
 		return nil, fmt.Errorf("listen for desktop control: %w", err)
@@ -234,7 +231,8 @@ func executeWith(mode string, initLog func() error, runNormal func(), runService
 	case "release-protection":
 		err := removeDesktopInstallationState(context.Background(), controlplane.WindowsInstallationSourceStore)
 		// Uninstall must not leave the machine's DNS pointed at the tunnel servers.
-		err = errors.Join(err, platform_engine.RecoverStaleWindowsNRPTRule())
+		// The service is stopped by now; wait a little for its owner mutex.
+		err = errors.Join(err, platform_engine.RecoverStaleWindowsNRPTRule(10*time.Second))
 		if err != nil {
 			log.Errorf(desktopLogCategory, "failed to release installed VPN state: %v", err)
 			return reportStartupFailure("release installed VPN state", err, true)
