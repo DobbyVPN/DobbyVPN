@@ -16,6 +16,11 @@ import (
 // /etc/pf.conf, so the system's main ruleset is never replaced or flushed.
 const MacOSPFAnchor = "com.apple/dobbyvpn"
 
+// MacOSPFAnchorMissing is the start failure when the main pf ruleset does not
+// evaluate anchor "com.apple/*", so the kill switch cannot be applied. The
+// macOS window recognizes it and shows a short explanation instead.
+const MacOSPFAnchorMissing = "macOS VPN protection requires the com.apple/* pf anchor; no connection was started"
+
 // PFDestination is one transport destination the backend authorized for an
 // attempt. Port 0 admits every port of the address. Bypass marks application
 // traffic sent outside the tunnel (ExcludeIPs) rather than the VPN transport.
