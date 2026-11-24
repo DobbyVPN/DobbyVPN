@@ -22,8 +22,9 @@ import (
 // sessionapi/runtime. The session manager owns the externally meaningful
 // state and generation; this type only tracks local resource cleanup.
 type nativeRuntime struct {
-	tun    io.ReadWriteCloser
-	engine *tunnel.Engine
+	tun        io.ReadWriteCloser
+	engine     *tunnel.Engine
+	networkRef sessionapi.SessionRef
 	// cleanupErr retains the failed rollback for a repeated Disconnect call.
 	cleanupErr        error
 	state             lifecycleState
@@ -39,6 +40,8 @@ type nativeRuntime struct {
 	cancelMu      sync.Mutex
 	connectCancel chan struct{}
 }
+
+func (c *nativeRuntime) setNetworkRef(ref sessionapi.SessionRef) { c.networkRef = ref }
 
 func newNativeRuntime(tun io.ReadWriteCloser) *nativeRuntime {
 	c := &nativeRuntime{
@@ -129,7 +132,9 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 	}
 
 	log.Debugf(nativeLogCategory, "starting tun2socks engine")
-	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: fd})
+	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
+		FD: fd, NetworkSession: c.networkRef.SessionID, NetworkGeneration: c.networkRef.Generation,
+	})
 	if err != nil {
 		log.Debugf(nativeLogCategory, "Can't start tun2socks: %v", err)
 		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))

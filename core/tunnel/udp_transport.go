@@ -4,12 +4,12 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/log"
 
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
-	stackTunnel "github.com/xjasonlyu/tun2socks/v2/tunnel"
 )
 
 // The packet stack keeps UDP endpoints until both relay directions finish.
@@ -23,6 +23,8 @@ type trackedUDPOrigin struct {
 	started    time.Time
 	mu         sync.Mutex
 	closed     bool
+	release    func()
+	lastIO     atomic.Int64
 }
 
 var _ adapter.TransportHandler = (*switchingProxy)(nil)
@@ -38,6 +40,9 @@ func (c *trackedUDPOrigin) Close() error {
 	if err == nil || errors.Is(err, net.ErrClosed) {
 		c.closed = true
 		err = nil
+		if c.release != nil {
+			c.release()
+		}
 	}
 	c.owner.release(c, err)
 	if err != nil {
@@ -48,28 +53,55 @@ func (c *trackedUDPOrigin) Close() error {
 	return err
 }
 
-func (p *switchingProxy) HandleTCP(conn adapter.TCPConn) {
-	stackTunnel.T().HandleTCP(conn)
+func (c *trackedUDPOrigin) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, addr, err := c.UDPConn.ReadFrom(b)
+	if n > 0 && c.release != nil {
+		c.lastIO.Store(time.Since(flowClock).Nanoseconds())
+	}
+	return n, addr, err
+}
+
+func (c *trackedUDPOrigin) WriteTo(b []byte, addr net.Addr) (int, error) {
+	n, err := c.UDPConn.WriteTo(b, addr)
+	if n > 0 && c.release != nil {
+		c.lastIO.Store(time.Since(flowClock).Nanoseconds())
+	}
+	return n, err
 }
 
 func (p *switchingProxy) HandleUDP(conn adapter.UDPConn) {
 	p.mu.Lock()
 	target, _ := p.target.(*DobbyProxy)
 	var admissionErr error
+	var release func()
 	if target != nil && target.udpRelay != nil {
 		// Register pending admission before Detach can fence the router. Its
 		// cleanup then includes origin closure even if dispatch races retirement.
-		admissionErr = target.flows.beginDial()
+		if p.udpLimit > 0 {
+			if p.udpPaused || target.udpOrigins.Load() >= p.udpLimit {
+				target.udpRefused.Add(1)
+				admissionErr = net.ErrClosed
+			} else {
+				target.udpOrigins.Add(1)
+				release = func() { target.udpOrigins.Add(-1) }
+			}
+		}
+		if admissionErr == nil {
+			admissionErr = target.flows.beginDial()
+		}
 	}
 	p.mu.Unlock()
 	if target == nil || target.udpRelay == nil || admissionErr != nil {
+		if release != nil {
+			release()
+		}
 		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Errorf(Category, "[Router] unavailable UDP origin close failed local=%s remote=%s err=%v", conn.LocalAddr(), conn.RemoteAddr(), err)
 		}
 		return
 	}
 	defer target.flows.endDial()
-	origin := &trackedUDPOrigin{UDPConn: conn, owner: &target.flows, generation: target.generation, started: time.Now()}
+	origin := &trackedUDPOrigin{UDPConn: conn, owner: &target.flows, generation: target.generation, started: time.Now(), release: release}
 	if !target.flows.track(origin) {
 		_ = origin.Close() // Retains a failed close in the sealed owner.
 		return

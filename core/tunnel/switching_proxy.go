@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync"
 
 	"core/log"
@@ -11,6 +12,8 @@ import (
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/proto"
+	stackTunnel "github.com/xjasonlyu/tun2socks/v2/tunnel"
+	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
 )
 
 // switchingProxy belongs to the packet stack, not a protocol. TCP waits under
@@ -18,13 +21,28 @@ import (
 // attempt is available. Retired targets seal their own flow owner, fencing a
 // dial that raced removal without holding a lock over network IO.
 type switchingProxy struct {
-	mu      sync.Mutex
-	target  proxy.Proxy
-	changed chan struct{}
-	closed  bool
+	mu        sync.Mutex
+	target    proxy.Proxy
+	changed   chan struct{}
+	done      chan struct{}
+	tcpRelay  *stackTunnel.Tunnel
+	closed    bool
+	udpPaused bool
+	udpLimit  int32
 }
 
-func newSwitchingProxy() *switchingProxy { return &switchingProxy{changed: make(chan struct{})} }
+func newSwitchingProxy() *switchingProxy {
+	router := &switchingProxy{changed: make(chan struct{}), done: make(chan struct{})}
+	if runtime.GOOS == "ios" {
+		router.udpLimit = iosUDPAssociationLimit
+	}
+	return router
+}
+
+func (p *switchingProxy) startTCPRelay() {
+	p.tcpRelay = stackTunnel.New(p, statistic.DefaultManager)
+	p.tcpRelay.ProcessAsync()
+}
 
 func (p *switchingProxy) set(target proxy.Proxy) {
 	p.mu.Lock()
@@ -45,6 +63,10 @@ func (p *switchingProxy) close() {
 	}
 	p.closed, p.target = true, nil
 	close(p.changed)
+	close(p.done)
+	if p.tcpRelay != nil {
+		p.tcpRelay.Close()
+	}
 }
 
 func (p *switchingProxy) DialContext(ctx context.Context, metadata *M.Metadata) (net.Conn, error) {

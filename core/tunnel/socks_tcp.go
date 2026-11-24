@@ -11,11 +11,25 @@ import (
 
 	"core/log"
 
+	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/transport/socks5"
 )
+
+func (p *switchingProxy) HandleTCP(conn adapter.TCPConn) {
+	// The explicit stack never configures tun2socks' default, rejecting relay.
+	// This relay dials through the active attempt selected by the stack owner.
+	select {
+	case p.tcpRelay.TCPIn() <- conn:
+		return
+	case <-p.done:
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Errorf(Category, "[Router] stopped TCP origin close failed local=%s remote=%s err=%v", conn.LocalAddr(), conn.RemoteAddr(), err)
+		}
+	}
+}
 
 // socksTCPProxy negotiates the local SOCKS transport under the attempt deadline.
 // Successful calls return the original socket, preserving TCP half-close.

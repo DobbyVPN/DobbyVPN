@@ -21,6 +21,7 @@ type tcpAdmission struct {
 	waited, refused           uint64
 	epoch                     uint64 // advanced when pending admissions are canceled
 	sealed                    bool
+	paused                    bool
 }
 
 type tcpWaiter struct {
@@ -45,7 +46,7 @@ func (a *tcpAdmission) acquire() (release func(), epoch uint64, waited bool) {
 		a.mu.Unlock()
 		return nil, 0, false
 	}
-	if a.active < a.activeLimit && len(a.queue) == 0 {
+	if !a.paused && a.active < a.activeLimit && len(a.queue) == 0 {
 		a.active++
 		a.mu.Unlock()
 		return a.releaser(), 0, false
@@ -113,6 +114,9 @@ func (a *tcpAdmission) releaser() func() {
 // expired is refused even if its timer has not taken the lock yet. Caller
 // holds mu.
 func (a *tcpAdmission) handOff() {
+	if a.paused || a.sealed {
+		return
+	}
 	now := time.Now()
 	for a.active < a.activeLimit && len(a.queue) > 0 {
 		w := a.queue[0]
@@ -125,6 +129,13 @@ func (a *tcpAdmission) handOff() {
 		}
 		close(w.ready)
 	}
+}
+
+func (a *tcpAdmission) setPaused(paused bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.paused = paused
+	a.handOff()
 }
 
 // dropPending refuses every waiting connection; each one is answered with RST

@@ -134,6 +134,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let launchId = UUID().uuidString
     private let resourceQueue = DispatchQueue(label: "vpn.dobby.provider-resources")
     private var resourceTimer: DispatchSourceTimer?
+    private var pressureSource: DispatchSourceMemoryPressure?
+    private var systemPressure = IOSFlowPressure.normal
+    private var resourceOwner: (session: String, generation: Int64)?
+    private var resourceAsleep = false
+    private var resourceInterval = DispatchTimeInterval.milliseconds(250)
     private var resourceRecord: IOSProviderRunRecord?
     private var savedResourcePeak: UInt64 = 0
     private var savedAdmission = ""
@@ -181,6 +186,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     var pathMonitor: Network.NWPathMonitor?
     var lastPathSignature: String?
+    var lastFlowPath: String?
     let physicalPathLock = NSLock()
     var physicalPath: Network.NWPath?
     var physicalRevision: UInt64 = 0
@@ -338,6 +344,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func beginResourceRecord() {
         resourceQueue.sync {
+            resourceAsleep = false
             do {
                 let previous = try IOSProviderRunRecord.load(from: resourcePath)
                 if let previous, previous.launchID != launchId, previous.protected {
@@ -354,26 +361,68 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
-    func recordProtection(_ protected: Bool) {
+    func recordProtection(_ protected: Bool, sessionID: String? = nil, generation: Int64 = 0) {
         resourceQueue.sync {
             guard resourceRecord?.protected != protected, resourceRecord != nil else { return }
             resourceRecord?.protected = protected
-            resourceTimer?.cancel()
-            resourceTimer = nil
-            if protected {
-                let timer = DispatchSource.makeTimerSource(queue: resourceQueue)
-                timer.schedule(deadline: .now(), repeating: .milliseconds(250), leeway: .milliseconds(50))
-                timer.setEventHandler { [weak self] in self?.sampleResourcePeak() }
-                resourceTimer = timer
-                timer.resume()
+            if protected, let sessionID {
+                resourceOwner = (sessionID, generation)
+                systemPressure = .normal
+                let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: resourceQueue)
+                source.setEventHandler { [weak self] in
+                    guard let self, self.resourceOwner?.session == sessionID,
+                          self.resourceOwner?.generation == generation,
+                          let source = self.pressureSource else { return }
+                    let events = source.data
+                    self.systemPressure = events.contains(.critical) ? .critical : events.contains(.warning) ? .warning : .normal
+                    self.sampleResourcePeak()
+                }
+                pressureSource = source
+                source.resume()
+            } else {
+                pressureSource?.cancel()
+                pressureSource = nil
+                resourceOwner = nil
             }
+            updateResourceTimer()
             persistResources()
         }
     }
 
+    private func updateResourceTimer() {
+        guard resourceOwner != nil, !resourceAsleep else {
+            resourceTimer?.cancel()
+            resourceTimer = nil
+            return
+        }
+        guard resourceTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: resourceQueue)
+        resourceInterval = .milliseconds(250)
+        timer.schedule(deadline: .now(), repeating: resourceInterval, leeway: .milliseconds(50))
+        timer.setEventHandler { [weak self] in self?.sampleResourcePeak() }
+        resourceTimer = timer
+        timer.resume()
+    }
+
+    func retirePhysicalPathFlows(revision: UInt64) {
+        let attempt = DobbyvpnActiveFlowGeneration()
+        guard attempt > 0, let owner = resourceQueue.sync(execute: { resourceOwner }) else { return }
+        commandQueue.async {
+            _ = DobbyvpnCloseFlowsForPath(owner.session, owner.generation, attempt, Int64(clamping: revision))
+        }
+    }
+
     private func sampleResourcePeak() {
-        guard var record = resourceRecord, record.protected else { return }
+        guard var record = resourceRecord, record.protected, let owner = resourceOwner else { return }
+        let pressure = IOSFlowPressure.effective(system: systemPressure, availableBytes: UInt64(os_proc_available_memory()))
+        _ = DobbyvpnSetFlowPressure(owner.session, owner.generation, pressure.rawValue)
         let resources = DobbyvpnResourceDiagnostics()
+        let idle = resources.contains(" activeTCP=0 ") && resources.contains(" activeUDP=0 ")
+        let interval: DispatchTimeInterval = pressure == .normal && idle ? .seconds(2) : .milliseconds(250)
+        if interval != resourceInterval {
+            resourceInterval = interval
+            resourceTimer?.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(50))
+        }
         if let bytes = physicalFootprint().0, bytes > record.peakBytes {
             record.peakBytes = bytes
             record.peakResources = resources
@@ -458,11 +507,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func sleep(completionHandler: @escaping () -> Void) {
+        resourceQueue.sync {
+            resourceAsleep = true
+            updateResourceTimer()
+            persistResources()
+        }
         logs.writeLog(log: "[tunnel:\(tunnelId)] sleep()")
         completionHandler()
     }
 
     override func wake() {
+        resourceQueue.async { [weak self] in
+            guard let self else { return }
+            self.resourceAsleep = false
+            self.updateResourceTimer()
+        }
         logs.writeLog(log: "[tunnel:\(tunnelId)] wake()")
     }
 

@@ -86,6 +86,16 @@ func (o *flowOwner) endDial() {
 	}
 }
 
+func (o *flowOwner) cancelPendingTCP() {
+	o.mu.Lock()
+	cancel := o.cancelTCP
+	o.tcpContext, o.cancelTCP = nil, nil
+	o.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (o *flowOwner) track(conn io.Closer) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()

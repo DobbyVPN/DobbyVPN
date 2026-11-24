@@ -64,6 +64,20 @@ func CallSessionJSON(operationID, method string, params []byte, rawConfiguration
 // ResourceDiagnostics reports process-local Go memory and tunnel flow counts.
 func ResourceDiagnostics() string { return tunnel.ResourceDiagnostics() }
 
+func SetFlowPressure(sessionID string, generation int64, level int) bool {
+	return generation > 0 && level >= 0 && level <= int(tunnel.FlowPressureCritical) &&
+		tunnel.SetFlowPressure(sessionID, uint64(generation), tunnel.FlowPressure(level))
+}
+
+func ActiveFlowGeneration() int64 {
+	return int64(tunnel.ActiveFlowGeneration())
+}
+
+func CloseFlowsForPath(sessionID string, generation, attempt, revision int64) bool {
+	return generation > 0 && attempt > 0 && revision > 0 &&
+		tunnel.CloseFlowsForPath(sessionID, uint64(generation), uint64(attempt), uint64(revision))
+}
+
 func GetTunnelFileDescriptor() int {
 	ctlInfo := &unix.CtlInfo{}
 	copy(ctlInfo.Name[:], utunControlName)

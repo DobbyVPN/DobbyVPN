@@ -1,5 +1,20 @@
 import Foundation
 
+public enum IOSFlowPressure: Int, Comparable {
+    case normal, warning, critical
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    public static func effective(system: Self, availableBytes: UInt64) -> Self {
+        // Apple also returns zero when a process has no available-memory
+        // estimate. In that case retain the OS pressure signal.
+        guard availableBytes != 0 else { return system }
+        if availableBytes < 4 * 1024 * 1024 { return .critical }
+        if availableBytes < 8 * 1024 * 1024 { return max(system, .warning) }
+        return system
+    }
+}
+
 /// Errors raised when a provider envelope contains bytes that cannot be
 /// represented as the UTF-8 text consumed by the Go bridge.
 internal enum IOSProviderPayloadError: Error, Equatable {

@@ -22,7 +22,10 @@ const (
 	macOSTunReleasePoll = 50 * time.Millisecond
 )
 
-func startPlatformEngine(_ EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
+func startPlatformEngine(cfg EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
+	if cfg.PacketFlow != nil {
+		return startStack(handler, func() (device.Device, error) { return cfg.PacketFlow, nil })
+	}
 	accepted, err := startStack(handler, func() (device.Device, error) { return tun.Open("utun", TunnelMTU) })
 	if !accepted {
 		return false, err

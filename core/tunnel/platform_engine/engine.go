@@ -16,8 +16,11 @@ import (
 const TunnelMTU = 1280
 
 type EngineConfig struct {
-	FD          int    // Linux / Mobile
-	UplinkIface string // Windows
+	FD                int    // Linux / Mobile
+	UplinkIface       string // Windows
+	NetworkSession    string
+	NetworkGeneration uint64
+	PacketFlow        *PacketFlowDevice
 }
 
 func StartPlatformEngine(cfg EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
@@ -154,6 +157,12 @@ func stopStack(ctx context.Context) error {
 func CancelPendingTCPAdmissions() {
 	if admission := ownedTCPAdmission.Load(); admission != nil {
 		admission.cancelPending()
+	}
+}
+
+func SetTCPAdmissionPaused(paused bool) {
+	if admission := ownedTCPAdmission.Load(); admission != nil {
+		admission.setPaused(paused)
 	}
 }
 

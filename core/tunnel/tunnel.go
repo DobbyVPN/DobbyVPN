@@ -42,13 +42,17 @@ var ErrEngineBusy = fmt.Errorf("tun2socks engine is busy")
 // limitation explicit at the Dobby boundary instead of allowing a later start
 // or stop request to affect a different lifecycle generation.
 type Engine struct {
-	mu        sync.RWMutex
-	stopped   bool
-	stopErr   error
-	ifaceName string
-	proxy     *DobbyProxy
-	router    *switchingProxy
-	attempt   uint64
+	mu                sync.RWMutex
+	stopped           bool
+	stopErr           error
+	ifaceName         string
+	proxy             *DobbyProxy
+	router            *switchingProxy
+	attempt           uint64
+	networkSession    string
+	networkGeneration uint64
+	pressure          FlowPressure
+	physicalRevision  uint64
 
 	// stopPlatform exists so ownership bookkeeping can be tested without a
 	// real TUN device. Production handles use platform_engine.EngineStop.
@@ -79,6 +83,9 @@ type DobbyProxy struct {
 	tcpDialAttempt atomic.Uint64
 	udpDialAttempt atomic.Uint64
 	udpIdleTimeout atomic.Uint64
+	udpOrigins     atomic.Int32
+	udpRefused     atomic.Uint64
+	reclaiming     atomic.Bool
 }
 
 type flowIdentity struct {
@@ -135,6 +142,7 @@ type trackedConn struct {
 	owner      *flowOwner
 	closeErr   error
 	traffic    trafficCounter
+	lastIO     atomic.Int64
 }
 
 func (c *trackedConn) identity() flowIdentity {
@@ -143,12 +151,18 @@ func (c *trackedConn) identity() flowIdentity {
 
 func (c *trackedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
+	if n > 0 && runtime.GOOS == "ios" {
+		c.lastIO.Store(time.Since(flowClock).Nanoseconds())
+	}
 	c.traffic.observeRead(n, err, c.started, c.identity())
 	return n, err
 }
 
 func (c *trackedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
+	if n > 0 && runtime.GOOS == "ios" {
+		c.lastIO.Store(time.Since(flowClock).Nanoseconds())
+	}
 	c.traffic.observeWrite(n, err, c.identity())
 	return n, err
 }
@@ -250,6 +264,7 @@ type idlePacketConn struct {
 	onIdleTimeout func() uint64
 	mu            sync.Mutex
 	lastTouch     time.Time
+	lastReset     time.Time
 	closed        bool
 	closeErr      error
 	owner         *flowOwner
@@ -264,6 +279,7 @@ func newIdlePacketConn(conn net.PacketConn, timeout time.Duration, identity flow
 		identity:      identity,
 		onIdleTimeout: onIdleTimeout,
 		owner:         owner,
+		lastTouch:     time.Now(),
 	}
 	c.timer = time.AfterFunc(timeout, c.closeAfterIdleTimeout)
 	return c
@@ -288,6 +304,10 @@ func (c *idlePacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 func (c *idlePacketConn) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.closeLocked()
+}
+
+func (c *idlePacketConn) closeLocked() error {
 	if c.closed && c.closeErr == nil {
 		return nil
 	}
@@ -323,9 +343,14 @@ func (c *idlePacketConn) touch() {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.closed && now.Sub(c.lastTouch) > time.Second {
-		c.lastTouch = now
-		c.timer.Reset(c.timeout)
+	if !c.closed {
+		if runtime.GOOS == "ios" {
+			c.lastTouch = now
+		}
+		if now.Sub(c.lastReset) > time.Second {
+			c.lastTouch, c.lastReset = now, now
+			c.timer.Reset(c.timeout)
+		}
 	}
 }
 
@@ -441,14 +466,19 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 // releases those resources on both later startup failure and normal shutdown.
 // Before acceptance, ownership remains with the caller.
 func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, error) {
-	handle := &Engine{stopPlatform: platform_engine.EngineStop, router: newSwitchingProxy()}
+	handle := &Engine{
+		stopPlatform: platform_engine.EngineStop, router: newSwitchingProxy(),
+		networkSession: cfg.NetworkSession, networkGeneration: cfg.NetworkGeneration,
+	}
 	activeEngine = handle
 	// Install the stable router before the descriptor can receive packets.
 	// No transport exists until an attempt has passed its readiness check.
+	handle.router.startTCPRelay()
 	if accepted, err := platform_engine.StartPlatformEngine(cfg, handle.router); err != nil {
 		if accepted {
 			return handle, true, err
 		}
+		handle.router.close()
 		activeEngine = nil
 		return nil, false, err
 	}
@@ -615,7 +645,13 @@ func (e *Engine) Stop(ctx context.Context) error {
 		_ = runPhase("router-close", func() error { e.router.close(); return nil })
 	}
 	if e.proxy != nil {
-		_ = runPhase("flow-close", func() error { e.proxy.flows.sealAndClose(); return nil })
+		_ = runPhase("flow-close", func() error {
+			e.proxy.flows.sealAndClose()
+			if e.proxy.udpRelay != nil {
+				e.proxy.udpRelay.Close()
+			}
+			return nil
+		})
 	}
 	var platformErr error
 	if stopPlatform != nil {
