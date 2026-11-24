@@ -26,6 +26,19 @@ type PFDestination struct {
 	Bypass   bool
 }
 
+// PFLink is a physical interface for one address family, with its default
+// gateway when it has one. Replies to connections that came in from excluded
+// networks leave through it.
+type PFLink struct {
+	Interface string
+	IPv6      bool
+	Gateway   netip.Addr
+}
+
+// pfExcludedInTag marks inbound packets from excluded networks until a later
+// rule of the same evaluation picks the reply path.
+const pfExcludedInTag = "DOBBYVPN_EXCLUDED_IN"
+
 // MacOSPFRules renders the kill switch anchor. Outbound packets leave only
 // through loopback and the tunnel, except DHCP, IPv6 neighbor discovery, the
 // backend's queries to the physical DNS servers and the backend's authorized
@@ -38,7 +51,16 @@ type PFDestination struct {
 // rule referring to it.
 // Loopback and tunnel rules keep no state: connections that existed before
 // the anchor loaded continue there without a state entry.
-func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Prefix, destinations []PFDestination) string {
+//
+// Connections that come in from excluded networks get a state on the physical
+// link they arrived through, so their replies leave there for any user, like
+// established connections on Linux (LinuxOutputGuard.SetExcluded): through
+// the gateway (reply-to) instead of following the split default routes into
+// the tunnel, or directly on-link. The excluded pass out rule cannot carry
+// those replies: its implicit flags S/SA admit only an initial SYN. No new
+// outbound path opens for applications. links are the physical interfaces;
+// without them no inbound rule is rendered.
+func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Prefix, destinations []PFDestination, links ...PFLink) string {
 	var b strings.Builder
 	b.WriteString("# DobbyVPN kill switch: outbound traffic leaves only through the tunnel.\n")
 	if len(excluded) > 0 {
@@ -51,6 +73,9 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Pref
 			b.WriteString(" " + prefix.String())
 		}
 		b.WriteString(" }\n")
+	}
+	if len(excluded) > 0 {
+		writeExcludedInbound(&b, links)
 	}
 	b.WriteString("pass out quick on lo0 all no state\n")
 	if tunName != "" {
@@ -100,6 +125,48 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Pref
 	}
 	b.WriteString("block drop out quick all\n")
 	return b.String()
+}
+
+// writeExcludedInbound tags inbound packets from excluded networks, then
+// keeps state for them: on-link sources without a route option, the others
+// with reply-to through the link's gateway. flags any also picks up
+// connections that existed before the anchor loaded, whose states were
+// flushed. Without a gateway only on-link sources are covered.
+func writeExcludedInbound(b *strings.Builder, links []PFLink) {
+	sorted := slices.Clone(links)
+	slices.SortFunc(sorted, func(a, b PFLink) int {
+		if c := strings.Compare(a.Interface, b.Interface); c != 0 {
+			return c
+		}
+		if a.IPv6 != b.IPv6 {
+			if a.IPv6 {
+				return 1
+			}
+			return -1
+		}
+		return a.Gateway.Compare(b.Gateway)
+	})
+	for _, link := range slices.Compact(sorted) {
+		if link.Interface == "" {
+			continue
+		}
+		family := "inet"
+		if link.IPv6 {
+			family = "inet6"
+		}
+		fmt.Fprintf(b, "pass in on %s %s from <dobbyvpn_excluded> to any no state tag %s\n", link.Interface, family, pfExcludedInTag)
+		fmt.Fprintf(b, "pass in quick on %s %s from (%s:network) to any flags any keep state tagged %s\n", link.Interface, family, link.Interface, pfExcludedInTag)
+		if link.Gateway.IsValid() && link.Gateway.Unmap().Is4() != link.IPv6 {
+			fmt.Fprintf(b, "pass in quick on %s reply-to (%s %s) %s from any to any flags any keep state tagged %s\n",
+				link.Interface, link.Interface, pfAddress(link.Gateway), family, pfExcludedInTag)
+		}
+	}
+}
+
+// PFInboundReplyRules reports whether rules renders reply rules for inbound
+// connections from excluded networks.
+func PFInboundReplyRules(rules string) bool {
+	return strings.Contains(rules, "tagged "+pfExcludedInTag)
 }
 
 // pfPrefixes converts merged inclusive ranges to the CIDRs accepted by pfctl.

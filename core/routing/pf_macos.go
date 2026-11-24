@@ -70,6 +70,12 @@ type MacOSKillSwitch struct {
 	// on after it: no further load is tried, cleanup does not reload, and the
 	// session releases the network (see Broken).
 	broken error
+	// links are the physical interfaces replies to inbound connections from
+	// excluded networks leave through.
+	links []PFLink
+	// excludedLogged is the last logged excluded-network enforcement, so it is
+	// logged when it changes rather than on every reload.
+	excludedLogged string
 }
 
 // AcquireMacOSKillSwitch blocks outbound traffic outside tunName with rules in
@@ -239,12 +245,13 @@ func (k *MacOSKillSwitch) reload(ctx context.Context) error {
 			destinations = append(destinations, destination)
 		}
 	}
-	rules := MacOSPFRules(k.tunName, k.servers, k.excluded, destinations)
+	rules := MacOSPFRules(k.tunName, k.servers, k.excluded, destinations, k.links...)
 	if _, _, err := macOSPFCommand(ctx, rules, "-a", MacOSPFAnchor, "-f", "-"); err != nil {
 		k.broken = fmt.Errorf("load leak protection rules: %w", err)
 		log.Error(Category, "macOS kill switch rules could not be loaded; the network will be released", map[string]any{"cause": err.Error()})
 		return k.broken
 	}
+	k.logExcluded(rules)
 	log.Debugf(Category, "macOS kill switch rules loaded:\n%s", rules)
 	return nil
 }
@@ -277,6 +284,41 @@ func (k *MacOSKillSwitch) Broken() error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.broken
+}
+
+// logExcluded records how ExcludeIPs is enforced: the size of the excluded
+// table and whether replies to inbound connections from it leave through the
+// physical links. Only changes are logged.
+func (k *MacOSKillSwitch) logExcluded(rules string) {
+	links := make([]string, 0, len(k.links))
+	for _, link := range k.links {
+		gateway := "on-link only"
+		if link.Gateway.IsValid() {
+			gateway = link.Gateway.String()
+		}
+		links = append(links, fmt.Sprintf("%s ipv6=%t gateway=%s", link.Interface, link.IPv6, gateway))
+	}
+	inbound := PFInboundReplyRules(rules)
+	summary := fmt.Sprintf("%d %t %v", len(k.excluded), inbound, links)
+	if summary == k.excludedLogged {
+		return
+	}
+	k.excludedLogged = summary
+	log.Info(Category, "macOS kill switch excluded networks", map[string]any{
+		"excluded_prefixes": len(k.excluded), "inbound_reply_rules": inbound, "physical_links": links,
+	})
+}
+
+// SetLinks sets the physical interfaces and gateways that replies to inbound
+// connections from excluded networks leave through.
+func (k *MacOSKillSwitch) SetLinks(ctx context.Context, links []PFLink) error {
+	return k.update(ctx, func() (bool, error) {
+		if slices.Equal(k.links, links) {
+			return false, nil
+		}
+		k.links = slices.Clone(links)
+		return true, nil
+	})
 }
 
 // SetResolvers admits the backend's queries to the physical DNS servers.

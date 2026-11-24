@@ -91,6 +91,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			if err := guard.SetResolvers(queryCtx, physical.DNSServers); err != nil {
 				return physical, nil, err
 			}
+			if err := guard.SetLinks(queryCtx, physicalRoutes.Links(physical)); err != nil {
+				return physical, nil, err
+			}
 		}
 		protected_dialer.SetPhysicalInterfaces(physical.IPv4, physical.IPv6)
 		resolve := dnscache.MacOSLinkResolver(physical.IPv4, physical.IPv6, physical.DNSServers, physical.NAT64Prefixes)
@@ -146,6 +149,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	if !guard.Applied() {
 		app.LeakProtectionOff = "pf_anchor_missing"
+	} else if err = guard.SetLinks(ctx, physicalRoutes.Links(physical)); err != nil {
+		signalInit(initResult, err)
+		return err
 	}
 	if err = plan.AcquireMacOSIPv4Default(ctx, name); err == nil {
 		err = plan.AcquireMacOSIPv6Default(ctx, name)

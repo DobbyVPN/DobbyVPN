@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 
 	"core/log"
@@ -103,6 +104,38 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 		})
 	}
 	return nil
+}
+
+// Links reports the physical interface of each address family with the
+// gateway of its retained default, if it has one, for the kill switch's
+// replies to inbound connections from excluded networks.
+func (p *MacOSPhysicalRoutes) Links(physical MacOSPhysicalNetwork) []PFLink {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var links []PFLink
+	for _, family := range []struct {
+		index int
+		ipv6  bool
+	}{{physical.IPv4, false}, {physical.IPv6, true}} {
+		if family.index == 0 {
+			continue
+		}
+		iface, err := net.InterfaceByIndex(family.index)
+		if err != nil {
+			log.Warn(Category, "physical interface for excluded-network replies is unavailable", map[string]any{
+				"interface_index": family.index, "cause": err.Error(),
+			})
+			continue
+		}
+		link := PFLink{Interface: iface.Name, IPv6: family.ipv6}
+		for _, route := range p.routes {
+			if route.index == family.index && route.prefix.Addr().Is4() != family.ipv6 && route.gateway.IsValid() {
+				link.Gateway = route.gateway
+			}
+		}
+		links = append(links, link)
+	}
+	return links
 }
 
 func (p *MacOSPhysicalRoutes) Close(ctx context.Context) error {

@@ -42,7 +42,11 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 		"14000": large,
 	} {
 		t.Run(name, func(t *testing.T) {
-			rules := MacOSPFRules("utun7", servers, excluded, destinations)
+			links := []PFLink{
+				{Interface: "en0", Gateway: netip.MustParseAddr("192.168.1.1")},
+				{Interface: "en0", IPv6: true, Gateway: netip.MustParseAddr("fe80::1%en0")},
+			}
+			rules := MacOSPFRules("utun7", servers, excluded, destinations, links...)
 			path := filepath.Join(t.TempDir(), "dobbyvpn.pf")
 			if err := os.WriteFile(path, []byte(rules), 0o600); err != nil {
 				t.Fatal(err)
@@ -68,6 +72,7 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 			if len(excluded) == 0 {
 				return
 			}
+			checkLoadedExcludedRules(t)
 			output, err = pfctl(t.Context(), "-a", pfCILoadAnchor, "-t", "dobbyvpn_excluded", "-T", "show")
 			if err != nil {
 				t.Fatalf("show the loaded %s table: %v\n%s", name, err, output)
@@ -86,6 +91,36 @@ func TestMacOSPFRulesParseWithPfctl(t *testing.T) {
 				t.Fatalf("the kernel table holds %d entries, want %d; pfctl -T show began:\n%.400s", entries, len(excluded), output)
 			}
 		})
+	}
+}
+
+// checkLoadedExcludedRules reads the loaded rules back with their defaults.
+// The excluded pass out rule for TCP carries the implicit flags S/SA, so it
+// can never pass the SYN+ACK or the ACK-carrying replies of an inbound
+// connection (#525); the inbound rules with reply-to carry those instead.
+func checkLoadedExcludedRules(t *testing.T) {
+	t.Helper()
+	listing, err := pfctl(t.Context(), "-a", pfCILoadAnchor, "-s", "rules")
+	if err != nil {
+		t.Fatalf("show the loaded rules: %v\n%s", err, listing)
+	}
+	t.Logf("loaded rules:\n%s", listing)
+	var outboundTCP, replyTo, onLink bool
+	for _, line := range strings.Split(string(listing), "\n") {
+		switch {
+		case strings.HasPrefix(line, "pass out") && strings.Contains(line, "<dobbyvpn_excluded>") && strings.Contains(line, "proto tcp"):
+			outboundTCP = strings.Contains(line, "flags S/SA")
+		case strings.HasPrefix(line, "pass in quick") && strings.Contains(line, "reply-to") && strings.Contains(line, "DOBBYVPN_EXCLUDED_IN"):
+			replyTo = true
+		case strings.HasPrefix(line, "pass in quick") && strings.Contains(line, ":network") && strings.Contains(line, "DOBBYVPN_EXCLUDED_IN"):
+			onLink = true
+		}
+	}
+	if !outboundTCP {
+		t.Error("the excluded TCP pass out rule did not load with the implicit flags S/SA")
+	}
+	if !replyTo || !onLink {
+		t.Errorf("inbound reply rules missing: reply-to=%t on-link=%t", replyTo, onLink)
 	}
 }
 
