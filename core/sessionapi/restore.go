@@ -19,12 +19,13 @@ type ActivationStore interface {
 }
 
 type savedActivation struct {
-	Version int       `json:"version"`
-	Enabled bool      `json:"enabled"`
-	Mode    StartMode `json:"mode"`
-	Index   int       `json:"index"`
-	Digest  string    `json:"digest,omitempty"`
-	Source  string    `json:"source,omitempty"`
+	Version        int       `json:"version"`
+	Enabled        bool      `json:"enabled"`
+	ProtectionOnly bool      `json:"protection_only,omitempty"`
+	Mode           StartMode `json:"mode"`
+	Index          int       `json:"index"`
+	Digest         string    `json:"digest,omitempty"`
+	Source         string    `json:"source,omitempty"`
 }
 
 func (s FileSourceStore) LoadActivation(ctx context.Context) ([]byte, error) {
@@ -43,6 +44,12 @@ func decodeActivation(raw []byte) (savedActivation, error) {
 	}
 	if err := json.Unmarshal(raw, &saved); err != nil {
 		return saved, failureWithCause(FailureMalformedConfig, "saved activation is invalid", err)
+	}
+	if saved.ProtectionOnly {
+		if saved.Version != 2 || saved.Enabled || saved.Source != "" || saved.Digest != "" || saved.Mode != "" || saved.Index != 0 {
+			return savedActivation{}, failure(FailureMalformedConfig, "saved protection-only activation is invalid")
+		}
+		return saved, nil
 	}
 	if !saved.Enabled && (saved.Version == 1 || saved.Version == 2 && saved.Source == "") {
 		return saved, nil
@@ -63,7 +70,9 @@ func (m *Manager) saveActivationLocked(ctx context.Context, inventory profileInv
 	if !ok {
 		return nil
 	}
-	saved := savedActivation{Version: 2}
+	// Inline configuration stays in memory. Retain just the user's protection
+	// intent so a new service does not mistake a restart for explicit Stop.
+	saved := savedActivation{Version: 2, ProtectionOnly: m.protection != nil}
 	if inventory.sourceKind == ConfigSourceURL && inventory.sourceURL != "" {
 		saved = savedActivation{Version: 2, Enabled: true, Mode: target.Mode, Index: target.Index, Digest: inventory.digest, Source: inventory.sourceURL}
 	}
@@ -135,6 +144,12 @@ func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool
 	saved, err := m.loadRestoreActivation(ctx, store)
 	if err != nil {
 		return StartResult{}, err
+	}
+	if saved.ProtectionOnly && m.protection != nil {
+		if _, err = m.prepareRestoreProtection(ctx, s, sequence, epoch); err != nil {
+			return StartResult{}, err
+		}
+		return StartResult{}, failure(FailurePlatform, "VPN protection is still active. Reapply the inline configuration to reconnect, or Stop to restore ordinary connectivity.")
 	}
 	if !saved.Enabled && (onlyPreviouslyEnabled || saved.Version == 1 || saved.Source == "") {
 		return StartResult{}, m.reconcileDisabledRestore(ctx, s, epoch)
