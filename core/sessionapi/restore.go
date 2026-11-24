@@ -46,7 +46,7 @@ func decodeActivation(raw []byte) (savedActivation, error) {
 		return saved, failureWithCause(FailureMalformedConfig, "saved activation is invalid", err)
 	}
 	if saved.ProtectionOnly {
-		if saved.Version != 2 || saved.Enabled || saved.Source != "" || saved.Digest != "" || saved.Mode != "" || saved.Index != 0 {
+		if saved != (savedActivation{Version: 2, ProtectionOnly: true}) {
 			return savedActivation{}, failure(FailureMalformedConfig, "saved protection-only activation is invalid")
 		}
 		return saved, nil
@@ -146,10 +146,7 @@ func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool
 		return StartResult{}, err
 	}
 	if saved.ProtectionOnly && m.protection != nil {
-		if _, err = m.prepareRestoreProtection(ctx, s, sequence, epoch); err != nil {
-			return StartResult{}, err
-		}
-		return StartResult{}, failure(FailurePlatform, "VPN protection is still active. Reapply the inline configuration to reconnect, or Stop to restore ordinary connectivity.")
+		return StartResult{}, m.restoreInlineProtection(ctx, s, sequence, epoch)
 	}
 	if !saved.Enabled && (onlyPreviouslyEnabled || saved.Version == 1 || saved.Source == "") {
 		return StartResult{}, m.reconcileDisabledRestore(ctx, s, epoch)
@@ -172,6 +169,13 @@ func (m *Manager) restoreAttempt(ctx context.Context, onlyPreviouslyEnabled bool
 		return result, err
 	}
 	return result, waitForRestoredNetwork(ctx, s, result.Generation)
+}
+
+func (m *Manager) restoreInlineProtection(ctx context.Context, s *session, sequence, epoch uint64) error {
+	if _, err := m.prepareRestoreProtection(ctx, s, sequence, epoch); err != nil {
+		return err
+	}
+	return failure(FailurePlatform, "VPN protection is still active. Reapply the inline configuration to reconnect, or Stop to restore ordinary connectivity.")
 }
 
 func (m *Manager) loadRestoreActivation(ctx context.Context, store ActivationStore) (savedActivation, error) {
