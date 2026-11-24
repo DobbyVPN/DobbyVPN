@@ -36,8 +36,19 @@ func prepareDesktopControl() (net.Listener, error) {
 			} // Open the pipe so the operator sees the retained policy failure.
 			return recoverInterruptedState()
 		},
-		platform_engine.RecoverStaleWindowsIPv6FirewallRules,
+		recoverStaleWindowsState,
 	)
+}
+
+// recoverStaleWindowsState removes what a crashed or killed backend left
+// behind, before any session starts. A stale NRPT rule would keep sending all
+// DNS to the tunnel servers, so it is removed here too; failing to remove it
+// is logged, not fatal, because connect and disconnect retry the removal.
+func recoverStaleWindowsState() error {
+	if err := platform_engine.RecoverStaleWindowsNRPTRule(); err != nil {
+		log.Errorf(desktopLogCategory, "stale NRPT rule recovery failed: %v", err)
+	}
+	return platform_engine.RecoverStaleWindowsIPv6FirewallRules()
 }
 
 func prepareDesktopControlWith(
@@ -221,7 +232,10 @@ func executeWith(mode string, initLog func() error, runNormal func(), runService
 
 	switch mode {
 	case "release-protection":
-		if err := removeDesktopInstallationState(context.Background(), controlplane.WindowsInstallationSourceStore); err != nil {
+		err := removeDesktopInstallationState(context.Background(), controlplane.WindowsInstallationSourceStore)
+		// Uninstall must not leave the machine's DNS pointed at the tunnel servers.
+		err = errors.Join(err, platform_engine.RecoverStaleWindowsNRPTRule())
+		if err != nil {
 			log.Errorf(desktopLogCategory, "failed to release installed VPN state: %v", err)
 			return reportStartupFailure("release installed VPN state", err, true)
 		}

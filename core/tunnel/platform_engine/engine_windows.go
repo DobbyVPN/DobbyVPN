@@ -47,6 +47,10 @@ type windowsAdapterState struct {
 
 var adapter windowsAdapterState
 
+// windowsNRPTInstalled is kept apart from the adapter state: the NRPT rule is
+// machine-wide and must be removed even after the adapter is gone.
+var windowsNRPTInstalled bool
+
 const (
 	windowsTunMTU             = TunnelMTU
 	windowsAdapterPrefix      = "DobbyVPN-"
@@ -149,6 +153,7 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 	for _, address := range common.VPNDNSServers() {
 		servers = append(servers, netip.MustParseAddr(address))
 	}
+	installWindowsNRPT(servers)
 	if err := routing.SetWindowsDNS(adapter.lastLUID, true, servers); err != nil {
 		return true, err
 	}
@@ -249,12 +254,59 @@ func RecoverStaleWindowsIPv6FirewallRules() error {
 	return routing.CleanupStaleWindowsIPv6FirewallRules()
 }
 
-func cleanupWindowsState() error {
-	if adapter.lastIface == "" {
+// installWindowsNRPT sends all DNS Client queries to the tunnel servers. If
+// it fails, the session still works with the slower multi-adapter lookups.
+func installWindowsNRPT(servers []netip.Addr) {
+	windowsNRPTInstalled = true // A failed write may still leave the rule behind.
+	if err := routing.InstallWindowsNRPT(servers); err != nil {
+		if errors.Is(err, routing.ErrForeignNRPTRule) {
+			windowsNRPTInstalled = false
+		}
+		log.Errorf(Category, "[Engine][Windows] NRPT rule not installed; DNS lookups may wait for blocked adapter servers err=%v", err)
+		return
+	}
+	log.Infof(Category, "[Engine][Windows] NRPT rule installed key=%s namespace=. servers=%v", routing.OwnedNRPTRuleKey, servers)
+}
+
+func removeWindowsNRPT() error {
+	if !windowsNRPTInstalled {
 		return nil
 	}
+	removed, err := routing.RemoveWindowsNRPT()
+	switch {
+	case errors.Is(err, routing.ErrForeignNRPTRule):
+		windowsNRPTInstalled = false
+		log.Warnf(Category, "[Engine][Windows] NRPT rule at key=%s is not ours; left in place", routing.OwnedNRPTRuleKey)
+		return nil
+	case err != nil && !removed:
+		return fmt.Errorf("remove NRPT rule: %w", err)
+	case err != nil:
+		log.Warnf(Category, "[Engine][Windows] NRPT rule removed; DNS cache flush failed err=%v", err)
+	}
+	windowsNRPTInstalled = false
+	log.Infof(Category, "[Engine][Windows] NRPT rule removal key=%s was_present=%t", routing.OwnedNRPTRuleKey, removed)
+	return nil
+}
 
-	var errs []error
+// RecoverStaleWindowsNRPTRule removes the owned NRPT rule that a crashed or
+// killed process left behind. It runs at service start, before any session,
+// and when the installer releases protection.
+func RecoverStaleWindowsNRPTRule() error {
+	if adapter.ownedAdapterName != "" || adapter.lastIface != "" {
+		return fmt.Errorf("cannot recover the NRPT rule while adapter %q is active", adapter.ownedAdapterName)
+	}
+	windowsNRPTInstalled = true
+	return removeWindowsNRPT()
+}
+
+func cleanupWindowsState() error {
+	// The machine-wide rule goes first, whatever happened to the adapter.
+	nrptErr := removeWindowsNRPT()
+	if adapter.lastIface == "" {
+		return nrptErr
+	}
+
+	errs := []error{nrptErr}
 
 	log.Debugf(Category, "[Engine][Windows] Restoring DNS. static=%v DNS=%v", adapter.prevDNSStatic, adapter.prevDNS)
 
