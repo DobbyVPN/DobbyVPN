@@ -16,7 +16,7 @@ import (
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
 
-	"golang.getoutline.org/sdk/network"
+	"github.com/songgao/water"
 )
 
 func (app *App) validateRunInputs() error {
@@ -56,7 +56,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	plan := routing.NewPlan(config.TunDeviceName)
 	var engine *tunnel.Engine
-	var tun network.IPDevice
+	var tun *water.Interface
 	app.setCleanup(func(cleanup context.Context) error {
 		if engine != nil {
 			return engine.Stop(cleanup)
@@ -83,15 +83,20 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return fail(captureErr)
 	}
 	app.DNSCache.SetResolverSource(capture)
-	tun, err = newTunDevice(config.TunDeviceName, config.TunDeviceIP, config.TunDeviceMTU)
+	tun, err = app.openLinuxTUN()
 	if err != nil {
 		return fail(err)
 	}
-	descriptor, ok := tun.(interface{ GetFd() int })
-	if !ok || descriptor.GetFd() < 0 {
-		return fail(errors.New("owned TUN descriptor is unavailable"))
+	file, ok := tun.ReadWriteCloser.(interface{ Fd() uintptr })
+	if !ok {
+		return fail(fmt.Errorf("owned TUN %s has no file descriptor (%T)", tun.Name(), tun.ReadWriteCloser))
 	}
-	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: descriptor.GetFd()})
+	fd, err := protected_dialer.UintptrToInt(file.Fd())
+	if err != nil {
+		return fail(fmt.Errorf("owned TUN %s descriptor: %w", tun.Name(), err))
+	}
+	log.Debugf(Category, "[TUN][FD] interface=%s fd=%d", tun.Name(), fd)
+	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: fd})
 	app.Engine = engine
 	if err != nil {
 		return fail(err)

@@ -45,9 +45,6 @@ func newNativeRuntime(dnsCache *dnscache.Cache) *nativeRuntime {
 		routing.TunDeviceName = ownedTunName
 		routing.TunDeviceIP = common.GetNetworkConfig().TunDevice
 		routing.RoutingTablePriority = ownedRoutingPriority
-		if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, routing); err != nil {
-			log.Errorf(nativeLogCategory, "retain desktop tunnel policy: %v", err)
-		}
 	}
 	return &nativeRuntime{
 		app:   &internal.App{DNSCache: dnsCache, RoutingConfig: routing},
