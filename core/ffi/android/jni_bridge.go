@@ -371,6 +371,7 @@ import (
 	"context"
 	"unsafe"
 
+	"core/log"
 	"core/sessionapi/mobilebinding"
 )
 
@@ -465,6 +466,14 @@ func Java_com_dobby_nativebridge_NativeGoSession_initializeLogger(
 		return C.jstring(0)
 	}
 	return jniResult(env, initializeLogger(jniString(env, path)))
+}
+
+//export Java_com_dobby_nativebridge_NativeGoSession_flushDiagnostics
+func Java_com_dobby_nativebridge_NativeGoSession_flushDiagnostics(env *C.JNIEnv, _ C.jclass) C.jstring {
+	if err := log.Flush(); err != nil {
+		return jniResult(env, err.Error())
+	}
+	return jniResult(env, "")
 }
 
 //export Java_com_dobby_nativebridge_NativeGoSession_attachNative

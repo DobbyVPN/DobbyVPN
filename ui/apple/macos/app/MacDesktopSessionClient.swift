@@ -42,6 +42,18 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
         Bundle.main.infoDictionary?["DobbySourceCommit"] as? String ?? "N/A"
     }
 
+    func flushDiagnostics() throws {
+        let request = Data("{\"method\":\"FlushDiagnostics\",\"params\":{}}\n".utf8)
+        do {
+            let response = try UnixControlSocket(path: socketPath, requestTimeout: 1).exchange(request)
+            try DobbyResponse.check(response)
+        } catch let error as POSIXError where error.code == .ENOENT || error.code == .ECONNREFUSED {
+            // A stopped service has no pending diagnostics.
+        } catch DobbyClientError.command(code: "INVALID_ARGUMENT", message: "unknown command") {
+            // An older service writes diagnostics without batching.
+        }
+    }
+
     private func sample(_ method: String) -> Bool {
         guard method == "Snapshot" else { return true }
         samplingLock.lock(); defer { samplingLock.unlock() }

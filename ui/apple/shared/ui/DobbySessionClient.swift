@@ -4,10 +4,15 @@ import Foundation
 /// The Go session manager owns all connection state and configuration rules.
 public protocol DobbySessionClient: AnyObject, Sendable {
     func call(_ method: String, parameters: [String: Any]) -> String
+    func flushDiagnostics() throws
     var diagnosticPaths: [URL] { get }
     var uiDiagnosticPath: URL { get }
     var version: String { get }
     var sourceCommit: String { get }
+}
+
+public extension DobbySessionClient {
+    func flushDiagnostics() throws {}
 }
 
 /// A platform whose VPN profile is created by the app after the user's consent (iOS).

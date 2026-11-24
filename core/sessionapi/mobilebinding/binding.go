@@ -375,6 +375,11 @@ func (b *Binding) CallJSONWithConfiguration(
 	switch method {
 	case "ParseImportLink":
 		return ParseImportLink(value.Link)
+	case "FlushDiagnostics":
+		if err := log.Flush(); err != nil {
+			return failed(&sessionapi.Error{Code: sessionapi.FailureInternal, Message: "could not flush diagnostics", Cause: err})
+		}
+		return success(struct{}{})
 	case "PrepareLogUpload":
 		result, err := b.manager.PrepareLogUpload(ctx, value.SessionID, value.Digest)
 		if err != nil {

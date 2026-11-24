@@ -734,8 +734,14 @@ extension DobbySessionViewModel {
                 .appendingPathComponent("DobbyVPN-logs-\(UUID().uuidString).gz")
             let header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\n" +
                 "Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)\nCaptured: \(ISO8601DateFormatter().string(from: Date()))\n\n"
+            var diagnosticDetails = writeError
             do {
-                let issues = try exportDiagnostics(paths: client.diagnosticPaths, to: url, header: header + writeError)
+                try client.flushDiagnostics()
+            } catch {
+                diagnosticDetails += "Backend diagnostic flush failed: \(String(reflecting: error))\n"
+            }
+            do {
+                let issues = try exportDiagnostics(paths: client.diagnosticPaths, to: url, header: header + diagnosticDetails)
                 Task { @MainActor [weak self] in
                     self?.exportingLogs = false
                     self?.logsError = issues

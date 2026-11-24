@@ -102,6 +102,7 @@ func runLogs(args []string) int {
 		return reportFailure(err)
 	}
 	if export {
+		flushServiceDiagnostics(dialService())
 		if err := exportDiagnostics(args[1], paths); err != nil {
 			return reportLogsFailure(err, paths[0])
 		}
@@ -180,6 +181,20 @@ func exportDiagnostics(destination string, paths []string) error {
 		return err
 	}
 	return diagnostics.ExportGzip(destination, paths, diagnosticHeader())
+}
+
+// Export remains available with a stopped service or a previous service version.
+func flushServiceDiagnostics(client controljson.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := client.Call(ctx, "FlushDiagnostics", struct{}{}, nil)
+	var unavailable *serviceUnavailableError
+	var command *controljson.CallError
+	if err == nil || errors.As(err, &unavailable) ||
+		(errors.As(err, &command) && command.Code == string(sessionapi.FailureInvalidArgument) && command.Message == "unknown command") {
+		return
+	}
+	applicationlog.Warn("DIAGNOSTICS", "Service diagnostics could not be flushed for export", map[string]any{"error": err.Error()})
 }
 
 // Clear stores stable file identities and lengths; it never changes producer

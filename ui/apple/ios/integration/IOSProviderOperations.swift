@@ -26,8 +26,8 @@ public enum IOSSessionExchange {
                     + "reversible_payload=\(reversibleDiagnosticText(providerResponse.payload))\n\(diagnosticErrorDescription(error))")
                 return (failure("INTERNAL", "iOS session provider response was not valid UTF-8"), false)
             }
-            // The manager records actual Snapshot transport failures and summarizes cached reads.
-            if providerResponse.kind != .go && method != "Snapshot" {
+            // Readiness records Snapshot failures. Export records flush failures in the archive.
+            if providerResponse.kind != .go && method != "Snapshot" && method != "FlushDiagnostics" {
                 log("ERROR", "[session] command transport failure \(command.diagnosticIdentity) stage=\(stage) elapsed=\(ProcessInfo.processInfo.systemUptime - started) response=\(response)")
             } else if trace {
                 log("INFO", "[session] command end \(command.diagnosticIdentity) kind=\(providerResponse.kind) elapsed=\(ProcessInfo.processInfo.systemUptime - started)")

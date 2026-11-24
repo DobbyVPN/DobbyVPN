@@ -30,6 +30,14 @@ final class IOSSessionClient: DobbyDisconnectObserving, DobbyVPNSetupProviding, 
         Bundle.main.infoDictionary?["DobbySourceCommit"] as? String ?? "N/A"
     }
 
+    func flushDiagnostics() throws {
+        do {
+            try DobbyResponse.check(shell.call(method: "FlushDiagnostics", parameters: [:]))
+        } catch DobbyClientError.command(code: "PROVIDER_INACTIVE", message: _) {
+            // Existing diagnostic files are available without starting the provider.
+        }
+    }
+
     func call(_ method: String, parameters: [String: Any]) -> String {
         if method == "ParseImportLink" {
             return DobbyvpnParseImportLink(parameters["link"] as? String ?? "")

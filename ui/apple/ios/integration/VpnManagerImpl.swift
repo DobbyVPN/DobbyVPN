@@ -149,6 +149,19 @@ public final class VpnManagerImpl: NSObject {
         }
         let command = try? IOSProviderCommand.decode(messageData)
         let commandMethod = command?.method
+        if commandMethod == "FlushDiagnostics" {
+            guard let manager = boundManager(),
+                  [.connected, .reasserting].contains(native.status(manager)) else {
+                return transportFailureResponse(for: messageData, code: "PROVIDER_INACTIVE",
+                                                message: "No running VPN provider to flush.")
+            }
+            do {
+                return try sendOnce(messageData, timeout: min(1, native.messageTimeout), using: manager)
+            } catch {
+                return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED",
+                                                message: diagnosticErrorDescription(error))
+            }
+        }
         let identity = command?.diagnosticIdentity ?? "request_id=unavailable method=unavailable"
         let started = monotonicNow()
         let trace = diagnosticSampler.shouldTrace(method: commandMethod ?? "")
@@ -314,11 +327,14 @@ public final class VpnManagerImpl: NSObject {
         }
     }
 
-    private func sendOnce(_ messageData: Data, timeout: TimeInterval) throws -> Data {
+    private func boundManager() -> NETunnelProviderManager? {
         condition.lock()
-        let manager = vpnManager
-        condition.unlock()
-        guard let manager else {
+        defer { condition.unlock() }
+        return vpnManager
+    }
+
+    private func sendOnce(_ messageData: Data, timeout: TimeInterval, using manager: NETunnelProviderManager? = nil) throws -> Data {
+        guard let manager = manager ?? boundManager() else {
             throw NSError(
                 domain: "VpnManagerImpl.sessionapi",
                 code: -1,

@@ -287,6 +287,13 @@ object NativeVpnBridge {
         val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
         val archive = File.createTempFile("DobbyVPN_logs_${stamp}_", ".jsonl.gz", context.cacheDir)
         try {
+            if (NativeGoSession.isLoggerReady()) {
+                val failure = NativeGoSession.flushDiagnostics()
+                if (failure != "") {
+                    recordNativeFailure(context, "logs.export_flush_failed",
+                        IOException(failure ?: "Go logger returned no diagnostic flush result"))
+                }
+            }
             val metadata = JSONObject().put("app_version", com.dobby.vpn.BuildConfig.VERSION_NAME)
                 .put("source_commit", com.dobby.vpn.BuildConfig.PROJECT_REPOSITORY_COMMIT)
                 .put("platform", "Android ${Build.VERSION.RELEASE}")

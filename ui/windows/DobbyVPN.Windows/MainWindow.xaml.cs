@@ -1597,6 +1597,17 @@ public sealed partial class MainWindow : Window
             if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
             if (file is not null)
             {
+                using var flush = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                flush.CancelAfter(TimeSpan.FromSeconds(1));
+                try
+                {
+                    await _control.CallAsync<JsonElement>("FlushDiagnostics", new { }, flush.Token);
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // The control client records failures. Export the retained files even if the backend is gone.
+                }
+                if (_lifetime.IsClosing || cancellationToken.IsCancellationRequested) return;
                 await _diagnostics.SaveAsync(file.Path, ExportHeader);
                 _diagnostics.RecordInfo("logs.export.saved", "Saved the log export", new
                 {
