@@ -267,7 +267,7 @@ func parseStartOptions(args []string) (options startOptions, errorMessage string
 				return options, sessionIDRequiredMessage
 			}
 			value, remaining, ok := takeOptionValue(args)
-			if !ok {
+			if !ok || value == "" {
 				return options, sessionIDRequiredMessage
 			}
 			options.sessionID = value
@@ -277,7 +277,7 @@ func parseStartOptions(args []string) (options startOptions, errorMessage string
 				return options, "--config-digest requires one value"
 			}
 			value, remaining, ok := takeOptionValue(args)
-			if !ok {
+			if !ok || value == "" {
 				return options, "--config-digest requires one value"
 			}
 			options.digest = value
@@ -368,7 +368,7 @@ func parseStopOptions(args []string) (options stopOptions, errorMessage string) 
 				return options, sessionIDRequiredMessage
 			}
 			value, remaining, ok := takeOptionValue(args)
-			if !ok {
+			if !ok || value == "" {
 				return options, sessionIDRequiredMessage
 			}
 			options.sessionID = value
@@ -411,25 +411,30 @@ func (options stopOptions) stop(ctx context.Context, client controljson.Client) 
 		}
 		return writeJSONResult(snapshot)
 	}
-	if err := callStop(ctx, client, snapshot.SessionID, snapshot.Generation); err != nil {
+	stopped, err := callStop(ctx, client, snapshot.SessionID, snapshot.Generation)
+	if err != nil {
 		return writeJSONFailure(err)
 	}
-	return waitForDisconnect(ctx, client, snapshot.SessionID)
+	return waitForDisconnect(ctx, client, snapshot.SessionID, stopped.Generation)
 }
 
-func callStop(ctx context.Context, client controljson.Client, sessionID string, generation uint64) error {
+func callStop(ctx context.Context, client controljson.Client, sessionID string, generation uint64) (wire.Generation, error) {
 	var stopped wire.Generation
-	return client.Call(ctx, "Stop", struct {
+	err := client.Call(ctx, "Stop", struct {
 		SessionID  string `json:"session_id"`
 		Generation uint64 `json:"generation"`
 	}{sessionID, generation}, &stopped)
+	return stopped, err
 }
 
-func waitForDisconnect(ctx context.Context, client controljson.Client, sessionID string) int {
+func waitForDisconnect(ctx context.Context, client controljson.Client, sessionID string, generation uint64) int {
 	for {
 		current, err := callSnapshot(ctx, client, sessionID)
 		if err != nil {
 			return writeJSONFailure(err)
+		}
+		if current.Generation != generation {
+			return writeJSONFailure(&controljson.CallError{Code: string(sessionapi.FailureConflict), Message: "session restarted while waiting for stop cleanup; refresh its snapshot"})
 		}
 		if current.CleanupComplete {
 			if err := cleanupFailure(&current); err != nil {
@@ -505,7 +510,7 @@ func cleanupSession(client controljson.Client, sessionID string, generation uint
 	if current.Generation != generation || current.CleanupComplete {
 		return cleanupFailure(&current)
 	}
-	if err := callStop(ctx, client, sessionID, generation); err != nil {
+	if _, err := callStop(ctx, client, sessionID, generation); err != nil {
 		return fmt.Errorf("stop cleanup session: %w", err)
 	}
 	for {

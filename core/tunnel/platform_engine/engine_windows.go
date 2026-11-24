@@ -65,7 +65,10 @@ func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) 
 		return false, fmt.Errorf("create owned Wintun identity: %w", err)
 	}
 	// Select against the interface inventory before adding our own adapter.
-	tunCfg := common.GetNetworkConfig()
+	tunCfg, err := common.GetNetworkConfig()
+	if err != nil {
+		return false, err
+	}
 	resetTun2SocksInterfaceBinding()
 	accepted, err := startStack(handler, func() (device.Device, error) { return tun.Open(adapterName, TunnelMTU) })
 	if accepted {

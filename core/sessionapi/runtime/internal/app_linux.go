@@ -9,6 +9,7 @@ import (
 	"net"
 	"time"
 
+	"core/common"
 	"core/dnscache"
 	"core/log"
 	"core/routing"
@@ -33,6 +34,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return fail(err)
 	}
 	config := app.RoutingConfig
+	if config.TunDeviceIP == "" {
+		addresses, err := common.GetNetworkConfig()
+		if err != nil {
+			return fail(err)
+		}
+		config.TunDeviceIP = addresses.TunDevice
+	}
 	// Retire precisely tagged state from an interrupted older process. The new
 	// policy leaves physical routes untouched, so it needs no route restoration.
 	if err := routing.RecoverLinuxNetworkRules(config.RoutingTableID, config.RoutingTablePriority, config.TunDeviceName); err != nil {

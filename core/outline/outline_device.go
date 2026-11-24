@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +23,10 @@ import (
 	"core/log"
 	"core/tunnel/protected_dialer"
 )
+
+// Windows needs real server reachability to try the next DNS address family.
+const forceTCPDNSForPlatform = runtime.GOOS == "android" || runtime.GOOS == "linux" ||
+	runtime.GOOS == "darwin" || runtime.GOOS == "ios"
 
 const (
 	networkTCP = "tcp"

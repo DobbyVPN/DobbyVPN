@@ -43,7 +43,6 @@ func newNativeRuntime(dnsCache *dnscache.Cache) *nativeRuntime {
 	}
 	if goruntime.GOOS == "linux" {
 		routing.TunDeviceName = ownedTunName
-		routing.TunDeviceIP = common.GetNetworkConfig().TunDevice
 		routing.RoutingTablePriority = ownedRoutingPriority
 	}
 	return &nativeRuntime{

@@ -13,18 +13,31 @@ type NetworkConfig struct {
 	TunDevice  string // 10.X.Y.2
 }
 
-var networkConfig = sync.OnceValue(generateConfig)
+var (
+	networkConfigMu sync.Mutex
+	networkConfig   *NetworkConfig
+)
 
-func GetNetworkConfig() *NetworkConfig { return networkConfig() }
+func GetNetworkConfig() (*NetworkConfig, error) {
+	networkConfigMu.Lock()
+	defer networkConfigMu.Unlock()
+	if networkConfig == nil {
+		config, err := selectNetworkConfig(localIPv4Addresses(), randomPrivateOctet)
+		if err != nil {
+			return nil, err
+		}
+		networkConfig = config
+	}
+	return networkConfig, nil
+}
 
-func generateConfig() *NetworkConfig {
-	assigned := localIPv4Addresses()
+func selectNetworkConfig(assigned map[string]bool, nextOctet func() (int64, error)) (*NetworkConfig, error) {
 	for i := 0; i < 20; i++ {
-		x, err := randomPrivateOctet()
+		x, err := nextOctet()
 		if err != nil {
 			break
 		}
-		y, err := randomPrivateOctet()
+		y, err := nextOctet()
 		if err != nil {
 			break
 		}
@@ -36,14 +49,15 @@ func generateConfig() *NetworkConfig {
 			return &NetworkConfig{
 				TunGateway: gateway,
 				TunDevice:  device,
-			}
+			}, nil
 		}
 	}
 
-	return &NetworkConfig{
-		TunGateway: "10.255.255.1",
-		TunDevice:  "10.255.255.2",
+	fallback := &NetworkConfig{TunGateway: "10.255.255.1", TunDevice: "10.255.255.2"}
+	if assigned[fallback.TunGateway] || assigned[fallback.TunDevice] {
+		return nil, fmt.Errorf("cannot select a free TUN address pair: fallback %s or %s is already assigned", fallback.TunGateway, fallback.TunDevice)
 	}
+	return fallback, nil
 }
 
 func randomPrivateOctet() (int64, error) {
