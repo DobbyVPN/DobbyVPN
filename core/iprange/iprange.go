@@ -3,6 +3,7 @@
 package iprange
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -75,7 +76,7 @@ func New(ranges []Range) *Set {
 			s.v6 = append(s.v6, range6{value16(first), value16(last)})
 		}
 	}
-	slices.SortFunc(s.v4, func(a, b range4) int { return compare(a.first, b.first) })
+	slices.SortFunc(s.v4, func(a, b range4) int { return cmp.Compare(a.first, b.first) })
 	merged4 := s.v4[:0]
 	for _, r := range s.v4 {
 		if n := len(merged4); n > 0 && (merged4[n-1].last == ^uint32(0) || r.first <= merged4[n-1].last+1) {
@@ -199,15 +200,17 @@ func (s *Set) Hash() string {
 
 func (s *Set) computeHash() string {
 	hash := sha256.New()
-	for _, r := range s.Ranges() {
-		// The family marker keeps IPv4 and IPv6 encodings apart.
-		family := []byte{6}
-		if r.First.Is4() {
-			family = []byte{4}
-		}
-		hash.Write(family)
-		hash.Write(r.First.AsSlice())
-		hash.Write(r.Last.AsSlice())
+	// Hash each family marker and its network-order endpoints, IPv4 first.
+	writeRange := func(family byte, first, last netip.Addr) {
+		hash.Write([]byte{family})
+		hash.Write(first.AsSlice())
+		hash.Write(last.AsSlice())
+	}
+	for _, r := range s.v4 {
+		writeRange(4, addr4(r.first), addr4(r.last))
+	}
+	for _, r := range s.v6 {
+		writeRange(6, r.first.addr(), r.last.addr())
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }
@@ -237,9 +240,9 @@ func (u u128) addr() netip.Addr {
 
 func (u u128) compare(v u128) int {
 	if u.hi != v.hi {
-		return compare(u.hi, v.hi)
+		return cmp.Compare(u.hi, v.hi)
 	}
-	return compare(u.lo, v.lo)
+	return cmp.Compare(u.lo, v.lo)
 }
 
 func (u u128) next() (u128, bool) {
@@ -252,14 +255,4 @@ func (u u128) next() (u128, bool) {
 func (u u128) big() *big.Int {
 	value := new(big.Int).SetUint64(u.hi)
 	return value.Lsh(value, 64).Or(value, new(big.Int).SetUint64(u.lo))
-}
-
-func compare[T uint32 | uint64](a, b T) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
 }
