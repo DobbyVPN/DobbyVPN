@@ -144,9 +144,6 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	if !guard.Applied() {
-		app.LeakProtectionOff = "pf_anchor_missing"
-	}
 	if err = plan.AcquireMacOSIPv4Default(ctx, name); err == nil {
 		err = plan.AcquireMacOSIPv6Default(ctx, name)
 	}
