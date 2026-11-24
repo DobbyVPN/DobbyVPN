@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"sync/atomic"
 
@@ -137,7 +138,11 @@ func setPath(path string, sharedStderr bool) error {
 
 var processOrder atomic.Uint64
 var processRun = fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
-var policyContext []byte // Protected by initMu, like all production writes.
+
+// Writers publish a new map under initMu. Buffered events can keep the previous snapshot.
+var policyContext map[string]json.RawMessage
+
+const DesktopTunnelPolicyKey = "desktop_tunnel"
 
 type policyWriter struct{ writer *diagnostics.Writer }
 
@@ -151,10 +156,14 @@ func (writer policyWriter) Write(record []byte) (int, error) {
 		if !bytes.HasSuffix(record, []byte("}\n")) {
 			return nil, fmt.Errorf("structured log record is not a JSON line")
 		}
-		output := make([]byte, 0, len(record)+len(policyContext)+20)
+		context, err := json.Marshal(policyContext)
+		if err != nil {
+			return nil, err
+		}
+		output := make([]byte, 0, len(record)+len(context)+20)
 		output = append(output, record[:len(record)-2]...)
 		output = append(output, `,"policy_context":`...)
-		output = append(output, policyContext...)
+		output = append(output, context...)
 		output = append(output, '}', '\n')
 		return output, nil
 	})
@@ -164,17 +173,24 @@ func (writer policyWriter) Write(record []byte) (int, error) {
 	return len(record), nil
 }
 
-// SetPolicy records full routing context once per accepted configuration and
-// attaches it again to the first event of every new retained generation.
-func SetPolicy(digest string, policy any) error {
-	data, err := json.Marshal(map[string]any{"digest": digest, "policy": policy})
+// SetPolicy replaces the accepted policy. A caller retaining a network can carry
+// its resolved detail into the new context. Other attempt details expire.
+func SetPolicy(digest string, policy any, keepDetails ...string) error {
+	encoded, err := json.Marshal(policy)
 	if err != nil {
 		return err
 	}
+	encodedDigest, _ := json.Marshal(digest)
+	fields := map[string]json.RawMessage{"digest": encodedDigest, "policy": encoded}
 	initMu.Lock()
-	policyContext = data
-	initMu.Unlock()
-	Info("ROUTING_POLICY", "configuration routing policy accepted", map[string]any{"configuration_digest": digest, "policy_context": json.RawMessage(data)})
+	defer initMu.Unlock()
+	for _, key := range keepDetails {
+		if detail, ok := policyContext[key]; ok && fields[key] == nil {
+			fields[key] = detail
+		}
+	}
+	policyContext = fields
+	writeEventLocked(time.Now(), slog.LevelInfo, "log.message", "ROUTING_POLICY", "configuration routing policy accepted", map[string]any{"configuration_digest": digest, "policy_context": fields})
 	return nil
 }
 
@@ -187,27 +203,15 @@ func SetPolicyDetail(key string, value any) error {
 		return err
 	}
 	initMu.Lock()
-	retained := make(map[string]json.RawMessage)
-	if len(policyContext) != 0 {
-		if decodeErr := json.Unmarshal(policyContext, &retained); decodeErr != nil {
-			initMu.Unlock()
-			return decodeErr
-		}
-	}
-	if bytes.Equal(retained[key], detail) {
-		initMu.Unlock()
+	defer initMu.Unlock()
+	if bytes.Equal(policyContext[key], detail) {
 		return nil
 	}
+	retained := make(map[string]json.RawMessage, len(policyContext)+1)
+	maps.Copy(retained, policyContext)
 	retained[key] = detail
-	data, err := json.Marshal(retained)
-	if err == nil {
-		policyContext = data
-	}
-	initMu.Unlock()
-	if err != nil {
-		return err
-	}
-	Info("ROUTING_POLICY", "resolved routing policy updated", map[string]any{"policy_context": json.RawMessage(data)})
+	policyContext = retained
+	writeEventLocked(time.Now(), slog.LevelInfo, "log.message", "ROUTING_POLICY", "resolved routing policy updated", map[string]any{"policy_context": retained})
 	return nil
 }
 
@@ -237,6 +241,10 @@ func writeEventAt(occurredAt time.Time, level slog.Level, event, category, messa
 	}
 	initMu.Lock()
 	defer initMu.Unlock()
+	writeEventLocked(occurredAt, level, event, category, message, arguments)
+}
+
+func writeEventLocked(occurredAt time.Time, level slog.Level, event, category, message string, arguments map[string]any) {
 	if lg.logger == nil {
 		if level >= slog.LevelError {
 			emitAt(slog.New(newJSONLineHandler(io.Discard)), occurredAt, level, event, category, message, arguments)

@@ -37,6 +37,21 @@ func macOSReadyFields(physical routing.MacOSPhysicalNetwork, ref sessionapi.Sess
 	return fields
 }
 
+func (app *App) retainMacOSTunnelPolicy(name string) {
+	ipv4, ipv6 := platform_engine.MacOSTunnelAddresses()
+	if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, map[string]any{
+		"session_id":            app.NetworkRef.SessionID,
+		"network_generation":    app.NetworkRef.Generation,
+		"interface":             name,
+		"ipv4":                  ipv4,
+		"ipv6":                  ipv6,
+		"requested_mtu":         platform_engine.TunnelMTU,
+		"requested_dns_servers": app.RoutingConfig.DNSServers,
+	}); err != nil {
+		log.Errorf(Category, "retain macOS tunnel policy: %v", err)
+	}
+}
+
 func macOSRefreshFields(physical routing.MacOSPhysicalNetwork, ref sessionapi.SessionRef, repaired bool) map[string]any {
 	fields := macOSNetworkFields(physical, ref)
 	fields["routes_repaired"] = repaired
@@ -134,6 +149,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
+	app.retainMacOSTunnelPolicy(name)
 	guard, err := plan.AcquireMacOSKillSwitch(ctx, name, physical.DNSServers)
 	if guard != nil {
 		killSwitch.Store(guard)

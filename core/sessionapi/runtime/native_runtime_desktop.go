@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	goruntime "runtime"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -35,27 +36,26 @@ type nativeRuntime struct {
 }
 
 func newNativeRuntime(dnsCache *dnscache.Cache) *nativeRuntime {
-	cfg := common.GetNetworkConfig()
-
-	c := &nativeRuntime{
-		app: &internal.App{
-			DNSCache: dnsCache,
-			RoutingConfig: &internal.RoutingConfig{
-				TunDeviceName:        ownedTunName,
-				TunDeviceIP:          cfg.TunDevice,
-				TunDeviceMTU:         platform_engine.TunnelMTU,
-				TunGatewayCIDR:       cfg.TunGateway + "/32",
-				RoutingTableID:       ownedRoutingTableID,
-				RoutingTablePriority: ownedRoutingPriority,
-				DNSServers:           common.VPNDNSServers(),
-			},
-		},
+	routing := &internal.RoutingConfig{
+		TunDeviceMTU:   platform_engine.TunnelMTU,
+		RoutingTableID: ownedRoutingTableID,
+		DNSServers:     common.VPNDNSServers(),
+	}
+	// The macOS adapter records its assigned utun after both address ioctls succeed.
+	if goruntime.GOOS != "darwin" {
+		cfg := common.GetNetworkConfig()
+		routing.TunDeviceName = ownedTunName
+		routing.TunDeviceIP = cfg.TunDevice
+		routing.TunGatewayCIDR = cfg.TunGateway + "/32"
+		routing.RoutingTablePriority = ownedRoutingPriority
+		if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, routing); err != nil {
+			log.Errorf(nativeLogCategory, "retain desktop tunnel policy: %v", err)
+		}
+	}
+	return &nativeRuntime{
+		app:   &internal.App{DNSCache: dnsCache, RoutingConfig: routing},
 		state: stateIdle,
 	}
-	if err := log.SetPolicyDetail("desktop_tunnel", c.app.RoutingConfig); err != nil {
-		log.Errorf(nativeLogCategory, "retain desktop tunnel policy: %v", err)
-	}
-	return c
 }
 
 func (c *nativeRuntime) setNetworkRef(ref sessionapi.SessionRef) { c.app.NetworkRef = ref }

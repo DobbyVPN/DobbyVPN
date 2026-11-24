@@ -1321,7 +1321,7 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 			s.activeInventory = s.pending.inventory
 			s.pending = nil
 			s.recoveryCount = 0
-			s.activeInventory.retainPolicy()
+			s.activeInventory.retainPolicy(log.DesktopTunnelPolicyKey)
 		}
 		ctx, next := m.beginAttemptLocked(s, target)
 		go m.runStart(ctx, s, next, target)
@@ -1385,9 +1385,9 @@ func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptCon
 	return ctx, s.generation
 }
 
-func (config profileInventory) retainPolicy() {
+func (config profileInventory) retainPolicy(keepDetails ...string) {
 	excluded := map[string]any{"ranges": config.profiles[0].ExcludeSet.Len(), "hosts": len(config.profiles[0].ExcludeHosts), "sha256": config.profiles[0].ExcludeSet.Hash()}
-	if err := log.SetPolicy(config.digest, map[string]any{"exclude_ips": excluded, "profiles": summaries(config.profiles)}); err != nil {
+	if err := log.SetPolicy(config.digest, map[string]any{"exclude_ips": excluded, "profiles": summaries(config.profiles)}, keepDetails...); err != nil {
 		log.Error("CONFIGURATION", "retain routing policy diagnostics failed", map[string]any{"cause": err.Error(), "configuration_digest": config.digest})
 	}
 }
