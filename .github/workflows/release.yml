@@ -156,7 +156,7 @@ jobs:
       deployments: read
       pages: write
       id-token: write
-    uses: DobbyVPN/fdroid-repo/.github/workflows/publish.yml@1954cf1eea1d2bc6c58f3ff8d3b808da174762a9
+    uses: DobbyVPN/fdroid-repo/.github/workflows/publish.yml@8a4a5afd02456dcb1b96f1701731dc59514fd72a
     secrets:
       FDROID_REPO_KEYSTORE: ${{ secrets.FDROID_REPO_KEYSTORE }}
       FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
