@@ -1190,9 +1190,13 @@ def _wait_for_macos_control_socket(
         if clock() - started >= timeout_seconds:
             break
         sleep(poll_seconds)
+    try:
+        launchd = service_state()
+    except Exception as error:  # keep the socket diagnostic if launchd cannot be read
+        launchd = f"unavailable ({error})"
     _fail(
         f"macOS control socket {path} was not ready {timeout_seconds:g} s after package installation "
-        f"({last_error}); launchd {MACOS_SERVICE_LABEL}: {service_state()}"
+        f"({last_error}); launchd {MACOS_SERVICE_LABEL}: {launchd}"
     )
 
 
