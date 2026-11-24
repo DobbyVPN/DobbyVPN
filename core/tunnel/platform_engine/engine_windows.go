@@ -49,7 +49,6 @@ type windowsAdapterState struct {
 var adapter windowsAdapterState
 
 const (
-	windowsTunMTU             = TunnelMTU
 	windowsAdapterPrefix      = "DobbyVPN-"
 	windowsAdapterRandomBytes = 16
 )
@@ -65,8 +64,10 @@ func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) 
 	if err != nil {
 		return false, fmt.Errorf("create owned Wintun identity: %w", err)
 	}
+	// Select against the interface inventory before adding our own adapter.
+	tunCfg := common.GetNetworkConfig()
 	resetTun2SocksInterfaceBinding()
-	accepted, err := startStack(handler, func() (device.Device, error) { return tun.Open(adapterName, windowsTunMTU) })
+	accepted, err := startStack(handler, func() (device.Device, error) { return tun.Open(adapterName, TunnelMTU) })
 	if accepted {
 		adapter.ownedAdapterName = adapterName
 	}
@@ -127,8 +128,6 @@ func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) 
 	adapter.dnsKnown = true
 	log.Debugf(Category, "[Engine][Windows] getCurrentDNS elapsed=%s total=%s", time.Since(dnsReadStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
-	tunCfg := common.GetNetworkConfig()
-
 	adapter.tunnelIPv4, err = windowsTunnelIPv4Prefix(tunCfg.TunDevice)
 	if err != nil {
 		return true, err
@@ -146,8 +145,9 @@ func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) 
 		return true, err
 	}
 	adapter.dnsMutated = true // SetDNS may have changed state before returning an error.
-	servers := make([]netip.Addr, 0, len(common.VPNDNSServers()))
-	for _, address := range common.VPNDNSServers() {
+	requestedDNS := common.VPNDNSServers()
+	servers := make([]netip.Addr, 0, len(requestedDNS))
+	for _, address := range requestedDNS {
 		servers = append(servers, netip.MustParseAddr(address))
 	}
 	if err := routing.SetWindowsDNS(adapter.lastLUID, true, servers); err != nil {
@@ -206,6 +206,19 @@ type WindowsProtection interface {
 // Read once after StartOwnedEngine succeeds. The network owner retains this
 // reference; the guard serializes updates and rejects operations after Close.
 func WindowsNetworkProtection() WindowsProtection { return adapter.networkGuard }
+
+// WindowsTunnelPolicy snapshots the current owner's setup. The network owner
+// calls it after StartOwnedEngine succeeds, before it can begin Stop.
+func WindowsTunnelPolicy() map[string]any {
+	return map[string]any{
+		"interface":             adapter.lastIface,
+		"tunnel_luid":           uint64(adapter.lastLUID),
+		"ipv4_prefix":           adapter.tunnelIPv4,
+		"ipv6_prefix":           adapter.tunnelIPv6,
+		"requested_mtu":         TunnelMTU,
+		"requested_dns_servers": common.VPNDNSServers(),
+	}
+}
 
 var openWindowsNetworkGuard = func(tunnelLUID uint64) (WindowsProtection, error) {
 	guard, err := routing.OpenWindowsNetworkGuard(tunnelLUID)

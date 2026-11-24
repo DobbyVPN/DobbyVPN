@@ -66,6 +66,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
+	app.retainDesktopTunnelPolicy(platform_engine.WindowsTunnelPolicy())
 	guard := platform_engine.WindowsNetworkProtection()
 	if guard == nil {
 		err = errors.New("Windows network protection owner missing")

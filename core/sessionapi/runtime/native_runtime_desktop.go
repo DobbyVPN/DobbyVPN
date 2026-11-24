@@ -41,12 +41,9 @@ func newNativeRuntime(dnsCache *dnscache.Cache) *nativeRuntime {
 		RoutingTableID: ownedRoutingTableID,
 		DNSServers:     common.VPNDNSServers(),
 	}
-	// The macOS adapter records its assigned utun after both address ioctls succeed.
-	if goruntime.GOOS != "darwin" {
-		cfg := common.GetNetworkConfig()
+	if goruntime.GOOS == "linux" {
 		routing.TunDeviceName = ownedTunName
-		routing.TunDeviceIP = cfg.TunDevice
-		routing.TunGatewayCIDR = cfg.TunGateway + "/32"
+		routing.TunDeviceIP = common.GetNetworkConfig().TunDevice
 		routing.RoutingTablePriority = ownedRoutingPriority
 		if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, routing); err != nil {
 			log.Errorf(nativeLogCategory, "retain desktop tunnel policy: %v", err)

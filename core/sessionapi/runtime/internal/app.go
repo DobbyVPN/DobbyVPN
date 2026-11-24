@@ -59,11 +59,18 @@ func retainedNetworkReadyFields(ref sessionapi.SessionRef, name string) map[stri
 	return fields
 }
 
+func (app *App) retainDesktopTunnelPolicy(fields map[string]any) {
+	fields["session_id"] = app.NetworkRef.SessionID
+	fields["network_generation"] = app.NetworkRef.Generation
+	if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, fields); err != nil {
+		log.Errorf(Category, "retain desktop tunnel policy: %v", err)
+	}
+}
+
 type RoutingConfig struct {
 	TunDeviceName        string
 	TunDeviceIP          string
 	TunDeviceMTU         int
-	TunGatewayCIDR       string
 	RoutingTableID       int
 	RoutingTablePriority int
 	DNSServers           []string
