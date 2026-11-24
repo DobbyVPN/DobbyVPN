@@ -49,6 +49,12 @@ func (c *trackedUDPOrigin) Close() error {
 }
 
 func (p *switchingProxy) HandleTCP(conn adapter.TCPConn) {
+	p.mu.Lock()
+	target, _ := p.target.(*DobbyProxy)
+	p.mu.Unlock()
+	if target != nil {
+		conn = timeDNSTCP(target.dnsTiming, conn)
+	}
 	stackTunnel.T().HandleTCP(conn)
 }
 
@@ -69,7 +75,7 @@ func (p *switchingProxy) HandleUDP(conn adapter.UDPConn) {
 		return
 	}
 	defer target.flows.endDial()
-	origin := &trackedUDPOrigin{UDPConn: conn, owner: &target.flows, generation: target.generation, started: time.Now()}
+	origin := &trackedUDPOrigin{UDPConn: timeDNSUDP(target.dnsTiming, conn), owner: &target.flows, generation: target.generation, started: time.Now()}
 	if !target.flows.track(origin) {
 		_ = origin.Close() // Retains a failed close in the sealed owner.
 		return

@@ -74,8 +74,12 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os/exec"
 	"strings"
+	"time"
 	"unsafe"
+
+	"core/log"
 )
 
 // AcquireMacOSDNS publishes a separate, session-owned supplemental resolver.
@@ -118,4 +122,25 @@ func (p *Plan) AcquireMacOSDNS(ctx context.Context, iface string, servers []stri
 		return lease, fmt.Errorf("install owned macOS DNS: SystemConfiguration status %d", int(code))
 	}
 	return lease, nil
+}
+
+// LogMacOSResolverOrder logs, shortly after the tunnel resolver is published,
+// the resolvers the system lists and their order, so the log shows whether
+// the first lookup after connect can go to a physical resolver (#532).
+func LogMacOSResolverOrder(ctx context.Context) {
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond): // configd applies the change asynchronously
+		}
+		queryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		output, err := exec.CommandContext(queryCtx, "/usr/sbin/scutil", "--dns").Output()
+		if err != nil {
+			log.Warn(Category, "macOS resolver order unavailable", map[string]any{"cause": err.Error()})
+			return
+		}
+		log.Info(Category, "macOS resolver order after tunnel DNS", map[string]any{"resolvers": SummarizeScutilDNS(string(output))})
+	}()
 }
