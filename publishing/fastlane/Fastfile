@@ -1,47 +1,9 @@
 require "base64"
-require "shellwords"
 require "tmpdir"
 require_relative "ios_release_notes"
 
-# CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
-# Apple CFBundleVersion uses the stable VERSION-derived number shared with Android.
-FULL_VERSION    = "#{ENV['APP_MAJOR_VERSION']}.#{ENV['APP_MINOR_VERSION']}.#{ENV['APP_MAINTENANCE_VERSION']}"
-SEMANTIC_ANDROID_VERSION_CODE =
-  ENV['APP_MAJOR_VERSION'].to_i * 1_000_000 +
-  ENV['APP_MINOR_VERSION'].to_i * 1_000 +
-  ENV['APP_MAINTENANCE_VERSION'].to_i
-VERSION_CODE    = ENV.fetch('ANDROID_VERSION_CODE', SEMANTIC_ANDROID_VERSION_CODE.to_s).to_i
-if VERSION_CODE != SEMANTIC_ANDROID_VERSION_CODE
-  raise "ANDROID_VERSION_CODE must equal #{SEMANTIC_ANDROID_VERSION_CODE} for #{FULL_VERSION}"
-end
-COMMIT          = ENV["APP_SOURCE_SHA"] || ENV["GITHUB_SHA"]
-SHORT_SHA       = COMMIT && !COMMIT.empty? ? COMMIT[0, 7] : "unknown"
-REPO            = ENV["APP_SOURCE_REPOSITORY"] || ENV["GITHUB_REPOSITORY"]
-COMMIT_LINK     = "https://github.com/#{REPO}/tree/#{COMMIT}"
 platform :ios do
-  PROJECT    = File.expand_path("../../ui/apple/ios/iosApp.xcodeproj", __dir__)
-  EXPORT_DIR = File.expand_path("../../ui/apple/build/ipa", __dir__)
-  ARCHIVE    = File.expand_path("../../ui/apple/build/archive.xcarchive", __dir__)
-
-  IPA_NAME   = "DobbyVPN.ipa"
-  TEAM_ID    = ENV['APPLE_TEAM_ID']
-  BUNDLE_ID  = "vpn.dobby.app"
-  BUNDLE_ID_TUNNEL = "vpn.dobby.app.tunnel"
-
-  build_number = ENV['APPLE_BUILD_NUMBER']
-
-  desc "Bump CFBundleVersion and CFBundleShortVersionString"
-  lane :bump_build_and_version do
-    increment_build_number(
-      build_number: build_number,
-      xcodeproj: PROJECT
-    )
-
-    increment_version_number(
-      version_number: FULL_VERSION,
-      xcodeproj: PROJECT
-    )
-  end
+  BUNDLE_ID = "vpn.dobby.app"
 
   desc "Prepare signing"
   lane :prepare_signing do
@@ -78,27 +40,6 @@ platform :ios do
         install_provisioning_profile(path: path)
       end
     end
-  end
-
-  desc "Build the native SwiftUI IPA and shared Go NetworkExtension runtime"
-  lane :build_ios do
-    unless COMMIT&.match?(/\A[0-9a-f]{40}\z/)
-      raise "APP_SOURCE_SHA must be the exact lowercase 40-character source commit"
-    end
-    runtime = File.expand_path("../../ui/apple/DobbyVPNRuntime.xcframework", __dir__)
-    package_script = File.expand_path("../../core/scripts/package_ios_app.sh", __dir__)
-    output = File.join(EXPORT_DIR, IPA_NAME)
-    FileUtils.mkdir_p(EXPORT_DIR)
-    sh(
-      "VERSION_NAME=#{FULL_VERSION.shellescape} " \
-      "APP_BUILD=#{build_number.shellescape} " \
-      "SOURCE_COMMIT=#{COMMIT.shellescape} " \
-      "IOS_CERTIFICATE_NAME=#{'Apple Distribution'.shellescape} " \
-      "IOS_PROFILE_NAME=#{'DobbyVPNAppStore'.shellescape} " \
-      "IOS_TEAM_ID=#{TEAM_ID.to_s.shellescape} " \
-      "IOS_SIGNING_IDENTITY=#{'Apple Distribution'.shellescape} " \
-      "#{package_script.shellescape} ios #{output.shellescape} #{runtime.shellescape}"
-    )
   end
 
   desc "Upload the selected Release IPA to TestFlight"

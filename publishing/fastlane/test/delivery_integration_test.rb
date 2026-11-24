@@ -37,9 +37,7 @@ class DeliveryIntegrationTest < Minitest::Test
       assert_equal "${{ steps.ios_notes.outputs.ios_release_notes_b64 }}", resolve.fetch("outputs").fetch("ios_release_notes_b64")
       metadata = jobs.fetch("app_store").fetch("steps").find { |s| s["name"] == "Set selected release metadata and exact notes" }
       assert_equal "${{ needs.resolve_publish.outputs.ios_release_notes_b64 }}", metadata.fetch("env").fetch("RELEASE_NOTES_B64")
-      # Replace only the unrelated GitHub expression; the shell step itself is real.
-      script = metadata.fetch("run").sub("${{ needs.resolve_publish.outputs.android_version_code }}", "1000000")
-      run_step(script, "VERSION_NAME" => "1.0.0", "APPLE_BUILD_NUMBER" => "1000000", "SOURCE_SHA" => "a" * 40,
+      run_step(metadata.fetch("run"), "VERSION_NAME" => "1.0.0", "APPLE_BUILD_NUMBER" => "1000000",
                "RELEASE_NOTES_B64" => b64, "RUNNER_TEMP" => dir, "GITHUB_ENV" => env_file)
       notes_path = File.read(env_file).match(/^APP_STORE_RELEASE_NOTES_FILE=(.*)$/)[1]
       assert_equal notes.b, File.binread(notes_path)
