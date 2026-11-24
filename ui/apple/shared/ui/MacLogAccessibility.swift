@@ -49,7 +49,11 @@ final class MacLogRecordAccessibilityElement: NSObject, NSAccessibilityStaticTex
 final class DobbyLogTextView: NSTextView {
     var onSendLogs: () -> Void = {}
     var onUploadLogs: (() -> Void)?
-    var copyLastReference: (title: String, action: () -> Void)?
+    /// The last upload for "Copy last reference (…)"; its title is built when the menu opens,
+    /// so an upload from yesterday shows its date after midnight.
+    var lastUpload: DobbyUploadReference?
+    var onCopyLastReference: (String) -> Void = { _ in }
+    var now: () -> Date = Date.init
     var onClear: () -> Void = {}
     var onAccessibilityObservation: ((MacLogAccessibilityObservation) -> Void)?
     private var recordElements: [String: MacLogRecordAccessibilityElement] = [:]
@@ -89,10 +93,12 @@ final class DobbyLogTextView: NSTextView {
         visibleMacLogRecordFragments(in: self)
     }
 
-    private var logsMenu: NSMenu {
+    var logsMenu: NSMenu {
         let menu = NSMenu()
         if let onUploadLogs { menu.addItem(LogsMenuItem("Upload logs", handler: onUploadLogs)) }
-        if let copyLastReference { menu.addItem(LogsMenuItem(copyLastReference.title, handler: copyLastReference.action)) }
+        if let lastUpload {
+            menu.addItem(LogsMenuItem(lastUpload.menuTitle(now: now())) { [weak self] in self?.onCopyLastReference(lastUpload.reference) })
+        }
         menu.addItem(LogsMenuItem("Send logs") { [weak self] in self?.onSendLogs() })
         menu.addItem(LogsMenuItem("Clear") { [weak self] in self?.onClear() })
         return menu

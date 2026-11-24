@@ -82,6 +82,8 @@ public struct DobbyRootView: View {
 #if os(macOS)
     @Environment(\.controlActiveState) private var controlActiveState
 #endif
+    @AccessibilityFocusState private var uploadTitleFocused: Bool
+    @AccessibilityFocusState private var logsFocused: Bool
     @FocusState private var sourceFocused: Bool
     @State private var canPaste = false
     @State private var followingLogs = true
@@ -139,6 +141,13 @@ public struct DobbyRootView: View {
         .overlay { errorPopup }
         .overlay { vpnSetupExplanation }
         .overlay { uploadResultDialog }
+        .onChange(of: showingUploadResult) { shown in
+            // VoiceOver moves to the result when it appears, after the overlay is in the hierarchy.
+            if shown { DispatchQueue.main.async { uploadTitleFocused = true } }
+        }
+        .onChange(of: model.uploadResult == nil) { closed in
+            if closed { logsFocused = true }
+        }
         .preferredColorScheme(.light)
 #if os(macOS)
         .frame(minWidth: 320, minHeight: 460)
@@ -404,6 +413,7 @@ public struct DobbyRootView: View {
                                  onShowMenu: { showingLogMenu.toggle() },
                                  onMenuGestureObservation: model.recordLogMenuGesture, onClear: model.clearLogs)
                         .accessibilityIdentifier("Connection logs")
+                        .accessibilityFocused($logsFocused)
                         .frame(minHeight: pt(60), maxHeight: .infinity)
                 }
             }
@@ -414,13 +424,14 @@ public struct DobbyRootView: View {
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
                 interactive: !showingError && !showingUploadResult, onSendLogs: sendLogs,
                 onUploadLogs: model.snapshot.logsUploadAvailable ? { model.startLogsUpload() } : nil,
-                copyLastReference: model.latestUpload.map { latest in (latest.menuTitle(), { copyUploadReference(latest.reference) }) },
+                lastUpload: model.latestUpload, onCopyLastReference: copyUploadReference,
                 onClear: { followingLogs = true; model.clearLogs() },
                 onReadingPositionRestored: model.recordMacLogRestore,
                 onReadingPositionCaptured: model.recordMacLogCapture,
                 onAccessibilityObservation: model.recordMacLogAccessibility
             )
             .accessibilityIdentifier("Connection logs")
+            .accessibilityFocused($logsFocused)
 #endif
         }
         .background(Color.surface.ignoresSafeArea(edges: .bottom))
@@ -433,14 +444,14 @@ public struct DobbyRootView: View {
 #else
         let foreground = controlActiveState != .inactive
 #endif
-        return model.uploadResult != nil && foreground && !showingError && model.pendingImport == nil
+        return model.uploadResultVisible(foreground: foreground)
     }
 
     @ViewBuilder
     private var uploadResultDialog: some View {
         if showingUploadResult, let result = model.uploadResult {
             DobbyUploadResultDialog(
-                result: result, stacked: sizeCategory.isAccessibilityCategory,
+                result: result, stacked: sizeCategory.isAccessibilityCategory, titleFocus: $uploadTitleFocused,
                 copy: { copyUploadReference(result.reference) }, share: { shareUploadReference(result.shareText) },
                 close: model.closeUploadResult
             )
@@ -684,6 +695,7 @@ private struct DobbyLogActionLine: View {
 private struct DobbyUploadResultDialog: View {
     let result: DobbyUploadReference
     let stacked: Bool
+    let titleFocus: AccessibilityFocusState<Bool>.Binding
     let copy: () -> Void
     let share: () -> Void
     let close: () -> Void
@@ -696,6 +708,9 @@ private struct DobbyUploadResultDialog: View {
                     HStack(spacing: pt(10)) {
                         SockIcon(holey: false).frame(width: pt(26), height: pt(32.5))
                         Text("Logs uploaded").dobbyFont(18, .semibold).foregroundColor(.ink)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("logs.upload.title")
+                            .accessibilityFocused(titleFocus)
                     }
                     Text("Send this number to support")
                         .dobbyFont(14)
@@ -731,6 +746,7 @@ private struct DobbyUploadResultDialog: View {
                 .accessibilityIdentifier("logs.upload.dialog")
                 .accessibilityAddTraits(.isModal)
             }
+            .accessibilityIdentifier("logs.upload.dialog.scroll")
         }
     }
 
