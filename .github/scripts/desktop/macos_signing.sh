@@ -1,5 +1,5 @@
 #!/bin/bash
-# Developer ID signing and notarization for the release macOS package.
+# Developer ID signing and notarization for distributed macOS packages.
 #
 #   prepare              temporary keychain, both .p12 identities, env for later steps
 #   sign-app <app>       sign nested executables, then the bundle (hardened runtime)
@@ -162,6 +162,7 @@ sign_package() {
   check "codesign --verify --strict --deep (app)" \
     codesign --verify --strict --deep --verbose=2 "${apps[0]}"
   check "spctl -a -vv (app)" spctl -a -vv "${apps[0]}"
+  check "SHA-256 (verified package)" shasum -a 256 "$package"
 }
 
 cleanup() {

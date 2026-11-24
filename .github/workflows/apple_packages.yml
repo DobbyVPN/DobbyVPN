@@ -132,12 +132,36 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 
+      # Both distributed packages use Developer ID. Debug retains its symbols,
+      # and the local development identity provides debugger entitlement.
+      - name: Prepare macOS Developer ID signing
+        id: macos_signing
+        if: ${{ inputs.release && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha }}
+        env:
+          MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
+          MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
+        run: bash .github/scripts/desktop/macos_signing.sh prepare
+
       - name: Build universal Debug macOS installer
         run: |
           set -euo pipefail
           python3 .github/scripts/desktop/desktop_package.py build --debug \
             --platform macos --arch universal --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
             --output-dir "$RUNNER_TEMP/apple-packages"
+
+      - name: Sign, notarize and verify Debug macOS package
+        if: ${{ steps.macos_signing.outputs.enabled == 'true' }}
+        env:
+          PACKAGE: ${{ runner.temp }}/apple-packages/dobbyVPN-macos-universal-debug.pkg
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
 
       - name: Smoke-test the Debug installer on ARM
         run: |
@@ -155,21 +179,6 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 
-      # Release packages only: hardened runtime blocks debugger attachment
-      # without get-task-allow, and notarization rejects get-task-allow.
-      - name: Prepare macOS Developer ID signing
-        id: macos_signing
-        if: ${{ inputs.release && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha }}
-        env:
-          MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
-          MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
-          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
-        run: bash .github/scripts/desktop/macos_signing.sh prepare
-
       - name: Build universal Release macOS installer
         if: inputs.release
         run: |
@@ -178,7 +187,7 @@ jobs:
             --platform macos --arch universal --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
             --output-dir "$RUNNER_TEMP/apple-packages"
 
-      - name: Sign, notarize and verify macOS package
+      - name: Sign, notarize and verify Release macOS package
         if: ${{ steps.macos_signing.outputs.enabled == 'true' }}
         env:
           PACKAGE: ${{ runner.temp }}/apple-packages/dobbyVPN-macos-universal.pkg
