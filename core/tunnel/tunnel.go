@@ -508,6 +508,10 @@ func (e *Engine) attachLocked(ctx context.Context, generation uint64, address st
 	if err != nil {
 		return err
 	}
+	dnsOverTCP := UDPDNSOverTCPRequested(ctx)
+	if dnsOverTCP {
+		wrapper.vpn = truncatingDNSProxy{wrapper.vpn}
+	}
 	// Bind the UDP dispatcher to this attempt. An admitted flow keeps its
 	// target even if dispatch runs after replacement of the active attempt.
 	wrapper.udpRelay = stackTunnel.New(wrapper, statistic.DefaultManager)
@@ -515,7 +519,7 @@ func (e *Engine) attachLocked(ctx context.Context, generation uint64, address st
 	e.proxy, e.attempt = wrapper, generation
 	activeFlowDiagnostics.Store(wrapper)
 	e.router.set(wrapper)
-	log.Infof(Category, "[Engine] transport attached generation=%d interface=%s", generation, e.ifaceName)
+	log.Infof(Category, "[Engine] transport attached generation=%d interface=%s udp_dns_over_tcp=%t", generation, e.ifaceName, dnsOverTCP)
 	return nil
 }
 
