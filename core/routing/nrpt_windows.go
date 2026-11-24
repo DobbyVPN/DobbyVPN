@@ -179,12 +179,7 @@ func AcquireWindowsNRPTOwnership(timeout time.Duration) (previousCrashed bool, e
 			done <- result{err: err}
 			return
 		}
-		// ERROR_ALREADY_EXISTS comes with a valid handle: another process
-		// created the mutex first, and waiting on it decides ownership.
-		handle, err := windows.CreateMutexEx(nil, name, 0, windows.SYNCHRONIZE|windows.MUTEX_MODIFY_STATE)
-		if errors.Is(err, windows.ERROR_ALREADY_EXISTS) && handle != 0 {
-			err = nil
-		}
+		handle, err := openedMutex(windows.CreateMutexEx(nil, name, 0, windows.SYNCHRONIZE|windows.MUTEX_MODIFY_STATE))
 		if err != nil {
 			runtime.UnlockOSThread()
 			done <- result{err: fmt.Errorf("open %s: %w", nrptOwnerMutex, err)}
@@ -209,6 +204,20 @@ func AcquireWindowsNRPTOwnership(timeout time.Duration) (previousCrashed bool, e
 	r := <-done
 	nrptOwner.held = r.err == nil
 	return r.crashed, r.err
+}
+
+// openedMutex interprets CreateMutexEx. When another process created the
+// mutex first, Windows returns ERROR_ALREADY_EXISTS together with a valid
+// handle to it; that is a successful open, and waiting on it decides
+// ownership.
+func openedMutex(handle windows.Handle, err error) (windows.Handle, error) {
+	if handle != 0 && errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return handle, nil
+	}
+	if err == nil && handle == 0 {
+		return 0, errors.New("CreateMutexEx returned no handle")
+	}
+	return handle, err
 }
 
 func requireNRPTOwnership() error {

@@ -148,10 +148,10 @@ func TestWindowsNRPTRuleOnRealDNSClient(t *testing.T) {
 		waitForPolicy(t, ".", "127.0.0.1", false)
 		before := tunnelQueries.Load()
 		expectAnswer(t, nrptCIOrdinaryName, nrptCIOrdinaryAnswer, ordinaryQueries)
-		if _, err := resolve(t, "github.com"); err != nil {
+		if _, _, err := resolve(t, "github.com"); err != nil {
 			t.Fatalf("ordinary DNS after Stop: %v", err)
 		}
-		_, _ = resolve(t, nrptCITunnelName) // not answered by the runner's DNS
+		_, _, _ = resolve(t, nrptCITunnelName) // not answered by the runner's DNS
 		if tunnelQueries.Load() != before {
 			t.Fatal("after Stop the DNS Client still asked the tunnel server")
 		}
@@ -341,27 +341,34 @@ func startDNSResponder(t *testing.T, address, name, answer string) *atomic.Int64
 	return &queries
 }
 
-// resolve asks the DNS Client for an A record of name, bypassing its cache.
-func resolve(t *testing.T, name string) (string, error) {
+// resolve asks the DNS Client for an A record of name, bypassing its cache. It
+// returns the address and the time Resolve-DnsName itself took, measured
+// inside PowerShell so that starting PowerShell is not counted.
+func resolve(t *testing.T, name string) (string, time.Duration, error) {
 	t.Helper()
-	mustPowershell(t, `Clear-DnsClientCache`)
-	output, err := powershell(`$r = Resolve-DnsName -Name '` + strings.TrimSuffix(name, ".") + `' -Type A -DnsOnly -QuickTimeout |
-		Where-Object { $_.Type -eq 'A' } | Select-Object -First 1; if (-not $r) { throw 'no A record' }; $r.IPAddress`)
-	return strings.TrimSpace(string(output)), err
+	output, err := powershell(`Clear-DnsClientCache; $r = $null
+		$ms = (Measure-Command { $r = Resolve-DnsName -Name '` + strings.TrimSuffix(name, ".") + `' -Type A -DnsOnly -QuickTimeout |
+			Where-Object { $_.Type -eq 'A' } | Select-Object -First 1 }).TotalMilliseconds
+		if (-not $r) { throw 'no A record' }; "$($r.IPAddress) $([int]$ms)"`)
+	fields := strings.Fields(strings.TrimSpace(string(output)))
+	if err != nil || len(fields) != 2 {
+		return "", 0, errors.Join(err, fmt.Errorf("unexpected Resolve-DnsName output %q", output))
+	}
+	ms, convErr := strconv.Atoi(fields[1])
+	return fields[0], time.Duration(ms) * time.Millisecond, convErr
 }
 
 func expectAnswer(t *testing.T, name, want string, queries *atomic.Int64) {
 	t.Helper()
 	before := queries.Load()
 	started := time.Now()
-	answer, err := resolve(t, name)
-	elapsed := time.Since(started)
-	t.Logf("Resolve-DnsName %s: %q in %s", name, answer, elapsed)
+	answer, lookup, err := resolve(t, name)
+	t.Logf("Resolve-DnsName %s: %q lookup=%s with_powershell=%s", name, answer, lookup, time.Since(started))
 	if err != nil || answer != want || queries.Load() == before {
 		t.Fatalf("Resolve-DnsName %s: answer=%q err=%v responder_queries=%d, want %s", name, answer, err, queries.Load()-before, want)
 	}
-	if elapsed > nrptCIResolveBound {
-		t.Fatalf("Resolve-DnsName %s took %s, more than %s", name, elapsed, nrptCIResolveBound)
+	if lookup > nrptCIResolveBound {
+		t.Fatalf("Resolve-DnsName %s took %s, more than %s", name, lookup, nrptCIResolveBound)
 	}
 }
 
