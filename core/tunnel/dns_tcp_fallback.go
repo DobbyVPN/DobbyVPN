@@ -69,7 +69,8 @@ func truncatedDNSResponse(query []byte) (response []byte, ok bool) {
 		return nil, false
 	}
 	builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{
-		ID: header.ID, Response: true, Truncated: true, RecursionDesired: header.RecursionDesired,
+		ID: header.ID, Response: true, Truncated: true,
+		RecursionDesired: header.RecursionDesired, CheckingDisabled: header.CheckingDisabled,
 	})
 	if builder.StartQuestions() != nil {
 		return nil, false
@@ -99,11 +100,18 @@ type dnsFallbackPacketConn struct {
 
 	mu       sync.Mutex
 	real     net.PacketConn
+	dialing  chan struct{} // closed when an in-flight dial ends
 	deadline time.Time
+	// deadlineChanged is closed and replaced on every read deadline change,
+	// so a pending read recomputes its timer.
+	deadlineChanged chan struct{}
 }
 
 func newDNSFallbackPacketConn(dial func() (net.PacketConn, error)) *dnsFallbackPacketConn {
-	return &dnsFallbackPacketConn{dial: dial, packets: make(chan dnsFallbackPacket, 16), done: make(chan struct{})}
+	return &dnsFallbackPacketConn{
+		dial: dial, packets: make(chan dnsFallbackPacket, 16), done: make(chan struct{}),
+		deadlineChanged: make(chan struct{}),
+	}
 }
 
 func (c *dnsFallbackPacketConn) deliver(packet dnsFallbackPacket) {
@@ -114,33 +122,72 @@ func (c *dnsFallbackPacketConn) deliver(packet dnsFallbackPacket) {
 	}
 }
 
+// realConn opens the VPN UDP path once. The dial runs without the lock, so
+// Close and reads are not held up by it; a connection that arrives after
+// Close is closed instead of kept.
 func (c *dnsFallbackPacketConn) realConn() (net.PacketConn, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.real != nil {
-		return c.real, nil
-	}
-	select {
-	case <-c.done:
-		return nil, net.ErrClosed
-	default:
-	}
-	conn, err := c.dial()
-	if err != nil {
-		return nil, err
-	}
-	c.real = conn
-	go func() {
-		buf := make([]byte, 64*1024)
-		for {
-			n, from, err := conn.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			c.deliver(dnsFallbackPacket{payload: append([]byte(nil), buf[:n]...), from: from})
+	for {
+		c.mu.Lock()
+		if c.real != nil {
+			conn := c.real
+			c.mu.Unlock()
+			return conn, nil
 		}
-	}()
-	return conn, nil
+		select {
+		case <-c.done:
+			c.mu.Unlock()
+			return nil, net.ErrClosed
+		default:
+		}
+		if wait := c.dialing; wait != nil {
+			c.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-c.done:
+				return nil, net.ErrClosed
+			}
+		}
+		dialing := make(chan struct{})
+		c.dialing = dialing
+		c.mu.Unlock()
+
+		conn, err := c.dial()
+
+		c.mu.Lock()
+		c.dialing = nil
+		close(dialing)
+		closed := false
+		select {
+		case <-c.done:
+			closed = true
+		default:
+		}
+		if err == nil && !closed {
+			c.real = conn
+		}
+		c.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		if closed {
+			_ = conn.Close()
+			return nil, net.ErrClosed
+		}
+		go c.pump(conn)
+		return conn, nil
+	}
+}
+
+func (c *dnsFallbackPacketConn) pump(conn net.PacketConn) {
+	buf := make([]byte, 64*1024)
+	for {
+		n, from, err := conn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		c.deliver(dnsFallbackPacket{payload: append([]byte(nil), buf[:n]...), from: from})
+	}
 }
 
 func (c *dnsFallbackPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
@@ -161,22 +208,34 @@ func (c *dnsFallbackPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 }
 
 func (c *dnsFallbackPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	c.mu.Lock()
-	deadline := c.deadline
-	c.mu.Unlock()
-	var expired <-chan time.Time
-	if !deadline.IsZero() {
-		timer := time.NewTimer(time.Until(deadline))
-		defer timer.Stop()
-		expired = timer.C
+	for {
+		c.mu.Lock()
+		deadline, changed := c.deadline, c.deadlineChanged
+		c.mu.Unlock()
+		var expired <-chan time.Time
+		var timer *time.Timer
+		if !deadline.IsZero() {
+			timer = time.NewTimer(time.Until(deadline))
+			expired = timer.C
+		}
+		select {
+		case packet := <-c.packets:
+			stopTimer(timer)
+			return copy(b, packet.payload), packet.from, nil
+		case <-c.done:
+			stopTimer(timer)
+			return 0, nil, net.ErrClosed
+		case <-expired:
+			return 0, nil, os.ErrDeadlineExceeded
+		case <-changed:
+			stopTimer(timer) // the deadline moved; wait with the new one
+		}
 	}
-	select {
-	case packet := <-c.packets:
-		return copy(b, packet.payload), packet.from, nil
-	case <-c.done:
-		return 0, nil, net.ErrClosed
-	case <-expired:
-		return 0, nil, os.ErrDeadlineExceeded
+}
+
+func stopTimer(timer *time.Timer) {
+	if timer != nil {
+		timer.Stop()
 	}
 }
 
@@ -200,6 +259,8 @@ func (c *dnsFallbackPacketConn) SetDeadline(t time.Time) error { return c.SetRea
 func (c *dnsFallbackPacketConn) SetReadDeadline(t time.Time) error {
 	c.mu.Lock()
 	c.deadline = t
+	close(c.deadlineChanged)
+	c.deadlineChanged = make(chan struct{})
 	c.mu.Unlock()
 	return nil
 }
