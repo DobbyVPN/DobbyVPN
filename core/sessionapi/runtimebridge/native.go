@@ -27,9 +27,7 @@ func New(tunnel runtime.TunnelProvider) sessionapi.Runtime {
 
 func newDevice(
 	ctx context.Context,
-	_ sessionapi.SessionRef,
 	profile sessionapi.RuntimeProfile,
-	_ runtime.SocketProtector,
 	dnsCache *dnscache.Cache,
 ) (vpnprotocol.ProtocolDevice, error) {
 	switch profile.Summary.Protocol {

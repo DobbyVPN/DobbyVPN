@@ -20,8 +20,8 @@ import (
 )
 
 func (app *App) validateRunInputs() error {
-	if app.RoutingConfig == nil || app.DNSCache == nil || app.BypassPolicy == nil {
-		return errors.New("network routing, resolver and bypass inputs are required")
+	if app.RoutingConfig == nil || app.DNSCache == nil {
+		return errors.New("network routing and resolver inputs are required")
 	}
 	return nil
 }

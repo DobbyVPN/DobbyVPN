@@ -40,7 +40,6 @@ type App struct {
 	Engine          *tunnel.Engine
 	UplinkInterface string
 	DNSCache        *dnscache.Cache
-	BypassPolicy    *tunnel.BypassPolicy
 	// Guard receives the shared configuration and per-attempt resolved hosts.
 	Guard interface {
 		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error

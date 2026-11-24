@@ -34,13 +34,12 @@ type nativeRuntime struct {
 	mu sync.Mutex
 }
 
-func newNativeRuntime(dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
+func newNativeRuntime(dnsCache *dnscache.Cache) *nativeRuntime {
 	cfg := common.GetNetworkConfig()
 
 	c := &nativeRuntime{
 		app: &internal.App{
-			DNSCache:     dnsCache,
-			BypassPolicy: bypass,
+			DNSCache: dnsCache,
 			RoutingConfig: &internal.RoutingConfig{
 				TunDeviceName:        ownedTunName,
 				TunDeviceIP:          cfg.TunDevice,
