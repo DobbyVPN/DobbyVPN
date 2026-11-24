@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"core/iprange"
 	"core/log"
@@ -230,6 +231,12 @@ func ReleaseUnadoptedMacOSKillSwitch(ctx context.Context) error {
 	return releaseMacOSPF(ctx, strings.TrimSpace(string(saved)))
 }
 
+// macOSPFLoadTimeout bounds one rule load. The load does not follow the
+// caller's cancellation: Authorize runs it with a single dial attempt's
+// context, and a canceled dial must not leave the rules half-applied or mark
+// the network broken.
+const macOSPFLoadTimeout = 15 * time.Second
+
 func (k *MacOSKillSwitch) reload(ctx context.Context) error {
 	var destinations []PFDestination
 	for _, entries := range k.attempts {
@@ -238,7 +245,9 @@ func (k *MacOSKillSwitch) reload(ctx context.Context) error {
 		}
 	}
 	rules := MacOSPFRules(k.tunName, k.servers, k.excluded, destinations, k.links...)
-	if _, _, err := macOSPFCommand(ctx, rules, "-a", MacOSPFAnchor, "-f", "-"); err != nil {
+	loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), macOSPFLoadTimeout)
+	defer cancel()
+	if _, _, err := macOSPFCommand(loadCtx, rules, "-a", MacOSPFAnchor, "-f", "-"); err != nil {
 		k.broken = fmt.Errorf("load leak protection rules: %w", err)
 		log.Error(Category, "macOS kill switch rules could not be loaded; the network will be released", map[string]any{"cause": err.Error()})
 		return k.broken
