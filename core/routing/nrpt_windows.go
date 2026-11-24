@@ -179,7 +179,12 @@ func AcquireWindowsNRPTOwnership(timeout time.Duration) (previousCrashed bool, e
 			done <- result{err: err}
 			return
 		}
+		// ERROR_ALREADY_EXISTS comes with a valid handle: another process
+		// created the mutex first, and waiting on it decides ownership.
 		handle, err := windows.CreateMutexEx(nil, name, 0, windows.SYNCHRONIZE|windows.MUTEX_MODIFY_STATE)
+		if errors.Is(err, windows.ERROR_ALREADY_EXISTS) && handle != 0 {
+			err = nil
+		}
 		if err != nil {
 			runtime.UnlockOSThread()
 			done <- result{err: fmt.Errorf("open %s: %w", nrptOwnerMutex, err)}
@@ -216,7 +221,7 @@ func InstallWindowsNRPT(servers []netip.Addr) error {
 	if err := requireNRPTOwnership(); err != nil {
 		return err
 	}
-	return installOwnedNRPT(windowsNRPTStore, servers)
+	return InstallOwnedNRPT(windowsNRPTStore, servers)
 }
 
 // RemoveWindowsNRPT removes the owned rule. It reports whether one was present.
@@ -224,7 +229,7 @@ func RemoveWindowsNRPT() (bool, error) {
 	if err := requireNRPTOwnership(); err != nil {
 		return false, err
 	}
-	return removeOwnedNRPT(windowsNRPTStore)
+	return RemoveOwnedNRPT(windowsNRPTStore)
 }
 
 func countSubKeys(path string) (int, error) {

@@ -120,9 +120,11 @@ func sameNRPTValues(a, b nrptValues) bool {
 	return true
 }
 
-// installOwnedNRPT writes the owned rule, or rewrites an owned rule left by an
-// earlier session, and checks that the key holds exactly that rule.
-func installOwnedNRPT(store nrptStore, servers []netip.Addr) error {
+// InstallOwnedNRPT writes the owned rule into store, or rewrites an owned
+// rule left by an earlier session, and checks that the key holds exactly that
+// rule. Windows uses it with the registry; it is exported so the protocol can
+// be tested against a fake store on any platform.
+func InstallOwnedNRPT(store nrptStore, servers []netip.Addr) error {
 	rule, err := ownedNRPTValues(servers)
 	if err != nil {
 		return err
@@ -132,29 +134,29 @@ func installOwnedNRPT(store nrptStore, servers []netip.Addr) error {
 		return fmt.Errorf("open NRPT rule: %w", err)
 	}
 	writeErr := func() error {
-		current, err := key.Values()
-		if err != nil {
-			return fmt.Errorf("read NRPT rule: %w", err)
+		current, readErr := key.Values()
+		if readErr != nil {
+			return fmt.Errorf("read NRPT rule: %w", readErr)
 		}
 		if !ownedNRPTKey(current) {
 			return ErrForeignNRPTRule
 		}
 		for name := range current {
 			if _, keep := rule[name]; !keep {
-				if err := key.DeleteValue(name); err != nil {
-					return fmt.Errorf("clear NRPT value %s: %w", name, err)
+				if opErr := key.DeleteValue(name); opErr != nil {
+					return fmt.Errorf("clear NRPT value %s: %w", name, opErr)
 				}
 			}
 		}
 		for _, name := range nrptWriteOrder {
-			if err := key.Set(name, rule[name]); err != nil {
-				return fmt.Errorf("write NRPT value %s: %w", name, err)
+			if opErr := key.Set(name, rule[name]); opErr != nil {
+				return fmt.Errorf("write NRPT value %s: %w", name, opErr)
 			}
 		}
 		return nil
 	}()
-	if err := errors.Join(writeErr, key.Close()); err != nil {
-		return err
+	if closeErr := errors.Join(writeErr, key.Close()); closeErr != nil {
+		return closeErr
 	}
 	// A fresh handle shows what the DNS Client sees under the key name.
 	written, err := readNRPTKey(store)
@@ -179,9 +181,10 @@ func readNRPTKey(store nrptStore) (nrptValues, error) {
 	return values, errors.Join(err, key.Close())
 }
 
-// removeOwnedNRPT removes the owned rule if it is present. It reports whether
-// a key was removed. A foreign rule at the key is kept and reported.
-func removeOwnedNRPT(store nrptStore) (bool, error) {
+// RemoveOwnedNRPT removes the owned rule from store if it is present. It
+// reports whether a key was removed. A foreign rule at the key is kept and
+// reported.
+func RemoveOwnedNRPT(store nrptStore) (bool, error) {
 	key, err := store.Open(OwnedNRPTRuleKey, false)
 	if err != nil {
 		return false, fmt.Errorf("open NRPT rule: %w", err)
@@ -190,9 +193,9 @@ func removeOwnedNRPT(store nrptStore) (bool, error) {
 		return false, nil
 	}
 	clearErr := func() error {
-		current, err := key.Values()
-		if err != nil {
-			return fmt.Errorf("read NRPT rule: %w", err)
+		current, readErr := key.Values()
+		if readErr != nil {
+			return fmt.Errorf("read NRPT rule: %w", readErr)
 		}
 		if !ownedNRPTKey(current) {
 			return ErrForeignNRPTRule
@@ -200,22 +203,22 @@ func removeOwnedNRPT(store nrptStore) (bool, error) {
 		// The comment goes last, so the key stays recognizable as ours.
 		for name := range current {
 			if !slices.Contains(nrptWriteOrder, name) {
-				if err := key.DeleteValue(name); err != nil {
-					return fmt.Errorf("delete NRPT value %s: %w", name, err)
+				if opErr := key.DeleteValue(name); opErr != nil {
+					return fmt.Errorf("delete NRPT value %s: %w", name, opErr)
 				}
 			}
 		}
 		for _, name := range slices.Backward(nrptWriteOrder) {
 			if _, present := current[name]; present {
-				if err := key.DeleteValue(name); err != nil {
-					return fmt.Errorf("delete NRPT value %s: %w", name, err)
+				if opErr := key.DeleteValue(name); opErr != nil {
+					return fmt.Errorf("delete NRPT value %s: %w", name, opErr)
 				}
 			}
 		}
 		return key.DeleteIfEmpty()
 	}()
-	if err := errors.Join(clearErr, key.Close()); err != nil {
-		return false, err
+	if closeErr := errors.Join(clearErr, key.Close()); closeErr != nil {
+		return false, closeErr
 	}
 	if left, err := store.Open(OwnedNRPTRuleKey, false); err != nil {
 		return false, fmt.Errorf("verify NRPT rule removal: %w", err)
