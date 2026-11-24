@@ -58,14 +58,14 @@ func decodeActivation(raw []byte) (savedActivation, error) {
 
 // Called with session.mu held, in the same order as accepted Start/Stop
 // commands. Internal health recovery and OS teardown do not change user intent.
-func (m *Manager) saveActivationLocked(ctx context.Context, kind ConfigSourceKind, source, digest string, target StartTarget) error {
+func (m *Manager) saveActivationLocked(ctx context.Context, inventory profileInventory, target StartTarget) error {
 	store, ok := m.sourceStore.(ActivationStore)
 	if !ok {
 		return nil
 	}
 	saved := savedActivation{Version: 2}
-	if kind == ConfigSourceURL && source != "" {
-		saved = savedActivation{Version: 2, Enabled: true, Mode: target.Mode, Index: target.Index, Digest: digest, Source: source}
+	if inventory.sourceKind == ConfigSourceURL && inventory.sourceURL != "" {
+		saved = savedActivation{Version: 2, Enabled: true, Mode: target.Mode, Index: target.Index, Digest: inventory.digest, Source: inventory.sourceURL}
 	}
 	raw, err := json.Marshal(saved)
 	if err == nil {

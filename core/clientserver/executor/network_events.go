@@ -4,7 +4,6 @@ package executor
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 
@@ -32,7 +31,9 @@ type networkEvents struct {
 
 // newNetworkEvents returns the emit function for OS watchers; it never blocks.
 func newNetworkEvents() func(reason string) {
-	return (&networkEvents{debounce: networkEventDebounce, send: sendNetworkEvent}).emit
+	return (&networkEvents{debounce: networkEventDebounce, send: func(reason string) {
+		sendNetworkEvent(desktopProcessBinding(), reason)
+	}}).emit
 }
 
 func (e *networkEvents) emit(reason string) {
@@ -54,19 +55,10 @@ func (e *networkEvents) flush() {
 	e.send(reason)
 }
 
-func sendNetworkEvent(reason string) {
+func sendNetworkEvent(binding *mobilebinding.Binding, reason string) {
 	log.Infof(desktopLogCategory, "system event: %s", reason)
-	// An empty session ID means the process-owned session.
-	response := callNetworkEvent(desktopProcessBinding(), reason)
-	var envelope struct {
-		OK bool `json:"ok"`
+	// An empty session ID selects the process-owned session.
+	if err := binding.NetworkEvent(context.Background(), "", reason); err != nil {
+		log.Errorf(desktopLogCategory, "system event %s was not accepted: %v", reason, err)
 	}
-	if err := json.Unmarshal([]byte(response), &envelope); err != nil || !envelope.OK {
-		log.Errorf(desktopLogCategory, "system event %s was not accepted: %s", reason, response)
-	}
-}
-
-func callNetworkEvent(binding *mobilebinding.Binding, reason string) string {
-	params, _ := json.Marshal(map[string]string{"reason": reason}) // a string map always encodes
-	return binding.CallJSON(context.Background(), "NetworkEvent", params)
 }

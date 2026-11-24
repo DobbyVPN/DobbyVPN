@@ -129,7 +129,7 @@ func (m *Manager) refreshAfterOfflineRestore(ctx context.Context, source string,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.restoreEpoch != epoch || s.generation != generation || s.stopRequested || s.closing ||
-		!s.vpnActive || s.state != StateConnected || s.sourceURL != source || s.offlineAcceptedAt == "" {
+		!s.vpnActive || s.state != StateConnected || s.loaded.sourceURL != source || s.offlineAcceptedAt == "" {
 		return
 	}
 	if err == nil && (loaded.SourceURL != source || loaded.Kind != ConfigSourceURL) {

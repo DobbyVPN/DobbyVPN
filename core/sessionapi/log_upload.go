@@ -30,7 +30,7 @@ func (m *Manager) PrepareLogUpload(_ context.Context, sessionID, digest string) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if digest != s.digest {
+	if digest != s.loaded.digest {
 		return LogUploadPreparation{}, failure(FailureConflict, "configuration changed; refresh its snapshot")
 	}
 	if s.logsEndpoint == "" {
