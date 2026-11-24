@@ -185,37 +185,41 @@ public struct DobbyFailure: Decodable, Sendable {
 }
 
 public enum DobbyResponse {
+    private struct Envelope<Value: Decodable>: Decodable {
+        let result: Value?
+
+        private enum Keys: String, CodingKey { case ok, result, error }
+        private enum FailureKeys: String, CodingKey { case code, message }
+
+        init(from decoder: Decoder) throws {
+            guard let fields = try? decoder.container(keyedBy: Keys.self) else {
+                throw DobbyClientError.invalidResponse
+            }
+            guard (try? fields.decode(Bool.self, forKey: .ok)) == true else {
+                let error = try? fields.nestedContainer(keyedBy: FailureKeys.self, forKey: .error)
+                throw DobbyClientError.command(
+                    code: (try? error?.decode(String.self, forKey: .code)) ?? "INTERNAL",
+                    message: (try? error?.decode(String.self, forKey: .message)) ?? "Go backend command failed"
+                )
+            }
+            result = try fields.decodeIfPresent(Value.self, forKey: .result)
+        }
+    }
+
     public static func result<T: Decodable>(from text: String, as type: T.Type) throws -> T {
-        guard let data = text.data(using: .utf8),
-              let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let value = try JSONDecoder().decode(Envelope<T>.self, from: Data(text.utf8)).result else {
             throw DobbyClientError.invalidResponse
         }
-        guard envelope["ok"] as? Bool == true else {
-            let error = envelope["error"] as? [String: Any]
-            throw DobbyClientError.command(
-                code: error?["code"] as? String ?? "INTERNAL",
-                message: error?["message"] as? String ?? "Go backend command failed"
-            )
-        }
-        guard let value = envelope["result"], JSONSerialization.isValidJSONObject(value),
-              let encoded = try? JSONSerialization.data(withJSONObject: value) else {
-            throw DobbyClientError.invalidResponse
-        }
-        return try JSONDecoder().decode(type, from: encoded)
+        return value
+    }
+
+    // A command acknowledgement accepts any result, including an absent one.
+    private struct IgnoredResult: Decodable {
+        init(from decoder: Decoder) {}
     }
 
     public static func check(_ text: String) throws {
-        guard let data = text.data(using: .utf8),
-              let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw DobbyClientError.invalidResponse
-        }
-        guard envelope["ok"] as? Bool == true else {
-            let error = envelope["error"] as? [String: Any]
-            throw DobbyClientError.command(
-                code: error?["code"] as? String ?? "INTERNAL",
-                message: error?["message"] as? String ?? "Go backend command failed"
-            )
-        }
+        _ = try JSONDecoder().decode(Envelope<IgnoredResult>.self, from: Data(text.utf8))
     }
 }
 

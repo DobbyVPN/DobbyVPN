@@ -5,10 +5,8 @@ using Windows.ApplicationModel.DataTransfer;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.IO.Pipes;
 using Microsoft.UI.Text;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Automation;
@@ -26,7 +24,6 @@ namespace DobbyVPN.Windows;
 
 public sealed partial class MainWindow : Window
 {
-    private const string PipeName = "DobbyVPN.Control";
     private readonly PeriodicTimer _pollTimer = new(TimeSpan.FromMilliseconds(750));
     private readonly WindowLifetime _lifetime = new();
     private readonly long _loadClockOrigin = Stopwatch.GetTimestamp();
@@ -95,7 +92,7 @@ public sealed partial class MainWindow : Window
     private readonly string _version;
     private readonly string _commit;
     private readonly NativeDiagnostics _diagnostics = NativeDiagnostics.Current;
-    private readonly DesktopControlDiagnostics _controlDiagnostics = new();
+    private readonly DesktopControlClient _control = new(NativeDiagnostics.Current);
     private bool _exportingLogs;
     private CancellationTokenSource? _logUploadCancellation;
     private string _lastLogReference = "";
@@ -416,14 +413,14 @@ public sealed partial class MainWindow : Window
         Snapshot snapshot;
         try
         {
-            snapshot = await CallAsync<Snapshot>("Snapshot", new { session_id = sessionId }, cancellationToken);
+            snapshot = await _control.CallAsync<Snapshot>("Snapshot", new { session_id = sessionId }, cancellationToken);
         }
         catch (BackendCommandException error) when (error.Code == "NOT_FOUND" && !string.IsNullOrEmpty(sessionId))
         {
             // The Go backend owns session state. A replacement backend has a
             // new session ID, so reattach through its owner-independent
             // Snapshot entry point and let it restore the saved configuration URL.
-            snapshot = await CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
+            snapshot = await _control.CallAsync<Snapshot>("Snapshot", new { session_id = "" }, cancellationToken);
         }
         // A service that predates the field has no value, which is also a mismatch.
         return snapshot;
@@ -894,7 +891,7 @@ public sealed partial class MainWindow : Window
                 if (current.PrimaryAction != "STOP" || current.Sequence < _acceptedSequence)
                     stopTarget = await ReadSnapshotAsync(cancellationToken);
                 if (_lifetime.IsClosing || !CanStopActive(stopTarget)) return;
-                await CallAsync<JsonElement>("Stop", new { session_id = stopTarget.SessionId, generation = stopTarget.Generation }, cancellationToken);
+                await _control.CallAsync<JsonElement>("Stop", new { session_id = stopTarget.SessionId, generation = stopTarget.Generation }, cancellationToken);
             }
             catch (Exception error) when (!_lifetime.IsClosing)
             {
@@ -918,7 +915,7 @@ public sealed partial class MainWindow : Window
         Render();
         try
         {
-            await CallAsync<JsonElement>("Start", new {
+            await _control.CallAsync<JsonElement>("Start", new {
                 session_id = current.SessionId, expected_sequence = current.Sequence,
                 mode = index is null ? "AUTO_SELECT" : "PROFILE_INDEX", index = index ?? 0,
                 digest = current.Digest, replace_current = true
@@ -949,7 +946,7 @@ public sealed partial class MainWindow : Window
             // locally fenced older snapshot must not turn Retry into Configure or a replacement.
             var current = await ReadSnapshotAsync(cancellationToken);
             if (_lifetime.IsClosing || !CanRetryActive(current)) return;
-            await CallAsync<JsonElement>("Start", new
+            await _control.CallAsync<JsonElement>("Start", new
             {
                 session_id = current.SessionId,
                 expected_sequence = current.Sequence,
@@ -1094,7 +1091,7 @@ public sealed partial class MainWindow : Window
             try
             {
                 _ = await ReadSnapshotAsync(cancellationToken);
-                var parsed = await CallAsync<ImportLinkResult>("ParseImportLink", new { link = value }, cancellationToken);
+                var parsed = await _control.CallAsync<ImportLinkResult>("ParseImportLink", new { link = value }, cancellationToken);
                 if (_lifetime.IsClosing || revision != _importRevision || parsed.Kind != "import") return;
                 _pendingImport = parsed.Source;
                 ShowImportDialog();
@@ -1244,7 +1241,7 @@ public sealed partial class MainWindow : Window
                     session_id = current.SessionId,
                     expected_sequence = current.Sequence
                 });
-            var configured = await CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source }, cancellationToken);
+            var configured = await _control.CallAsync<JsonElement>("Configure", new { session_id = current.SessionId, expected_sequence = current.Sequence, source }, cancellationToken);
             if (_lifetime.IsClosing) return;
             if (_subscriptionLoad.MarkAccepted(request))
             {
@@ -1330,55 +1327,6 @@ public sealed partial class MainWindow : Window
         }
         if (!_lifetime.IsClosing) await LoadNextAsync(cancellationToken);
     }
-
-    private async Task<T> CallAsync<T>(string method, object parameters, CancellationToken cancellationToken)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMinutes(2));
-        var operation = _controlDiagnostics.Begin(method, parameters);
-        var started = Stopwatch.GetTimestamp();
-        object fields(string? error = null) => new
-        {
-            request_id = operation.Id, method, identity = operation.Identity,
-            elapsed_ms = Stopwatch.GetElapsedTime(started).TotalMilliseconds, error,
-        };
-        if (operation.Sampled) _diagnostics.RecordInfo("control.command.begin", "Started desktop control command", fields());
-        try
-        {
-            await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-start", "Started connecting the Configure named pipe", new { method, parameters });
-            await pipe.ConnectAsync(3000, timeout.Token);
-            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-connect-end", "Connected the Configure named pipe", new { method, parameters });
-            await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, leaveOpen: true) { AutoFlush = true };
-            using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
-            var request = operation.Encode();
-            await writer.WriteLineAsync(request.AsMemory(), timeout.Token);
-            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-request-written", "Wrote the Configure request to the Go backend", new { method, parameters });
-            var line = await reader.ReadLineAsync(timeout.Token);
-            if (method == "Configure") _diagnostics.RecordInfo("subscription.configure-pipe-response-read", "Read the Configure response from the Go backend", new { method, parameters, succeeded = line is not null });
-            if (line is null) throw new IOException("Go backend closed the control connection without a response.");
-            using var response = JsonDocument.Parse(line);
-            if (!response.RootElement.GetProperty("ok").GetBoolean())
-            {
-                var failure = response.RootElement.GetProperty("error");
-                var code = failure.GetProperty("code").GetString() ?? "INTERNAL";
-                var message = failure.GetProperty("message").GetString() ?? "Go backend command failed";
-                throw new BackendCommandException(code, message);
-            }
-            var payload = response.RootElement.GetProperty("result");
-            var result = typeof(T) == typeof(Snapshot) ? (T)(object)Snapshot.Decode(payload) : payload.Deserialize<T>(JsonOptions);
-            if (result is null) throw new InvalidDataException("Go backend returned an empty result.");
-            if (operation.Sampled) _diagnostics.RecordInfo("control.command.complete", "Completed desktop control command", fields());
-            return result;
-        }
-        catch (Exception error)
-        {
-            _diagnostics.RecordError("control.command.failure", "Desktop control command failed", fields(error.ToString()));
-            throw;
-        }
-    }
-
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private void SetSourceText(string value)
     {
@@ -2266,7 +2214,7 @@ public sealed partial class MainWindow : Window
         var confirmed = false;
         try
         {
-            var prepared = await CallAsync<LogUploadPreparation>("PrepareLogUpload", new { session_id = snapshot.SessionId, digest = snapshot.Digest }, upload.Token);
+            var prepared = await _control.CallAsync<LogUploadPreparation>("PrepareLogUpload", new { session_id = snapshot.SessionId, digest = snapshot.Digest }, upload.Token);
             var directory = LogUploadDirectory;
             Directory.CreateDirectory(directory);
             using (var createGate = new Mutex(false, @"Local\DobbyVPN.LogUploadCleanup"))
@@ -2378,16 +2326,5 @@ public sealed partial class MainWindow : Window
             _exportingLogs = false;
             if (!_lifetime.IsClosing) SendLogsItem.IsEnabled = true;
         }
-    }
-
-    private sealed class BackendCommandException : InvalidOperationException
-    {
-        public BackendCommandException(string code, string message)
-            : base($"{message} ({code})")
-        {
-            Code = code;
-        }
-
-        public string Code { get; }
     }
 }

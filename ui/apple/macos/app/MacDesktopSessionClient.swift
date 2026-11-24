@@ -100,15 +100,17 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
                   let response = String(data: data, encoding: .utf8) else {
                 return #"{"ok":false,"error":{"code":"PLATFORM_FAILED","message":"Platform operation failed"}}"#
             }
-            self.recordConfigureResponse(method, parameters: parameters, response: response, responseReceived: false)
+            recordConfigureResponse(method, parameters: parameters, succeeded: false)
             return response
         }
+        var succeeded = false
         do {
             guard let data = response.data(using: .utf8),
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let ok = object["ok"] as? Bool else {
                 throw NSError(domain: "DobbyDesktopControl", code: 1, userInfo: [NSLocalizedDescriptionKey: "Desktop control response envelope is invalid"])
             }
+            succeeded = ok
             if !ok {
                 record("control.command.failure", "ERROR", "Desktop control command failed", error: response)
             } else if sampled {
@@ -117,22 +119,14 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
         } catch {
             record("control.command.failure", "ERROR", "Desktop control response inspection failed", error: String(reflecting: error))
         }
-        recordConfigureResponse(method, parameters: parameters, response: response, responseReceived: true)
+        recordConfigureResponse(method, parameters: parameters, succeeded: succeeded)
         return response
     }
 
     private func recordConfigureResponse(
-        _ method: String, parameters: [String: Any], response: String, responseReceived: Bool
+        _ method: String, parameters: [String: Any], succeeded: Bool
     ) {
         guard method == "Configure", let source = parameters["source"] as? String else { return }
-        let responseIsSuccessful: Bool
-        if responseReceived, let data = response.data(using: .utf8),
-           let rawEnvelope = try? JSONSerialization.jsonObject(with: data),
-           let envelope = rawEnvelope as? [String: Any] {
-            responseIsSuccessful = envelope["ok"] as? Bool == true
-        } else {
-            responseIsSuccessful = false
-        }
         do {
             try DiagnosticFiles.append(
                 "Read the Configure response from the Go backend",
@@ -142,7 +136,7 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
                 to: uiDiagnosticPath,
                 fields: [
                     "parameters": ["source": source],
-                    "succeeded": responseReceived && responseIsSuccessful,
+                    "succeeded": succeeded,
                     "response_read_monotonic_uptime": ProcessInfo.processInfo.systemUptime,
                 ], legacyDesktop: true, legacyExcludedPaths: [backendLogPath]
             )
