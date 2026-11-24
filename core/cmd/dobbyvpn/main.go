@@ -411,14 +411,18 @@ func (options stopOptions) stop(ctx context.Context, client controljson.Client) 
 		}
 		return writeJSONResult(snapshot)
 	}
-	var stopped wire.Generation
-	if err := client.Call(ctx, "Stop", struct {
-		SessionID  string `json:"session_id"`
-		Generation uint64 `json:"generation"`
-	}{snapshot.SessionID, snapshot.Generation}, &stopped); err != nil {
+	if err := callStop(ctx, client, snapshot.SessionID, snapshot.Generation); err != nil {
 		return writeJSONFailure(err)
 	}
 	return waitForDisconnect(ctx, client, snapshot.SessionID)
+}
+
+func callStop(ctx context.Context, client controljson.Client, sessionID string, generation uint64) error {
+	var stopped wire.Generation
+	return client.Call(ctx, "Stop", struct {
+		SessionID  string `json:"session_id"`
+		Generation uint64 `json:"generation"`
+	}{sessionID, generation}, &stopped)
 }
 
 func waitForDisconnect(ctx context.Context, client controljson.Client, sessionID string) int {
@@ -501,11 +505,7 @@ func cleanupSession(client controljson.Client, sessionID string, generation uint
 	if current.Generation != generation || current.CleanupComplete {
 		return cleanupFailure(&current)
 	}
-	var stopped wire.Generation
-	if err := client.Call(ctx, "Stop", struct {
-		SessionID  string `json:"session_id"`
-		Generation uint64 `json:"generation"`
-	}{sessionID, generation}, &stopped); err != nil {
+	if err := callStop(ctx, client, sessionID, generation); err != nil {
 		return fmt.Errorf("stop cleanup session: %w", err)
 	}
 	for {
