@@ -12,17 +12,18 @@ import (
 
 	"core/log"
 
+	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/fdbased"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/iobased"
 )
 
-func startPlatformEngine(cfg EngineConfig) (bool, error) {
+func startPlatformEngine(cfg EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
 	offset := 0
 	if runtime.GOOS == "ios" {
 		offset = 4
 	}
-	return startStack(cfg, func() (device.Device, error) {
+	return startStack(handler, func() (device.Device, error) {
 		if runtime.GOOS == "ios" {
 			return openOwnedFileDevice(cfg.FD, TunnelMTU, offset)
 		}

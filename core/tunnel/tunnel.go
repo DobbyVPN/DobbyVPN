@@ -424,14 +424,14 @@ func (p *DobbyProxy) Proto() proto.Proto {
 // StartOwnedEngine starts tun2socks and returns the handle which exclusively
 // owns the resulting process-global engine. A second start is rejected rather
 // than stopping or reconfiguring the current session.
-func StartOwnedEngine(cfg platform_engine.EngineConfig, dnsCache *dnscache.Cache, bypass *BypassPolicy) (*Engine, error) {
+func StartOwnedEngine(cfg platform_engine.EngineConfig) (*Engine, error) {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 
 	if activeEngine != nil {
 		return nil, ErrEngineBusy
 	}
-	handle, _, err := startOwnedEngineLocked(cfg, dnsCache, bypass)
+	handle, _, err := startOwnedEngineLocked(cfg)
 	return handle, err
 }
 
@@ -440,32 +440,17 @@ func StartOwnedEngine(cfg platform_engine.EngineConfig, dnsCache *dnscache.Cache
 // resource embedded in cfg, including an fd-backed device, and its stop path
 // releases those resources on both later startup failure and normal shutdown.
 // Before acceptance, ownership remains with the caller.
-func startOwnedEngineLocked(cfg platform_engine.EngineConfig, dnsCache *dnscache.Cache, bypass *BypassPolicy) (*Engine, bool, error) {
-	if dnsCache == nil {
-		return nil, false, errors.New("DNS cache is required for tunnel start")
-	}
-	if bypass == nil {
-		return nil, false, errors.New("bypass policy is required for tunnel start")
-	}
-
+func startOwnedEngineLocked(cfg platform_engine.EngineConfig) (*Engine, bool, error) {
 	handle := &Engine{stopPlatform: platform_engine.EngineStop, router: newSwitchingProxy()}
 	activeEngine = handle
 	// Install the stable router before the descriptor can receive packets.
 	// No transport exists until an attempt has passed its readiness check.
-	cfg.Dialer = handle.router
-	cfg.TransportHandler = handle.router
-	if cfg.ProxyAddr != "" {
-		if err := handle.attachLocked(context.Background(), 0, cfg.ProxyAddr, dnsCache, bypass); err != nil {
-			activeEngine = nil
-			return nil, false, err
-		}
-	}
-	if accepted, err := platform_engine.StartPlatformEngine(cfg); err != nil {
+	if accepted, err := platform_engine.StartPlatformEngine(cfg, handle.router); err != nil {
 		if accepted {
 			return handle, true, err
 		}
 		activeEngine = nil
-		return nil, false, errors.Join(err, handle.detachLocked(context.Background()))
+		return nil, false, err
 	}
 	handle.ifaceName = platform_engine.InterfaceName()
 	log.Infof(Category, "[Engine] network owner active interface=%s", handle.ifaceName)
@@ -483,10 +468,6 @@ func (e *Engine) Attach(ctx context.Context, generation uint64, address string, 
 	if e.proxy != nil {
 		return errors.New("previous attempt still owns flows")
 	}
-	return e.attachLocked(ctx, generation, address, cache, bypass)
-}
-
-func (e *Engine) attachLocked(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *BypassPolicy) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

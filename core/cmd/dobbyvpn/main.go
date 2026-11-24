@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -566,18 +568,18 @@ func failureError(failure *wire.Failure) error {
 var configureStdin io.Reader = os.Stdin
 
 const (
-	stdinSource  = "-"
-	startCommand = "start"
+	sourceSizeLimit = 1 << 20
+	stdinSource     = "-"
+	startCommand    = "start"
 )
 
 func readSource(source string) (data []byte, resultErr error) {
-	const limit = 1 << 20
 	if source == stdinSource {
-		return readStdinSource(configureStdin, limit)
+		return readStdinSource(configureStdin)
 	}
 	cleanPath := filepath.Clean(source)
 	if isInlineTOMLSource(source) {
-		return readInlineTOMLSource(source, cleanPath, limit)
+		return readInlineTOMLSource(source, cleanPath)
 	}
 
 	sourceURL, isURL, err := parseSourceURL(source)
@@ -587,19 +589,19 @@ func readSource(source string) (data []byte, resultErr error) {
 	if isURL {
 		return sourceURL, nil
 	}
-	return readSourceFile(cleanPath, limit)
+	return readSourceFile(cleanPath)
 }
 
 // readStdinSource reads a subscription from stdin so that it never appears in
 // the process list or shell history. The text is an HTTPS URL (surrounding
 // whitespace is ignored) or an inline TOML profile; a file path is not accepted.
 // Errors never echo the input, which usually carries a secret token.
-func readStdinSource(input io.Reader, limit int) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(input, int64(limit+1)))
+func readStdinSource(input io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(input, sourceSizeLimit+1))
 	if err != nil {
 		return nil, errors.New("cannot read the configuration from stdin")
 	}
-	if len(data) > limit {
+	if len(data) > sourceSizeLimit {
 		return nil, errors.New("configuration exceeds the 1 MiB size limit")
 	}
 	text := string(data)
@@ -616,46 +618,63 @@ func readStdinSource(input io.Reader, limit int) ([]byte, error) {
 	return []byte(trimmed), nil
 }
 
-func readInlineTOMLSource(source, path string, limit int) ([]byte, error) {
+func readInlineTOMLSource(source, path string) ([]byte, error) {
 	_, statErr := os.Stat(path)
 	if statErr == nil {
-		return readSourceFile(path, limit)
+		return readSourceFile(path)
 	}
 	if !errors.Is(statErr, os.ErrNotExist) &&
 		!errors.Is(statErr, syscall.ENAMETOOLONG) &&
 		!strings.ContainsAny(source, "\r\n") {
 		return nil, fmt.Errorf("cannot read configuration file: %w", statErr)
 	}
-	if len(source) > limit {
+	if len(source) > sourceSizeLimit {
 		return nil, errors.New("configuration exceeds the 1 MiB size limit")
 	}
 	return []byte(source), nil
 }
 
-func readSourceFile(path string, limit int) (data []byte, resultErr error) {
+func readSourceFile(path string) (data []byte, resultErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
-	data, err = io.ReadAll(io.LimitReader(file, int64(limit+1)))
+	data, err = io.ReadAll(io.LimitReader(file, sourceSizeLimit+1))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
-	if len(data) > limit {
+	if len(data) > sourceSizeLimit {
 		return nil, errors.New("configuration exceeds the 1 MiB size limit")
 	}
 
 	return data, nil
 }
 
+// Recognize an assignment only at the start of the first content line. The
+// backend decodes the document and decides which keys and values are valid.
+const tomlKeyPart = `(?:[A-Za-z0-9_-]+|'[^']*'|"(?:[^"\\]|\\.)*")`
+
+var tomlAssignment = regexp.MustCompile(`^` + tomlKeyPart + `(?:[ \t]*\.[ \t]*` + tomlKeyPart + `)*[ \t]*=`)
+
 func isInlineTOMLSource(source string) bool {
-	for _, line := range strings.Split(source, "\n") {
-		candidate := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	var sawAssignment bool
+	for line := range strings.SplitSeq(source, "\n") {
+		candidate := strings.TrimSpace(line)
 		if candidate == "" || strings.HasPrefix(candidate, "#") {
 			continue
 		}
-		return strings.HasPrefix(candidate, "[")
+		if strings.HasPrefix(candidate, "[") {
+			return true
+		}
+		if !sawAssignment {
+			if !tomlAssignment.MatchString(candidate) {
+				return false
+			}
+			// A single assignment can also be a filename. Look for the
+			// following table before treating the source as an inline profile.
+			sawAssignment = true
+		}
 	}
 	return false
 }
@@ -686,6 +705,7 @@ func isWindowsPath(source string) bool {
 }
 
 func externalIP() int {
+	const maxResponseBytes = 64
 	client := &http.Client{Timeout: 10 * time.Second}
 	var failures []error
 	for _, endpoint := range []string{"https://api.ipify.org", "https://ifconfig.me/ip"} {
@@ -699,7 +719,7 @@ func externalIP() int {
 			failures = append(failures, fmt.Errorf("external IP request failed: %w", err))
 			continue
 		}
-		body, readErr := io.ReadAll(response.Body)
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 		closeErr := response.Body.Close()
 		if closeErr != nil {
 			failures = append(failures, fmt.Errorf("close external IP response: %w", closeErr))
@@ -713,12 +733,13 @@ func externalIP() int {
 			failures = append(failures, fmt.Errorf("external IP response status=%d body=%q", response.StatusCode, body))
 			continue
 		}
-		value := strings.TrimSpace(string(body))
-		if value != "" {
-			fmt.Println(value)
+		// IPv4 and IPv6 text plus the usual trailing newline fit within 64 bytes.
+		address, parseErr := netip.ParseAddr(strings.TrimSpace(string(body)))
+		if len(body) <= maxResponseBytes && parseErr == nil && address.Zone() == "" {
+			fmt.Println(address)
 			return exitOK
 		}
-		failures = append(failures, errors.New("external IP response body is empty"))
+		failures = append(failures, errors.New("external IP response is not a single IP address"))
 	}
 	reportCLIError("external IP lookup failed", errors.Join(failures...))
 	return exitRuntime

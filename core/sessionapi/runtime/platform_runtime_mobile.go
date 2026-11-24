@@ -6,11 +6,10 @@ import (
 	"io"
 
 	"core/dnscache"
-	"core/tunnel"
 )
 
 const mobileRuntime = true
 
-func newPlatformCore(tun io.ReadWriteCloser, dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) sessionCore {
-	return newNativeRuntime(tun, dnsCache, bypass)
+func newPlatformCore(tun io.ReadWriteCloser, _ *dnscache.Cache) sessionCore {
+	return newNativeRuntime(tun)
 }

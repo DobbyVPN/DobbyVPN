@@ -22,10 +22,8 @@ import (
 // sessionapi/runtime. The session manager owns the externally meaningful
 // state and generation; this type only tracks local resource cleanup.
 type nativeRuntime struct {
-	tun          io.ReadWriteCloser
-	dnsCache     *dnscache.Cache
-	bypassPolicy *tunnel.BypassPolicy
-	engine       *tunnel.Engine
+	tun    io.ReadWriteCloser
+	engine *tunnel.Engine
 	// cleanupErr retains the failed rollback for a repeated Disconnect call.
 	cleanupErr        error
 	state             lifecycleState
@@ -42,11 +40,9 @@ type nativeRuntime struct {
 	connectCancel chan struct{}
 }
 
-func newNativeRuntime(tun io.ReadWriteCloser, dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
+func newNativeRuntime(tun io.ReadWriteCloser) *nativeRuntime {
 	c := &nativeRuntime{
 		tun:           tun,
-		dnsCache:      dnsCache,
-		bypassPolicy:  bypass,
 		state:         stateIdle,
 		connectCancel: make(chan struct{}),
 	}
@@ -132,11 +128,8 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 		return fail(fmt.Errorf("TUN device does not expose a descriptor"))
 	}
 
-	log.Debugf(nativeLogCategory, "starting tun2socks engine proxy_endpoint_configured=true local_socks_listener_readiness=unobserved")
-	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
-		FD:          fd,
-		UplinkIface: "",
-	}, c.dnsCache, c.bypassPolicy)
+	log.Debugf(nativeLogCategory, "starting tun2socks engine")
+	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: fd})
 	if err != nil {
 		log.Debugf(nativeLogCategory, "Can't start tun2socks: %v", err)
 		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))

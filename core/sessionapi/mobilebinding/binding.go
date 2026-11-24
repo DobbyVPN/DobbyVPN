@@ -70,8 +70,12 @@ func NewForDesktop(manager *sessionapi.Manager) *Binding {
 	return &Binding{manager: manager}
 }
 
-// StopAndWait is reserved for OS lifecycle callbacks; CallJSON deliberately
-// exposes only the four existing desktop methods.
+// NetworkEvent forwards a wake or network-path change to the owning session.
+func (b *Binding) NetworkEvent(ctx context.Context, sessionID, reason string) error {
+	return b.manager.NetworkEvent(ctx, sessionID, reason)
+}
+
+// StopAndWait is reserved for OS lifecycle callbacks.
 func (b *Binding) StopAndWait(ctx context.Context) error {
 	owner, ok := b.manager.(interface{ StopAndWait(context.Context) error })
 	if !ok {
@@ -399,7 +403,7 @@ func (b *Binding) CallJSONWithConfiguration(
 	case "Stop":
 		return b.StopContext(ctx, value.SessionID, value.Generation)
 	case "NetworkEvent":
-		if err := b.manager.NetworkEvent(ctx, value.SessionID, value.Reason); err != nil {
+		if err := b.NetworkEvent(ctx, value.SessionID, value.Reason); err != nil {
 			return failed(err)
 		}
 		return success(struct{}{})

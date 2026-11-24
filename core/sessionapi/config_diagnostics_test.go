@@ -18,6 +18,20 @@ const diagnosticsOutlineProfile = "[[Outline]]\nServer = 'vpn.invalid'\nPort = 4
 
 func b64(text string) string { return base64.StdEncoding.EncodeToString([]byte(text)) }
 
+func TestMixedExcludePolicyHash(t *testing.T) {
+	const entries = `[ExcludeIPs]
+IPs = ["2001:db8::/64", "::ffff:192.0.2.1", "ffff:ffff:ffff:ffff::/64", "192.0.2.2"]
+`
+	parsed, err := parseConfig([]byte(entries + diagnosticsOutlineProfile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "b8915d077d5b7affb40bce6cbf82b4ecc5507c7c7708c951bb6a70af9da077df"
+	if got := parsed.profiles[0].ExcludeSet.Hash(); got != want {
+		t.Fatalf("excluded IP policy hash = %s, want %s", got, want)
+	}
+}
+
 func TestParseConfigRecognisesForeignFormats(t *testing.T) {
 	links := "vless://00000000-0000-0000-0000-000000000000@host.invalid:443?type=tcp#one\n" +
 		"trojan://synthetic@host.invalid:443#two\n"

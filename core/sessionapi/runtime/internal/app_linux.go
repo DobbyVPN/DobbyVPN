@@ -20,8 +20,8 @@ import (
 )
 
 func (app *App) validateRunInputs() error {
-	if app.RoutingConfig == nil || app.DNSCache == nil || app.BypassPolicy == nil {
-		return errors.New("network routing, resolver and bypass inputs are required")
+	if app.RoutingConfig == nil || app.DNSCache == nil {
+		return errors.New("network routing and resolver inputs are required")
 	}
 	return nil
 }
@@ -91,7 +91,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	if !ok || descriptor.GetFd() < 0 {
 		return fail(errors.New("owned TUN descriptor is unavailable"))
 	}
-	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: descriptor.GetFd()}, app.DNSCache, app.BypassPolicy)
+	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: descriptor.GetFd()})
 	app.Engine = engine
 	if err != nil {
 		return fail(err)

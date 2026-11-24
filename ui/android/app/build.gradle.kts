@@ -205,6 +205,14 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
         tasks.register<Exec>("buildGoBackend_${variant}_${androidAbi.replace('-', '_')}") {
             dependsOn(validateGoToolchain, downloadGoModules)
             inputs.files(backendInputs)
+            inputs.property("releaseVersionName", releaseVersionName)
+            inputs.property("sourceCommit", sourceCommit)
+            inputs.property("androidApi", api)
+            inputs.property("goVersion", expectedGoVersion)
+            inputs.file(goBinary).withPropertyName("goCompiler")
+            inputs.property("ndkVersion", pinnedAndroidNdkVersion)
+            inputs.file(ndkHome.map { File(it, "source.properties") })
+                .withPropertyName("ndkRevision")
             inputs.property("testSeamsBuild", testSeamsBuild)
             outputs.file(layout.buildDirectory.file("generated/go-libs/$variant/$androidAbi/libdobby_vpn.so"))
             doFirst {

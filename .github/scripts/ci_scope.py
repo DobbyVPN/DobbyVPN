@@ -207,6 +207,9 @@ def _path_scope(path: str) -> str:
         return "docs"
     if path.startswith(RELEASE_PREFIXES):
         return "release"
+    # iOS also imports the mobile Go tool pins from this module.
+    if path == ".github/scripts/android/android_dependency_provenance.py":
+        return "shared"
     if path.startswith(ANDROID_PREFIXES) or path.endswith("_android.go"):
         return "android"
     if (
@@ -215,8 +218,6 @@ def _path_scope(path: str) -> str:
         or path.endswith("_ios.go")
     ):
         return "apple"
-    if _allowed_markdown(path):
-        return "docs"
     return "shared"
 
 

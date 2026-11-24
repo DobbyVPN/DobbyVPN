@@ -25,9 +25,8 @@ import (
 const category = "sessionapi/runtime"
 
 // TunnelProvider acquires one interface for a network generation. The returned
-// lease survives all protocol attempts until the network owner is stopped. ProtectSocket is passed to
-// custom device factories so platform dial hooks can correlate protection with
-// the session which owns the socket.
+// lease survives all protocol attempts until the network owner is stopped. The socket scope binds protection
+// to the session that acquired the network.
 type TunnelProvider interface {
 	Acquire(context.Context, sessionapi.SessionRef) (TunnelLease, error)
 	ProtectSocket(context.Context, sessionapi.SessionRef, int) error
@@ -52,11 +51,9 @@ type InputProvider interface {
 
 // DeviceFactory receives only the normalized config for every protocol and
 // the resolver context owned by the retained VPN network.
-type DeviceFactory func(context.Context, sessionapi.SessionRef, sessionapi.RuntimeProfile, SocketProtector, *dnscache.Cache) (protocol.ProtocolDevice, error)
+type DeviceFactory func(context.Context, sessionapi.RuntimeProfile, *dnscache.Cache) (protocol.ProtocolDevice, error)
 
-type SocketProtector func(context.Context, int) error
-
-type CoreFactory func(io.ReadWriteCloser, *dnscache.Cache, *tunnel.BypassPolicy) sessionCore
+type CoreFactory func(io.ReadWriteCloser, *dnscache.Cache) sessionCore
 
 type sessionCore interface {
 	Connect(context.Context) error
@@ -104,9 +101,6 @@ type Options struct {
 // would not be isolated.
 func New(options Options) sessionapi.Runtime {
 	r := &runtime{options: options}
-	if r.options.Inputs == nil {
-		r.options.Inputs = defaultInputProvider{}
-	}
 	if r.options.NewDevice == nil {
 		r.options.NewDevice = unsupportedDevice
 	}
@@ -171,7 +165,7 @@ type networkOwner struct {
 
 func (n *networkOwner) Stop(ctx context.Context) error { return n.lease.Stop(ctx) }
 
-func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
+func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef, _ sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.network != nil || r.active {
@@ -190,19 +184,8 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 			r.network = nil
 		}
 	})
-	// The stack starts without a transport or bypass target. Resolve the actual
-	// attempt policy only after native setup has captured the physical resolver.
-	excluded, hosts := profile.ExcludeSet, profile.ExcludeHosts
-	if _, native := r.options.Inputs.(defaultInputProvider); native {
-		excluded, hosts = nil, nil
-	}
-	bypass, err := r.options.Inputs.Resolve(ctx, excluded, hosts)
-	if err != nil {
-		return n, fmt.Errorf("resolve network bypass: %w", err)
-	}
-	if bypass == nil {
-		return n, errors.New("network bypass is unavailable")
-	}
+	// Attempt exclusions are resolved after Connect captures the physical resolver.
+	var err error
 	var tun TunnelLease
 	if mobileRuntime {
 		tun, err = r.acquireNetworkTunnel(ctx, ref, n)
@@ -210,7 +193,7 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 			return n, err
 		}
 	}
-	n.core = r.options.NewCore(tun, n.cache, bypass)
+	n.core = r.options.NewCore(tun, n.cache)
 	if n.core == nil {
 		return n, errors.New("network core is unavailable")
 	}
@@ -368,7 +351,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	}
 	var bypass *tunnel.BypassPolicy
 	var err error
-	if _, native := r.options.Inputs.(defaultInputProvider); native {
+	if r.options.Inputs == nil {
 		bypass, err = tunnel.ResolveBypassPolicyWithResolver(ctx, profile.ExcludeSet, profile.ExcludeHosts, r.network.cache.ResolveAddresses)
 	} else {
 		bypass, err = r.options.Inputs.Resolve(ctx, profile.ExcludeSet, profile.ExcludeHosts)
@@ -380,7 +363,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		return fail(errors.New("bypass policy unavailable"))
 	}
 	n := r.network
-	var protect SocketProtector
+	var protect func(context.Context, int) error
 	if r.options.Tunnel != nil {
 		protect = func(ctx context.Context, fd int) error {
 			if contextErr := ctx.Err(); contextErr != nil {
@@ -392,7 +375,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	ctx, scope := protected_dialer.NewSocketScope(ctx, ref.Generation, protect)
 	owned.socketContext = ctx
 	owned.push(scope.Close)
-	device, err := r.options.NewDevice(ctx, ref, profile, protect, n.cache)
+	device, err := r.options.NewDevice(ctx, profile, n.cache)
 	if device != nil {
 		owned.push(func(ctx context.Context) error {
 			if closer, ok := device.(interface{ CloseContext(context.Context) error }); ok {
@@ -703,17 +686,7 @@ func (l *lease) Stop(ctx context.Context) error {
 	return nil
 }
 
-type defaultInputProvider struct{}
-
-func (defaultInputProvider) Resolve(ctx context.Context, excluded *iprange.Set, hosts []string) (*tunnel.BypassPolicy, error) {
-	policy, err := tunnel.ResolveBypassPolicy(ctx, excluded, hosts)
-	if err != nil {
-		return nil, fmt.Errorf("resolve exclusion policy: %w", err)
-	}
-	return policy, nil
-}
-
-func unsupportedDevice(_ context.Context, _ sessionapi.SessionRef, _ sessionapi.RuntimeProfile, _ SocketProtector, _ *dnscache.Cache) (protocol.ProtocolDevice, error) {
+func unsupportedDevice(_ context.Context, _ sessionapi.RuntimeProfile, _ *dnscache.Cache) (protocol.ProtocolDevice, error) {
 	return nil, errors.New("native protocol device factory is not installed")
 }
 

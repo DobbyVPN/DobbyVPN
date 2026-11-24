@@ -4,13 +4,10 @@ import (
 	"context"
 	"core/log"
 	"fmt"
-	"net/url"
 	"time"
 
 	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
-	"github.com/xjasonlyu/tun2socks/v2/proxy"
-	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
@@ -18,15 +15,15 @@ import (
 const TunnelMTU = 1280
 
 type EngineConfig struct {
-	Dialer           proxy.Proxy
-	ProxyAddr        string
-	FD               int    // Linux / Mobile
-	UplinkIface      string // Windows
-	TransportHandler stackAdapter.TransportHandler
+	FD          int    // Linux / Mobile
+	UplinkIface string // Windows
 }
 
-func StartPlatformEngine(cfg EngineConfig) (bool, error) {
-	return startPlatformEngine(cfg)
+func StartPlatformEngine(cfg EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
+	if handler == nil {
+		return false, fmt.Errorf("packet stack requires a transport handler")
+	}
+	return startPlatformEngine(cfg, handler)
 }
 
 // EngineStop lets each platform preserve its required teardown order around
@@ -38,27 +35,15 @@ func EngineStop(ctx context.Context) error {
 func InterfaceName() string { return platformInterfaceName() }
 
 // Access is serialized by tunnel.Engine, the existing process-wide owner.
-// Only the public device, SOCKS, and stack APIs are used: no engine command
+// Only the public device and stack APIs are used: no engine command
 // hooks, global logger replacement, REST listener, or fatal-exit path.
 var ownedDevice device.Device
 var ownedStack *stack.Stack
 var ownedTCPAdmission *tcpAdmission
 
-func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, error) {
+func startStack(handler stackAdapter.TransportHandler, open func() (device.Device, error)) (bool, error) {
 	if ownedDevice != nil || ownedStack != nil {
 		return false, fmt.Errorf("network stack is still owned")
-	}
-	outbound := cfg.Dialer
-	if outbound == nil {
-		endpoint, err := url.Parse("socks5://" + cfg.ProxyAddr)
-		if err != nil {
-			return false, fmt.Errorf("parse local SOCKS endpoint: %w", err)
-		}
-		password, _ := endpoint.User.Password()
-		outbound, err = proxy.NewSocks5(endpoint.Host, endpoint.User.Username(), password)
-		if err != nil {
-			return false, fmt.Errorf("open local SOCKS proxy: %w", err)
-		}
 	}
 	dev, err := open()
 	if dev != nil {
@@ -69,11 +54,6 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 	}
 	if dev.MTU() < TunnelMTU {
 		return true, fmt.Errorf("tunnel MTU %d is below IPv6 minimum %d", dev.MTU(), TunnelMTU)
-	}
-	tunnel.T().SetDialer(outbound)
-	handler := cfg.TransportHandler
-	if handler == nil {
-		handler = tunnel.T()
 	}
 	if len(tcpStackOptions) != 0 {
 		ownedTCPAdmission = &tcpAdmission{changed: make(chan struct{})}

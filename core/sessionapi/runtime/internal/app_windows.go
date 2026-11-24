@@ -60,7 +60,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	app.UplinkInterface = physical.Name
 	protected_dialer.SetPhysicalInterfaces(ipv4, ipv6)
-	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{FD: -1, UplinkIface: physical.Name}, app.DNSCache, app.BypassPolicy)
+	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{FD: -1, UplinkIface: physical.Name})
 	app.Engine = ownedEngine
 	if err != nil {
 		signalInit(initResult, err)
