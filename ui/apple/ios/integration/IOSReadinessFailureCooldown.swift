@@ -2,7 +2,9 @@ import Foundation
 
 /// Keeps passive provider readiness polling from retrying a recent failure on
 /// every Snapshot request. Callers supply monotonic time so expiry is stable
-/// across wall-clock changes and can be tested without waiting.
+/// across wall-clock changes and can be tested without waiting. VPN setup
+/// states (not set up, refused or timed-out setup) are never cached here:
+/// they have their own responses and no poll saves preferences after them.
 public struct IOSReadinessFailureCooldown: Equatable {
     public static let duration: TimeInterval = 5
 

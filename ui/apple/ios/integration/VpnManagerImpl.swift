@@ -1,6 +1,40 @@
 import NetworkExtension
 import Foundation
 
+/// The NetworkExtension calls VpnManagerImpl makes. Production uses the
+/// system; tests replace only these calls, keeping the readiness logic real.
+struct IOSNativeVPN {
+    var load: VPNPreferenceCoordinator.Inventory = { NETunnelProviderManager.loadAllFromPreferences(completionHandler: $0) }
+    var save: VPNPreferenceCoordinator.Operation = { $0.saveToPreferences(completionHandler: $1) }
+    var reload: VPNPreferenceCoordinator.Operation = { $0.loadFromPreferences(completionHandler: $1) }
+    var status: (NETunnelProviderManager) -> NEVPNStatus = { $0.connection.status }
+    var start: (NETunnelProviderManager, [String: NSObject]) throws -> Void = { try $0.connection.startVPNTunnel(options: $1) }
+    var send: (NETunnelProviderManager, Data, @escaping (Data?) -> Void) throws -> Void = { manager, data, response in
+        guard let session = manager.connection as? NETunnelProviderSession else {
+            throw NSError(domain: "VpnManagerImpl.sessionapi", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "provider session is unavailable"])
+        }
+        try session.sendProviderMessage(data, responseHandler: response)
+    }
+    var messageTimeout = IOSProviderTiming.appMessageTimeout
+}
+
+/// Response codes for a containing app whose VPN profile is missing or was refused.
+public enum IOSVPNSetupCode {
+    /// No DobbyVPN profile exists yet; the window shows its ordinary first screen.
+    public static let notSetUp = "VPN_NOT_SET_UP"
+    /// The last setup the user started failed (denied, timed out or another
+    /// preference error); only the user's next setup action saves again.
+    public static let setupFailed = "VPN_SETUP_FAILED"
+}
+
+private enum ProviderReadiness {
+    case ready
+    case notSetUp(String)
+    case setupFailed(String)
+    case failed(String)
+}
+
 /// A NetworkExtension readiness and message-transport shell.
 ///
 /// This class deliberately has no VPN product state, generation, configured
@@ -13,6 +47,7 @@ public final class VpnManagerImpl: NSObject {
     static let defaultServerAddress = "Dobby VPN"
 
     let logs = IOSAppCompositionRoot.logsRepository
+    let native: IOSNativeVPN
     let condition = NSCondition()
     var vpnManager: NETunnelProviderManager?
     var providerStatus: NEVPNStatus = .invalid
@@ -24,11 +59,12 @@ public final class VpnManagerImpl: NSObject {
         let coordinator = VPNPreferenceCoordinator(
             providerIdentifier: Self.dobbyBundleIdentifier, name: Self.dobbyName,
             serverAddress: Self.defaultServerAddress,
+            load: native.load, save: native.save, reload: native.reload, status: native.status,
             bind: { [weak self] manager in
                 guard let self else { return }
                 self.condition.lock()
                 self.vpnManager = manager
-                self.providerStatus = manager.connection.status
+                self.providerStatus = self.native.status(manager)
                 self.condition.broadcast()
                 self.condition.unlock()
             },
@@ -40,6 +76,7 @@ public final class VpnManagerImpl: NSObject {
     }
     private var snapshotReadinessFailureCooldown = IOSReadinessFailureCooldown()
     private var setupFailure: String?
+    private var reportedNotSetUp = false
     private var cachedFailureReads = 0
 
     public var vpnSetupFailure: String? {
@@ -52,7 +89,12 @@ public final class VpnManagerImpl: NSObject {
     private let diagnosticSampler = IOSCommandLogSampler()
     private var observer: NSObjectProtocol?
 
-    override public init() {
+    override public convenience init() {
+        self.init(native: IOSNativeVPN())
+    }
+
+    init(native: IOSNativeVPN) {
+        self.native = native
         super.init()
         observer = NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange,
@@ -71,7 +113,7 @@ public final class VpnManagerImpl: NSObject {
             }
             self.condition.broadcast()
             self.condition.unlock()
-            self.observeDisconnect(connection)
+            self.observeDisconnect(connection, status: connection.status)
             self.logs.writeLog(
                 log: "[NEVPNStatusDidChange] provider status=\(self.statusName(connection.status)) " +
                     "raw=\(connection.status.rawValue)"
@@ -79,8 +121,8 @@ public final class VpnManagerImpl: NSObject {
         }
     }
 
-    private func observeDisconnect(_ connection: NEVPNConnection) {
-        guard connection.status == .disconnected || connection.status == .invalid,
+    private func observeDisconnect(_ connection: NEVPNConnection, status: NEVPNStatus) {
+        guard status == .disconnected || status == .invalid,
               let ticket = disconnectHistory.disconnected() else { return }
         logs.writeLog(level: "ERROR", log: "[provider] \(disconnectHistory.message)")
         if #available(iOS 16.0, macOS 13.0, *) {
@@ -98,7 +140,9 @@ public final class VpnManagerImpl: NSObject {
     }
 
     /// Sends one command to the provider. The inner Go payload is never rewritten.
-    public func sendProviderMessage(_ messageData: Data, bypassReadinessFailureCooldown: Bool = false) -> Data {
+    /// `setUpVPN` marks a Snapshot the user started (Continue or Allow VPN):
+    /// only it may create the VPN profile and show the iOS permission prompt.
+    public func sendProviderMessage(_ messageData: Data, setUpVPN: Bool = false) -> Data {
         guard !messageData.isEmpty else {
             logs.writeLog(level: "ERROR", log: "[provider-message] rejected empty command")
             return Self.transportFailure("INTERNAL", message: "provider command is empty")
@@ -111,17 +155,17 @@ public final class VpnManagerImpl: NSObject {
         var stage = "begin"
         if trace { logs.writeLog(log: "[provider-message] begin \(identity)") }
         defer { if trace { logs.writeLog(log: "[provider-message] end \(identity) stage=\(stage) elapsed=\(monotonicNow() - started)") } }
-        let useSnapshotReadinessCooldown = commandMethod == "Snapshot" && !Thread.isMainThread
-        let manualSetupRetry = useSnapshotReadinessCooldown && bypassReadinessFailureCooldown
+        let userSetup = setUpVPN && commandMethod == "Snapshot"
+        let useSnapshotReadinessCooldown = commandMethod == "Snapshot" && !Thread.isMainThread && !userSetup
         if useSnapshotReadinessCooldown,
-           let readinessFailure = cachedSnapshotReadinessFailure(bypass: manualSetupRetry) {
+           let readinessFailure = cachedSnapshotReadinessFailure() {
             return transportFailureResponse(
                 for: messageData,
                 code: "PLATFORM_FAILED",
                 message: readinessFailure
             )
         }
-        let deadline = monotonicNow() + IOSProviderTiming.appMessageTimeout
+        let deadline = monotonicNow() + native.messageTimeout
         var stopPreferenceStarted = false
         defer {
             // Even an unavailable provider must not leave an explicit Stop's
@@ -143,19 +187,42 @@ public final class VpnManagerImpl: NSObject {
         if repeats > 0 {
             logs.writeLog(log: "[provider-message] cached readiness failure repeats=\(repeats)")
         }
-        var preferenceFailure: String?
-        let trigger = manualSetupRetry ? "manual_retry" : commandMethod ?? "unknown"
-        let readinessFailure = ensureProviderReady(until: deadline, identity: identity, trace: trace,
-                                                   trigger: trigger, stage: &stage, preferenceFailure: &preferenceFailure)
-        if useSnapshotReadinessCooldown {
+        let access: VPNPreferenceAccess = userSetup ? .setUp : passiveAccess()
+        let trigger = userSetup ? "user_setup" : commandMethod ?? "unknown"
+        let readinessFailure: String
+        switch ensureProviderReady(until: deadline, identity: identity, trace: trace,
+                                   trigger: trigger, access: access, stage: &stage) {
+        case .ready:
             condition.lock()
-            setupFailure = preferenceFailure
+            setupFailure = nil
+            reportedNotSetUp = false
             condition.unlock()
-        }
-        if let readinessFailure {
-            if preferenceFailure == nil {
-                logs.writeLog(level: "ERROR", log: "[provider-message] readiness failed \(identity) stage=\(stage) elapsed=\(monotonicNow() - started): \(readinessFailure)")
+            readinessFailure = ""
+        case let .notSetUp(reason):
+            condition.lock()
+            let failure = setupFailure
+            let firstReport = !reportedNotSetUp
+            reportedNotSetUp = true
+            condition.unlock()
+            if firstReport {
+                logs.writeLog(log: "[provider-message] VPN not set up \(identity) access=\(access) reason=\(reason) " +
+                              "setup_failure_pending=\(failure != nil)")
             }
+            if let failure {
+                return transportFailureResponse(for: messageData, code: IOSVPNSetupCode.setupFailed, message: failure)
+            }
+            return transportFailureResponse(for: messageData, code: IOSVPNSetupCode.notSetUp,
+                                            message: "DobbyVPN is not set up on this device yet.")
+        case let .setupFailed(detail):
+            condition.lock()
+            setupFailure = detail
+            condition.unlock()
+            return transportFailureResponse(for: messageData, code: IOSVPNSetupCode.setupFailed, message: detail)
+        case let .failed(message):
+            readinessFailure = message
+        }
+        if !readinessFailure.isEmpty {
+            logs.writeLog(level: "ERROR", log: "[provider-message] readiness failed \(identity) stage=\(stage) elapsed=\(monotonicNow() - started): \(readinessFailure)")
             if commandMethod != nil && !Thread.isMainThread {
                 condition.lock()
                 snapshotReadinessFailureCooldown.recordFailure(readinessFailure, at: monotonicNow())
@@ -249,9 +316,9 @@ public final class VpnManagerImpl: NSObject {
 
     private func sendOnce(_ messageData: Data, timeout: TimeInterval) throws -> Data {
         condition.lock()
-        let session = vpnManager?.connection as? NETunnelProviderSession
+        let manager = vpnManager
         condition.unlock()
-        guard let session else {
+        guard let manager else {
             throw NSError(
                 domain: "VpnManagerImpl.sessionapi",
                 code: -1,
@@ -261,7 +328,7 @@ public final class VpnManagerImpl: NSObject {
         let semaphore = DispatchSemaphore(value: 0)
         let responseLock = NSLock()
         var response: Data?
-        try session.sendProviderMessage(messageData) { value in
+        try native.send(manager, messageData) { value in
             responseLock.lock()
             response = value
             responseLock.unlock()
@@ -288,120 +355,157 @@ public final class VpnManagerImpl: NSObject {
 
     private func monotonicNow() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
-    private func cachedSnapshotReadinessFailure(bypass: Bool) -> String? {
+    /// After a failed setup, polls only load: the next save waits for the user's tap.
+    private func passiveAccess() -> VPNPreferenceAccess {
+        condition.lock()
+        defer { condition.unlock() }
+        return setupFailure == nil ? .passive : .loadOnly
+    }
+
+    private func cachedSnapshotReadinessFailure() -> String? {
         condition.lock()
         if let current = vpnManager {
-            providerStatus = current.connection.status
+            providerStatus = native.status(current)
         }
         if providerStatus == .connected {
             snapshotReadinessFailureCooldown.clear()
             condition.unlock()
             return nil
         }
-        let failure = snapshotReadinessFailureCooldown.cachedFailure(at: monotonicNow(), bypass: bypass)
+        let failure = snapshotReadinessFailureCooldown.cachedFailure(at: monotonicNow())
         if failure != nil { cachedFailureReads += 1 }
         condition.unlock()
         return failure
     }
 
-    private func ensureProviderReady(until deadline: TimeInterval, identity: String, trace: Bool, trigger: String, stage: inout String, preferenceFailure: inout String?) -> String? {
+    private func ensureProviderReady(until deadline: TimeInterval, identity: String, trace: Bool, trigger: String,
+                                     access: VPNPreferenceAccess, stage: inout String) -> ProviderReadiness {
         if Thread.isMainThread {
             // Provider readiness waits must never freeze the UI thread. Refuse
             // a main-thread call if a caller violates that boundary.
             logs.writeLog(level: "ERROR", log: "[provider] readiness check rejected on the main thread")
-            return "readiness check rejected on the main thread"
+            return .failed("readiness check rejected on the main thread")
         }
-        // Once the saved-and-reloaded manager is connected, use that exact
-        // bound object for subsequent commands. Re-saving preferences for
-        // every snapshot would add needless transition risk and
-        // consume the aggregate command budget.
+        // Once the loaded manager is connected, use that exact bound object
+        // for subsequent commands. Re-reading preferences for every snapshot
+        // would add needless transition risk and consume the command budget.
         condition.lock()
         if let current = vpnManager {
-            providerStatus = current.connection.status
+            providerStatus = native.status(current)
             if providerStatus == .connected {
                 snapshotReadinessFailureCooldown.clear()
                 condition.unlock()
-                return nil
+                return .ready
             }
         }
         condition.unlock()
         stage = "preferences"
         let loaded = DispatchSemaphore(value: 0)
+        let resultLock = NSLock()
         var loadedManager: NETunnelProviderManager?
         var loadError: Error?
         if trace { logs.writeLog(log: "[provider-message] preferences begin \(identity)") }
-        preferences.getOrCreateManager(trigger: trigger) { value, error in
+        let preferencesStarted = monotonicNow()
+        preferences.prepareManager(access: access == .setUp ? .setUp : self.passiveAccess(), trigger: trigger) { value, error in
+            if let setup = error as? VPNSetupFailure {
+                // Record it before the next queued operation reads the access kind.
+                self.condition.lock()
+                self.setupFailure = setup.localizedDescription
+                self.condition.unlock()
+            }
+            resultLock.lock()
             loadedManager = value
             loadError = error
+            resultLock.unlock()
             loaded.signal()
         }
         guard let loadRemaining = remaining(until: deadline),
               loaded.wait(timeout: .now() + loadRemaining) == .success else {
-            logs.writeLog(level: "ERROR", log: "[provider] timed out loading NetworkExtension preferences")
-            return "timed out loading NetworkExtension preferences"
-        }
-        if trace && loadError == nil { logs.writeLog(log: "[provider-message] preferences end \(identity)") }
-        condition.lock()
-        // getOrCreateManager returns the post-save reloaded object. Never
-        // prefer an older in-memory manager after a provider-process restart.
-        let current = loadedManager
-        if let current {
-            vpnManager = current
-            providerStatus = current.connection.status
-            if providerStatus == .connected {
-                snapshotReadinessFailureCooldown.clear()
+            let elapsed = monotonicNow() - preferencesStarted
+            switch access == .setUp ? .setUp : passiveAccess() {
+            case .setUp:
+                // Usually the iOS permission prompt is still open. This is the same
+                // setup failure as a refusal: the user can tap Allow VPN again.
+                logs.writeLog(level: "ERROR",
+                              log: "[provider] VPN setup trigger=\(trigger) operation=save timed_out=true elapsed=\(elapsed)")
+                return .setupFailed("Timed out after \(Int(elapsed.rounded())) s waiting for the VPN configuration to be saved.")
+            case .loadOnly:
+                // An earlier setup save still holds the preference queue.
+                return .notSetUp("preferences busy after a failed setup, elapsed=\(elapsed)")
+            case .passive:
+                logs.writeLog(level: "ERROR", log: "[provider] timed out loading NetworkExtension preferences")
+                return .failed("timed out loading NetworkExtension preferences")
             }
         }
-        let status = current?.connection.status ?? .invalid
-        condition.unlock()
-        if let loadError {
-            // The preference operation records its precise phase and original
-            // OS error. Propagate that error without logging it a second time.
-            preferenceFailure = (loadError as? VPNSetupFailure)?.localizedDescription
-            return preferenceFailure ?? String(reflecting: loadError)
+        resultLock.lock()
+        let current = loadedManager
+        let error = loadError
+        resultLock.unlock()
+        if trace && error == nil { logs.writeLog(log: "[provider-message] preferences end \(identity)") }
+        if let notSetUp = error as? VPNNotSetUp {
+            condition.lock()
+            // The profile may have been removed in Settings; never keep using it.
+            vpnManager = nil
+            providerStatus = .invalid
+            condition.unlock()
+            return .notSetUp(notSetUp.reason)
         }
+        if let setup = error as? VPNSetupFailure {
+            // The preference operation logged its precise phase and original OS error.
+            return .setupFailed(setup.localizedDescription)
+        }
+        if let error { return .failed(String(reflecting: error)) }
         guard let current else {
             logs.writeLog(level: "ERROR", log: "[provider] NetworkExtension manager is unavailable without an error")
-            return "NetworkExtension manager is unavailable without an error"
+            return .failed("NetworkExtension manager is unavailable without an error")
         }
-        observeDisconnect(current.connection)
-        var observedStatus = status
+        condition.lock()
+        // Bind the loaded (or saved and reloaded) object. Never prefer an
+        // older in-memory manager after a provider-process restart.
+        vpnManager = current
+        providerStatus = native.status(current)
+        if providerStatus == .connected {
+            snapshotReadinessFailureCooldown.clear()
+        }
+        var observedStatus = providerStatus
+        condition.unlock()
+        observeDisconnect(current.connection, status: observedStatus)
         while remaining(until: deadline) != nil {
             if observedStatus == .connected {
                 condition.lock()
                 snapshotReadinessFailureCooldown.clear()
                 condition.unlock()
-                return nil
+                return .ready
             }
             if observedStatus == .disconnecting {
                 stage = "disconnect-wait"
                 guard let settled = waitForDisconnectToSettle(until: deadline) else {
                     logs.writeLog(level: "ERROR", log: "[provider] disconnect did not settle before the readiness deadline")
-                    return "disconnect did not settle before the readiness deadline"
+                    return .failed("disconnect did not settle before the readiness deadline")
                 }
                 observedStatus = settled
                 continue
             }
             if observedStatus == .connecting || observedStatus == .reasserting {
                 stage = "provider-ready-wait"
-                if waitForReady(until: deadline) { return nil }
-                observedStatus = current.connection.status
+                if waitForReady(until: deadline) { return .ready }
+                observedStatus = native.status(current)
                 continue
             }
             do {
                 stage = "provider-start"
-                observeDisconnect(current.connection)
-                try current.connection.startVPNTunnel(options: ["dobby_control_only": NSNumber(value: true)])
+                observeDisconnect(current.connection, status: observedStatus)
+                try native.start(current, ["dobby_control_only": NSNumber(value: true)])
             } catch {
                 logs.writeLog(level: "ERROR", log: "[provider] control-mode start failed:\n\(diagnosticErrorDescription(error))")
-                return String(reflecting: error)
+                return .failed(String(reflecting: error))
             }
             stage = "provider-ready-wait"
-            if waitForReady(until: deadline) { return nil }
-            observedStatus = current.connection.status
+            if waitForReady(until: deadline) { return .ready }
+            observedStatus = native.status(current)
         }
         logs.writeLog(level: "ERROR", log: "[provider] control-mode provider did not reach connected state")
-        return "control-mode provider did not reach connected state before the readiness deadline"
+        return .failed("control-mode provider did not reach connected state before the readiness deadline")
     }
 
     private func waitForReady(until monotonicDeadline: TimeInterval) -> Bool {
@@ -414,7 +518,8 @@ public final class VpnManagerImpl: NSObject {
             monotonicNow() < monotonicDeadline {
             let deadline = Date().addingTimeInterval(min(0.1, remaining(until: monotonicDeadline) ?? 0))
             condition.wait(until: deadline)
-            if let status = vpnManager?.connection.status {
+            if let manager = vpnManager {
+                let status = native.status(manager)
                 providerStatus = status
                 if status == .connected { snapshotReadinessFailureCooldown.clear() }
             }
@@ -427,7 +532,8 @@ public final class VpnManagerImpl: NSObject {
         condition.lock()
         defer { condition.unlock() }
         while true {
-            if let status = vpnManager?.connection.status {
+            if let manager = vpnManager {
+                let status = native.status(manager)
                 providerStatus = status
                 if status == .connected { snapshotReadinessFailureCooldown.clear() }
             }

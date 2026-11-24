@@ -2,7 +2,7 @@ import Foundation
 import IOSIntegration
 import DobbyVPNRuntime
 
-final class IOSSessionClient: DobbyDisconnectObserving, DobbyVPNSetupRetrying, @unchecked Sendable {
+final class IOSSessionClient: DobbyDisconnectObserving, DobbyVPNSetupProviding, @unchecked Sendable {
     private let shell = IOSAppCompositionRoot.sessionShell
 
     private let history = IOSAppCompositionRoot.vpnManager.disconnectHistory
@@ -17,10 +17,8 @@ final class IOSSessionClient: DobbyDisconnectObserving, DobbyVPNSetupRetrying, @
     }
     func acknowledgeDisconnect(_ message: String) { history.acknowledge(message) }
 
-    var vpnSetupFailure: String? { IOSAppCompositionRoot.vpnManager.vpnSetupFailure }
-
-    func retryVPNSetupSnapshot() -> String {
-        shell.call(method: "Snapshot", parameters: ["session_id": ""], bypassReadinessFailureCooldown: true)
+    func setUpVPNSnapshot() -> String {
+        shell.call(method: "Snapshot", parameters: ["session_id": ""], setUpVPN: true)
     }
 
     var diagnosticPaths: [URL] { IOSAppCompositionRoot.diagnosticPaths() }

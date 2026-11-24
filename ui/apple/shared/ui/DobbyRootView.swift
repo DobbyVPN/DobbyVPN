@@ -106,6 +106,7 @@ public struct DobbyRootView: View {
                             .font(.caption)
                             .accessibilityIdentifier("configuration.offline")
                     }
+                    if model.vpnPermissionNeeded { vpnPermission }
                     mainButton
                     connections
                         .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))
@@ -128,11 +129,12 @@ public struct DobbyRootView: View {
             .frame(maxWidth: .infinity)
 #endif
         }
-        .disabled(showingError)
-        .accessibilityHidden(showingError)
+        .disabled(showingError || model.vpnSetupExplanationVisible)
+        .accessibilityHidden(showingError || model.vpnSetupExplanationVisible)
         .background(Color.paper.ignoresSafeArea().onTapGesture { sourceFocused = false })
         .ignoresSafeArea(.keyboard)
         .overlay { errorPopup }
+        .overlay { vpnSetupExplanation }
         .preferredColorScheme(.light)
 #if os(macOS)
         .frame(minWidth: 320, minHeight: 460)
@@ -288,6 +290,66 @@ public struct DobbyRootView: View {
                 .disabled(!model.canStop)
                 .accessibilityIdentifier("connection.stop")
         }
+        }
+    }
+
+    /// A refused or timed-out VPN setup: plain text on the main screen, one
+    /// button that retries the save, and the technical detail only behind Copy.
+    private var vpnPermission: some View {
+        VStack(alignment: .leading, spacing: pt(10)) {
+            Text("DobbyVPN needs VPN permission to connect.")
+                .dobbyFont(15)
+                .foregroundColor(.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("vpn.permission.message")
+            DialogButton(title: "Allow VPN", filled: true) {
+                sourceFocused = false
+                model.retryVPNSetup()
+            }
+            .disabled(!model.canRetryVPNSetup)
+            .accessibilityIdentifier("vpn.permission.allow")
+            Button { copyError(model.vpnSetupFailureDetail, onObservation: model.recordErrorCopy) } label: {
+                Text("Copy").underline().dobbyFont(12, .semibold).foregroundColor(.ink)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy VPN setup details")
+            .accessibilityIdentifier("vpn.permission.copy")
+        }
+        .padding(pt(12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.surface, in: buttonShape)
+        .overlay(buttonShape.stroke(Color.ink, lineWidth: 1.5))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("vpn.permission")
+    }
+
+    /// Shown before the first save, which makes iOS ask for VPN permission.
+    @ViewBuilder
+    private var vpnSetupExplanation: some View {
+        if model.vpnSetupExplanationVisible {
+            ZStack {
+                Color.black.opacity(0.32).ignoresSafeArea()
+                VStack(alignment: .leading, spacing: pt(14)) {
+                    HStack(alignment: .top, spacing: pt(10)) {
+                        SockIcon(holey: false).frame(width: pt(26), height: pt(32.5))
+                        Text("iOS will ask to add a VPN configuration. Tap Allow so DobbyVPN can connect.")
+                            .dobbyFont(16)
+                            .foregroundColor(.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("vpn.setup.explanation.message")
+                    }
+                    DialogButton(title: "Continue", filled: true, action: model.continueVPNSetup)
+                        .accessibilityIdentifier("vpn.setup.continue")
+                }
+                .padding(EdgeInsets(top: pt(16), leading: pt(16), bottom: pt(12), trailing: pt(16)))
+                .background(Color.surface, in: buttonShape)
+                .overlay(buttonShape.stroke(Color.ink, lineWidth: 1.5))
+                .frame(maxWidth: 420)
+                .padding(.horizontal, pt(24))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("vpn.setup.explanation")
+                .accessibilityAddTraits(.isModal)
+            }
         }
     }
 
@@ -505,10 +567,6 @@ public struct DobbyRootView: View {
     private func failureActions(loadFailed: Bool) -> some View {
         DialogButton(title: "Close", filled: false, action: model.closeFailure)
             .accessibilityIdentifier("error.close")
-        if model.canRetryVPNSetup {
-            DialogButton(title: "Retry VPN setup", filled: true, action: model.retryVPNSetup)
-                .accessibilityIdentifier("vpn.setup.retry")
-        }
         if model.canRetryActiveSelection {
             DialogButton(title: "Retry", filled: true, action: model.retryActiveSelection)
                 .accessibilityIdentifier("connection.retry")
