@@ -21,19 +21,6 @@ on:
       retention_days:
         default: 1
         type: number
-    secrets:
-      MACOS_DEVELOPER_ID_APP_P12:
-        required: false
-      MACOS_DEVELOPER_ID_INSTALLER_P12:
-        required: false
-      MACOS_DEVELOPER_ID_P12_PASSWORD:
-        required: false
-      APP_STORE_API_KEY:
-        required: false
-      APP_STORE_KEY_ID:
-        required: false
-      APP_STORE_ISSUER_ID:
-        required: false
 
 permissions:
   contents: read
@@ -41,9 +28,8 @@ permissions:
 jobs:
   package:
     name: ${{ inputs.platform }} / ${{ inputs.architecture }} package
-    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || 'macos-15' }}
-    # Release macOS jobs also wait for notarization (notarytool --timeout 30m).
-    timeout-minutes: ${{ inputs.platform == 'macos' && !inputs.debug && 90 || 45 }}
+    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || 'windows-2022' }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,21 +61,6 @@ jobs:
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           global-json-file: global.json
-
-      # Release packages only: hardened runtime blocks debugger attachment
-      # without get-task-allow, and notarization rejects get-task-allow.
-      - name: Prepare macOS Developer ID signing
-        id: macos_signing
-        if: ${{ inputs.platform == 'macos' && !inputs.debug && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha }}
-        env:
-          MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
-          MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
-          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
-        run: bash .github/scripts/desktop/macos_signing.sh prepare
 
       # The runtime check in desktop_package.py compares the new MSI with the last release. Only a confirmed "no release
       # exists yet" may skip it; any other failure to fetch it fails a release build (other builds only warn).
@@ -143,41 +114,12 @@ jobs:
           case "$PLATFORM:$ARCHITECTURE" in
             linux:amd64) package=dobbyVPN-linux.deb ;;
             windows:amd64) package=dobbyVPN-windows-amd64.msi ;;
-            macos:universal) package=dobbyVPN-macos-universal.pkg ;;
             *) exit 1 ;;
           esac
           if [[ "$DEBUG" == true ]]; then package="${package%.*}-debug.${package##*.}"; fi
           test -s "$output/$package"
           printf 'package=%s\n' "$output/$package" >> "$GITHUB_OUTPUT"
           printf 'artifact=%s\n' "$package" >> "$GITHUB_OUTPUT"
-
-      - name: Sign, notarize and verify macOS package
-        if: ${{ steps.macos_signing.outputs.enabled == 'true' }}
-        env:
-          PACKAGE: ${{ steps.build.outputs.package }}
-          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
-          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
-          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
-        run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
-
-      - name: Exercise the exact universal package on Apple Silicon
-        if: inputs.platform == 'macos'
-        shell: bash
-        env:
-          PACKAGE: ${{ steps.build.outputs.package }}
-          VERSION_NAME: ${{ inputs.version_name }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          DEBUG: ${{ inputs.debug }}
-        run: |
-          set -euo pipefail
-          args=(smoke-macos --package "$PACKAGE" --version "$VERSION_NAME" --source-sha "$SOURCE_SHA"
-                --run-dir "$RUNNER_TEMP/macos-package-smoke")
-          if [[ "$DEBUG" == true ]]; then args+=(--debug); fi
-          python3 .github/scripts/desktop/desktop_package.py "${args[@]}"
-
-      - name: Remove macOS signing keychain
-        if: ${{ always() && steps.macos_signing.outcome != 'skipped' }}
-        run: bash .github/scripts/desktop/macos_signing.sh cleanup
 
       - name: Upload exact package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

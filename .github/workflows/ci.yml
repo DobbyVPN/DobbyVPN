@@ -15,6 +15,7 @@ on:
         options:
           - ci
           - debug-packages
+          - apple-packages
           - fdroid-preflight
 
 concurrency:
@@ -392,7 +393,7 @@ jobs:
   selected_package_result:
     name: Require selected package check success
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' }}
-    needs: [ci_selected_version, fdroid_preflight, debug_packages, android_build]
+    needs: [ci_selected_version, fdroid_preflight, debug_packages, apple_packages, android_build]
     runs-on: ubuntu-24.04
     steps:
       - name: Check selected package result
@@ -400,6 +401,7 @@ jobs:
           PLATFORM: ${{ inputs.platform }}
           VERSION_RESULT: ${{ needs.ci_selected_version.result }}
           FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
+          APPLE_PACKAGE_RESULT: ${{ needs.apple_packages.result }}
           DEBUG_RESULT: ${{ needs.debug_packages.result }}
           ANDROID_RESULT: ${{ needs.android_build.result }}
         run: |
@@ -412,8 +414,13 @@ jobs:
               ;;
             debug-packages)
               test "$VERSION_RESULT" = success
+              test "$APPLE_PACKAGE_RESULT" = success
               test "$DEBUG_RESULT" = success
               test "$ANDROID_RESULT" = success
+              ;;
+            apple-packages)
+              test "$VERSION_RESULT" = success
+              test "$APPLE_PACKAGE_RESULT" = success
               ;;
             *) echo "unsupported package check: $PLATFORM" >&2; exit 1 ;;
           esac
@@ -527,7 +534,13 @@ jobs:
     with:
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.ci_selected_version.outputs.version_name }}
-      major: ${{ needs.ci_selected_version.outputs.major }}
-      minor: ${{ needs.ci_selected_version.outputs.minor }}
-      maintenance: ${{ needs.ci_selected_version.outputs.maintenance }}
-      build_number: ${{ needs.ci_selected_version.outputs.android_version_code }}
+
+  apple_packages:
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'debug-packages' || inputs.platform == 'apple-packages') }}
+    needs: ci_selected_version
+    uses: ./.github/workflows/apple_packages.yml
+    with:
+      release: ${{ inputs.platform == 'apple-packages' }}
+      source_sha: ${{ github.sha }}
+      version_name: ${{ needs.ci_selected_version.outputs.version_name }}
+      apple_build_number: ${{ needs.ci_selected_version.outputs.android_version_code }}
