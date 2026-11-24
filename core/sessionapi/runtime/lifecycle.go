@@ -428,6 +428,11 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	if device == nil {
 		return fail(errors.New("protocol device unavailable"))
 	}
+	// A protocol that does not carry UDP DNS reliably has the tunnel answer it
+	// with a truncated response, so resolvers retry over TCP (#532).
+	if dns, ok := device.(interface{ UDPDNSOverTCP() bool }); ok && dns.UDPDNSOverTCP() {
+		owned.socketContext = tunnel.WithUDPDNSOverTCP(owned.socketContext)
+	}
 	// Retain the device-reported numeric upstream inventory in this
 	// attempt's direct policy, including IPv6 answers.
 	if upstreams, ok := device.(interface{ UpstreamIPs() []net.IP }); ok {
