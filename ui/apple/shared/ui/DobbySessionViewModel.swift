@@ -810,7 +810,7 @@ extension DobbySessionViewModel {
 
     private var failures: [String] {
         var seen = Set<String>()
-        return [importError, loadError, disconnectFailure, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
+        return [importError, loadError, disconnectFailure, error, snapshot.lastFailure.map(Self.displayedFailure) ?? "", logsError]
             .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
@@ -845,8 +845,19 @@ extension DobbySessionViewModel {
 
     private func acknowledgeDisplayedTransportFailure() {
         guard let failure = snapshot.lastFailure else { return }
-        let message = "\(failure.message) (\(failure.code))"
+        let message = Self.displayedFailure(failure)
         if visibleFailure == message { dismissedFailures.insert(message) }
+    }
+
+    /// The service refuses to connect on macOS when the main pf ruleset no longer
+    /// evaluates anchor "com.apple/*" (core/routing MacOSPFAnchorMissing). The
+    /// window shows one short line for it; the diagnostics keep the full message.
+    static let missingFirewallAnchor = "requires the com.apple/* pf anchor"
+    static let missingFirewallAnchorText = "Can't connect: the system firewall settings were changed."
+
+    static func displayedFailure(_ failure: DobbyFailure) -> String {
+        if failure.message.contains(missingFirewallAnchor) { return missingFirewallAnchorText }
+        return "\(failure.message) (\(failure.code))"
     }
 
     /// A new attempt shows its failure again, even when it repeats one the user closed.

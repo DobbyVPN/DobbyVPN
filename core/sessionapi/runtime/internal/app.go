@@ -46,9 +46,6 @@ type App struct {
 		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
 	}
 	RoutingConfig *RoutingConfig
-	// LeakProtectionOff names why the platform's leak protection (macOS pf
-	// kill switch) is not in place for this network; empty when it is.
-	LeakProtectionOff string
 }
 
 // retainedNetworkReadyFields identifies the owner independently of whichever

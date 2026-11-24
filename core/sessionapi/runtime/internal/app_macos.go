@@ -144,9 +144,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		signalInit(initResult, err)
 		return err
 	}
-	if !guard.Applied() {
-		app.LeakProtectionOff = "pf_anchor_missing"
-	} else if err = refreshMacOSPFLinks(ctx, guard); err != nil {
+	if err = refreshMacOSPFLinks(ctx, guard); err != nil {
 		signalInit(initResult, err)
 		return err
 	}
@@ -177,7 +175,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			repaired, repairErr := plan.Repair()
 			refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			current, _, refreshErr := capturePhysical(refreshCtx)
-			if refreshErr == nil && guard.Applied() {
+			if refreshErr == nil {
 				refreshErr = refreshMacOSPFLinks(refreshCtx, guard)
 			}
 			cancel()

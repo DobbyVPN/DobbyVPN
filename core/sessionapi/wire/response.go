@@ -74,9 +74,6 @@ type Snapshot struct {
 	CleanupComplete     bool       `json:"cleanup_complete"`
 	Recovering          bool       `json:"recovering"`
 	PrimaryAction       string     `json:"primary_action"`
-	// LeakProtectionOff names why the connected network runs without leak
-	// protection; omitted when the protection is on.
-	LeakProtectionOff string `json:"leak_protection_off,omitempty"`
 
 	ServiceRestorePending bool `json:"service_restore_pending,omitempty"`
 }
@@ -119,7 +116,6 @@ func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 		PrimaryAction:   in.PrimaryAction,
 
 		ServiceRestorePending: in.ServiceRestorePending, OfflineAcceptedAt: in.OfflineAcceptedAt,
-		LeakProtectionOff: in.LeakProtectionOff,
 	}
 	if in.PendingTarget != nil {
 		out.PendingTarget = &Selection{Digest: in.PendingTarget.Digest, Mode: string(in.PendingTarget.Mode), Index: in.PendingTarget.Index}

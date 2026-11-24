@@ -79,9 +79,8 @@ type MacOSKillSwitch struct {
 }
 
 // AcquireMacOSKillSwitch blocks outbound traffic outside tunName with rules in
-// MacOSPFAnchor. A pf configuration without the stock com.apple anchor is left
-// untouched and logged; the network then connects without the kill switch and
-// Applied reports false, so the window can say so.
+// MacOSPFAnchor. A pf configuration without the stock com.apple anchor is
+// refused without changing the system ruleset; an unprotected connection is not accepted.
 func (p *Plan) AcquireMacOSKillSwitch(ctx context.Context, tunName string, servers []netip.Addr) (*MacOSKillSwitch, error) {
 	k := &MacOSKillSwitch{tunName: tunName, servers: servers, attempts: make(map[uint64]map[PFDestination]struct{})}
 	mainRules, _, err := macOSPFCommand(ctx, "", "-s", "rules")
@@ -90,7 +89,7 @@ func (p *Plan) AcquireMacOSKillSwitch(ctx context.Context, tunName string, serve
 	}
 	if !PFEvaluatesAnchor(mainRules) {
 		log.Error(Category, `macOS kill switch not applied: pf rules were not loaded because /etc/pf.conf has no anchor "com.apple/*"`, map[string]any{"anchor": MacOSPFAnchor})
-		return k, nil
+		return nil, errors.New(MacOSPFAnchorMissing)
 	}
 	macOSPFOwner.Lock()
 	defer macOSPFOwner.Unlock()
@@ -112,13 +111,6 @@ func (p *Plan) AcquireMacOSKillSwitch(ctx context.Context, tunName string, serve
 		log.Info(Category, "macOS kill switch applied", map[string]any{"anchor": MacOSPFAnchor, "interface": tunName})
 	}
 	return k, err
-}
-
-// Applied reports whether the kill switch rules are in place.
-func (k *MacOSKillSwitch) Applied() bool {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.applied
 }
 
 // A block rule does not stop flows that already have pf state, which exists

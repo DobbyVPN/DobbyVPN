@@ -275,10 +275,6 @@ func (c *nativeRuntime) generationValue() uint64 {
 	return c.generation
 }
 
-// LeakProtectionUnavailable names why the network runs without its leak
-// protection; empty when it is in place. Run sets it before Connect returns.
-func (c *nativeRuntime) LeakProtectionUnavailable() string { return c.app.LeakProtectionOff }
-
 // NetworkFailure reports a failed leak protection rule load (SetExcluded,
 // Authorize, SetResolvers) that leaves this network unusable, or nil.
 func (c *nativeRuntime) NetworkFailure() error {

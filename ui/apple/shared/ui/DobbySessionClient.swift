@@ -36,8 +36,6 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public internal(set) var configured: Bool
     public internal(set) var sourceURL: String
     public var offlineAcceptedAt = ""
-    /// Why the connected network runs without leak protection (macOS pf kill switch); empty when it is on.
-    public var leakProtectionOff = ""
     public let sourceError: String
     public let activeProfile: DobbyProfile?
     public let lastFailure: DobbyFailure?
@@ -75,7 +73,6 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         case sourceURL = "source_url"
         case sourceError = "source_error"
         case offlineAcceptedAt = "offline_accepted_at"
-        case leakProtectionOff = "leak_protection_off"
         case activeProfile = "active_profile"
         case lastFailure = "last_failure"
         case recovering, digest, profiles
@@ -110,7 +107,6 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         configured = try values.decode(Bool.self, forKey: .configured)
         sourceURL = values.contains(.sourceURL) ? try values.decode(String.self, forKey: .sourceURL) : ""
         offlineAcceptedAt = values.contains(.offlineAcceptedAt) ? try values.decode(String.self, forKey: .offlineAcceptedAt) : ""
-        leakProtectionOff = values.contains(.leakProtectionOff) ? try values.decode(String.self, forKey: .leakProtectionOff) : ""
         sourceError = values.contains(.sourceError) ? try values.decode(String.self, forKey: .sourceError) : ""
         activeProfile = try values.decodeIfPresent(DobbyProfile.self, forKey: .activeProfile)
         lastFailure = try values.decodeIfPresent(DobbyFailure.self, forKey: .lastFailure)
