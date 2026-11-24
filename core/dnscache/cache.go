@@ -84,9 +84,14 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 	if source != nil {
 		identity, resolver, err := source(ctx)
 		if err != nil {
-			c.mu.Lock()
-			c.lostAt = time.Now()
-			c.mu.Unlock()
+			// Only a capture that reports no physical network counts as a
+			// loss. A canceled caller or a capture that ran out of time says
+			// nothing about the network, so the recovery limit still applies.
+			if ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				c.mu.Lock()
+				c.lostAt = time.Now()
+				c.mu.Unlock()
+			}
 			return nil, fmt.Errorf("capture underlying resolver: %w", err)
 		}
 		c.SetResolver(identity, resolver)
