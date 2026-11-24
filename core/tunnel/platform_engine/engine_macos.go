@@ -9,6 +9,7 @@ import (
 	"net"
 	"time"
 
+	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/tun"
 
@@ -21,8 +22,8 @@ const (
 	macOSTunReleasePoll = 50 * time.Millisecond
 )
 
-func startPlatformEngine(c EngineConfig) (bool, error) {
-	accepted, err := startStack(c, func() (device.Device, error) { return tun.Open("utun", TunnelMTU) })
+func startPlatformEngine(_ EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
+	accepted, err := startStack(handler, func() (device.Device, error) { return tun.Open("utun", TunnelMTU) })
 	if !accepted {
 		return false, err
 	}

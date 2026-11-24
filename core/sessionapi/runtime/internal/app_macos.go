@@ -122,7 +122,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 	app.DNSCache.SetResolverSource(capture)
-	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{FD: -1}, app.DNSCache, app.BypassPolicy)
+	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{FD: -1})
 	app.Engine = ownedEngine
 	if err != nil {
 		signalInit(initResult, err)

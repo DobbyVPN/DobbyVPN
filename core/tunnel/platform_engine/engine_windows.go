@@ -19,6 +19,7 @@ import (
 	"core/routing"
 	"core/tunnel/protected_dialer"
 
+	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/tun"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
@@ -53,7 +54,7 @@ const (
 	windowsAdapterRandomBytes = 16
 )
 
-func startPlatformEngine(c EngineConfig) (bool, error) {
+func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
 	startedAt := time.Now()
 	uplinkIface := c.UplinkIface
 	if err := prepareWindowsStateForStart(); err != nil {
@@ -65,7 +66,7 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 		return false, fmt.Errorf("create owned Wintun identity: %w", err)
 	}
 	resetTun2SocksInterfaceBinding()
-	accepted, err := startStack(c, func() (device.Device, error) { return tun.Open(adapterName, windowsTunMTU) })
+	accepted, err := startStack(handler, func() (device.Device, error) { return tun.Open(adapterName, windowsTunMTU) })
 	if accepted {
 		adapter.ownedAdapterName = adapterName
 	}

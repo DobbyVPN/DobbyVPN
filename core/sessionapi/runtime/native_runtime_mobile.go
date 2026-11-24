@@ -133,10 +133,7 @@ func (c *nativeRuntime) connectLocked(ctx context.Context) (err error) {
 	}
 
 	log.Debugf(nativeLogCategory, "starting tun2socks engine proxy_endpoint_configured=true local_socks_listener_readiness=unobserved")
-	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{
-		FD:          fd,
-		UplinkIface: "",
-	}, c.dnsCache, c.bypassPolicy)
+	c.engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: fd})
 	if err != nil {
 		log.Debugf(nativeLogCategory, "Can't start tun2socks: %v", err)
 		return fail(fmt.Errorf("failed to start tun2socks engine: %w", err))
