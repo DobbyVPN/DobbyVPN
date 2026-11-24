@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
+	"core/common"
 	"core/dnscache"
 	"core/iprange"
 	"core/log"
@@ -407,6 +409,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	if device == nil {
 		return fail(errors.New("protocol device unavailable"))
 	}
+	owned.socketContext = withDeviceDNS(owned.socketContext, device)
 	// Retain the device-reported numeric upstream inventory in this
 	// attempt's direct policy, including IPv6 answers.
 	if upstreams, ok := device.(interface{ UpstreamIPs() []net.IP }); ok {
@@ -744,4 +747,25 @@ func connectedHealthTimeout(ctx context.Context) (time.Duration, error) {
 
 func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyAddr string) error {
 	return measureConnectedHealth(ctx, proxyAddr)
+}
+
+// withDeviceDNS marks the attempt when its protocol does not carry UDP DNS
+// reliably, so the tunnel answers it with a truncated response and resolvers
+// retry over TCP (#532).
+func withDeviceDNS(ctx context.Context, device protocol.ProtocolDevice) context.Context {
+	if dns, ok := device.(interface{ UDPDNSOverTCP() bool }); ok && dns.UDPDNSOverTCP() {
+		return tunnel.WithUDPDNSOverTCP(ctx, tunnelResolvers())
+	}
+	return ctx
+}
+
+// tunnelResolvers are the tunnel DNS servers published to the system resolver.
+func tunnelResolvers() []netip.Addr {
+	var resolvers []netip.Addr
+	for _, server := range common.VPNDNSServers() {
+		if address, err := netip.ParseAddr(server); err == nil {
+			resolvers = append(resolvers, address)
+		}
+	}
+	return resolvers
 }

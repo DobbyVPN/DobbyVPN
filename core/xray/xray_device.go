@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	goruntime "runtime"
 	"sync"
 
 	"core/auth"
@@ -179,3 +180,11 @@ func (d *XrayDevice) CloseContext(ctx context.Context) error {
 	}
 	return nil
 }
+
+// UDPDNSOverTCP reports whether the tunnel answers UDP DNS for this device
+// with a truncated response, so the system resolver uses TCP through Xray.
+// On macOS the resolver sends its first query to an IPv6 tunnel resolver; an
+// IPv4-only VPN server drops that UDP query without an answer, and the lookup
+// waits about 5 s before the resolver tries another server (#532). Over TCP
+// the failed connection ends at once and the next server answers.
+func (d *XrayDevice) UDPDNSOverTCP() bool { return goruntime.GOOS == "darwin" }

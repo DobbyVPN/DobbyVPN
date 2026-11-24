@@ -70,6 +70,7 @@ type DobbyProxy struct {
 	flows      flowOwner
 	generation uint64
 	udpRelay   *stackTunnel.Tunnel
+	dnsTiming  *dnsTiming
 
 	activeTCP atomic.Int64
 	activeUDP atomic.Int64
@@ -502,10 +503,16 @@ func (e *Engine) attachLocked(ctx context.Context, generation uint64, address st
 	if err != nil {
 		return err
 	}
-	wrapper := &DobbyProxy{vpn: outbound, direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: cache, OwnerContext: ctx}, bypass: bypass, generation: generation}
+	wrapper := &DobbyProxy{vpn: outbound, direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: cache, OwnerContext: ctx}, bypass: bypass, generation: generation, dnsTiming: newDNSTiming(generation)}
 	wrapper.vpn, err = newSocksTCPProxy(outbound, address, &wrapper.flows)
 	if err != nil {
 		return err
+	}
+	dnsOverTCP := UDPDNSOverTCPRequested(ctx)
+	if dnsOverTCP {
+		// Only queries the VPN path would carry: bypass destinations
+		// (ExcludeIPs) are chosen before this proxy and stay direct.
+		wrapper.vpn = truncatingDNSProxy{Proxy: wrapper.vpn, resolvers: udpDNSOverTCPResolvers(ctx)}
 	}
 	// Bind the UDP dispatcher to this attempt. An admitted flow keeps its
 	// target even if dispatch runs after replacement of the active attempt.
@@ -514,7 +521,7 @@ func (e *Engine) attachLocked(ctx context.Context, generation uint64, address st
 	e.proxy, e.attempt = wrapper, generation
 	activeFlowDiagnostics.Store(wrapper)
 	e.router.set(wrapper)
-	log.Infof(Category, "[Engine] transport attached generation=%d interface=%s", generation, e.ifaceName)
+	log.Infof(Category, "[Engine] transport attached generation=%d interface=%s udp_dns_over_tcp=%t", generation, e.ifaceName, dnsOverTCP)
 	return nil
 }
 

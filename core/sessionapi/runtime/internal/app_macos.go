@@ -150,6 +150,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	if err == nil {
 		_, err = plan.AcquireMacOSDNS(ctx, name, app.RoutingConfig.DNSServers)
 	}
+	if err == nil {
+		routing.LogMacOSResolverOrder(ctx)
+	}
 	if err != nil {
 		signalInit(initResult, err)
 		return err
