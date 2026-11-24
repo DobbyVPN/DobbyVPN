@@ -21,7 +21,7 @@ type MacOSPhysicalRoutes struct {
 	mu        sync.Mutex
 	sessionID string
 	current   *Plan
-	routes    []macOSRoute
+	routes    []*macOSRouteOwner
 	identity  string
 	complete  bool
 	closed    bool
@@ -39,6 +39,15 @@ func (p *Plan) AcquireMacOSPhysicalRoutes() (*MacOSPhysicalRoutes, error) {
 // Update captures actual physical gateways for both families. It never repairs
 // a gateway from an obsolete physical context or mutates an unscoped default.
 func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysicalNetwork) error {
+	return p.update(ctx, physical, false)
+}
+
+// Refresh checks the kernel routes even when SystemConfiguration is unchanged.
+func (p *MacOSPhysicalRoutes) Refresh(ctx context.Context, physical MacOSPhysicalNetwork) error {
+	return p.update(ctx, physical, true)
+}
+
+func (p *MacOSPhysicalRoutes) update(ctx context.Context, physical MacOSPhysicalNetwork, refresh bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -47,36 +56,57 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// The identity covers gateways and DNS of the physical services, so an
-	// unchanged one needs no routing table dump.
-	if physical.Identity != "" && p.complete && p.identity == physical.Identity {
+	// Resolver lookups may reuse a completed observation for the same service identity.
+	if !refresh && physical.Identity != "" && p.complete && p.identity == physical.Identity {
 		return nil
 	}
-	routes, err := macOSPhysicalScopedDefaults(physical)
+	// A failed observation must be retried even by an ordinary resolver lookup.
+	p.identity = ""
+	rows, err := macOSReadRoutes()
+	if err != nil {
+		return err
+	}
+	routes, err := macOSPhysicalScopedDefaults(physical, rows)
 	if err != nil {
 		return err
 	}
 	same := p.complete && len(routes) == len(p.routes)
 	for i := range routes {
-		if !same || !routes[i].same(p.routes[i]) {
+		if !same || !routes[i].same(p.routes[i].macOSRoute) {
 			same = false
 			break
 		}
 	}
 	if same {
-		for _, route := range routes {
-			current, err := findMacOSRoute(route)
+		var missing []*macOSRouteOwner
+		var conflict error
+		for _, owner := range p.routes {
+			current, err := matchMacOSRoute(rows, owner.macOSRoute)
+			if err != nil {
+				conflict = errors.Join(conflict, err)
+				continue
+			}
+			if current == nil {
+				owner.owned = false
+				missing = append(missing, owner)
+			}
+		}
+		if conflict != nil {
+			return conflict
+		}
+		for _, owner := range missing {
+			changed, err := owner.add(ctx)
 			if err != nil {
 				return err
 			}
-			if current == nil {
-				same = false
+			if changed {
+				log.Info(Category, "macOS physical scoped default restored", map[string]any{
+					"network_identity": physical.Identity, "prefix": owner.prefix.String(), "interface_index": owner.index,
+				})
 			}
 		}
-		if same {
-			p.identity = physical.Identity
-			return nil
-		}
+		p.identity = physical.Identity
+		return nil
 	}
 	// A partly closed plan no longer matches the remembered identity.
 	p.complete = false
@@ -88,11 +118,13 @@ func (p *MacOSPhysicalRoutes) Update(ctx context.Context, physical MacOSPhysical
 	// Record the replacement before applying anything so partial acquisition is
 	// retained for cleanup, including a successful native write followed by error.
 	p.current = NewPlan(p.sessionID)
-	p.routes = routes
+	p.routes = nil
 	for _, route := range routes {
-		if _, err := p.current.acquireMacOSRoute(ctx, route); err != nil {
+		owner, err := p.current.acquireMacOSRoute(ctx, route)
+		if err != nil {
 			return err
 		}
+		p.routes = append(p.routes, owner)
 	}
 	p.complete = true
 	p.identity = physical.Identity
@@ -121,11 +153,7 @@ func (p *MacOSPhysicalRoutes) Close(ctx context.Context) error {
 	return nil
 }
 
-func macOSPhysicalScopedDefaults(physical MacOSPhysicalNetwork) ([]macOSRoute, error) {
-	rows, err := macOSReadRoutes()
-	if err != nil {
-		return nil, err
-	}
+func macOSPhysicalScopedDefaults(physical MacOSPhysicalNetwork, rows []macOSRoute) ([]macOSRoute, error) {
 	var defaults []macOSRoute
 	for _, family := range []struct {
 		index int

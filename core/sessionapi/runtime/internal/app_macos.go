@@ -88,13 +88,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return err
 	}
 
-	capturePhysical := func(queryCtx context.Context) (routing.MacOSPhysicalNetwork, dnscache.Resolver, error) {
+	capturePhysical := func(queryCtx context.Context, updateRoutes func(context.Context, routing.MacOSPhysicalNetwork) error) (routing.MacOSPhysicalNetwork, dnscache.Resolver, error) {
 		physical, err := routing.CaptureMacOSPhysicalNetwork(queryCtx)
 		if err != nil {
 			protected_dialer.ResetDefaultRoute()
 			return routing.MacOSPhysicalNetwork{}, nil, err
 		}
-		if err := physicalRoutes.Update(queryCtx, physical); err != nil {
+		if err := updateRoutes(queryCtx, physical); err != nil {
 			protected_dialer.ResetDefaultRoute()
 			return physical, nil, err
 		}
@@ -119,7 +119,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return physical, fenced, nil
 	}
 	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
-		physical, resolver, err := capturePhysical(queryCtx)
+		physical, resolver, err := capturePhysical(queryCtx, physicalRoutes.Update)
 		if err != nil {
 			return "", nil, err
 		}
@@ -127,7 +127,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	// Capture the physical service before publishing the owned supplemental DNS.
 	// The same source is refreshed for every endpoint lookup and link observation.
-	physical, _, err := capturePhysical(ctx)
+	physical, _, err := capturePhysical(ctx, physicalRoutes.Update)
 	if err != nil {
 		signalInit(initResult, err)
 		return err
@@ -182,7 +182,7 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			// the exact routes owned by this network; never replace foreign state.
 			repaired, repairErr := plan.Repair()
 			refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			current, _, refreshErr := capturePhysical(refreshCtx)
+			current, _, refreshErr := capturePhysical(refreshCtx, physicalRoutes.Refresh)
 			cancel()
 			if err := errors.Join(repairErr, refreshErr); err != nil {
 				observed := physical

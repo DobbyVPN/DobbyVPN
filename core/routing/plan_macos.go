@@ -54,6 +54,10 @@ func findMacOSRoute(want macOSRoute) (*macOSRoute, error) {
 	if err != nil {
 		return nil, err
 	}
+	return matchMacOSRoute(rows, want)
+}
+
+func matchMacOSRoute(rows []macOSRoute, want macOSRoute) (*macOSRoute, error) {
 	var exact *macOSRoute
 	for _, row := range rows {
 		if row.prefix != want.prefix || row.flags&unix.RTF_IFSCOPE != want.flags&unix.RTF_IFSCOPE ||
@@ -76,37 +80,44 @@ func findMacOSRoute(want macOSRoute) (*macOSRoute, error) {
 	return exact, nil
 }
 
-func (p *Plan) acquireMacOSRoute(ctx context.Context, want macOSRoute) (*Lease, error) {
-	owned := false
+// A missing row is restored with an exclusive add. If another writer wins
+// the race, the exact row can be used without taking ownership of it.
+type macOSRouteOwner struct {
+	macOSRoute
+	owned bool
+}
+
+func (r *macOSRouteOwner) add(ctx context.Context) (bool, error) {
+	var err error
+	r.owned, err = macOSChangeRoute(ctx, unix.RTM_ADD, r.macOSRoute)
+	if errors.Is(err, unix.EEXIST) {
+		current, err := findMacOSRoute(r.macOSRoute)
+		if err == nil && current == nil {
+			err = fmt.Errorf("route exists but exact identity was not found: %s", r.prefix)
+		}
+		return false, err
+	}
+	if err != nil {
+		return r.owned, err
+	}
+	current, err := findMacOSRoute(r.macOSRoute)
+	if err == nil && current == nil {
+		err = fmt.Errorf("created route %s is absent", r.prefix)
+	}
+	return true, err
+}
+
+func (p *Plan) acquireMacOSRoute(ctx context.Context, want macOSRoute) (*macOSRouteOwner, error) {
+	owner := &macOSRouteOwner{macOSRoute: want}
 	ensure := func() (bool, error) {
 		current, err := findMacOSRoute(want)
 		if err != nil || current != nil {
 			return false, err
 		}
-		owned, err = macOSChangeRoute(ctx, unix.RTM_ADD, want)
-		if errors.Is(err, unix.EEXIST) {
-			current, err = findMacOSRoute(want)
-			if err == nil && current == nil {
-				err = fmt.Errorf("route exists but exact identity was not found: %s", want.prefix)
-			}
-			return false, err
-		}
-		// A successful atomic write owns the mutation even if socket close or
-		// verification fails. A rejected write never adopts a foreign route.
-		if err != nil {
-			return false, err
-		}
-		current, err = findMacOSRoute(want)
-		if err != nil {
-			return true, err
-		}
-		if current == nil {
-			return true, fmt.Errorf("created route %s is absent", want.prefix)
-		}
-		return true, nil
+		return owner.add(ctx)
 	}
 	lease, err := p.Acquire("route "+want.prefix.String(), func() error { return nil }, func(cleanupCtx context.Context) error {
-		if !owned {
+		if !owner.owned {
 			return nil
 		}
 		current, err := findMacOSRoute(want)
@@ -130,5 +141,5 @@ func (p *Plan) acquireMacOSRoute(ctx context.Context, want macOSRoute) (*Lease, 
 	lease.repair = ensure
 	_, err = ensure()
 	lease.mu.Unlock()
-	return lease, err
+	return owner, err
 }
