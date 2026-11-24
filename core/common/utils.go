@@ -13,20 +13,12 @@ type NetworkConfig struct {
 	TunDevice  string // 10.X.Y.2
 }
 
-var (
-	cfg  *NetworkConfig
-	once sync.Once
-)
+var networkConfig = sync.OnceValue(generateConfig)
 
-func GetNetworkConfig() *NetworkConfig {
-	once.Do(func() {
-		cfg = generateConfig()
-	})
-
-	return cfg
-}
+func GetNetworkConfig() *NetworkConfig { return networkConfig() }
 
 func generateConfig() *NetworkConfig {
+	assigned := localIPv4Addresses()
 	for i := 0; i < 20; i++ {
 		x, err := randomPrivateOctet()
 		if err != nil {
@@ -40,7 +32,7 @@ func generateConfig() *NetworkConfig {
 		gateway := fmt.Sprintf("10.%d.%d.1", x, y)
 		device := fmt.Sprintf("10.%d.%d.2", x, y)
 
-		if isIPFree(gateway) && isIPFree(device) {
+		if !assigned[gateway] && !assigned[device] {
 			return &NetworkConfig{
 				TunGateway: gateway,
 				TunDevice:  device,
@@ -62,26 +54,24 @@ func randomPrivateOctet() (int64, error) {
 	return n.Int64() + 1, nil
 }
 
-func isIPFree(target string) bool {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return true
-	}
-
-	for _, ifc := range ifaces {
-		addrs, _ := ifc.Addrs()
-
-		for _, addr := range addrs {
-			ip, _, err := net.ParseCIDR(addr.String())
-			if err != nil {
-				continue
+// Keep addresses from readable interfaces if another adapter disappears mid-scan.
+func localIPv4Addresses() map[string]bool {
+	assigned := make(map[string]bool)
+	interfaces, _ := net.Interfaces()
+	for _, iface := range interfaces {
+		addresses, _ := iface.Addrs()
+		for _, address := range addresses {
+			var ip net.IP
+			switch addr := address.(type) {
+			case *net.IPNet:
+				ip = addr.IP
+			case *net.IPAddr:
+				ip = addr.IP
 			}
-
-			if ip.String() == target {
-				return false
+			if ipv4 := ip.To4(); ipv4 != nil {
+				assigned[ipv4.String()] = true
 			}
 		}
 	}
-
-	return true
+	return assigned
 }
