@@ -53,6 +53,11 @@ def _carried_forward(original, current):
 def select_ready(run, artifacts, jobs_by_attempt, group):
     """None means ordinary producer progress, never a successful missing check."""
     required = PACKAGES[group]
+    if group in {"macos", "ios"} and any(
+        job.get("name") == build_manifest.APPLE_PRODUCER
+        for jobs in jobs_by_attempt.values() for job in jobs
+    ):
+        required = dict.fromkeys(required, build_manifest.APPLE_PRODUCER)
     selected = select_artifacts(artifacts, run["run_attempt"])
     result = {}
     for logical, producer in required.items():
@@ -82,6 +87,8 @@ def select_ready(run, artifacts, jobs_by_attempt, group):
             raise ValueError(f"unsuccessful package producer: {producer}")
         if later_jobs and not _carried_forward(job, later_jobs[0]):
             raise ValueError(f"current producer has no successful current-attempt artifact: {producer}")
+        if producer == build_manifest.APPLE_PRODUCER:
+            build_manifest.verify_apple_artifact_attempt(selected, attempt)
         if type(job.get("id")) is not int or job["id"] <= 0:
             raise ValueError(f"invalid package producer job ID: {producer}")
         if (type(artifact.get("id")) is not int or artifact["id"] <= 0

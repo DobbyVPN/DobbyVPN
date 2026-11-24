@@ -9,22 +9,6 @@ on:
       version_name:
         type: string
         required: true
-      major:
-        type: string
-        required: true
-      minor:
-        type: string
-        required: true
-      maintenance:
-        type: string
-        required: true
-      build_number:
-        type: string
-        required: true
-      apple_build_number:
-        type: string
-        required: false
-        default: ''
       retention_days:
         default: 1
         type: number
@@ -43,8 +27,6 @@ jobs:
             architecture: amd64
           - platform: windows
             architecture: amd64
-          - platform: macos
-            architecture: universal
     uses: ./.github/workflows/desktop_package.yml
     with:
       debug: true
@@ -52,24 +34,4 @@ jobs:
       architecture: ${{ matrix.architecture }}
       source_sha: ${{ inputs.source_sha }}
       version_name: ${{ inputs.version_name }}
-      retention_days: ${{ inputs.retention_days }}
-
-  ios_runtime:
-    uses: ./.github/workflows/ios_runtime_framework.yml
-    with:
-      debug: true
-      source_sha: ${{ inputs.source_sha }}
-      retention_days: ${{ inputs.retention_days }}
-
-  ios_archive:
-    needs: ios_runtime
-    uses: ./.github/workflows/ios_build.yml
-    with:
-      debug: true
-      source_sha: ${{ inputs.source_sha }}
-      app_major_version: ${{ inputs.major }}
-      app_minor_version: ${{ inputs.minor }}
-      app_maintenance_version: ${{ inputs.maintenance }}
-      android_version_code: ${{ inputs.build_number }}
-      apple_build_number: ${{ inputs.apple_build_number }}
       retention_days: ${{ inputs.retention_days }}

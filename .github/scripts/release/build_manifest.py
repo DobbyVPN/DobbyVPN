@@ -13,7 +13,7 @@ import subprocess
 import sys
 from typing import Any
 
-from artifact_attempts import ArtifactAttemptError, select_artifacts
+from artifact_attempts import ArtifactAttemptError, parse_artifact_name, select_artifacts
 from require_ci import find_reusable_ci_run
 
 BUILD_WORKFLOW_PATH = ".github/workflows/build.yml"
@@ -21,6 +21,15 @@ MANIFEST_ARTIFACT = "build-manifest"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 VERSION_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+APPLE_PRODUCER = "build_apple / packages"
+APPLE_ARTIFACTS = (
+    "DobbyVPNRuntime.xcframework",
+    "DobbyVPNRuntime-debug.xcframework",
+    "DobbyVPN.xcarchive.tar.gz",
+    "DobbyVPN.xcarchive-debug.tar.gz",
+    "dobbyVPN-macos-universal.pkg",
+    "dobbyVPN-macos-universal-debug.pkg",
+)
 
 
 class BuildManifestError(ValueError):
@@ -49,6 +58,13 @@ def required_artifacts(version: str) -> tuple[str, ...]:
 
 def _workflow_path_matches(value: Any, expected: str) -> bool:
     return isinstance(value, str) and (value == expected or value.startswith(expected + "@"))
+
+
+def verify_apple_artifact_attempt(inventory: dict[str, dict[str, Any]], attempt: int) -> None:
+    for name in APPLE_ARTIFACTS:
+        artifact = inventory.get(name)
+        if artifact is None or parse_artifact_name(artifact["name"])[1] != attempt:
+            raise BuildManifestError(f"{name} must come from successful Apple producer attempt {attempt}")
 
 
 def _json_command(command: list[str]) -> Any:
@@ -174,7 +190,7 @@ def _current_build_run(repository: str, run_id: int, run_number: int, source_sha
 def create_manifest(
     *, repository: str, run_id: int, run_number: int, source_sha: str,
     source_tree: str, version: str, android_version_code: int,
-    apple_build_number: int,
+    apple_build_number: int, apple_producer_attempt: int | None = None,
 ) -> dict[str, Any]:
     if not SHA_RE.fullmatch(source_sha) or not SHA_RE.fullmatch(source_tree):
         raise BuildManifestError("source commit and tree must be full lowercase Git identities")
@@ -185,6 +201,10 @@ def create_manifest(
     current_run = _current_build_run(repository, run_id, run_number, source_sha)
     run_attempt = current_run["run_attempt"]
     inventory = _artifact_inventory(repository, run_id, run_attempt, required_artifacts(version))
+    if apple_producer_attempt is not None:
+        if type(apple_producer_attempt) is not int or not 1 <= apple_producer_attempt <= run_attempt:
+            raise BuildManifestError("invalid successful Apple producer attempt")
+        verify_apple_artifact_attempt(inventory, apple_producer_attempt)
     artifacts: list[dict[str, Any]] = []
     for name in required_artifacts(version):
         item = inventory.get(name)
@@ -308,6 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--version", required=True)
     create.add_argument("--android-version-code", type=int, required=True)
     create.add_argument("--apple-build-number", type=int, required=True)
+    create.add_argument("--apple-producer-attempt", type=int, required=True)
     create.add_argument("--output", type=Path, required=True)
     resolve = sub.add_parser("resolve")
     resolve.add_argument("--repository", required=True)
@@ -327,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
                 repository=args.repository, run_id=args.run_id, run_number=args.run_number,
                 source_sha=args.source_sha, source_tree=args.source_tree, version=args.version,
                 android_version_code=args.android_version_code, apple_build_number=args.apple_build_number,
+                apple_producer_attempt=args.apple_producer_attempt,
             )
             _write_output(args.output, manifest)
         elif args.command == "resolve":
