@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"core/dnscache"
@@ -13,6 +14,7 @@ import (
 	xrayCommon "core/xray/common"
 
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/infra/conf"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	_ "github.com/xtls/xray-core/main/distro/all" // Register Xray's built-in protocol and transport modules.
 )
@@ -81,7 +83,35 @@ func GenerateXrayConfig(
 		return nil, fmt.Errorf("failed to decode xray json config: %w", err)
 	}
 
+	if runtime.GOOS == "ios" {
+		clampIOSConnectionBuffers(infraConfig)
+	}
 	return infraConfig.Build()
+}
+
+func clampIOSConnectionBuffers(config *conf.Config) {
+	// Xray reads this policy in KiB. Keep a small per-connection queue inside
+	// the packet provider's process budget, including profiles requesting unlimited queues.
+	const maximumKiB int32 = 16
+	if config.Policy == nil {
+		config.Policy = &conf.PolicyConfig{}
+	}
+	if config.Policy.Levels == nil {
+		config.Policy.Levels = make(map[uint32]*conf.Policy)
+	}
+	if config.Policy.Levels[0] == nil {
+		config.Policy.Levels[0] = &conf.Policy{}
+	}
+	for level, policy := range config.Policy.Levels {
+		if policy == nil {
+			policy = &conf.Policy{}
+			config.Policy.Levels[level] = policy
+		}
+		if policy.BufferSize == nil || *policy.BufferSize < 0 || *policy.BufferSize > maximumKiB {
+			limit := maximumKiB
+			policy.BufferSize = &limit
+		}
+	}
 }
 
 func captureXrayLogMessages(userConfig map[string]interface{}) {
