@@ -145,10 +145,7 @@ func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Pref
 // sources are covered.
 func writeExcludedInbound(b *strings.Builder, links []PFLink) {
 	for _, link := range pfUsableLinks(links) {
-		family := "inet"
-		if link.IPv6 {
-			family = "inet6"
-		}
+		family := pfLinkFamily(link)
 		fmt.Fprintf(b, "pass in on %s %s proto tcp from <dobbyvpn_excluded> port != 53 to any flags S/SA no state tag %s\n", link.Interface, family, pfExcludedInTag)
 		fmt.Fprintf(b, "pass in quick on %s %s proto tcp from (%s:network) to any flags S/SA keep state tagged %s\n", link.Interface, family, link.Interface, pfExcludedInTag)
 		if pfLinkHasGateway(link) {
@@ -176,6 +173,13 @@ func pfUsableLinks(links []PFLink) []PFLink {
 	return slices.Compact(sorted)
 }
 
+func pfLinkFamily(link PFLink) string {
+	if link.IPv6 {
+		return pfInet6
+	}
+	return pfInet
+}
+
 func pfLinkHasGateway(link PFLink) bool {
 	return link.Gateway.IsValid() && link.Gateway.Unmap().Is4() != link.IPv6
 }
@@ -190,10 +194,7 @@ func PFInboundCoverage(excluded []netip.Prefix, links []PFLink) []string {
 	}
 	var coverage []string
 	for _, link := range pfUsableLinks(links) {
-		family := "inet"
-		if link.IPv6 {
-			family = "inet6"
-		}
+		family := pfLinkFamily(link)
 		reach := "on-link only"
 		if pfLinkHasGateway(link) {
 			reach = "on-link and via " + pfAddress(link.Gateway)
@@ -220,11 +221,16 @@ func pfPrefixes(configured, hosts *iprange.Set) []netip.Prefix {
 	return prefixes
 }
 
+const (
+	pfInet  = "inet"
+	pfInet6 = "inet6"
+)
+
 func pfFamily(ip netip.Addr) string {
 	if ip.Unmap().Is4() {
-		return "inet"
+		return pfInet
 	}
-	return "inet6"
+	return pfInet6
 }
 
 // pf takes no zone in an address; the rule matches the address on any link.
