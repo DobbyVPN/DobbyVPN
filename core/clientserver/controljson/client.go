@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"core/sessionapi/wire"
@@ -34,15 +35,24 @@ func (c Client) Call(ctx context.Context, method string, params, result any) (ca
 	if err != nil {
 		return err
 	}
+	// Closing this one-request connection interrupts both reads and writes.
+	closeConn := sync.OnceValue(conn.Close)
+	stopClose := context.AfterFunc(ctx, func() { closeConn() })
 	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
+		stopClose()
+		if callErr != nil && ctx.Err() != nil {
+			callErr = errors.Join(ctx.Err(), callErr)
+		}
+		if closeErr := closeConn(); closeErr != nil {
 			callErr = errors.Join(callErr, fmt.Errorf("close desktop control connection: %w", closeErr))
 		}
 	}()
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	} else {
-		_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(2 * time.Minute)
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("set desktop control deadline: %w", err)
 	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {

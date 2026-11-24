@@ -324,27 +324,13 @@ func uploadDiagnostics(ctx context.Context, client controljson.Client, paths []s
 	return uploadDiagnosticsWithHTTP(ctx, client, paths, &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
 }
 
-func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, paths []string, transport *http.Client) (resultErr error) {
-	logPath, pathErr := cliLogPath()
-	if pathErr != nil {
-		return pathErr
-	}
-	tempDir := filepath.Join(filepath.Dir(logPath), "upload-temp")
-	if err := os.MkdirAll(tempDir, 0o700); err != nil {
-		return err
-	}
-	lock, lockErr := os.OpenFile(filepath.Join(tempDir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if lockErr != nil {
-		return lockErr
-	}
-	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	if err := tryUploadLock(lock); err != nil {
-		if uploadLockContended(err) {
-			return fmt.Errorf("another log upload is in progress: %w", err)
-		}
-		return fmt.Errorf("lock upload directory: %w", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, releaseUploadLock(lock)) }()
+func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, paths []string, transport *http.Client) error {
+	return withUploadLock(false, func(dir string) error {
+		return uploadLocked(ctx, client, paths, transport, dir)
+	})
+}
+
+func uploadLocked(ctx context.Context, client controljson.Client, paths []string, transport *http.Client, tempDir string) (resultErr error) {
 	snapshot, snapshotErr := callSnapshot(ctx, client, "")
 	if snapshotErr != nil {
 		return snapshotErr
@@ -468,7 +454,11 @@ func cleanupUploadTemps(dir string) error {
 	return nil
 }
 
-func cleanupAbandonedUploads() (resultErr error) {
+func cleanupAbandonedUploads() error {
+	return withUploadLock(true, cleanupUploadTemps)
+}
+
+func withUploadLock(skipIfBusy bool, action func(string) error) (resultErr error) {
 	path, pathErr := cliLogPath()
 	if pathErr != nil {
 		return pathErr
@@ -484,10 +474,13 @@ func cleanupAbandonedUploads() (resultErr error) {
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
 	if err := tryUploadLock(lock); err != nil {
 		if uploadLockContended(err) {
-			return nil
+			if skipIfBusy {
+				return nil
+			}
+			return fmt.Errorf("another log upload is in progress: %w", err)
 		}
-		return fmt.Errorf("lock upload directory for cleanup: %w", err)
+		return fmt.Errorf("lock upload directory: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, releaseUploadLock(lock)) }()
-	return cleanupUploadTemps(dir)
+	return action(dir)
 }

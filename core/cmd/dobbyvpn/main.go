@@ -54,14 +54,15 @@ func run(args []string) int {
 	}
 	// Reject malformed commands before any side effect: no upload
 	// cleanup, log file or service connection for a typo.
+	var execute serviceCommand
+	var message string
 	if args[0] == "logs" {
-		if message := logsArgsError(args[1:]); message != "" {
-			return usage(message)
-		}
+		message = logsArgsError(args[1:])
 	} else {
-		if message := serviceArgsError(args); message != "" {
-			return usage(message)
-		}
+		execute, message = parseServiceCommand(args)
+	}
+	if message != "" {
+		return usage(message)
 	}
 	if err := cleanupAbandonedUploads(); err != nil {
 		fmt.Fprintf(os.Stderr, "dobby-cli: upload temporary cleanup: %v\n", err)
@@ -84,7 +85,7 @@ func run(args []string) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return runServiceCommand(ctx, client, args)
+	return execute(ctx, client)
 }
 
 func initApplicationLogger() error {
@@ -142,49 +143,33 @@ func isHelpCommand(args []string) bool {
 	return len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help"
 }
 
-// serviceArgsError returns the usage message for an invalid service command
-// line, or "" when the command line is acceptable.
-func serviceArgsError(args []string) string {
+type serviceCommand func(context.Context, controljson.Client) int
+
+func parseServiceCommand(args []string) (serviceCommand, string) {
 	switch args[0] {
 	case "configure":
 		if len(args) != 2 {
-			return "configure requires a source"
+			return nil, "configure requires a source"
 		}
+		return func(ctx context.Context, client controljson.Client) int { return configureJSON(ctx, client, args[1]) }, ""
 	case startCommand:
-		_, message := parseStartOptions(args[1:])
-		return message
+		options, message := parseStartOptions(args[1:])
+		return options.start, message
 	case "stop":
-		_, message := parseStopOptions(args[1:])
-		return message
+		options, message := parseStopOptions(args[1:])
+		return options.stop, message
 	case "snapshot":
 		if len(args) != 1 {
-			return "snapshot accepts no options"
+			return nil, "snapshot accepts no options"
 		}
+		return snapshotJSON, ""
 	case "external-ip":
 		if len(args) != 1 {
-			return "external-ip accepts no options"
+			return nil, "external-ip accepts no options"
 		}
+		return func(context.Context, controljson.Client) int { return externalIP() }, ""
 	default:
-		return "unknown command"
-	}
-	return ""
-}
-
-// runServiceCommand runs a command line already accepted by serviceArgsError.
-func runServiceCommand(ctx context.Context, client controljson.Client, args []string) int {
-	switch args[0] {
-	case "configure":
-		return configureJSON(ctx, client, args[1])
-	case startCommand:
-		return startJSON(ctx, client, args[1:])
-	case "stop":
-		return stopJSON(ctx, client, args[1:])
-	case "snapshot":
-		return snapshotJSON(ctx, client)
-	case "external-ip":
-		return externalIP()
-	default:
-		return usage("unknown command")
+		return nil, "unknown command"
 	}
 }
 
@@ -307,11 +292,7 @@ func parseStartOptions(args []string) (options startOptions, errorMessage string
 	return options, ""
 }
 
-func startJSON(ctx context.Context, client controljson.Client, args []string) int {
-	options, parseError := parseStartOptions(args)
-	if parseError != "" {
-		return usage(parseError)
-	}
+func (options startOptions) start(ctx context.Context, client controljson.Client) int {
 	current, err := callSnapshot(ctx, client, "")
 	if err != nil {
 		return writeJSONFailure(err)
@@ -416,11 +397,7 @@ func parseStopOptions(args []string) (options stopOptions, errorMessage string) 
 	return options, ""
 }
 
-func stopJSON(ctx context.Context, client controljson.Client, args []string) int {
-	options, parseError := parseStopOptions(args)
-	if parseError != "" {
-		return usage(parseError)
-	}
+func (options stopOptions) stop(ctx context.Context, client controljson.Client) int {
 	snapshot, err := callSnapshot(ctx, client, "")
 	if err != nil {
 		return writeJSONFailure(err)

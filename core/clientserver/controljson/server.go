@@ -111,11 +111,6 @@ func controlFailure(fields map[string]any, phase string, err error) {
 type Handler struct{ Binding *mobilebinding.Binding }
 
 func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
-	if h.Binding == nil {
-		err := errors.New("desktop control binding is unavailable")
-		controlFailure(requestFields(requestIdentity(""), "", nil), "binding", err)
-		return err
-	}
 	var diagnosticFields map[string]any
 	defer func() {
 		if closeErr := conn.Close(); closeErr != nil {
@@ -126,6 +121,12 @@ func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 			resultErr = errors.Join(resultErr, fmt.Errorf("close desktop control connection: %w", closeErr))
 		}
 	}()
+	if h.Binding == nil {
+		err := errors.New("desktop control binding is unavailable")
+		diagnosticFields = requestFields(requestIdentity(""), "", nil)
+		controlFailure(diagnosticFields, "binding", err)
+		return err
+	}
 	if err := conn.SetDeadline(time.Now().Add(2 * time.Minute)); err != nil {
 		controlFailure(requestFields(requestIdentity(""), "", nil), "deadline", err)
 		return fmt.Errorf("set desktop control deadline: %w", err)
@@ -159,19 +160,21 @@ func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 		log.Info(controlCategory, "desktop command accepted", fields)
 	}
 	response := json.RawMessage(h.Binding.CallJSON(ctx, request.Method, request.Params))
-	var checked json.RawMessage
-	if decodeErr := json.Unmarshal(response, &checked); decodeErr != nil {
+	var outcome struct {
+		OK    *bool         `json:"ok"`
+		Error *wire.Failure `json:"error"`
+	}
+	decodeErr := json.Unmarshal(response, &outcome)
+	if decodeErr == nil && outcome.OK == nil {
+		decodeErr = errors.New("missing response status")
+	}
+	if decodeErr != nil {
 		controlFailure(fields, "response-decode", decodeErr)
 		return writeFailureWithCause(conn, "INTERNAL", "desktop control returned an invalid response: "+decodeErr.Error(), decodeErr)
 	}
-	var outcome struct {
-		OK    bool          `json:"ok"`
-		Error *wire.Failure `json:"error"`
-	}
-	_ = json.Unmarshal(response, &outcome)
 	if outcome.Error != nil {
 		controlFailure(fields, "command", fmt.Errorf("%s: %s", outcome.Error.Code, outcome.Error.Message))
-	} else if !outcome.OK {
+	} else if !*outcome.OK {
 		controlFailure(fields, "command", errors.New("desktop control returned a failure without details"))
 	}
 	_, err = conn.Write(append(response, '\n'))
@@ -179,7 +182,7 @@ func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 		controlFailure(fields, "write", err)
 		return err
 	}
-	if sampled && outcome.OK && outcome.Error == nil {
+	if sampled && *outcome.OK && outcome.Error == nil {
 		fields["elapsed_ms"] = time.Since(started).Milliseconds()
 		log.Info(controlCategory, "desktop command completed", fields)
 	}
