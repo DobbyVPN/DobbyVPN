@@ -30,19 +30,19 @@ func TestConfigureKeepsSourceAndFilenameDistinct(t *testing.T) {
 	if err != nil || string(got) != "file contents" {
 		t.Fatalf("existing filename: got %q, err %v", got, err)
 	}
-	if _, err = readStdinSource(strings.NewReader(filename), 1<<20); err == nil {
+	if _, err = readStdinSource(strings.NewReader(filename)); err == nil {
 		t.Fatal("stdin accepted an assignment-shaped filename")
 	}
 	if _, err = readSource("missing=example.toml"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing assignment-shaped filename: %v", err)
 	}
 	const url = "https://subscription.invalid/sub?token=example"
-	got, err = readStdinSource(strings.NewReader(url+"\n"), 1<<20)
+	got, err = readStdinSource(strings.NewReader(url + "\n"))
 	if err != nil || string(got) != url {
 		t.Fatalf("stdin URL: got %q, err %v", got, err)
 	}
 	for _, invalid := range []string{"/dir/file=value", "http://subscription.invalid/sub?token=example", "subscription.invalid/sub?token=example"} {
-		if _, err := readStdinSource(strings.NewReader(invalid), 1<<20); err == nil {
+		if _, err := readStdinSource(strings.NewReader(invalid)); err == nil {
 			t.Fatalf("accepted invalid stdin source %q", invalid)
 		}
 	}

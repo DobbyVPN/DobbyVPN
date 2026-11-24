@@ -567,18 +567,18 @@ func failureError(failure *wire.Failure) error {
 var configureStdin io.Reader = os.Stdin
 
 const (
-	stdinSource  = "-"
-	startCommand = "start"
+	sourceSizeLimit = 1 << 20
+	stdinSource     = "-"
+	startCommand    = "start"
 )
 
 func readSource(source string) (data []byte, resultErr error) {
-	const limit = 1 << 20
 	if source == stdinSource {
-		return readStdinSource(configureStdin, limit)
+		return readStdinSource(configureStdin)
 	}
 	cleanPath := filepath.Clean(source)
 	if isInlineTOMLSource(source) {
-		return readInlineTOMLSource(source, cleanPath, limit)
+		return readInlineTOMLSource(source, cleanPath)
 	}
 
 	sourceURL, isURL, err := parseSourceURL(source)
@@ -588,19 +588,19 @@ func readSource(source string) (data []byte, resultErr error) {
 	if isURL {
 		return sourceURL, nil
 	}
-	return readSourceFile(cleanPath, limit)
+	return readSourceFile(cleanPath)
 }
 
 // readStdinSource reads a subscription from stdin so that it never appears in
 // the process list or shell history. The text is an HTTPS URL (surrounding
 // whitespace is ignored) or an inline TOML profile; a file path is not accepted.
 // Errors never echo the input, which usually carries a secret token.
-func readStdinSource(input io.Reader, limit int) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(input, int64(limit+1)))
+func readStdinSource(input io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(input, sourceSizeLimit+1))
 	if err != nil {
 		return nil, errors.New("cannot read the configuration from stdin")
 	}
-	if len(data) > limit {
+	if len(data) > sourceSizeLimit {
 		return nil, errors.New("configuration exceeds the 1 MiB size limit")
 	}
 	text := string(data)
@@ -617,33 +617,33 @@ func readStdinSource(input io.Reader, limit int) ([]byte, error) {
 	return []byte(trimmed), nil
 }
 
-func readInlineTOMLSource(source, path string, limit int) ([]byte, error) {
+func readInlineTOMLSource(source, path string) ([]byte, error) {
 	_, statErr := os.Stat(path)
 	if statErr == nil {
-		return readSourceFile(path, limit)
+		return readSourceFile(path)
 	}
 	if !errors.Is(statErr, os.ErrNotExist) &&
 		!errors.Is(statErr, syscall.ENAMETOOLONG) &&
 		!strings.ContainsAny(source, "\r\n") {
 		return nil, fmt.Errorf("cannot read configuration file: %w", statErr)
 	}
-	if len(source) > limit {
+	if len(source) > sourceSizeLimit {
 		return nil, errors.New("configuration exceeds the 1 MiB size limit")
 	}
 	return []byte(source), nil
 }
 
-func readSourceFile(path string, limit int) (data []byte, resultErr error) {
+func readSourceFile(path string) (data []byte, resultErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
-	data, err = io.ReadAll(io.LimitReader(file, int64(limit+1)))
+	data, err = io.ReadAll(io.LimitReader(file, sourceSizeLimit+1))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
-	if len(data) > limit {
+	if len(data) > sourceSizeLimit {
 		return nil, errors.New("configuration exceeds the 1 MiB size limit")
 	}
 
