@@ -50,8 +50,44 @@ Write-Output ("FILES=" + (Test-Path (Join-Path $env:ProgramFiles 'DobbyVPN\bin')
 SID = "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"
 
 
+# Lines of a verbose msiexec log that show whether, and why, the install stopped.
+RELEVANT = re.compile(
+    r"LaunchConditions|Return value|Error \d+|\b(?:1708|1603|1920|1925)\b|InstallFiles|StartServices|InstallInitialize|CostFinalize"
+    r"|DOBBYVPN_CONTROL_PIPE_SID|UserSID|SYSTEM account|Product:|Installation (?:success|operation)|Windows Installer|MSI \(s\).*Note:",
+    re.IGNORECASE)
+
+
 class CheckError(RuntimeError):
     """The MSI does not behave as the SYSTEM install guard requires."""
+
+
+def decode_log(data: bytes) -> tuple[str, str]:
+    """Decode a verbose msiexec log: UTF-16 (BOM, or NUL bytes) or UTF-8; returns the text and the encoding used."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", errors="replace"), "utf-16 (BOM)"
+    if b"\x00" in data[:4096]:
+        return data.decode("utf-16-le", errors="replace"), "utf-16-le (NUL bytes)"
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data[3:].decode("utf-8", errors="replace"), "utf-8 (BOM)"
+    try:
+        return data.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        return data.decode("cp1252", errors="replace"), "cp1252"
+
+
+def read_log(path: Path) -> str:
+    return decode_log(path.read_bytes())[0]
+
+
+def describe_log(path: Path) -> str:
+    """The lines of a log that matter for a failed check, with its size and encoding."""
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return f"{path.name}: unreadable: {error}"
+    text, encoding = decode_log(data)
+    lines = [line.rstrip() for line in text.splitlines() if RELEVANT.search(line)]
+    return "\n".join([f"--- {path.name}: {len(data)} bytes, {encoding}, {len(lines)} relevant lines ---", *lines[:200]])
 
 
 def _powershell(script: str, environment: dict[str, str] | None = None, *, run=subprocess.run) -> str:
@@ -95,7 +131,7 @@ def check(package: Path, log_dir: Path, *, run=subprocess.run, clock=time.monoto
             timings.append(f"{label}: {clock() - started:.0f} s")
 
     def read(name: str) -> str:
-        return (log_dir / name).read_text(encoding="utf-8", errors="replace")
+        return read_log(log_dir / name)
 
     sid = _powershell(SID, run=run).strip().splitlines()[-1].strip()
     if not re.fullmatch(r"S-1-(?:\d+-)*\d+", sid) or sid == "S-1-5-18":
@@ -105,10 +141,14 @@ def check(package: Path, log_dir: Path, *, run=subprocess.run, clock=time.monoto
         # 1. Without the property: refused early, nothing installed.
         code = timed("refused without the property", lambda: msiexec_as_system(package, log_dir / "no-sid.log", run=run))
         log = read("no-sid.log")
-        if code != MSI_FAILED or MESSAGE not in log or "DOBBYVPN_CONTROL_PIPE_SID" not in log:
-            raise CheckError(f"without the property msiexec exited {code}; expected {MSI_FAILED} with the launch condition message")
         if "Error 1920" in log or re.search(r"Action start \d+:\d+:\d+: InstallFiles", log):
-            raise CheckError("the install got past the launch condition (files or the service were reached)")
+            raise CheckError(f"the install got past the launch condition (files or the service were reached); msiexec exited {code}")
+        if code != MSI_FAILED:
+            raise CheckError(f"without the property msiexec exited {code}; expected {MSI_FAILED}")
+        missing = [what for what, text in (("the launch condition message", MESSAGE), ("the property name", "DOBBYVPN_CONTROL_PIPE_SID"))
+                   if text not in log]
+        if missing:
+            raise CheckError(f"without the property msiexec exited {MSI_FAILED} but its log lacks {' and '.join(missing)}")
         if product_state(run=run) != ("absent", False):
             raise CheckError("the refused install left files or the service behind")
         # 2. With the runner account's SID: installs and the service runs.
@@ -141,8 +181,9 @@ def main(argv: list[str] | None = None) -> int:
     except CheckError as error:
         print(f"SYSTEM install check failed: {error}", file=sys.stderr)
         for log in sorted(args.log_dir.glob("*.log")):
+            print(describe_log(log), file=sys.stderr)
             print(f"--- {log.name} (tail) ---", file=sys.stderr)
-            print(log.read_text(encoding="utf-8", errors="replace")[-3000:], file=sys.stderr)
+            print(read_log(log)[-1500:], file=sys.stderr)
         return 1
     print("SYSTEM install check passed: " + "; ".join(timings) + f"; total {time.monotonic() - started:.0f} s")
     return 0
