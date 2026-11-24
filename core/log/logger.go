@@ -202,14 +202,14 @@ func (r policyRecord) encode(first bool) ([]byte, error) {
 	if !bytes.HasSuffix(r.record, []byte("}\n")) {
 		return nil, fmt.Errorf("structured log record is not a JSON line")
 	}
-	context, err := json.Marshal(r.context)
+	encodedContext, err := json.Marshal(r.context)
 	if err != nil {
 		return nil, err
 	}
-	output := make([]byte, 0, len(r.record)+len(context)+20)
+	output := make([]byte, 0, len(r.record)+len(encodedContext)+20)
 	output = append(output, r.record[:len(r.record)-2]...)
 	output = append(output, `,"policy_context":`...)
-	output = append(output, context...)
+	output = append(output, encodedContext...)
 	return append(output, '}', '\n'), nil
 }
 

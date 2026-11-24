@@ -177,6 +177,19 @@ func (w *Writer) writeRecords(records []func(bool) ([]byte, error), buffer bool)
 			file = nil
 			return errors.Join(flushErr, closeErr)
 		}
+		openGeneration := func() error {
+			next, openErr := openAppend(w.path)
+			if openErr != nil {
+				return openErr
+			}
+			file = next
+			output = file
+			if buffered != nil {
+				buffered.Reset(file)
+				output = buffered
+			}
+			return preservePermissions(file, info)
+		}
 		defer func() {
 			if file != nil {
 				err = errors.Join(err, closeGeneration())
@@ -184,23 +197,14 @@ func (w *Writer) writeRecords(records []func(bool) ([]byte, error), buffer bool)
 		}()
 		for _, encode := range records {
 			if w.rotate && size >= w.limit {
-				if err := closeGeneration(); err != nil {
-					return err
+				if closeErr := closeGeneration(); closeErr != nil {
+					return closeErr
 				}
-				if _, err := rotateFiles(w.path); err != nil {
-					return err
+				if _, rotateErr := rotateFiles(w.path); rotateErr != nil {
+					return rotateErr
 				}
-				file, err = openAppend(w.path)
-				if err != nil {
-					return err
-				}
-				output = file
-				if buffered != nil {
-					buffered.Reset(file)
-					output = buffered
-				}
-				if err := preservePermissions(file, info); err != nil {
-					return err
+				if openErr := openGeneration(); openErr != nil {
+					return openErr
 				}
 				size, first = 0, true
 			}

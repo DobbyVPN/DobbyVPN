@@ -72,10 +72,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return nil
 	}, plan.Close, func(context.Context) error {
 		if tunFD >= 0 {
-			err := unix.Close(tunFD)
+			closeErr := unix.Close(tunFD)
 			tunFD = -1 // Linux releases the descriptor even when close reports an error.
-			if err != nil {
-				return fmt.Errorf("close Linux TUN: %w", err)
+			if closeErr != nil {
+				return fmt.Errorf("close Linux TUN: %w", closeErr)
 			}
 		}
 		protected_dialer.SetLinuxSocketMark(0)

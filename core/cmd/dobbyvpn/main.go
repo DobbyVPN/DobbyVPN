@@ -149,7 +149,7 @@ func isHelpCommand(args []string) bool {
 
 type serviceCommand func(context.Context, controljson.Client) int
 
-func parseServiceCommand(args []string) (serviceCommand, string) {
+func parseServiceCommand(args []string) (run serviceCommand, usageMessage string) {
 	switch args[0] {
 	case "configure":
 		if len(args) != 2 {
@@ -410,8 +410,8 @@ func (options stopOptions) stop(ctx context.Context, client controljson.Client) 
 		return writeJSONFailure(&controljson.CallError{Code: string(sessionapi.FailureConflict), Message: "session generation changed; refresh its snapshot before stopping"})
 	}
 	if snapshot.Generation == 0 || (snapshot.CleanupComplete && snapshot.PrimaryAction != "STOP") {
-		if err := cleanupFailure(&snapshot); err != nil {
-			return writeJSONFailure(err)
+		if cleanupErr := cleanupFailure(&snapshot); cleanupErr != nil {
+			return writeJSONFailure(cleanupErr)
 		}
 		return writeJSONResult(snapshot)
 	}

@@ -33,7 +33,7 @@ type switchingProxy struct {
 
 func newSwitchingProxy() *switchingProxy {
 	router := &switchingProxy{changed: make(chan struct{}), done: make(chan struct{})}
-	if runtime.GOOS == "ios" {
+	if runtime.GOOS == iosPlatform {
 		router.udpLimit = iosUDPAssociationLimit
 	}
 	return router

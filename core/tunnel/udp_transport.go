@@ -74,24 +74,23 @@ func (p *switchingProxy) HandleUDP(conn adapter.UDPConn) {
 	target, _ := p.target.(*DobbyProxy)
 	var admissionErr error
 	var release func()
-	if target != nil && target.udpRelay != nil {
-		// Register pending admission before Detach can fence the router. Its
-		// cleanup then includes origin closure even if dispatch races retirement.
-		if p.udpLimit > 0 {
-			if p.udpPaused || target.udpOrigins.Load() >= p.udpLimit {
-				target.udpRefused.Add(1)
-				admissionErr = net.ErrClosed
-			} else {
-				target.udpOrigins.Add(1)
-				release = func() { target.udpOrigins.Add(-1) }
-			}
-		}
-		if admissionErr == nil {
-			admissionErr = target.flows.beginDial()
+	available := target != nil && target.udpRelay != nil
+	if available && p.udpLimit > 0 {
+		if p.udpPaused || target.udpOrigins.Load() >= p.udpLimit {
+			target.udpRefused.Add(1)
+			admissionErr = net.ErrClosed
+		} else {
+			target.udpOrigins.Add(1)
+			release = func() { target.udpOrigins.Add(-1) }
 		}
 	}
+	// Register pending admission before Detach can fence the router so its
+	// cleanup includes origin closure when dispatch races retirement.
+	if available && admissionErr == nil {
+		admissionErr = target.flows.beginDial()
+	}
 	p.mu.Unlock()
-	if target == nil || target.udpRelay == nil || admissionErr != nil {
+	if !available || admissionErr != nil {
 		if release != nil {
 			release()
 		}

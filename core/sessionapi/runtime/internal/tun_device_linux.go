@@ -38,11 +38,11 @@ func (app *App) openLinuxTUN() (int, error) {
 		return -1, fmt.Errorf("create TUN %s: %w", config.TunDeviceName, err)
 	}
 	// An existing persistent TUN can be reopened under the configured name.
-	if err := unix.IoctlSetInt(fd, unix.TUNSETPERSIST, 0); err != nil {
-		return fd, fmt.Errorf("clear persistence on TUN %s: %w", config.TunDeviceName, err)
+	if persistErr := unix.IoctlSetInt(fd, unix.TUNSETPERSIST, 0); persistErr != nil {
+		return fd, fmt.Errorf("clear persistence on TUN %s: %w", config.TunDeviceName, persistErr)
 	}
-	if err := unix.IoctlIfreq(fd, unix.TUNGETIFF, ifr); err != nil {
-		return fd, fmt.Errorf("read assigned name for TUN %s: %w", config.TunDeviceName, err)
+	if nameErr := unix.IoctlIfreq(fd, unix.TUNGETIFF, ifr); nameErr != nil {
+		return fd, fmt.Errorf("read assigned name for TUN %s: %w", config.TunDeviceName, nameErr)
 	}
 	name := ifr.Name()
 	log.Debugf(Category, "[TUN][Netlink] resolving interface=%s fd=%d", name, fd)
@@ -51,14 +51,14 @@ func (app *App) openLinuxTUN() (int, error) {
 		return fd, fmt.Errorf("resolve new TUN %s: %w", name, err)
 	}
 	log.Debugf(Category, "[TUN][Config] interface=%s index=%d mtu=%d requested_mtu=%d", name, link.Attrs().Index, link.Attrs().MTU, config.TunDeviceMTU)
-	if err := netlink.LinkSetMTU(link, config.TunDeviceMTU); err != nil {
-		return fd, fmt.Errorf("set MTU %d on TUN %s: %w", config.TunDeviceMTU, name, err)
+	if mtuErr := netlink.LinkSetMTU(link, config.TunDeviceMTU); mtuErr != nil {
+		return fd, fmt.Errorf("set MTU %d on TUN %s: %w", config.TunDeviceMTU, name, mtuErr)
 	}
 
 	ipv4 := &netlink.Addr{IPNet: netlink.NewIPNet(ip.AsSlice())}
 	log.Debugf(Category, "[TUN][IP] adding %s to %s", ipv4, name)
-	if err := netlink.AddrAdd(link, ipv4); err != nil {
-		return fd, fmt.Errorf("add IPv4 %s to TUN %s: %w", ipv4, name, err)
+	if addressErr := netlink.AddrAdd(link, ipv4); addressErr != nil {
+		return fd, fmt.Errorf("add IPv4 %s to TUN %s: %w", ipv4, name, addressErr)
 	}
 	ipv6, err := netlink.ParseAddr("fd00:dbb::1/128")
 	if err != nil {
@@ -66,12 +66,12 @@ func (app *App) openLinuxTUN() (int, error) {
 	}
 	ipv6.Flags = unix.IFA_F_NODAD
 	log.Debugf(Category, "[TUN][IP] adding %s to %s", ipv6, name)
-	if err := netlink.AddrAdd(link, ipv6); err != nil {
-		return fd, fmt.Errorf("add IPv6 %s to TUN %s: %w", ipv6, name, err)
+	if addressErr := netlink.AddrAdd(link, ipv6); addressErr != nil {
+		return fd, fmt.Errorf("add IPv6 %s to TUN %s: %w", ipv6, name, addressErr)
 	}
 	log.Debugf(Category, "[TUN][Link] bringing up %s", name)
-	if err := netlink.LinkSetUp(link); err != nil {
-		return fd, fmt.Errorf("bring up TUN %s: %w", name, err)
+	if upErr := netlink.LinkSetUp(link); upErr != nil {
+		return fd, fmt.Errorf("bring up TUN %s: %w", name, upErr)
 	}
 	app.retainDesktopTunnelPolicy(map[string]any{
 		"interface":                        name,

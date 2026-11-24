@@ -17,15 +17,17 @@ const (
 	FlowPressureCritical
 )
 
+const iosPlatform = "ios"
 const iosUDPAssociationLimit = 64
 const pressureIdlePeriod = 5 * time.Second
+const networkGenerationField = "network_generation"
 
 var flowClock = time.Now()
 
 // SetFlowPressure only changes the stack owned by this provider network.
 // Outstanding connections keep their existing owner across the transition.
 func SetFlowPressure(session string, generation uint64, pressure FlowPressure) bool {
-	if runtime.GOOS != "ios" || pressure > FlowPressureCritical {
+	if runtime.GOOS != iosPlatform || pressure > FlowPressureCritical {
 		return false
 	}
 	engineMu.Lock()
@@ -57,7 +59,7 @@ func (e *Engine) setFlowPressure(session string, generation uint64, pressure Flo
 	e.mu.Unlock()
 	if previous != pressure {
 		log.Info(Category, "flow pressure updated", map[string]any{
-			"network_generation": generation, "pressure": pressure,
+			networkGenerationField: generation, "pressure": pressure,
 		})
 	}
 	if pressure == FlowPressureCritical && target != nil && target.reclaiming.CompareAndSwap(false, true) {
@@ -65,7 +67,7 @@ func (e *Engine) setFlowPressure(session string, generation uint64, pressure Flo
 			defer target.reclaiming.Store(false)
 			if reclaimed := target.flows.closeMatching(time.Now().Add(-pressureIdlePeriod)); reclaimed > 0 {
 				log.Info(Category, "idle flows reclaimed", map[string]any{
-					"network_generation": generation, "generation": target.generation, "reclaimed_flows": reclaimed,
+					networkGenerationField: generation, "generation": target.generation, "reclaimed_flows": reclaimed,
 				})
 			}
 		}()
@@ -83,7 +85,7 @@ func ActiveFlowGeneration() uint64 {
 // CloseFlowsForPath drops flows owned by the attempt active when the physical
 // path changed. An older notification cannot close flows of its replacement.
 func CloseFlowsForPath(session string, generation, attempt, revision uint64) bool {
-	if runtime.GOOS != "ios" {
+	if runtime.GOOS != iosPlatform {
 		return false
 	}
 	engineMu.Lock()
@@ -114,7 +116,7 @@ func (e *Engine) closeFlowsForPath(session string, generation, attempt, revision
 		}
 	}
 	log.Info(Category, "physical path flows invalidated", map[string]any{
-		"network_generation": generation, "generation": attempt, "path_revision": revision, "closed_flows": closed,
+		networkGenerationField: generation, "generation": attempt, "path_revision": revision, "closed_flows": closed,
 	})
 	return true
 }

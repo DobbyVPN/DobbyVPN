@@ -49,7 +49,7 @@ func (d *PacketFlowDevice) Receive(version uint8, payload []byte) error {
 
 // ReadPacket gives the caller ownership of exactly one outbound packet. Close
 // and context cancellation both unblock an idle reader.
-func (d *PacketFlowDevice) ReadPacket(ctx context.Context) (uint8, []byte, error) {
+func (d *PacketFlowDevice) ReadPacket(ctx context.Context) (family uint8, payload []byte, packetErr error) {
 	packet := d.ReadContext(ctx)
 	if packet == nil {
 		if err := ctx.Err(); err != nil {

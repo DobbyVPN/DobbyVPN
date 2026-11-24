@@ -151,7 +151,7 @@ func (c *trackedConn) identity() flowIdentity {
 
 func (c *trackedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
-	if n > 0 && runtime.GOOS == "ios" {
+	if n > 0 && runtime.GOOS == iosPlatform {
 		c.lastIO.Store(time.Since(flowClock).Nanoseconds())
 	}
 	c.traffic.observeRead(n, err, c.started, c.identity())
@@ -160,7 +160,7 @@ func (c *trackedConn) Read(b []byte) (int, error) {
 
 func (c *trackedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
-	if n > 0 && runtime.GOOS == "ios" {
+	if n > 0 && runtime.GOOS == iosPlatform {
 		c.lastIO.Store(time.Since(flowClock).Nanoseconds())
 	}
 	c.traffic.observeWrite(n, err, c.identity())
@@ -344,7 +344,7 @@ func (c *idlePacketConn) touch() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.closed {
-		if runtime.GOOS == "ios" {
+		if runtime.GOOS == iosPlatform {
 			c.lastTouch = now
 		}
 		if now.Sub(c.lastReset) > time.Second {

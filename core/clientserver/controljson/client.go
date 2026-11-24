@@ -37,7 +37,7 @@ func (c Client) Call(ctx context.Context, method string, params, result any) (ca
 	}
 	// Closing this one-request connection interrupts both reads and writes.
 	closeConn := sync.OnceValue(conn.Close)
-	stopClose := context.AfterFunc(ctx, func() { closeConn() })
+	stopClose := context.AfterFunc(ctx, func() { _ = closeConn() })
 	defer func() {
 		stopClose()
 		if callErr != nil && ctx.Err() != nil {
@@ -51,8 +51,8 @@ func (c Client) Call(ctx context.Context, method string, params, result any) (ca
 	if !ok {
 		deadline = time.Now().Add(2 * time.Minute)
 	}
-	if err := conn.SetDeadline(deadline); err != nil {
-		return fmt.Errorf("set desktop control deadline: %w", err)
+	if deadlineErr := conn.SetDeadline(deadline); deadlineErr != nil {
+		return fmt.Errorf("set desktop control deadline: %w", deadlineErr)
 	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
