@@ -70,6 +70,7 @@ type DobbyProxy struct {
 	flows      flowOwner
 	generation uint64
 	udpRelay   *stackTunnel.Tunnel
+	dnsTiming  *dnsTiming
 
 	activeTCP atomic.Int64
 	activeUDP atomic.Int64
@@ -502,7 +503,7 @@ func (e *Engine) attachLocked(ctx context.Context, generation uint64, address st
 	if err != nil {
 		return err
 	}
-	wrapper := &DobbyProxy{vpn: outbound, direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: cache, OwnerContext: ctx}, bypass: bypass, generation: generation}
+	wrapper := &DobbyProxy{vpn: outbound, direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: cache, OwnerContext: ctx}, bypass: bypass, generation: generation, dnsTiming: newDNSTiming(generation)}
 	wrapper.vpn, err = newSocksTCPProxy(outbound, address, &wrapper.flows)
 	if err != nil {
 		return err
