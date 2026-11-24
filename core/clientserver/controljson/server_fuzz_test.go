@@ -99,43 +99,57 @@ func FuzzRequestEnvelope(f *testing.F) {
 			return
 		}
 		id := requestIdentity(request.RequestID)
-		if id == "" {
-			t.Fatalf("request identity is empty")
-		}
-		if len(id) > 64 && !strings.HasPrefix(id, "backend-") {
-			t.Fatalf("request identity %q is longer than 64 bytes", id)
-		}
-		for _, character := range id {
-			if (character < '0' || character > '9') && (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && character != '-' && character != '_' {
-				t.Fatalf("request identity %q carries an unsafe character", id)
-			}
-		}
-		fields := requestFields(id, request.Method, request.Params)
-		if got := fields["request_id"]; got != id {
-			t.Fatalf("request_id = %v, want %q", got, id)
-		}
-		if got := fields["method"]; got != request.Method {
-			t.Fatalf("method = %v, want %q", got, request.Method)
-		}
-		for key := range fields {
-			switch key {
-			case "request_id", "method", "session_id", "generation", "expected_sequence":
-			default:
-				t.Fatalf("unexpected diagnostic field %q", key)
-			}
-		}
-		if value, present := fields["session_id"]; present {
-			text, ok := value.(string)
-			if !ok || len(text) == 0 || len(text) > 128 {
-				t.Fatalf("session_id diagnostic = %v", value)
-			}
-		}
-		for _, key := range []string{"generation", "expected_sequence"} {
-			if value, present := fields[key]; present {
-				if _, ok := value.(int64); !ok {
-					t.Fatalf("%s diagnostic = %v (%T)", key, value, value)
-				}
-			}
-		}
+		checkRequestIdentity(t, id)
+		checkRequestFields(t, requestFields(id, request.Method, request.Params), id, request.Method)
 	})
+}
+
+// checkRequestIdentity verifies the bounded identity copied into diagnostics:
+// a client-supplied id is kept only when it is short and safe, otherwise a
+// generated backend identity replaces it.
+func checkRequestIdentity(t *testing.T, id string) {
+	t.Helper()
+	if id == "" {
+		t.Fatalf("request identity is empty")
+	}
+	if len(id) > 64 && !strings.HasPrefix(id, "backend-") {
+		t.Fatalf("request identity %q is longer than 64 bytes", id)
+	}
+	for _, character := range id {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && character != '-' && character != '_' {
+			t.Fatalf("request identity %q carries an unsafe character", id)
+		}
+	}
+}
+
+// checkRequestFields verifies the diagnostic field set and the bounds of the
+// identity values copied out of untrusted parameters.
+func checkRequestFields(t *testing.T, fields map[string]any, id, method string) {
+	t.Helper()
+	if got := fields["request_id"]; got != id {
+		t.Fatalf("request_id = %v, want %q", got, id)
+	}
+	if got := fields["method"]; got != method {
+		t.Fatalf("method = %v, want %q", got, method)
+	}
+	for key := range fields {
+		switch key {
+		case "request_id", "method", "session_id", "generation", "expected_sequence":
+		default:
+			t.Fatalf("unexpected diagnostic field %q", key)
+		}
+	}
+	if value, present := fields["session_id"]; present {
+		text, ok := value.(string)
+		if !ok || len(text) == 0 || len(text) > 128 {
+			t.Fatalf("session_id diagnostic = %v", value)
+		}
+	}
+	for _, key := range []string{"generation", "expected_sequence"} {
+		if value, present := fields[key]; present {
+			if _, ok := value.(int64); !ok {
+				t.Fatalf("%s diagnostic = %v (%T)", key, value, value)
+			}
+		}
+	}
 }
