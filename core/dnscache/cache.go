@@ -33,6 +33,9 @@ type Cache struct {
 	identity string
 	revision uint64
 	source   ResolverSource
+	// lostAt is when a capture before a lookup last found the physical
+	// network unavailable or replaced by another one.
+	lostAt time.Time
 }
 
 func New() *Cache { return &Cache{revision: 1} }
@@ -50,6 +53,9 @@ func (c *Cache) SetResolver(identity string, resolver Resolver) {
 	defer c.mu.Unlock()
 	if c.identity == identity && c.resolver != nil {
 		return
+	}
+	if c.identity != "" && c.identity != identity {
+		c.lostAt = time.Now()
 	}
 	c.identity, c.resolver = identity, resolver
 	c.revision++
@@ -78,6 +84,14 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 	if source != nil {
 		identity, resolver, err := source(ctx)
 		if err != nil {
+			// Only a capture that reports no physical network counts as a
+			// loss. A canceled caller or a capture that ran out of time says
+			// nothing about the network, so the recovery limit still applies.
+			if ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				c.mu.Lock()
+				c.lostAt = time.Now()
+				c.mu.Unlock()
+			}
 			return nil, fmt.Errorf("capture underlying resolver: %w", err)
 		}
 		c.SetResolver(identity, resolver)
@@ -107,6 +121,20 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 		return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
 	}
 	return addresses, nil
+}
+
+// NetworkLostSince reports whether a lookup after since found the physical
+// network unavailable or replaced. It only reads the captures that server
+// lookups already make, so it sees nothing while no endpoint name is resolved
+// (numeric server addresses, no redial). #477 will replace this signal with a
+// real network-change event from Android and iOS.
+func (c *Cache) NetworkLostSince(since time.Time) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lostAt.After(since)
 }
 
 func NormalizeHost(host string) string {

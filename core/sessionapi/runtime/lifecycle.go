@@ -339,6 +339,7 @@ func (r *runtime) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 	lease.push(func(ctx context.Context) error { return core.Detach(ctx, ref.Generation) })
 	lease.setOnDone(r.releaseActive)
 	healthInterval, healthFailureThreshold := testHealthMonitorTiming(r.options.HealthInterval, r.options.HealthFailureThreshold)
+	lease.networkLostSince = r.network.cache.NetworkLostSince
 	lease.startHealthMonitor(ctx, ref, lease.proxyAddr, r.options.ConnectedHealth, healthInterval, healthFailureThreshold)
 	return lease, nil
 }
@@ -419,9 +420,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 		bypass = bypass.WithIPv6Availability(capability.IPv6Unavailable)
 	}
 	owned.proxyAddr, owned.bypass = device.GetProxyAddr(), bypass
-	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {
-		owned.waitReady = ready.WaitReady
-	}
+	owned.bindDeviceHooks(device)
 	if owned.proxyAddr == "" {
 		return fail(errors.New("protocol device returned an empty SOCKS endpoint"))
 	}
@@ -567,6 +566,105 @@ type lease struct {
 	healthDone    chan struct{}
 	healthFailed  chan error
 	probeNow      chan string
+	// resetTransport drops the protocol's pooled multiplexed connections
+	// (Xray gRPC, XHTTP); nil for per-flow transports such as Outline.
+	resetTransport func(reason string)
+	// networkLostSince reads whether server lookups saw the physical network
+	// missing or replaced after a time; nil when unknown.
+	networkLostSince func(time.Time) bool
+	// now is the health monitor's clock; nil means time.Now.
+	now func() time.Time
+}
+
+// transportResetRecheck is how soon the health monitor checks again after it
+// dropped a multiplexed transport's connections, instead of the full interval.
+var transportResetRecheck = time.Second
+
+// bindDeviceHooks keeps the optional capabilities a protocol device offers.
+func (l *lease) bindDeviceHooks(device any) {
+	if ready, ok := device.(interface{ WaitReady(context.Context) error }); ok {
+		l.waitReady = ready.WaitReady
+	}
+	if transport, ok := device.(interface{ ResetTransport(string) }); ok {
+		l.resetTransport = transport.ResetTransport
+	}
+}
+
+// dropTransport drops pooled multiplexed connections; it reports whether the
+// protocol has any.
+func (l *lease) dropTransport(reason string) bool {
+	if l.resetTransport == nil {
+		return false
+	}
+	l.resetTransport(reason)
+	return true
+}
+
+// healthyRun measures how long an attempt stayed healthy before its current
+// failing checks, so the session can tell a recovered attempt from one that
+// failed right after it connected, and whether the network changed meanwhile.
+type healthyRun struct {
+	now func() time.Time
+	// checks counts consecutive passing scheduled checks since start. Checks
+	// triggered by a network event or run early after a transport reset do
+	// not count, so they cannot make a flapping server look healthy.
+	checks   int
+	start    time.Time
+	lastPass time.Time // last passing check of any kind
+	// proven latches once a run of scheduled checks proves the attempt
+	// healthy (sessionapi.ProvenHealthy).
+	proven bool
+	// eventSincePass is set by a network event and cleared by a passing
+	// check: a check that passes after the event shows the attempt survived it.
+	eventSincePass bool
+
+	streakChecks int
+	streakFor    time.Duration
+	streakFrom   time.Time // the last moment the attempt was known healthy
+}
+
+func newHealthyRun(now func() time.Time) healthyRun {
+	if now == nil {
+		now = time.Now
+	}
+	return healthyRun{now: now, lastPass: now()}
+}
+
+func (h *healthyRun) passed(scheduled bool) {
+	h.lastPass, h.eventSincePass = h.now(), false
+	if !scheduled {
+		return
+	}
+	if h.checks == 0 {
+		h.start = h.lastPass
+	}
+	h.checks++
+	if !h.proven && sessionapi.ProvenHealthy(h.checks, h.lastPass.Sub(h.start)) {
+		h.proven = true
+		log.Info(category, "connected attempt proved healthy", map[string]any{
+			"scheduled_checks": h.checks, "healthy_ms": h.lastPass.Sub(h.start).Milliseconds(),
+		})
+	}
+}
+
+// failed is called on the first failure of a streak.
+func (h *healthyRun) failed() {
+	h.streakChecks, h.streakFor, h.streakFrom = h.checks, 0, h.lastPass
+	if h.checks > 0 {
+		h.streakFor = h.now().Sub(h.start)
+	}
+	h.checks = 0
+}
+
+func (h *healthyRun) networkEvent() { h.eventSincePass = true }
+
+// failure reports the streak. A network event counts only if no check passed
+// after it, so it exempts only the failures it caused.
+func (h *healthyRun) failure(failures []error, networkLostSince func(time.Time) bool) error {
+	return &sessionapi.HealthFailure{
+		Err: errors.Join(failures...), Proven: h.proven, HealthyChecks: h.streakChecks, HealthyFor: h.streakFor,
+		NetworkLost: h.eventSincePass || networkLostSince != nil && networkLostSince(h.streakFrom),
+	}
 }
 
 func (l *lease) push(fn func(context.Context) error) { l.undo = append(l.undo, fn) }
@@ -599,6 +697,8 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 		defer close(l.healthFailed)
 		var failures []error
 		var eventReason string
+		healthy := newHealthyRun(l.now)
+		scheduled := true
 		for {
 			var started time.Time
 			if eventReason != "" {
@@ -614,18 +714,32 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 			}
 			if err != nil {
 				failures = append(failures, err)
+				if len(failures) == 1 {
+					healthy.failed()
+				}
+				log.Warn(category, "connected health check failed", map[string]any{
+					"generation": ref.Generation, "consecutive_failures": len(failures), "threshold": threshold, "cause": err.Error(),
+				})
 				if len(failures) >= threshold {
-					cause := errors.Join(failures...)
 					select {
-					case l.healthFailed <- cause:
+					case l.healthFailed <- healthy.failure(failures, l.networkLostSince):
 					case <-ctx.Done():
 					}
 					return
 				}
 			} else {
 				failures = nil
+				healthy.passed(scheduled)
 			}
-			if interval <= 0 {
+			wait := interval
+			// A multiplexed transport can keep a dead connection that looks
+			// ready after a short network drop; drop it on the first failure
+			// and check again soon instead of waiting for the threshold.
+			if err != nil && len(failures) == 1 && l.dropTransport("connected health check failed") {
+				wait = transportResetRecheck
+			}
+			scheduled = wait == interval
+			if wait <= 0 {
 				select {
 				case <-ctx.Done():
 					return
@@ -633,7 +747,7 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				}
 				continue
 			}
-			timer := time.NewTimer(interval)
+			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				if !timer.Stop() {
@@ -644,8 +758,10 @@ func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.Sessio
 				if !timer.Stop() {
 					<-timer.C
 				}
-				eventReason = reason
+				eventReason, scheduled = reason, false
+				healthy.networkEvent()
 				log.Infof(category, "health check triggered by %s generation=%d", reason, ref.Generation)
+				l.dropTransport("network event: " + reason)
 			case <-timer.C:
 			}
 		}

@@ -82,6 +82,39 @@ type CleanupFailure struct{ Err error }
 func (e *CleanupFailure) Error() string { return "cleanup failed: " + e.Err.Error() }
 func (e *CleanupFailure) Unwrap() error { return e.Err }
 
+// HealthFailure is the connected-health failure of a runtime lease. It tells
+// whether the attempt proved healthy before it failed: such an attempt resets
+// the recovery count and the restart delays.
+type HealthFailure struct {
+	Err error
+	// Proven is set when the attempt proved healthy at some point (see
+	// ProvenHealthy); a later scheduled check failing does not unset it.
+	Proven bool
+	// HealthyChecks and HealthyFor describe the passing scheduled checks
+	// right before the failing ones, for the log.
+	HealthyChecks int
+	HealthyFor    time.Duration
+	// NetworkLost is set when a network event (wake, path change) arrived, or
+	// the physical-network captures made by server lookups found no network
+	// or a different one, after the last passing check.
+	NetworkLost bool
+}
+
+// ProvedHealthy reports whether the attempt proved healthy before it failed.
+func (e *HealthFailure) ProvedHealthy() bool { return e != nil && e.Proven }
+
+// ProvenHealthy reports whether a run of consecutive passing scheduled checks
+// proves a connected attempt healthy: at least provenHealthyChecks checks
+// spanning at least autoRetryProvenHealthy, whichever is longer. A scheduled
+// check that fails inside the window ends the run, so the window starts over.
+// The health monitor calls it after each passing scheduled check.
+func ProvenHealthy(scheduledChecks int, span time.Duration) bool {
+	return scheduledChecks >= provenHealthyChecks && span >= autoRetryProvenHealthy
+}
+
+func (e *HealthFailure) Error() string { return e.Err.Error() }
+func (e *HealthFailure) Unwrap() error { return e.Err }
+
 func failure(code FailureCode, message string) error { return &Error{Code: code, Message: message} }
 
 func failureWithCause(code FailureCode, message string, cause error) error {
@@ -294,9 +327,18 @@ type Manager struct {
 }
 
 const (
-	autoRecoveryLimit   = 3
-	autoRecoveryStable  = 5 * time.Minute
-	autoRecoveryMessage = "Automatic reconnect limit reached. Check your connection and connect again."
+	autoRecoveryLimit = 3
+	// An attempt proves healthy after at least provenHealthyChecks consecutive
+	// passing scheduled checks spanning autoRetryProvenHealthy (two checks
+	// every 10 s or 30 s, whichever is longer). That resets the recovery count
+	// and the restart delays: a later failure is transient, as after a network
+	// drop. This is the only reset while the session runs: time connected
+	// alone does not count, so a server that hangs right after accepting the
+	// connection, or flaps between checks, still reaches the limit. The name
+	// and value of autoRetryProvenHealthy match the automatic retry (#508).
+	provenHealthyChecks    = 2
+	autoRetryProvenHealthy = 30 * time.Second
+	autoRecoveryMessage    = "Automatic reconnect limit reached. Check your connection and connect again."
 )
 
 type session struct {
@@ -352,10 +394,14 @@ type session struct {
 	recovering                 bool
 	recoveryOriginGeneration   uint64
 	recoveryCount              int
-	lastConnectedAt            time.Time
-	hasConnectedAt             bool
-	lastTransitionAt           time.Time
-	sequence                   uint64
+	// recoveryRestarts counts health-recovery restarts since the attempt last
+	// proved healthy; it picks the growing pause before the next restart.
+	recoveryRestarts int
+	nextStartDelay   time.Duration
+	lastConnectedAt  time.Time
+	hasConnectedAt   bool
+	lastTransitionAt time.Time
+	sequence         uint64
 
 	probeGeneration uint64
 	prober          ProbingLease
@@ -777,6 +823,7 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	s.activeTarget, s.restartAfterCleanup, s.failureAfterCleanup = target, false, ""
 	s.failureMessageAfterCleanup = ""
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
+	s.recoveryRestarts, s.nextStartDelay = 0, 0
 	s.lastConnectedAt = time.Time{}
 	s.hasConnectedAt = false
 	s.state = StateProbing
@@ -809,7 +856,11 @@ func (m *Manager) retryLocked(requestCtx context.Context, s *session, target Sta
 	if err := m.saveActivationLocked(requestCtx, s.activeSourceKind, s.activeSourceURL, s.activeDigest, s.activeTarget); err != nil {
 		return StartResult{}, err
 	}
+	// Retry (manual or automatic) gives a fresh recovery budget but keeps the
+	// restart delays: only an attempt that proved healthy resets them, so a
+	// server that connects and then hangs keeps backing off.
 	s.recoveryCount, s.recoveryOriginGeneration = 0, 0
+	s.nextStartDelay = 0
 	ctx, generation := m.beginAttemptLocked(s, s.activeTarget)
 	s.startOriginGeneration = generation
 	go m.runStart(ctx, s, generation, target)
@@ -1005,12 +1056,27 @@ func (m *Manager) prepareHealthRecoveryLocked(s *session, generation uint64, cau
 	}
 	s.lastFailure = FailureRuntime
 	s.lastFailureMessage = healthFailure
-	if s.hasConnectedAt && m.now().Sub(s.lastConnectedAt) >= autoRecoveryStable {
-		s.recoveryCount = 0
+	var health *HealthFailure
+	if !errors.As(cause, &health) {
+		health = &HealthFailure{}
+	}
+	provedHealthy := health.ProvedHealthy()
+	if provedHealthy {
+		s.recoveryCount, s.recoveryRestarts = 0, 0
 		s.recoveryOriginGeneration = 0
 	}
-	if s.recoveryCount < autoRecoveryLimit {
-		s.recoveryCount++
+	// A failure that follows a network change (event or observed loss) since
+	// the last passing check is the network's, not the server's, and does not
+	// count toward the limit.
+	networkChanged := health.NetworkLost
+	log.Info("SESSION", "connected health recovery", map[string]any{
+		logGeneration: generation, "recovery_count": s.recoveryCount, "limit": autoRecoveryLimit,
+		"proved_healthy": provedHealthy, "network_changed": networkChanged, "restarts": s.recoveryRestarts,
+	})
+	if s.recoveryCount < autoRecoveryLimit || networkChanged {
+		if !networkChanged {
+			s.recoveryCount++
+		}
 		s.restartAfterCleanup = true
 		s.recovering = true
 		if s.recoveryOriginGeneration == 0 {
@@ -1106,10 +1172,31 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 	return ctx.Err()
 }
 
+// waitStartDelay waits the pause armed for a health-recovery restart. It
+// reports false when the attempt was stopped during the pause.
+func waitStartDelay(ctx context.Context, s *session) bool {
+	s.mu.Lock()
+	delay := s.nextStartDelay
+	s.nextStartDelay = 0
+	s.mu.Unlock()
+	if delay <= 0 {
+		return true
+	}
+	return sleepStartDelay(ctx, delay)
+}
+
+// prepareStart waits any health-recovery pause, then acquires the network.
+func (m *Manager) prepareStart(ctx context.Context, s *session) error {
+	if !waitStartDelay(ctx, s) {
+		return failure(FailureCanceled, "attempt stopped")
+	}
+	return m.prepareNetwork(ctx, s)
+}
+
 // runStart owns acquisition and cleanup, including canceled late callbacks.
 func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
 	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
-	if err := m.prepareNetwork(ctx, s); err != nil {
+	if err := m.prepareStart(ctx, s); err != nil {
 		m.finish(s, generation, err)
 		return
 	}
@@ -1322,8 +1409,14 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 			s.activeProfiles, s.activeDigest = s.pending.profiles, s.pending.digest
 			s.activeSourceKind, s.activeSourceURL = s.pending.sourceKind, s.pending.sourceURL
 			s.pending = nil
-			s.recoveryCount = 0
+			s.recoveryCount, s.recoveryRestarts = 0, 0
 			retainPolicy(s.activeDigest, s.activeProfiles)
+		} else {
+			// A health recovery waits a growing pause, so a failing server
+			// cannot make the session restart every few seconds; the
+			// protection stays on meanwhile.
+			s.nextStartDelay = healthRecoveryDelay(s.recoveryRestarts)
+			s.recoveryRestarts++
 		}
 		ctx, next := m.beginAttemptLocked(s, target)
 		go m.runStart(ctx, s, next, target)
