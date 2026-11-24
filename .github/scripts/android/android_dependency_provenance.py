@@ -600,12 +600,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--print-pin", choices=sorted(_DEFAULT_PINS))
     args = parser.parse_args(argv)
     try:
-        if args.spec is not None:
-            source_root = args.source_root or _infer_source_root(args.spec)
-            pins = dependency_pins(source_root, args.spec)
-        else:
-            source_root = args.source_root or REPOSITORY_ROOT
-            pins = dependency_pins(source_root)
+        if args.print_pin or args.verify_gradle_distribution:
+            if args.spec is not None:
+                pins = dependency_pins(args.source_root or _infer_source_root(args.spec), args.spec)
+            elif args.source_root is not None:
+                pins = dependency_pins(args.source_root)
+            else:
+                pins = _DEFAULT_PINS
         if args.print_pin:
             print(pins[args.print_pin])
             return 0

@@ -35,12 +35,6 @@ from bounded_process import (
     run_streamed,
 )
 from dependency_fetch import download_file, run_dependency_command
-from android_dependency_provenance import (
-    ANDROID_BUILD_TOOLS,
-    ANDROID_SDK_PLATFORM,
-    JAVA_MAJOR,
-)
-from android_security_inventory import GROUPS, scanner_inputs, verify_scanner_report
 
 # Release asset digests pin the downloaded executable archives. These versions
 # intentionally match the existing CI tool versions, except Trivy and SwiftLint
@@ -367,6 +361,8 @@ def lint_go(tools: Tools) -> None:
 
 
 def require_android_sdk() -> Path:
+    from android_dependency_provenance import ANDROID_SDK_PLATFORM
+
     candidates = [os.environ.get("ANDROID_SDK_ROOT"), os.environ.get("ANDROID_HOME")]
     local_properties = ROOT / "ui" / "android" / "local.properties"
     if local_properties.is_file():
@@ -383,6 +379,8 @@ def require_android_sdk() -> Path:
 
 
 def android_check_tools() -> tuple[Path, Path]:
+    from android_dependency_provenance import ANDROID_BUILD_TOOLS, JAVA_MAJOR
+
     require_platform("linux")
     go = ensure_go()
     java = require_command("java", "Android Lint")
@@ -406,6 +404,8 @@ def android_check_tools() -> tuple[Path, Path]:
 def android_dependency_inventory(
     gradle: Path, go: Path, directory: Path, *, require_tests: bool = False,
 ) -> dict[str, set[str]]:
+    from android_security_inventory import GROUPS, scanner_inputs
+
     directory.mkdir(parents=True, exist_ok=True)
     inventory = directory / "resolved-gradle.json"
     for path in (inventory, *(directory / f"{group}.gradle.lockfile" for group in GROUPS)):
@@ -427,6 +427,8 @@ def android_dependency_inventory(
 
 
 def android_security(tools: Tools, *, output_dir: Path | None = None) -> None:
+    from android_security_inventory import verify_scanner_report
+
     gradle, go = android_check_tools()
     directory = (output_dir or tools.root / "android-security").resolve()
     report = directory / "trivy.json"

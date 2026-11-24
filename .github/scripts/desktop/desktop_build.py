@@ -1142,20 +1142,17 @@ def _quote_go_ldflags_token(value: str) -> str:
 
 
 def read_version() -> str:
-    """Read the one repository-owned desktop version source."""
-    value = (ROOT_DIR / "VERSION").read_text(encoding="utf-8").strip()
+    """Resolve the version shared by desktop packages, UI and Go binaries."""
+    value = os.environ.get("VERSION_NAME")
+    if value is None:
+        components = ("APP_MAJOR_VERSION", "APP_MINOR_VERSION", "APP_MAINTENANCE_VERSION")
+        if all(key in os.environ for key in components):
+            value = ".".join(os.environ[key] for key in components)
+        else:
+            value = (ROOT_DIR / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value):
-        fail(f"VERSION must contain a numeric x.y.z value, got {value!r}")
+        fail(f"desktop version must be a numeric x.y.z value, got {value!r}")
     return value
-
-
-def required_service_platforms(require_all: bool, platform_value: str) -> list[str]:
-    if require_all:
-        return ["linux", "macos", "windows"]
-    platforms = selected_platforms(platform_value)
-    if platforms == ["linux", "macos", "windows"]:
-        return platforms
-    return platforms
 
 
 def required_service_paths(require_all: bool, platform_value: str) -> list[Path]:
@@ -1183,19 +1180,12 @@ def require_services(require_all: bool, platform_value: str) -> None:
 
 def run_native_package() -> None:
     """Assemble release archives without a JVM or third-party packager."""
-    major = os.environ.get("APP_MAJOR_VERSION")
-    minor = os.environ.get("APP_MINOR_VERSION")
-    maintenance = os.environ.get("APP_MAINTENANCE_VERSION")
-    if major is not None and minor is not None and maintenance is not None:
-        version = f"{major}.{minor}.{maintenance}"
-    else:
-        version = os.environ.get("VERSION_NAME") or read_version()
     run(
         [
             sys.executable,
             str(ROOT_DIR / ".github" / "scripts" / "desktop" / "package_desktop.py"),
             "--version",
-            version,
+            read_version(),
             "--staging-root",
             str(SERVICES_DIR),
             "--output",
@@ -1240,7 +1230,7 @@ def build_native_ui(
         fail("native desktop UI must be built on its target platform")
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    version = os.environ.get("VERSION_NAME") or read_version()
+    version = read_version()
     commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "N/A"
     if target_platform == "windows":
         project = ROOT_DIR / "ui" / "windows" / "DobbyVPN.Windows" / "DobbyVPN.Windows.csproj"

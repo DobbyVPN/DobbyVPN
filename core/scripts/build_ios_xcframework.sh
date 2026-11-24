@@ -122,8 +122,8 @@ simulator_framework="$simulator_framework_output"
 
 module_dir="$(go list -m -f '{{.Dir}}' trusttunnel-go | tee /dev/stderr)"
 simulator_bridge="$module_dir/lib/ios-simulator/libdobby_bridge.a"
-simulator_provenance="$module_dir/lib/static-libraries.provenance.json"
-if [[ ! -f "$simulator_bridge" || ! -f "$simulator_provenance" ]]; then
+provenance="$module_dir/lib/static-libraries.provenance.json"
+if [[ ! -f "$simulator_bridge" || ! -f "$provenance" ]]; then
   echo "missing iOS Simulator TrustTunnel bridge or provenance" >&2
   exit 1
 fi
@@ -136,33 +136,7 @@ for simulator_arch in "${simulator_native_arches[@]}"; do
     exit 1
   fi
 done
-simulator_expected_hash="$(python3 - "$simulator_provenance" <<'PY' | tee /dev/stderr
-import json
-import re
-import sys
-
-path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8") as source:
-        document = json.load(source)
-except (OSError, json.JSONDecodeError) as error:
-    print(f"cannot read TrustTunnel Simulator bridge provenance {path}: {error}", file=sys.stderr)
-    raise SystemExit(1)
-
-value = document.get("artifacts", {}).get("ios_simulator", {}).get("sha256")
-if document.get("schema") != 3 or not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
-    print(f"invalid TrustTunnel Simulator bridge provenance {path}", file=sys.stderr)
-    raise SystemExit(1)
-print(value)
-PY
-)"
-simulator_actual_hash="$(shasum -a 256 "$simulator_bridge" | tee /dev/stderr | awk '{print $1}')"
-if [[ "$simulator_actual_hash" != "$simulator_expected_hash" ]]; then
-  echo "TrustTunnel Simulator bridge SHA-256 verification failed" >&2
-  echo "expected: $simulator_expected_hash" >&2
-  echo "actual:   $simulator_actual_hash" >&2
-  exit 1
-fi
+python3 ../.github/scripts/ios/verify_bridge.py "$provenance" ios_simulator "$simulator_bridge"
 simulator_library="$simulator_framework/DobbyVPNRuntime"
 if [[ ! -f "$simulator_library" ]]; then
   echo "missing generated Simulator DobbyVPNRuntime binary" >&2
@@ -201,67 +175,7 @@ if [[ -z "$simulator_architecture" ]]; then
     exit 1
   fi
 
-  provenance="$module_dir/lib/static-libraries.provenance.json"
-  if [[ ! -f "$provenance" ]]; then
-    echo "missing TrustTunnel static-library provenance: $provenance" >&2
-    exit 1
-  fi
-  parser_status=0
-  expected_bridge_output="$(python3 - "$provenance" <<'PY' | tee /dev/stderr
-import json
-import re
-import sys
-
-path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8") as source:
-        document = json.load(source)
-except OSError as error:
-    print(f"cannot read TrustTunnel static-library provenance {path}: {error}", file=sys.stderr)
-    raise SystemExit(1)
-except json.JSONDecodeError as error:
-    print(f"invalid TrustTunnel static-library provenance JSON {path}: {error}", file=sys.stderr)
-    raise SystemExit(1)
-
-try:
-    value = document["artifacts"]["ios"]["sha256"]
-except (KeyError, TypeError):
-    print(f"TrustTunnel static-library provenance has no artifacts.ios.sha256: {path}", file=sys.stderr)
-    raise SystemExit(1)
-
-if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
-    print(
-        f"invalid iOS bridge SHA-256 in TrustTunnel static-library provenance {path}: "
-        "expected exactly 64 lowercase hexadecimal characters",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-print(value)
-PY
-)" || parser_status=$?
-  # Stdout is forwarded by tee before it is parsed; stderr remains inherited
-  # directly from Python. A successful substitution therefore hides neither.
-  if [[ "$parser_status" -ne 0 ]]; then
-    exit "$parser_status"
-  fi
-  if [[ ! "$expected_bridge_output" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "TrustTunnel bridge provenance parser returned an invalid hash" >&2
-    exit 1
-  fi
-  expected_bridge_hash="$expected_bridge_output"
-  bridge_hash_output="$(shasum -a 256 "$bridge" | tee /dev/stderr)"
-  if [[ ! "$bridge_hash_output" =~ ^([0-9a-f]{64})[[:space:]] ]]; then
-    echo "TrustTunnel bridge SHA-256 command returned an invalid record" >&2
-    exit 1
-  fi
-  actual_bridge_hash="${BASH_REMATCH[1]}"
-  if [[ "$actual_bridge_hash" != "$expected_bridge_hash" ]]; then
-    echo "TrustTunnel bridge SHA-256 verification failed" >&2
-    echo "expected: $expected_bridge_hash" >&2
-    echo "actual:   $actual_bridge_hash" >&2
-    exit 1
-  fi
+  python3 ../.github/scripts/ios/verify_bridge.py "$provenance" ios "$bridge"
 
   merged_library="$workdir/DobbyVPNRuntime-merged.a"
   libtool -static -D -o "$merged_library" "$device_library" "$bridge"
