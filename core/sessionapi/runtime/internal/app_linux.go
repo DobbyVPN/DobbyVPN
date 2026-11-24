@@ -16,7 +16,7 @@ import (
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
 
-	"github.com/songgao/water"
+	"golang.org/x/sys/unix"
 )
 
 func (app *App) validateRunInputs() error {
@@ -56,16 +56,18 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	plan := routing.NewPlan(config.TunDeviceName)
 	var engine *tunnel.Engine
-	var tun *water.Interface
+	tunFD := -1
 	app.setCleanup(func(cleanup context.Context) error {
 		if engine != nil {
 			return engine.Stop(cleanup)
 		}
 		return nil
 	}, plan.Close, func(context.Context) error {
-		if tun != nil {
-			if closeErr := tun.Close(); closeErr != nil {
-				return closeErr
+		if tunFD >= 0 {
+			err := unix.Close(tunFD)
+			tunFD = -1 // Linux releases the descriptor even when close reports an error.
+			if err != nil {
+				return fmt.Errorf("close Linux TUN: %w", err)
 			}
 		}
 		protected_dialer.SetLinuxSocketMark(0)
@@ -83,20 +85,11 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return fail(captureErr)
 	}
 	app.DNSCache.SetResolverSource(capture)
-	tun, err = app.openLinuxTUN()
+	tunFD, err = app.openLinuxTUN()
 	if err != nil {
 		return fail(err)
 	}
-	file, ok := tun.ReadWriteCloser.(interface{ Fd() uintptr })
-	if !ok {
-		return fail(fmt.Errorf("owned TUN %s has no file descriptor (%T)", tun.Name(), tun.ReadWriteCloser))
-	}
-	fd, err := protected_dialer.UintptrToInt(file.Fd())
-	if err != nil {
-		return fail(fmt.Errorf("owned TUN %s descriptor: %w", tun.Name(), err))
-	}
-	log.Debugf(Category, "[TUN][FD] interface=%s fd=%d", tun.Name(), fd)
-	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: fd})
+	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: tunFD})
 	app.Engine = engine
 	if err != nil {
 		return fail(err)
