@@ -36,7 +36,9 @@ jobs:
       minor: ${{ steps.resolve.outputs.minor }}
       maintenance: ${{ steps.resolve.outputs.maintenance }}
       android_version_code: ${{ steps.resolve.outputs.android_version_code }}
-      apple_build_number: ${{ steps.resolve.outputs.apple_build_number }}
+      build_manifest: ${{ steps.resolve.outputs.build_manifest }}
+      packages: ${{ steps.resolve.outputs.packages }}
+      release_attempt_id: ${{ steps.claim.outputs.release_attempt_id }}
     steps:
       - name: Require the release coordinator on main
         env:
@@ -54,128 +56,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Resolve active Build identity
+      - name: Pin packages from the completed Build
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/package_readiness.py identity
-
-  ready_linux:
-    needs: resolve_build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    outputs:
-      packages: ${{ steps.ready.outputs.packages }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Wait for linux package producers
-        id: ready
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/package_readiness.py wait --group linux
-
-  ready_windows:
-    needs: resolve_build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    outputs:
-      packages: ${{ steps.ready.outputs.packages }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Wait for windows package producers
-        id: ready
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/package_readiness.py wait --group windows
-
-  ready_macos:
-    needs: resolve_build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    outputs:
-      packages: ${{ steps.ready.outputs.packages }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Wait for macos package producers
-        id: ready
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/package_readiness.py wait --group macos
-
-  ready_android:
-    needs: resolve_build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    outputs:
-      packages: ${{ steps.ready.outputs.packages }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Wait for android package producers
-        id: ready
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/package_readiness.py wait --group android
-
-  ready_ios:
-    needs: resolve_build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    outputs:
-      packages: ${{ steps.ready.outputs.packages }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Wait for ios package producers
-        id: ready
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/package_readiness.py wait --group ios
-
-  final_build:
-    needs: resolve_build
-    runs-on: ubuntu-24.04
-    environment: release-tests
-    timeout-minutes: 360
-    permissions:
-      contents: read
-      actions: read
-      deployments: write
-    outputs:
-      build_manifest: ${{ steps.resolve.outputs.build_manifest }}
-      manifest_sha256: ${{ steps.resolve.outputs.manifest_sha256 }}
-      release_attempt_id: ${{ steps.claim.outputs.release_attempt_id }}
-      claimed: ${{ steps.claim.outputs.claimed }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Require successful final Build manifest
-        id: resolve
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-        run: python3 .github/scripts/release/package_readiness.py final
+        run: python3 .github/scripts/release/package_readiness.py
       - name: Claim the exact reserved release verification
         id: claim
         env:
@@ -201,22 +87,22 @@ jobs:
           release_guard.claim(release_guard.GitHubAPI(), os.environ["GITHUB_REPOSITORY"],
                               deployment_id, int(os.environ["GITHUB_RUN_ID"]), candidate)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"release_attempt_id={deployment_id}\nclaimed=true\n")
+              output.write(f"release_attempt_id={deployment_id}\n")
           PY
 
   ios_analysis:
-    needs: [resolve_build, ready_ios]
+    needs: resolve_build
     uses: ./.github/workflows/ios_analysis.yml
     with:
-      build_packages: ${{ needs.ready_ios.outputs.packages }}
+      build_packages: ${{ toJSON(fromJSON(needs.resolve_build.outputs.packages).ios) }}
       build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
 
   android_reproducibility:
-    needs: [resolve_build, ready_android]
+    needs: resolve_build
     uses: ./.github/workflows/android_build.yml
     with:
-      build_packages: ${{ needs.ready_android.outputs.packages }}
+      build_packages: ${{ toJSON(fromJSON(needs.resolve_build.outputs.packages).android) }}
       single_build: true
       reference_build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
@@ -227,10 +113,10 @@ jobs:
       retention_days: 7
 
   fdroid_preflight:
-    needs: [resolve_build, ready_android]
+    needs: resolve_build
     uses: ./.github/workflows/fdroid_preflight.yml
     with:
-      build_packages: ${{ needs.ready_android.outputs.packages }}
+      build_packages: ${{ toJSON(fromJSON(needs.resolve_build.outputs.packages).android) }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
       version_name: ${{ needs.resolve_build.outputs.version_name }}
       version_code: ${{ needs.resolve_build.outputs.android_version_code }}
@@ -245,7 +131,7 @@ jobs:
   qualification_result:
     name: Record final verification and release stop
     if: ${{ always() }}
-    needs: [resolve_build, final_build, ready_linux, ready_windows, ready_macos, ready_android, ready_ios, ios_analysis, android_reproducibility, fdroid_preflight, dependency_scan]
+    needs: [resolve_build, ios_analysis, android_reproducibility, fdroid_preflight, dependency_scan]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -255,8 +141,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       BUILD_RUN_ID: ${{ inputs.build_run_id }}
-      RELEASE_ATTEMPT_ID: ${{ needs.final_build.outputs.release_attempt_id }}
-      BUILD_JSON: ${{ needs.final_build.outputs.build_manifest }}
+      RELEASE_ATTEMPT_ID: ${{ needs.resolve_build.outputs.release_attempt_id }}
+      BUILD_JSON: ${{ needs.resolve_build.outputs.build_manifest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -276,21 +162,21 @@ jobs:
           import hashlib, json, os, sys
           from pathlib import Path
           sys.path.insert(0, ".github/scripts/release")
-          import test_manifest, package_readiness, build_manifest
+          import test_manifest, package_readiness
           result_path = Path(os.environ["RUNNER_TEMP"]) / "test-result.json"
           needs = json.loads(os.environ["NEEDS_JSON"])
           build = json.loads(os.environ["BUILD_JSON"] or "{}")
-          if any(needs[name]["result"] != "success" for name in ("final_build", *["ready_" + group for group in package_readiness.PACKAGES])):
-              raise SystemExit("Build completion or package readiness failed")
+          if needs["resolve_build"]["result"] != "success":
+              raise SystemExit("Build package selection or reservation failed")
           if needs["dependency_scan"]["result"] != "success":
               raise SystemExit("Fresh candidate dependency scan failed")
-          selections = {group: json.loads(needs["ready_" + group]["outputs"].get("packages") or "{}")
-                        for group in package_readiness.PACKAGES}
-          inventory = build_manifest._artifact_inventory(os.environ["GITHUB_REPOSITORY"], int(os.environ["BUILD_RUN_ID"]), build.get("run_attempt", 1), tuple(name for group in package_readiness.PACKAGES.values() for name in group))
-          jobs_by_attempt = {attempt: package_readiness._pages(os.environ["GITHUB_REPOSITORY"],
-                              f"actions/runs/{build['run_id']}/attempts/{attempt}/jobs", "jobs")
-                             for attempt in range(1, build.get("run_attempt", 1) + 1)}
-          package_readiness.reconcile(build, selections, inventory, jobs_by_attempt=jobs_by_attempt)
+          selections = json.loads(needs["resolve_build"]["outputs"]["packages"])
+          confirmed, current = package_readiness.package_snapshot(
+              os.environ["GITHUB_REPOSITORY"], int(os.environ["BUILD_RUN_ID"]),
+              Path(os.environ["RUNNER_TEMP"]) / "confirmed-build-manifest")
+          package_readiness.reconcile(selections, current)
+          if confirmed["manifest_sha256"] != build["manifest_sha256"]:
+              raise SystemExit("Build manifest changed during verification")
           apk = Path(os.environ["RUNNER_TEMP"]) / "selected-android" / f"DobbyVPN-v{build['version']}-unsign.apk"
           with apk.open("rb") as source:
               apk_sha = hashlib.file_digest(source, "sha256").hexdigest()

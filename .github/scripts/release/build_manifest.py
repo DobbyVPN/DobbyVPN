@@ -140,7 +140,7 @@ def _verify_prior_attempts(repository: str, run: dict[str, Any]) -> None:
             raise BuildManifestError(f"Build prior attempt {prior_attempt} has an unsupported conclusion")
 
 
-def _run(repository: str, run_id: int, *, require_main: bool = False, allow_active: bool = False) -> dict[str, Any]:
+def _run(repository: str, run_id: int, *, require_main: bool = False) -> dict[str, Any]:
     run = _json_command([
         "gh", "api", f"repos/{repository}/actions/runs/{run_id}",
     ])
@@ -155,10 +155,9 @@ def _run(repository: str, run_id: int, *, require_main: bool = False, allow_acti
         raise BuildManifestError("selected run is not a manually dispatched Build workflow")
     if (
         type(run.get("run_attempt")) is not int or run["run_attempt"] < 1
-        or not ((run.get("status") == "completed" and run.get("conclusion") == "success")
-                or (allow_active and run.get("status") in {"queued", "in_progress"}))
+        or run.get("status") != "completed" or run.get("conclusion") != "success"
     ):
-        raise BuildManifestError("selected Build must be successful and completed or explicitly allowed active")
+        raise BuildManifestError("selected Build must be successful and completed")
     if require_main and run.get("head_branch") != "main":
         raise BuildManifestError("production Release can only select a Build from main")
     if not isinstance(run.get("head_sha"), str) or not SHA_RE.fullmatch(run["head_sha"]):
@@ -234,6 +233,13 @@ def create_manifest(
 
 
 def resolve_build(repository: str, run_id: int, destination: Path, *, require_main: bool = False) -> dict[str, Any]:
+    manifest, _ = resolve_build_with_inventory(repository, run_id, destination, require_main=require_main)
+    return manifest
+
+
+def resolve_build_with_inventory(
+    repository: str, run_id: int, destination: Path, *, require_main: bool = False,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     run = _run(repository, run_id, require_main=require_main)
     destination.mkdir(mode=0o700, parents=True, exist_ok=False)
     subprocess.run([
@@ -308,7 +314,7 @@ def resolve_build(repository: str, run_id: int, destination: Path, *, require_ma
     if names != expected_names:
         raise BuildManifestError("Build manifest does not list the complete package set")
     manifest["manifest_sha256"] = hashlib.sha256(files[0].read_bytes()).hexdigest()
-    return manifest
+    return manifest, current
 
 
 def _write_output(path: Path, manifest: dict[str, Any]) -> None:
