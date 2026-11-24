@@ -732,16 +732,8 @@ extension DobbySessionViewModel {
         logWorker.async { [weak self, client] in
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("DobbyVPN-logs-\(UUID().uuidString).gz")
-            let header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\n" +
-                "Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)\nCaptured: \(ISO8601DateFormatter().string(from: Date()))\n\n"
-            var diagnosticDetails = writeError
             do {
-                try client.flushDiagnostics()
-            } catch {
-                diagnosticDetails += "Backend diagnostic flush failed: \(String(reflecting: error))\n"
-            }
-            do {
-                let issues = try exportDiagnostics(paths: client.diagnosticPaths, to: url, header: header + diagnosticDetails)
+                let issues = try exportLocalDiagnostics(client: client, to: url, writeError: writeError)
                 Task { @MainActor [weak self] in
                     self?.exportingLogs = false
                     self?.logsError = issues

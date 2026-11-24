@@ -150,17 +150,7 @@ public final class VpnManagerImpl: NSObject {
         let command = try? IOSProviderCommand.decode(messageData)
         let commandMethod = command?.method
         if commandMethod == "FlushDiagnostics" {
-            guard let manager = boundManager(),
-                  [.connected, .reasserting].contains(native.status(manager)) else {
-                return transportFailureResponse(for: messageData, code: "PROVIDER_INACTIVE",
-                                                message: "No running VPN provider to flush.")
-            }
-            do {
-                return try sendOnce(messageData, timeout: min(1, native.messageTimeout), using: manager)
-            } catch {
-                return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED",
-                                                message: diagnosticErrorDescription(error))
-            }
+            return flushProviderDiagnostics(messageData)
         }
         let identity = command?.diagnosticIdentity ?? "request_id=unavailable method=unavailable"
         let started = monotonicNow()
@@ -184,11 +174,7 @@ public final class VpnManagerImpl: NSObject {
             // Even an unavailable provider must not leave an explicit Stop's
             // restart preference untouched. This work never gates Go cleanup.
             if commandMethod == "Stop" && !stopPreferenceStarted {
-                preferences.changeOnDemand(false) { [weak self] error in
-                    if let error {
-                        self?.logs.writeLog(level: "ERROR", log: "[provider] unsent Stop could not disable On Demand:\n\(diagnosticErrorDescription(error))")
-                    }
-                }
+                changeOnDemand(false, failureMessage: "unsent Stop could not disable On Demand")
             }
         }
         stage = "readiness"
@@ -271,11 +257,7 @@ public final class VpnManagerImpl: NSObject {
                     // Connect re-arms the On Demand that an earlier Stop turned off.
                     // It never gates the Go command; a failure is only logged.
                     if commandMethod == "Start" {
-                        preferences.changeOnDemand(true) { [weak self] error in
-                            if let error {
-                                self?.logs.writeLog(level: "ERROR", log: "[provider] Start could not enable On Demand:\n\(diagnosticErrorDescription(error))")
-                            }
-                        }
+                        changeOnDemand(true, failureMessage: "Start could not enable On Demand")
                     }
                     response = try sendOnce(messageData, timeout: timeout)
                     onDemandFailure = nil
@@ -292,6 +274,28 @@ public final class VpnManagerImpl: NSObject {
         } catch {
             logs.writeLog(level: "ERROR", log: "[provider] transport failure response encoding failed \(identity) stage=\(stage) elapsed=\(monotonicNow() - started):\n\(diagnosticErrorDescription(error))")
             return Self.transportFailure("INTERNAL", message: "provider request failed")
+        }
+    }
+
+    private func flushProviderDiagnostics(_ messageData: Data) -> Data {
+        guard let manager = boundManager(),
+              [.connected, .reasserting].contains(native.status(manager)) else {
+            return transportFailureResponse(for: messageData, code: "PROVIDER_INACTIVE",
+                                            message: "No running VPN provider to flush.")
+        }
+        do {
+            return try sendOnce(messageData, timeout: min(1, native.messageTimeout), using: manager)
+        } catch {
+            return transportFailureResponse(for: messageData, code: "PLATFORM_FAILED",
+                                            message: diagnosticErrorDescription(error))
+        }
+    }
+
+    private func changeOnDemand(_ enabled: Bool, failureMessage: String) {
+        preferences.changeOnDemand(enabled) { [weak self] error in
+            if let error {
+                self?.logs.writeLog(level: "ERROR", log: "[provider] \(failureMessage):\n\(diagnosticErrorDescription(error))")
+            }
         }
     }
 

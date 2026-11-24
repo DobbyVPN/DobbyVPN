@@ -24,6 +24,18 @@ func exportDiagnostics(paths: [URL], to url: URL, header: String, checkCancellat
     try DiagnosticFiles.export(paths: paths, to: url, header: header, checkCancellation: checkCancellation)
 }
 
+func exportLocalDiagnostics(client: DobbySessionClient, to url: URL, writeError: String) throws -> String {
+    var header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\n" +
+        "Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)\nCaptured: \(ISO8601DateFormatter().string(from: Date()))\n\n" +
+        writeError
+    do {
+        try client.flushDiagnostics()
+    } catch {
+        header += "Backend diagnostic flush failed: \(String(reflecting: error))\n"
+    }
+    return try exportDiagnostics(paths: client.diagnosticPaths, to: url, header: header)
+}
+
 final class DobbyUploadCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
