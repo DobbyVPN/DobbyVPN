@@ -4,11 +4,11 @@ using System.Linq;
 
 namespace DobbyVPN.Windows;
 
-// UI-independent state consumed directly by MainWindow while it renders logs.
+// UI-independent state shared by the log viewport and its presentation tests.
 internal sealed class LogPresentationState
 {
     private List<NativeDiagnostics.Entry> _latestEntries = [];
-    private List<NativeDiagnostics.Entry> _visibleEntries = [];
+    private IReadOnlyList<NativeDiagnostics.Entry>? _frozenEntries;
     // This set mirrors the current bounded diagnostics preview; it is not a
     // history of every backend record the app has ever read.
     private HashSet<string> _latestBackendEntryIds = new(StringComparer.Ordinal);
@@ -18,8 +18,8 @@ internal sealed class LogPresentationState
     internal readonly record struct BackendEntryAcknowledgement(string EntryId, bool FollowsTail);
 
     public IReadOnlyList<NativeDiagnostics.Entry> LatestEntries => _latestEntries;
-    public IReadOnlyList<NativeDiagnostics.Entry> VisibleEntries => _visibleEntries;
-    public bool FollowsTail { get; private set; } = true;
+    public IReadOnlyList<NativeDiagnostics.Entry> VisibleEntries => _frozenEntries ?? _latestEntries;
+    public bool FollowsTail => _frozenEntries is null;
 
     public IReadOnlyList<BackendEntryAcknowledgement> ReplaceEntries(IEnumerable<NativeDiagnostics.Entry> entries)
     {
@@ -38,13 +38,12 @@ internal sealed class LogPresentationState
         _latestEntries = latestEntries;
         _latestBackendEntryIds = latestBackendEntryIds;
         _hasSeededBackendEntryIds = true;
-        if (FollowsTail) ShowLatestEntries();
         return acknowledgements;
     }
 
     public void Freeze()
     {
-        FollowsTail = false;
+        _frozenEntries ??= _latestEntries;
         _settledTailAlignment = null;
     }
 
@@ -61,11 +60,7 @@ internal sealed class LogPresentationState
         return true;
     }
 
-    public void FollowTail()
-    {
-        FollowsTail = true;
-        ShowLatestEntries();
-    }
+    public void FollowTail() => _frozenEntries = null;
 
     public void ObserveUserScroll(bool isAtBottom, bool movedTowardEarlierEntries)
     {
@@ -88,7 +83,6 @@ internal sealed class LogPresentationState
     {
         _settledTailAlignment = null;
         _latestEntries = [];
-        _visibleEntries = [];
         _latestBackendEntryIds.Clear();
         FollowTail();
     }
@@ -97,9 +91,4 @@ internal sealed class LogPresentationState
         entry.Source == "Backend" || entry.Source == "Backend stderr" ||
         entry.Source.StartsWith("Backend · ", StringComparison.Ordinal) ||
         entry.Source.StartsWith("Backend stderr · ", StringComparison.Ordinal);
-
-    private void ShowLatestEntries()
-    {
-        _visibleEntries = _latestEntries.ToList();
-    }
 }

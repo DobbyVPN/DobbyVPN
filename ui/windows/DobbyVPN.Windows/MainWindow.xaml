@@ -167,7 +167,7 @@
       <Rectangle Grid.Row="2" Height="1.5" Fill="{StaticResource Ink}" />
 
       <ScrollViewer Grid.Row="4" x:Name="LogsScroll" Background="{StaticResource Surface}" Padding="9,4.5,9,4.5"
-                    VerticalScrollBarVisibility="Auto" Loaded="LogsText_Loaded"
+                    VerticalScrollBarVisibility="Auto"
                     AutomationProperties.AutomationId="Connection logs">
         <ScrollViewer.ContextFlyout>
           <MenuFlyout x:Name="LogsMenu">
