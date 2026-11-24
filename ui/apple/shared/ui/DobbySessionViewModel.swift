@@ -473,8 +473,10 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.busy = false
                 if case let .failure(failure) = outcome {
                     let message = failure.localizedDescription
-                    self.dismissedFailures.remove(message)
-                    self.setError(message, origin: .other)
+                    let displayed = Self.displayedMessage(message)
+                    if displayed != message { self.recordError(message) }
+                    self.dismissedFailures.remove(displayed)
+                    self.setError(displayed, origin: .other)
                 }
                 self.refreshSnapshot()
             }
@@ -858,6 +860,11 @@ extension DobbySessionViewModel {
     static func displayedFailure(_ failure: DobbyFailure) -> String {
         if failure.message.contains(missingFirewallAnchor) { return missingFirewallAnchorText }
         return "\(failure.message) (\(failure.code))"
+    }
+
+    /// The same short text for a command error (Start refused by the service).
+    static func displayedMessage(_ message: String) -> String {
+        message.contains(missingFirewallAnchor) ? missingFirewallAnchorText : message
     }
 
     /// A new attempt shows its failure again, even when it repeats one the user closed.
