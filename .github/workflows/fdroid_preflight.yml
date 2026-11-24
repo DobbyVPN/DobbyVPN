@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       build_packages:
-        description: Exact readiness-selected Build artifacts, when overlapping Build.
+        description: Exact artifact selections from the referenced Build.
         type: string
         required: false
         default: ''

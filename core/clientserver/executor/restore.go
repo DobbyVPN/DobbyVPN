@@ -18,9 +18,8 @@ type serviceRestorer interface {
 // prepareDesktopRestore fixes the user's intent before the control channel
 // accepts commands and returns the function that starts the restore once it
 // serves. The restore runs in the background: it loads the saved source and
-// waits for the tunnel. A failure is logged (code only, the message can
-// contain the subscription address) and never stops the service; a failed
-// connection shows in the snapshot like any other failed connection.
+// waits for the tunnel. The service logs a failed restore and keeps serving.
+// The failed connection also appears in the snapshot.
 //
 // A macOS kill switch left by a backend that died stays in place while the
 // restore runs. Once the restore ends, it is removed unless a network adopted
@@ -41,7 +40,7 @@ func prepareDesktopRestore(owner serviceRestorer, releaseUnadopted func(context.
 				}
 			}()
 			if err := restore(context.Background()); err != nil {
-				log.Errorf(desktopLogCategory, "automatic session restore failed: %s", sessionapi.CodeOf(err))
+				log.Errorf(desktopLogCategory, "automatic session restore failed: %s: %v", sessionapi.CodeOf(err), err)
 			}
 		}()
 	}

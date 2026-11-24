@@ -103,7 +103,6 @@ jobs:
     uses: ./.github/workflows/android_build.yml
     with:
       build_packages: ${{ toJSON(fromJSON(needs.resolve_build.outputs.packages).android) }}
-      single_build: true
       reference_build_run_id: ${{ inputs.build_run_id }}
       source_sha: ${{ needs.resolve_build.outputs.source_sha }}
       app_major_version: ${{ needs.resolve_build.outputs.major }}
