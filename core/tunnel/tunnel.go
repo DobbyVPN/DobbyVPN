@@ -517,6 +517,9 @@ func (e *Engine) detachLocked(ctx context.Context) error {
 	if e.proxy == nil {
 		return nil
 	}
+	// Connections still waiting for a TCP slot belong to this attempt; refuse
+	// them now instead of admitting them after its flows close.
+	platform_engine.CancelPendingTCPAdmissions()
 	e.proxy.flows.sealAndClose()
 	if e.proxy.udpRelay != nil {
 		e.proxy.udpRelay.Close()

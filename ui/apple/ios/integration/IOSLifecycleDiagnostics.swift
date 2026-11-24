@@ -196,6 +196,8 @@ public struct IOSProviderRunRecord: Codable {
     public var protected = false
     public var peakBytes: UInt64 = 0
     public var peakResources = ""
+    /// Most recent resource sample, refreshed every 250 ms while protected.
+    public var latestResources: String?
     public var unexpectedPreviousLaunch: String?
 
     public init(launchID: String, replacing previous: Self?) {

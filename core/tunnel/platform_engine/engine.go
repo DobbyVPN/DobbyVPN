@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/log"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
@@ -39,7 +40,10 @@ func InterfaceName() string { return platformInterfaceName() }
 // hooks, global logger replacement, REST listener, or fatal-exit path.
 var ownedDevice device.Device
 var ownedStack *stack.Stack
-var ownedTCPAdmission *tcpAdmission
+
+// ownedTCPAdmission is read without the owner's serialization by
+// TCPAdmissionDiagnostics and CancelPendingTCPAdmissions.
+var ownedTCPAdmission atomic.Pointer[tcpAdmission]
 
 func startStack(handler stackAdapter.TransportHandler, open func() (device.Device, error)) (bool, error) {
 	if ownedDevice != nil || ownedStack != nil {
@@ -55,10 +59,12 @@ func startStack(handler stackAdapter.TransportHandler, open func() (device.Devic
 	if dev.MTU() < TunnelMTU {
 		return true, fmt.Errorf("tunnel MTU %d is below IPv6 minimum %d", dev.MTU(), TunnelMTU)
 	}
+	var admission *tcpAdmission
 	if len(tcpStackOptions) != 0 {
-		ownedTCPAdmission = &tcpAdmission{changed: make(chan struct{})}
+		admission = newTCPAdmission(iosActiveTCPLimit, iosPendingTCPLimit, iosTCPWait)
+		ownedTCPAdmission.Store(admission)
 	}
-	ownedStack, err = createStack(dev, handler, ownedTCPAdmission)
+	ownedStack, err = createStack(dev, handler, admission)
 	if err == nil {
 		log.Infof(Category, "packet stack ready interface=%s mtu=%d ipv4=true ipv6=true", dev.Name(), dev.MTU())
 	}
@@ -123,10 +129,9 @@ func drainStack(ctx context.Context) error {
 }
 
 func stopStack(ctx context.Context) error {
-	if ownedTCPAdmission != nil {
-		waited, refused := ownedTCPAdmission.seal()
+	if admission := ownedTCPAdmission.Swap(nil); admission != nil {
+		waited, refused := admission.seal()
 		log.Infof(Category, "TCP admission totals waited=%d refused=%d", waited, refused)
-		ownedTCPAdmission = nil
 	}
 	if ownedDevice != nil {
 		if err := stopPhaseCtx(ctx, "device-close", ownedDevice.Close); err != nil {
@@ -141,4 +146,24 @@ func stopStack(ctx context.Context) error {
 	}
 	clear(stopPhases)
 	return nil
+}
+
+// CancelPendingTCPAdmissions refuses the connections waiting for a TCP slot,
+// as Stop does, while the stack keeps running. A profile switch calls it so a
+// connection opened for the previous profile is not admitted to the next one.
+func CancelPendingTCPAdmissions() {
+	if admission := ownedTCPAdmission.Load(); admission != nil {
+		admission.cancelPending()
+	}
+}
+
+// TCPAdmissionDiagnostics reports the TCP admission counters. ok is false when
+// the running stack has no admission limit (all platforms except iOS).
+func TCPAdmissionDiagnostics() (active, pending int, waited, refused uint64, ok bool) {
+	admission := ownedTCPAdmission.Load()
+	if admission == nil {
+		return 0, 0, 0, 0, false
+	}
+	active, pending, waited, refused = admission.stats()
+	return active, pending, waited, refused, true
 }

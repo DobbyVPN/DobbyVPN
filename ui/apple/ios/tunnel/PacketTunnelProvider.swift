@@ -136,6 +136,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var resourceTimer: DispatchSourceTimer?
     private var resourceRecord: IOSProviderRunRecord?
     private var savedResourcePeak: UInt64 = 0
+    private var savedAdmission = ""
     private var lastResourceWrite: TimeInterval = 0
     private var resourcePath: URL { IOSAppCompositionRoot.sharedLogPath("provider-run.json") }
     let tunnelId = UUID().uuidString
@@ -321,15 +322,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         logs.writeLog(log: "[tunnel:\(tunnelId)] resources event=\(event) footprint_bytes=\(footprint) \(DobbyvpnResourceDiagnostics())")
     }
 
-    private func persistResources() {
-        guard let resourceRecord else { return }
+    @discardableResult
+    private func persistResources() -> Bool {
+        guard let resourceRecord else { return false }
+        defer { lastResourceWrite = ProcessInfo.processInfo.systemUptime }
         do {
             try resourceRecord.save(to: resourcePath)
             savedResourcePeak = resourceRecord.peakBytes
+            return true
         } catch {
             logs.writeLog(level: "ERROR", log: "[tunnel] resource checkpoint failed: \(error)")
+            return false
         }
-        lastResourceWrite = ProcessInfo.processInfo.systemUptime
     }
 
     private func beginResourceRecord() {
@@ -338,7 +342,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 let previous = try IOSProviderRunRecord.load(from: resourcePath)
                 if let previous, previous.launchID != launchId, previous.protected {
                     logs.writeLog(level: "WARN", log: "[tunnel] unexpected previous launch=\(previous.launchID) " +
-                                  "peak_footprint_bytes=\(previous.peakBytes) \(previous.peakResources)")
+                                  "peak_footprint_bytes=\(previous.peakBytes) \(previous.peakResources) " +
+                                  "latest=[\(previous.latestResources ?? "")]")
                 }
                 resourceRecord = IOSProviderRunRecord(launchID: launchId, replacing: previous)
             } catch {
@@ -368,15 +373,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func sampleResourcePeak() {
         guard var record = resourceRecord, record.protected else { return }
+        let resources = DobbyvpnResourceDiagnostics()
         if let bytes = physicalFootprint().0, bytes > record.peakBytes {
             record.peakBytes = bytes
-            record.peakResources = DobbyvpnResourceDiagnostics()
-            resourceRecord = record
+            record.peakResources = resources
         }
+        // TCP admission counters keep changing after the footprint peak, so the
+        // latest sample is kept too and saved when those counters change.
+        record.latestResources = resources
+        resourceRecord = record
+        let admission = resources.range(of: " admitActiveTCP=").map { String(resources[$0.lowerBound...]) } ?? ""
         let elapsed = ProcessInfo.processInfo.systemUptime - lastResourceWrite
-        if record.peakBytes > savedResourcePeak,
-           elapsed >= 1 || record.peakBytes - savedResourcePeak >= 4 * 1024 * 1024 {
-            persistResources()
+        let peakChanged = record.peakBytes > savedResourcePeak &&
+            (elapsed >= 1 || record.peakBytes - savedResourcePeak >= 4 * 1024 * 1024)
+        // A failed save keeps the old value, so the counters are retried later.
+        if peakChanged || (admission != savedAdmission && elapsed >= 1), persistResources() {
+            savedAdmission = admission
         }
     }
 
