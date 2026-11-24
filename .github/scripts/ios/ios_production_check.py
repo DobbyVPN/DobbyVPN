@@ -14,25 +14,13 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / ".github" / "scripts"))
 sys.path.insert(0, str(ROOT / ".github" / "scripts" / "desktop"))
 sys.path.insert(0, str(ROOT / ".github" / "scripts" / "release"))
-sys.path.insert(0, str(ROOT / ".github" / "scripts" / "android"))
 import desktop_build
-from android_dependency_provenance import MOBILE_MODULE, MOBILE_VERSION
 from version_metadata import parse_version
-from dependency_fetch import run_dependency_command
 
 
 def run(command: list[str], *, cwd: Path, environment: dict[str, str]) -> None:
     print("$ " + " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, env=environment, check=True)
-
-
-def run_dependency(command: list[str], *, cwd: Path, environment: dict[str, str]) -> None:
-    print("$ " + " ".join(command), flush=True)
-    result = run_dependency_command(command, cwd=cwd, env=environment)
-    if result.returncode:
-        raise subprocess.CalledProcessError(
-            result.returncode, command, output=result.stdout, stderr=result.stderr,
-        )
 
 
 def main() -> int:
@@ -62,6 +50,7 @@ def main() -> int:
     version = parse_version((ROOT / "VERSION").read_text(encoding="utf-8"))
     env = os.environ.copy()
     env.update(
+        PATH=str(Path(go).parent) + os.pathsep + env["PATH"],
         GOTOOLCHAIN="local",
         GOBIN=str(tools),
         GOMOBILE_BIN=str(tools / "gomobile"),
@@ -72,9 +61,9 @@ def main() -> int:
         APP_BUILD=str(version.android_version_code),
     )
     module = ROOT / "core"
-    run_dependency([go, "mod", "download"], cwd=module, environment=env)
-    for tool in ("gomobile", "gobind"):
-        run_dependency([go, "install", f"{MOBILE_MODULE}/cmd/{tool}@{MOBILE_VERSION}"], cwd=module, environment=env)
+    fetch = ROOT / ".github" / "scripts" / "dependency_fetch.py"
+    run([sys.executable, str(fetch), "retry", "--", go, "mod", "download"], cwd=module, environment=env)
+    run([sys.executable, str(Path(__file__).with_name("mobile_tools.py")), "install"], cwd=module, environment=env)
     command = [str(module / "scripts" / "build_ios_xcframework.sh")]
     if args.simulator_architecture:
         command.extend(["--simulator-architecture", args.simulator_architecture])

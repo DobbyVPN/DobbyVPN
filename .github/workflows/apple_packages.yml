@@ -84,33 +84,8 @@ jobs:
         run: python3 ../.github/scripts/dependency_fetch.py retry -- go mod download
 
       - name: Install pinned Go mobile runtime tools
-        run: |
-          set -euo pipefail
-          mobile_version='v0.0.0-20260520154334-0e4426e1883d'
-          python3 .github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gomobile@"$mobile_version"
-          python3 .github/scripts/dependency_fetch.py retry -- go install golang.org/x/mobile/cmd/gobind@"$mobile_version"
-          gopath="$(go env GOPATH)"
-          echo "$gopath/bin" >> "$GITHUB_PATH"
-          for tool in gomobile gobind; do
-            test -x "$gopath/bin/$tool"
-            metadata_stdout="$RUNNER_TEMP/$tool-version.stdout"
-            metadata_stderr="$RUNNER_TEMP/$tool-version.stderr"
-            set +e
-            go version -m "$gopath/bin/$tool" >"$metadata_stdout" 2>"$metadata_stderr"
-            metadata_status=$?
-            set -e
-            cat "$metadata_stdout"
-            cat "$metadata_stderr" >&2
-            test "$metadata_status" -eq 0
-            tool_metadata="$(cat "$metadata_stdout")"
-            [[ "$tool_metadata" == *"$mobile_version"* ]]
-          done
-
-      - name: Verify pinned Go mobile runtime dependency
         working-directory: core
-        run: |
-          test "$(go list -m -f '{{.Version}}' golang.org/x/mobile)" = 'v0.0.0-20260520154334-0e4426e1883d'
-          python3 ../.github/scripts/dependency_fetch.py retry -- go mod download golang.org/x/mobile
+        run: python3 ../.github/scripts/ios/mobile_tools.py install
 
       - name: Build Debug iOS framework and unsigned archive
         run: |

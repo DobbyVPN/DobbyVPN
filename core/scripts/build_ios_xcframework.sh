@@ -20,7 +20,6 @@ if [[ -z "$commit" ]]; then commit=$(git rev-parse HEAD); fi
 go_identity="-buildid= -X core/buildinfo.Version=$version -X core/buildinfo.Commit=$commit -X core/buildinfo.Configuration=$configuration"
 
 readonly output="DobbyVPNRuntime.xcframework"
-readonly mobile_version="v0.0.0-20260520154334-0e4426e1883d"
 
 simulator_architecture=""
 if [[ "$#" -gt 0 ]]; then
@@ -36,32 +35,13 @@ if [[ "$#" -gt 0 ]]; then
 fi
 
 gopath="$(go env GOPATH | tee /dev/stderr)"
-tool_dir="$gopath/bin"
+gopath="${gopath%%:*}"
+tool_dir="$(go env GOBIN | tee /dev/stderr)"
+tool_dir="${tool_dir:-$gopath/bin}"
 gomobile_bin="${GOMOBILE_BIN:-$tool_dir/gomobile}"
 gobind_bin="${GOBIND_BIN:-$tool_dir/gobind}"
-if [[ ! -x "$gomobile_bin" || ! -x "$gobind_bin" ]]; then
-  echo "pinned gomobile and gobind are required; install both at $mobile_version" >&2
-  exit 2
-fi
-for tool in "$gomobile_bin" "$gobind_bin"; do
-  # Keep the complete tool report visible while retaining it for the module
-  # pin check.  A command substitution alone would hide successful stdout
-  # from the invoking build log.
-  tool_metadata="$(go version -m "$tool" | tee /dev/stderr)"
-  if [[ "$tool_metadata" != *"golang.org/x/mobile"*"$mobile_version"* ]]; then
-    echo "tool module closure is not pinned to golang.org/x/mobile@$mobile_version: $tool" >&2
-    exit 2
-  fi
-done
 export GOMOBILE="${GOMOBILE:-$gopath/pkg/gomobile}"
 mkdir -p "$GOMOBILE"
-export PATH="${gomobile_bin%/*}:${gobind_bin%/*}:$PATH"
-
-module_version="$(go list -m -f '{{.Version}}' golang.org/x/mobile | tee /dev/stderr)"
-if [[ "$module_version" != "$mobile_version" ]]; then
-  echo "go.mod resolves golang.org/x/mobile@$module_version; expected $mobile_version" >&2
-  exit 2
-fi
 
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/dobbyvpn-ios-xcframework.XXXXXX")"
 cleanup_workdir() {
@@ -74,6 +54,9 @@ cleanup_workdir() {
   exit "$status"
 }
 trap cleanup_workdir EXIT
+
+python3 ../.github/scripts/ios/mobile_tools.py stage "$workdir/bin" "$gomobile_bin" "$gobind_bin"
+export PATH="$workdir/bin:$PATH"
 
 mkdir -p "$workdir/device" "$workdir/simulator"
 device_output="$workdir/device/DobbyVPNRuntime.xcframework"
