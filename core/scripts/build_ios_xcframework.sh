@@ -116,12 +116,12 @@ if [[ -z "$simulator_architecture" ]]; then
 fi
 
 simulator_target="iossimulator"
+simulator_go_arches=(arm64 amd64)
 if [[ -n "$simulator_architecture" ]]; then
   simulator_target="iossimulator/$simulator_architecture"
+  simulator_go_arches=("$simulator_architecture")
 fi
-simulator_arches_to_query=(arm64 amd64)
-if [[ -n "$simulator_architecture" ]]; then simulator_arches_to_query=("$simulator_architecture"); fi
-run_bind simulator "$simulator_target" 'static simulator' "$simulator_output" "${simulator_arches_to_query[@]}"
+run_bind simulator "$simulator_target" 'static simulator' "$simulator_output" "${simulator_go_arches[@]}"
 
 simulator_framework_output="$(
   find "$simulator_output" -type d -name DobbyVPNRuntime.framework -print | tee /dev/stderr
@@ -145,13 +145,9 @@ if [[ ! -f "$simulator_bridge" || ! -f "$simulator_provenance" ]]; then
   exit 1
 fi
 simulator_arches="$(xcrun lipo -archs "$simulator_bridge" | tee /dev/stderr)"
-required_simulator_arches=(arm64 x86_64)
-if [[ -n "$simulator_architecture" ]]; then
-  selected_simulator_arch=arm64
-  if [[ "$simulator_architecture" == amd64 ]]; then selected_simulator_arch=x86_64; fi
-  required_simulator_arches=("$selected_simulator_arch")
-fi
-for simulator_arch in "${required_simulator_arches[@]}"; do
+# lipo uses x86_64 for Go's amd64.
+simulator_native_arches=("${simulator_go_arches[@]/amd64/x86_64}")
+for simulator_arch in "${simulator_native_arches[@]}"; do
   if [[ " $simulator_arches " != *" $simulator_arch "* ]]; then
     echo "TrustTunnel Simulator bridge is missing architecture $simulator_arch" >&2
     exit 1
@@ -189,14 +185,8 @@ if [[ ! -f "$simulator_library" ]]; then
   echo "missing generated Simulator DobbyVPNRuntime binary" >&2
   exit 1
 fi
-simulator_merge_arches=(arm64 x86_64)
-if [[ -n "$simulator_architecture" ]]; then
-  selected_simulator_arch=arm64
-  if [[ "$simulator_architecture" == amd64 ]]; then selected_simulator_arch=x86_64; fi
-  simulator_merge_arches=("$selected_simulator_arch")
-fi
 merged_simulator_slices=()
-for simulator_arch in "${simulator_merge_arches[@]}"; do
+for simulator_arch in "${simulator_native_arches[@]}"; do
   runtime_slice="$workdir/DobbyVPNRuntime-Simulator-$simulator_arch.a"
   bridge_slice="$workdir/libdobby_bridge-Simulator-$simulator_arch.a"
   merged_slice="$workdir/DobbyVPNRuntime-Simulator-$simulator_arch-merged.a"
