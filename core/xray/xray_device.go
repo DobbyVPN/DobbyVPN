@@ -156,8 +156,8 @@ func (d *XrayDevice) GetProxyAddr() string {
 // destination (gRPC, XHTTP) out of use, so the next streams dial new ones.
 // After a short network drop the old HTTP/2 connection can still look ready
 // while every new stream on it hangs. Streams already running on the old
-// connections are not cut: those connections close once nothing runs on them
-// (see retireXrayGRPCClients and retireXrayXHTTPClients). The maps are
+// connections are not cut: the retired connections are closed when the device
+// closes (see retireXrayGRPCClients and retireXrayXHTTPClients). The maps are
 // process-wide, but the system dialer hook is too, so only one Xray instance
 // (this device's) owns entries in them. A per-flow transport (Outline) does
 // not need this.
@@ -165,10 +165,10 @@ func (d *XrayDevice) ResetTransport(reason string) {
 	if d == nil || d.xrayInstance == nil {
 		return
 	}
-	grpcRetired, grpcClosed := retireXrayGRPCClients()
+	grpcRetired := retireXrayGRPCClients()
 	xhttpRetired := retireXrayXHTTPClients()
 	log.Info(common.Category, "Xray multiplexed connections retired", map[string]any{
-		"reason": reason, "grpc_retired": grpcRetired, "grpc_closed_idle": grpcClosed, "xhttp_retired": xhttpRetired,
+		"reason": reason, "grpc_retired": grpcRetired, "xhttp_retired": xhttpRetired,
 	})
 }
 
@@ -186,7 +186,7 @@ func (d *XrayDevice) CloseContext(ctx context.Context) error {
 	if d.xrayInstance != nil {
 		err := d.xrayInstance.Close()
 		closeXrayGRPCClients()
-		retireXrayXHTTPClients()
+		closeXrayXHTTPClients()
 		if err != nil {
 			return fmt.Errorf("failed to close xray instance: %w", err)
 		}
