@@ -65,7 +65,7 @@ func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) 
 		return false, fmt.Errorf("create owned Wintun identity: %w", err)
 	}
 	// Select against the interface inventory before adding our own adapter.
-	tunCfg, err := common.GetNetworkConfig()
+	tunAddress, err := common.TUNDeviceIPv4()
 	if err != nil {
 		return false, err
 	}
@@ -131,7 +131,7 @@ func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) 
 	adapter.dnsKnown = true
 	log.Debugf(Category, "[Engine][Windows] getCurrentDNS elapsed=%s total=%s", time.Since(dnsReadStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
-	adapter.tunnelIPv4, err = windowsTunnelIPv4Prefix(tunCfg.TunDevice)
+	adapter.tunnelIPv4, err = windowsTunnelIPv4Prefix(tunAddress)
 	if err != nil {
 		return true, err
 	}
@@ -144,7 +144,7 @@ func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) 
 		return true, fmt.Errorf("add owned Wintun IPv6 address: %w", err)
 	}
 	adapter.ipv6Mutated = true
-	if err := waitForPreferredIPv4(ifName, tunCfg.TunDevice, 5*time.Second); err != nil {
+	if err := waitForPreferredIPv4(ifName, tunAddress, 5*time.Second); err != nil {
 		return true, err
 	}
 	adapter.dnsMutated = true // SetDNS may have changed state before returning an error.

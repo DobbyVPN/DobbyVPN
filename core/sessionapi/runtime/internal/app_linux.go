@@ -35,11 +35,11 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	config := app.RoutingConfig
 	if config.TunDeviceIP == "" {
-		addresses, err := common.GetNetworkConfig()
+		address, err := common.TUNDeviceIPv4()
 		if err != nil {
 			return fail(err)
 		}
-		config.TunDeviceIP = addresses.TunDevice
+		config.TunDeviceIP = address
 	}
 	// Retire precisely tagged state from an interrupted older process. The new
 	// policy leaves physical routes untouched, so it needs no route restoration.
