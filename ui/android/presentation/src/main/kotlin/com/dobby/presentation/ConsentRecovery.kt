@@ -62,8 +62,9 @@ class ConsentRecovery(
             return
         }
         if (intent.granted) return
-        restored = intent.copy(granted = true)
-        schedule(intent)
+        val allowed = intent.copy(granted = true)
+        restored = allowed
+        schedule(allowed)
     }
 
     /** The user cancelled the request (source change, stop): forget it, allowed or not yet answered. */
@@ -77,6 +78,6 @@ class ConsentRecovery(
     }
 
     private fun schedule(intent: PendingConsent) {
-        enqueue(Runnable { if (restored?.granted == true) resume(intent) })
+        enqueue(Runnable { if (restored === intent) resume(intent) })
     }
 }
