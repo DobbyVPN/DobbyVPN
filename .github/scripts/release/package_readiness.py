@@ -36,6 +36,20 @@ def identity(repository, run_id, source_sha):
                  "apple_build_number": str(version.android_version_code + run["run_number"])}
 
 
+def _carried_forward(original, current):
+    # GitHub can copy an earlier execution into a later attempt with a new
+    # job ID and creation time. The copied execution keeps its run times.
+    started = original.get("started_at")
+    completed = original.get("completed_at")
+    created = current.get("created_at")
+    return (
+        current.get("conclusion") == "success"
+        and isinstance(started, str) and isinstance(completed, str) and isinstance(created, str)
+        and started == current.get("started_at") and completed == current.get("completed_at")
+        and started <= completed and started < created
+    )
+
+
 def select_ready(run, artifacts, jobs_by_attempt, group):
     """None means ordinary producer progress, never a successful missing check."""
     required = PACKAGES[group]
@@ -51,14 +65,13 @@ def select_ready(run, artifacts, jobs_by_attempt, group):
                 raise ValueError(f"package unavailable from completed producer: {producer}")
             return None
         _, attempt = parse_artifact_name(artifact["name"])
-        replacing = [j for j in jobs_by_attempt.get(run["run_attempt"], [])
-                     if j.get("name") == producer] if attempt < run["run_attempt"] else []
-        if replacing:
-            if len(replacing) != 1:
+        later_jobs = [j for j in jobs_by_attempt.get(run["run_attempt"], [])
+                      if j.get("name") == producer] if attempt < run["run_attempt"] else []
+        if later_jobs:
+            if len(later_jobs) != 1:
                 raise ValueError(f"ambiguous replacement producer: {producer}")
-            if replacing[0].get("status") != "completed":
+            if later_jobs[0].get("status") != "completed":
                 return None
-            raise ValueError(f"current producer has no successful current-attempt artifact: {producer}")
         jobs = [j for j in jobs_by_attempt.get(attempt, []) if j.get("name") == producer]
         if len(jobs) != 1:
             raise ValueError(f"missing or ambiguous producer: {producer} attempt {attempt}")
@@ -67,6 +80,8 @@ def select_ready(run, artifacts, jobs_by_attempt, group):
             return None
         if job.get("conclusion") != "success":
             raise ValueError(f"unsuccessful package producer: {producer}")
+        if later_jobs and not _carried_forward(job, later_jobs[0]):
+            raise ValueError(f"current producer has no successful current-attempt artifact: {producer}")
         if type(job.get("id")) is not int or job["id"] <= 0:
             raise ValueError(f"invalid package producer job ID: {producer}")
         if (type(artifact.get("id")) is not int or artifact["id"] <= 0
