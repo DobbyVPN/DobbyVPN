@@ -91,6 +91,16 @@ jobs:
           printf 'package=%s\n' "$output/$package" >> "$GITHUB_OUTPUT"
           printf 'artifact=%s\n' "$package" >> "$GITHUB_OUTPUT"
 
+      # The MSI of this exact build, installed under SYSTEM through a scheduled task (as Intune and SCCM do): refused early without
+      # DOBBYVPN_CONTROL_PIPE_SID, installed with it, uninstalled without it. Debug builds only (the pull request signal); the release
+      # package gets the same checks, plus the upgrade over a released MSI, in the Test workflow.
+      - name: Check the SYSTEM install guard of the MSI
+        if: ${{ inputs.platform == 'windows' && inputs.debug }}
+        shell: bash
+        env:
+          PACKAGE: ${{ steps.build.outputs.package }}
+        run: python3 .github/scripts/desktop/windows_system_install_check.py --package "$PACKAGE" --log-dir "$RUNNER_TEMP/system-install-check"
+
       - name: Upload exact package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

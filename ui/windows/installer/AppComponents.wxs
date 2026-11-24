@@ -4,7 +4,10 @@
          [UserSID] unless DOBBYVPN_CONTROL_PIPE_SID is passed. An install, repair or upgrade under SYSTEM (Intune, SCCM) without that property
          used to roll back late, in StartServices, with Error 1920; this stops it before anything is installed. A launch condition runs in
          every install sequence, including a major upgrade (the new package is not installed yet), and cannot rely on the SetProperty default
-         of Package.wxs, which runs later (before CostFinalize), so it checks the passed property and UserSID itself. Uninstall always passes.
+         of Package.wxs, which runs later (before CostFinalize), so it checks the passed property and UserSID itself. An uninstall
+         started by msiexec /x passes, and so does the one of Programs and Features, which runs the same command: msiexec sets REMOVE=ALL
+         before the sequences. The package has no maintenance UI (ARPNOMODIFY), so no other path removes it; a path that set REMOVE=ALL
+         only later would not pass this condition.
          The property is not remembered between installs: an upgrade under SYSTEM has to pass it again. -->
     <Launch Condition="REMOVE=&quot;ALL&quot; OR (DOBBYVPN_CONTROL_PIPE_SID AND DOBBYVPN_CONTROL_PIPE_SID ~&lt;&gt; &quot;S-1-5-18&quot;) OR (NOT DOBBYVPN_CONTROL_PIPE_SID AND UserSID ~&lt;&gt; &quot;S-1-5-18&quot;)"
             Message="DobbyVPN cannot be installed or upgraded under the SYSTEM account without naming the user who will run it. Run msiexec again with DOBBYVPN_CONTROL_PIPE_SID set to the SID of that user (not S-1-5-18), for example: msiexec /i dobbyVPN-windows-amd64.msi /qn DOBBYVPN_CONTROL_PIPE_SID=S-1-5-21-1111111111-2222222222-3333333333-1001" />
