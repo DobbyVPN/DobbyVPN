@@ -1,4 +1,6 @@
+require "base64"
 require "shellwords"
+require "tmpdir"
 require_relative "ios_release_notes"
 
 # CI sets APP_* from the manual VERSION file (prepare_version reads x.y.z, no auto-bump).
@@ -46,15 +48,6 @@ platform :ios do
     keychain_name = "build.keychain-db"
     keychain_password = ENV['KEYCHAIN_PASSWORD']
 
-    tmp = Dir.mktmpdir
-    cert_path = File.join(tmp, "cert.p12")
-    profile1  = File.join(tmp, "profile1.mobileprovision")
-    profile2  = File.join(tmp, "profile2.mobileprovision")
-
-    File.write(cert_path, Base64.decode64(ENV['CERT_P12_BASE64']))
-    File.write(profile1,  Base64.decode64(ENV['PROVISION_DOBBY_BASE64']))
-    File.write(profile2,  Base64.decode64(ENV['PROVISION_DOBBY_TUNNEL_BASE64']))
-
     create_keychain(
       name: keychain_name,
       password: keychain_password,
@@ -63,17 +56,28 @@ platform :ios do
       timeout: 3600
     )
 
-    import_certificate(
-      certificate_path: cert_path,
-      certificate_password: ENV['CERT_P12_PASSWORD'],
-      keychain_name: keychain_name,
-      keychain_password: keychain_password
-    )
+    Dir.mktmpdir("dobby-signing-") do |tmp|
+      cert_path = File.join(tmp, "cert.p12")
+      File.binwrite(cert_path, Base64.decode64(ENV.fetch("CERT_P12_BASE64")))
+      import_certificate(
+        certificate_path: cert_path,
+        certificate_password: ENV.fetch("CERT_P12_PASSWORD"),
+        keychain_name: keychain_name,
+        keychain_password: keychain_password
+      )
 
-    sh("security set-key-partition-list -S apple-tool:,apple: -s -k #{keychain_password} ~/Library/Keychains/#{keychain_name}")
+      keychain_path = File.expand_path("~/Library/Keychains/#{keychain_name}")
+      unless system("security", "set-key-partition-list", "-S", "apple-tool:,apple:", "-s",
+                    "-k", keychain_password, keychain_path)
+        UI.user_error!("Failed to configure access to the signing keychain")
+      end
 
-    install_provisioning_profile(path: profile1)
-    install_provisioning_profile(path: profile2)
+      %w[PROVISION_DOBBY_BASE64 PROVISION_DOBBY_TUNNEL_BASE64].each do |variable|
+        path = File.join(tmp, "#{variable}.mobileprovision")
+        File.binwrite(path, Base64.decode64(ENV.fetch(variable)))
+        install_provisioning_profile(path: path)
+      end
+    end
   end
 
   desc "Build the native SwiftUI IPA and shared Go NetworkExtension runtime"
