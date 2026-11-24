@@ -37,6 +37,8 @@ jobs:
       scope: ${{ steps.classify.outputs.scope || 'full' }}
       reason: ${{ steps.classify.outputs.reason || 'classification-unavailable' }}
       reused_run_id: ${{ steps.classify.outputs.reused_run_id || '' }}
+      # Whether ui/windows/**, global.json or the Windows project's lock file changed; true whenever that cannot be told.
+      windows_ui: ${{ steps.classify.outputs.windows_ui || 'true' }}
     steps:
       - name: Check out trusted CI helpers
         if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
@@ -79,6 +81,7 @@ jobs:
                 echo "scope=full" >> "$GITHUB_OUTPUT"
                 echo "reason=push-classification-failed" >> "$GITHUB_OUTPUT"
                 echo "reused_run_id=" >> "$GITHUB_OUTPUT"
+                echo "windows_ui=true" >> "$GITHUB_OUTPUT"
               fi
             fi
             exit 0
@@ -87,6 +90,7 @@ jobs:
             echo "scope=full" >> "$GITHUB_OUTPUT"
             echo "reason=non-pull-request-event" >> "$GITHUB_OUTPUT"
             echo "reused_run_id=" >> "$GITHUB_OUTPUT"
+            echo "windows_ui=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           classifier_output="$RUNNER_TEMP/ci-scope-output"
@@ -103,6 +107,7 @@ jobs:
             echo "CI scope classifier failed; selecting full CI." >&2
             echo "scope=full" >> "$GITHUB_OUTPUT"
             echo "reason=classifier-failed" >> "$GITHUB_OUTPUT"
+            echo "windows_ui=true" >> "$GITHUB_OUTPUT"
           fi
 
   go_build:
@@ -146,9 +151,9 @@ jobs:
   windows_ui_restore:
     name: Windows UI NuGet restore
     needs: ci_scope
-    # ui/windows/**, global.json and the project's packages.lock.json are shared paths, so a pull request that changes them
-    # always selects the full scope; narrower scopes never touch them.
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && needs.ci_scope.outputs.scope == 'full' }}
+    # Runs only when ui/windows/** (the project's packages.lock.json included) or global.json changed; the manual 'ci' run
+    # and every classification that cannot be established select it too (see the windows_ui output of ci_scope).
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && needs.ci_scope.outputs.windows_ui == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -468,6 +473,7 @@ jobs:
           REUSED_RUN_ID: ${{ needs.ci_scope.outputs.reused_run_id || '' }}
           CI_SCOPE_RESULT: ${{ needs.ci_scope.result }}
           GO_BUILD_RESULT: ${{ needs.go_build.result }}
+          WINDOWS_UI: ${{ needs.ci_scope.outputs.windows_ui || 'true' }}
           WINDOWS_UI_RESTORE_RESULT: ${{ needs.windows_ui_restore.result }}
           ANDROID_LINT_RESULT: ${{ needs.android_lint.result }}
           LINT_GO_RESULT: ${{ needs.lint_go.result }}
@@ -494,10 +500,15 @@ jobs:
           require_common() {
             require_result 'Git history secret scan' success "$SECURITY_RESULT"
             require_result 'GitHub workflow validation' success "$ACTIONLINT_RESULT"
+            # Conditional on the changed paths, in every scope: required when they changed, skipped when they did not.
+            if [ "$WINDOWS_UI" = true ]; then
+              require_result 'Windows UI NuGet restore' success "$WINDOWS_UI_RESTORE_RESULT"
+            else
+              require_result 'Windows UI NuGet restore' skipped "$WINDOWS_UI_RESTORE_RESULT"
+            fi
           }
           require_unselected_platform_jobs() {
             require_result 'Go source build' skipped "$GO_BUILD_RESULT"
-            require_result 'Windows UI NuGet restore' skipped "$WINDOWS_UI_RESTORE_RESULT"
             require_result 'Android lint' skipped "$ANDROID_LINT_RESULT"
             require_result 'Go source analysis' skipped "$LINT_GO_RESULT"
             require_result 'Apple development checks' skipped "$APPLE_RESULT"
@@ -507,7 +518,6 @@ jobs:
             full)
               require_common
               require_result 'Go source build' success "$GO_BUILD_RESULT"
-              require_result 'Windows UI NuGet restore' success "$WINDOWS_UI_RESTORE_RESULT"
               require_result 'Android lint' success "$ANDROID_LINT_RESULT"
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
               require_result 'Apple development checks' success "$APPLE_RESULT"
@@ -525,7 +535,6 @@ jobs:
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
               require_result 'Android product build' success "$ANDROID_BUILD_RESULT"
               require_result 'Go source build' skipped "$GO_BUILD_RESULT"
-              require_result 'Windows UI NuGet restore' skipped "$WINDOWS_UI_RESTORE_RESULT"
               require_result 'Apple development checks' skipped "$APPLE_RESULT"
               echo "Reduced CI passed: Android build, Android lint, Go analysis, security, and actionlint."
               ;;
@@ -534,7 +543,6 @@ jobs:
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
               require_result 'Apple development checks' success "$APPLE_RESULT"
               require_result 'Go source build' skipped "$GO_BUILD_RESULT"
-              require_result 'Windows UI NuGet restore' skipped "$WINDOWS_UI_RESTORE_RESULT"
               require_result 'Android lint' skipped "$ANDROID_LINT_RESULT"
               require_result 'Android product build' skipped "$ANDROID_BUILD_RESULT"
               echo "Reduced CI passed: Apple production analysis, Swift and Go analysis, security, and actionlint."

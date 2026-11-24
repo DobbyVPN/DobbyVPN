@@ -19,7 +19,6 @@ REQUIRED_CI_JOB_NAMES = (
     "Go source build (Linux x86_64)",
     "Go source build (Linux ARM64)",
     "Go source build (Windows)",
-    "Windows UI NuGet restore",
     "Android lint",
     "Go source analysis",
     "Apple development checks",
