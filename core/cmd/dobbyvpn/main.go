@@ -42,7 +42,11 @@ const (
 	sessionIDRequiredMessage = "--session-id requires one value"
 )
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() {
+	code := run(os.Args[1:])
+	_ = applicationlog.Flush()
+	os.Exit(code)
+}
 
 func run(args []string) int {
 	if isHelpCommand(args) {

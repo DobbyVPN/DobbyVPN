@@ -13,7 +13,9 @@ import (
 
 	"core/buildinfo"
 	"core/diagnostics"
+	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,25 @@ import (
 
 const logSchema = "dobby.log/v1"
 const logSource = "go"
+const batchBytes = 32 * 1024
+const batchDelay = 100 * time.Millisecond
+
+var minimumLevel = configuredLevel(buildinfo.Configuration, os.Getenv("DOBBY_LOG_LEVEL"))
+
+func configuredLevel(configuration, setting string) slog.Level {
+	switch strings.ToUpper(strings.TrimSpace(setting)) {
+	case "TRACE":
+		return slog.LevelDebug - 4
+	case "DEBUG":
+		return slog.LevelDebug
+	case "INFO":
+		return slog.LevelInfo
+	}
+	if configuration == "Release" {
+		return slog.LevelInfo
+	}
+	return slog.LevelDebug - 4
+}
 
 type logrusToSlogHook struct{}
 
@@ -40,6 +61,9 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 	case logrus.TraceLevel:
 		level = slog.LevelDebug - 4
 	}
+	if level < minimumLevel {
+		return nil
+	}
 	arguments := make(map[string]any, len(entry.Data))
 	for key, value := range entry.Data {
 		arguments[key] = value
@@ -50,6 +74,7 @@ func (*logrusToSlogHook) Fire(entry *logrus.Entry) error {
 
 type Logger struct {
 	file         *diagnostics.Writer
+	output       *policyWriter
 	logger       *slog.Logger
 	pending      []pendingEntry
 	sharedStderr bool
@@ -98,12 +123,23 @@ func Close() error {
 	defer initMu.Unlock()
 	var err error
 	if lg.file != nil {
-		err = lg.file.Close()
+		err = errors.Join(lg.output.flush(), lg.file.Close())
 	}
 	lg.file = nil
+	lg.output = nil
 	lg.logger = nil
 	lg.sharedStderr = false
 	return err
+}
+
+// Flush writes pending records to their retained generation before a snapshot.
+func Flush() error {
+	initMu.Lock()
+	defer initMu.Unlock()
+	if lg.output == nil {
+		return nil
+	}
+	return lg.output.flush()
 }
 
 // SetPath creates or reuses the local log file.
@@ -130,10 +166,11 @@ func setPath(path string, sharedStderr bool) error {
 	}
 	lg.file = file
 	lg.sharedStderr = sharedStderr
-	lg.logger = slog.New(newJSONLineHandler(policyWriter{writer: file}))
+	lg.output = &policyWriter{writer: file, batch: buildinfo.Configuration == "Release"}
+	lg.logger = slog.New(newJSONLineHandler(lg.output))
 
 	lg.dumpBuffer()
-	return nil
+	return lg.output.flush()
 }
 
 var processOrder atomic.Uint64
@@ -144,33 +181,90 @@ var policyContext map[string]json.RawMessage
 
 const DesktopTunnelPolicyKey = "desktop_tunnel"
 
-type policyWriter struct{ writer *diagnostics.Writer }
+type policyWriter struct {
+	writer  *diagnostics.Writer
+	batch   bool
+	pending []policyRecord
+	size    int
+	timer   *time.Timer
+}
 
-func (writer policyWriter) Write(record []byte) (int, error) {
-	_, err := writer.writer.WriteRecord(func(first bool) ([]byte, error) {
-		if !first || len(policyContext) == 0 || bytes.Contains(record, []byte(`"policy_context":`)) {
-			return record, nil
-		}
-		// slog emits one complete JSON object and newline. Attach retained policy
-		// to this event, preserving its timestamp and process ordering.
-		if !bytes.HasSuffix(record, []byte("}\n")) {
-			return nil, fmt.Errorf("structured log record is not a JSON line")
-		}
-		context, err := json.Marshal(policyContext)
-		if err != nil {
-			return nil, err
-		}
-		output := make([]byte, 0, len(record)+len(context)+20)
-		output = append(output, record[:len(record)-2]...)
-		output = append(output, `,"policy_context":`...)
-		output = append(output, context...)
-		output = append(output, '}', '\n')
-		return output, nil
-	})
+type policyRecord struct {
+	record  []byte
+	context map[string]json.RawMessage
+}
+
+func (r policyRecord) encode(first bool) ([]byte, error) {
+	if !first || len(r.context) == 0 || bytes.Contains(r.record, []byte(`"policy_context":`)) {
+		return r.record, nil
+	}
+	// slog emits a complete JSON line. Preserve the context at record creation.
+	if !bytes.HasSuffix(r.record, []byte("}\n")) {
+		return nil, fmt.Errorf("structured log record is not a JSON line")
+	}
+	context, err := json.Marshal(r.context)
 	if err != nil {
-		return 0, err
+		return nil, err
+	}
+	output := make([]byte, 0, len(r.record)+len(context)+20)
+	output = append(output, r.record[:len(r.record)-2]...)
+	output = append(output, `,"policy_context":`...)
+	output = append(output, context...)
+	return append(output, '}', '\n'), nil
+}
+
+// Write and flush run under initMu. slog can reuse its serialization buffer
+// immediately after Write returns.
+func (w *policyWriter) Write(record []byte) (int, error) {
+	if !w.batch {
+		_, err := w.writer.WriteRecord(policyRecord{record, policyContext}.encode)
+		if err != nil {
+			return 0, err
+		}
+		return len(record), nil
+	}
+	w.pending = append(w.pending, policyRecord{bytes.Clone(record), policyContext})
+	w.size += len(record)
+	if w.size >= batchBytes {
+		if err := w.flush(); err != nil {
+			return 0, err
+		}
+	} else if w.timer == nil {
+		w.timer = time.AfterFunc(batchDelay, func() {
+			initMu.Lock()
+			defer initMu.Unlock()
+			if lg.output == w {
+				_ = w.flush()
+			}
+		})
 	}
 	return len(record), nil
+}
+
+func (w *policyWriter) flush() error {
+	if w.timer != nil {
+		w.timer.Stop()
+		w.timer = nil
+	}
+	if len(w.pending) == 0 {
+		return nil
+	}
+	pending := w.pending
+	records := make([]func(bool) ([]byte, error), 0, len(pending))
+	for _, record := range pending {
+		records = append(records, record.encode)
+	}
+	_, err := w.writer.WriteRecords(records)
+	if err != nil {
+		_, _ = fmt.Fprintf(diagnostics.Stderr, "write structured log batch failed: %v\n", err)
+		for _, record := range pending {
+			_, _ = diagnostics.Stderr.Write(record.record)
+		}
+	}
+	clear(w.pending)
+	w.pending = w.pending[:0]
+	w.size = 0
+	return err
 }
 
 // SetPolicy replaces the accepted policy. A caller retaining a network can carry
@@ -236,6 +330,9 @@ func writeEvent(level slog.Level, event, category, message string, arguments map
 }
 
 func writeEventAt(occurredAt time.Time, level slog.Level, event, category, message string, arguments map[string]any) {
+	if level < minimumLevel {
+		return
+	}
 	if occurredAt.IsZero() {
 		occurredAt = time.Now()
 	}
@@ -315,6 +412,9 @@ func emitAt(logger *slog.Logger, occurredAt time.Time, level slog.Level, event, 
 				fallbackErr, event, category, message, arguments)
 		}
 	}
+	if level >= slog.LevelWarn && lg.output != nil {
+		_ = lg.output.flush()
+	}
 }
 
 func Info(category, message string, arguments map[string]any) {
@@ -332,11 +432,19 @@ func Error(category, message string, arguments map[string]any) {
 func Trace(category, message string, arguments map[string]any) {
 	write(slog.LevelDebug-4, category, message, arguments)
 }
-func Infof(category, format string, args ...any)  { Info(category, fmt.Sprintf(format, args...), nil) }
-func Debugf(category, format string, args ...any) { Debug(category, fmt.Sprintf(format, args...), nil) }
+func Infof(category, format string, args ...any) { Info(category, fmt.Sprintf(format, args...), nil) }
+func Debugf(category, format string, args ...any) {
+	if minimumLevel <= slog.LevelDebug {
+		Debug(category, fmt.Sprintf(format, args...), nil)
+	}
+}
 func Warnf(category, format string, args ...any)  { Warn(category, fmt.Sprintf(format, args...), nil) }
 func Errorf(category, format string, args ...any) { Error(category, fmt.Sprintf(format, args...), nil) }
-func Tracef(category, format string, args ...any) { Trace(category, fmt.Sprintf(format, args...), nil) }
+func Tracef(category, format string, args ...any) {
+	if minimumLevel <= slog.LevelDebug-4 {
+		Trace(category, fmt.Sprintf(format, args...), nil)
+	}
+}
 
 func newJSONLineHandler(writer io.Writer) slog.Handler {
 	return slog.NewJSONHandler(writer, &slog.HandlerOptions{

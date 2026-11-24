@@ -138,6 +138,7 @@ func run() {
 	if err := initExplicitLocalLog(); err != nil {
 		panic(fmt.Sprintf("failed to initialize local logging: %v", err))
 	}
+	defer func() { _ = log.Flush() }()
 	// Convert logrus.Fatal (os.Exit) into a panic so goroutines can recover from it
 	// instead of crashing the entire desktop control process.
 	logrus.StandardLogger().ExitFunc = func(code int) {

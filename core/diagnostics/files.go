@@ -2,6 +2,7 @@
 package diagnostics
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -129,6 +130,16 @@ func (w *Writer) Write(record []byte) (int, error) {
 }
 
 func (w *Writer) WriteRecord(encode func(firstInGeneration bool) ([]byte, error)) (count int, resultErr error) {
+	return w.writeRecords([]func(bool) ([]byte, error){encode}, false)
+}
+
+// WriteRecords encodes and appends a batch in order under one destination lock.
+// Each generation is flushed before rotation or before releasing the lock.
+func (w *Writer) WriteRecords(records []func(firstInGeneration bool) ([]byte, error)) (int, error) {
+	return w.writeRecords(records, len(records) > 1)
+}
+
+func (w *Writer) writeRecords(records []func(bool) ([]byte, error), buffer bool) (count int, resultErr error) {
 	resultErr = withFileLock(w.path, func() (err error) {
 		if w.closed {
 			return os.ErrClosed
@@ -141,7 +152,8 @@ func (w *Writer) WriteRecord(encode func(firstInGeneration bool) ([]byte, error)
 		if err != nil {
 			return errors.Join(err, file.Close())
 		}
-		first := info.Size() == 0
+		size := info.Size()
+		first := size == 0
 		if !w.rotate {
 			id, identityErr := Identity(file)
 			if identityErr != nil {
@@ -150,32 +162,64 @@ func (w *Writer) WriteRecord(encode func(firstInGeneration bool) ([]byte, error)
 			first = id != w.lastID
 			w.lastID = id
 		}
-		if w.rotate && info.Size() >= w.limit {
-			first = true
-			if closeErr := file.Close(); closeErr != nil {
-				return closeErr
+		var buffered *bufio.Writer
+		var output io.Writer = file
+		if buffer {
+			buffered = bufio.NewWriterSize(file, 32*1024)
+			output = buffered
+		}
+		closeGeneration := func() error {
+			var flushErr error
+			if buffered != nil {
+				flushErr = buffered.Flush()
 			}
-			if _, rotateErr := rotateFiles(w.path); rotateErr != nil {
-				return rotateErr
+			closeErr := file.Close()
+			file = nil
+			return errors.Join(flushErr, closeErr)
+		}
+		defer func() {
+			if file != nil {
+				err = errors.Join(err, closeGeneration())
 			}
-			file, err = openAppend(w.path)
+		}()
+		for _, encode := range records {
+			if w.rotate && size >= w.limit {
+				if err := closeGeneration(); err != nil {
+					return err
+				}
+				if _, err := rotateFiles(w.path); err != nil {
+					return err
+				}
+				file, err = openAppend(w.path)
+				if err != nil {
+					return err
+				}
+				output = file
+				if buffered != nil {
+					buffered.Reset(file)
+					output = buffered
+				}
+				if err := preservePermissions(file, info); err != nil {
+					return err
+				}
+				size, first = 0, true
+			}
+			record, err := encode(first)
 			if err != nil {
 				return err
 			}
-			if modeErr := preservePermissions(file, info); modeErr != nil {
-				return errors.Join(modeErr, file.Close())
+			written, err := output.Write(record)
+			count += written
+			if err != nil {
+				return err
 			}
+			if written != len(record) {
+				return io.ErrShortWrite
+			}
+			size += int64(written)
+			first = false
 		}
-		defer func() { err = errors.Join(err, file.Close()) }()
-		record, encodeErr := encode(first)
-		if encodeErr != nil {
-			return encodeErr
-		}
-		count, err = file.Write(record)
-		if err == nil && count != len(record) {
-			err = io.ErrShortWrite
-		}
-		return err
+		return nil
 	})
 	return count, resultErr
 }

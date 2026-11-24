@@ -19,6 +19,7 @@ import (
 	"core/buildinfo"
 	"core/clientserver/controljson"
 	"core/diagnostics"
+	applicationlog "core/log"
 	"core/sessionapi"
 
 	"github.com/google/uuid"
@@ -175,6 +176,9 @@ func diagnosticHeader() string {
 }
 
 func exportDiagnostics(destination string, paths []string) error {
+	if err := applicationlog.Flush(); err != nil {
+		return err
+	}
 	return diagnostics.ExportGzip(destination, paths, diagnosticHeader())
 }
 

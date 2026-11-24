@@ -77,6 +77,7 @@ func (b *Binding) NetworkEvent(ctx context.Context, sessionID, reason string) er
 
 // StopAndWait is reserved for OS lifecycle callbacks.
 func (b *Binding) StopAndWait(ctx context.Context) error {
+	defer func() { _ = log.Flush() }()
 	owner, ok := b.manager.(interface{ StopAndWait(context.Context) error })
 	if !ok {
 		return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "shutdown owner is unavailable"}
@@ -87,6 +88,7 @@ func (b *Binding) StopAndWait(ctx context.Context) error {
 // StopAndWaitWithOperation records one iOS provider lifecycle operation without
 // altering the owner or its cleanup error.
 func (b *Binding) StopAndWaitWithOperation(ctx context.Context, operationID string) error {
+	defer func() { _ = log.Flush() }()
 	fields := map[string]any{"operation_id": operationID, "method": "StopAndWait"}
 	started := time.Now()
 	log.Info("SESSION", "mobile operation entered", fields)

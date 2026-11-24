@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"net/url"
 
+	"core/log"
+
 	"github.com/google/uuid"
 )
 
@@ -23,6 +25,9 @@ type LogUploadPreparation struct {
 func (m *Manager) PrepareLogUpload(_ context.Context, sessionID, digest string) (LogUploadPreparation, error) {
 	if sessionID == "" || digest == "" {
 		return LogUploadPreparation{}, failure(FailureInvalidArgument, "session ID and configuration digest are required")
+	}
+	if err := log.Flush(); err != nil {
+		return LogUploadPreparation{}, failureWithCause(FailureInternal, "could not flush diagnostics", err)
 	}
 	s, err := m.get(sessionID)
 	if err != nil {

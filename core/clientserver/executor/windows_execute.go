@@ -133,6 +133,7 @@ func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeReq
 		reportStartupFailure("initialize local logging", err, true)
 		return true, 1
 	}
+	defer func() { _ = log.Flush() }()
 	log.Infof(desktopLogCategory, "Windows service dispatcher connected, preparing desktop control")
 	listener, err := prepareDesktopControl()
 	if err != nil {
@@ -198,7 +199,9 @@ func run() {
 }
 
 func (c *Executor) Execute(mode string) {
-	if code := executeWith(mode, initExplicitLocalLog, run, runService); code != 0 {
+	code := executeWith(mode, initExplicitLocalLog, run, runService)
+	_ = log.Flush()
+	if code != 0 {
 		os.Exit(code)
 	}
 }
