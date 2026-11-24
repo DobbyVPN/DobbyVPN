@@ -21,7 +21,13 @@ const (
 	nrptPolicyPath = `SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\DnsPolicyConfig`
 )
 
-var procDnsFlushResolverCache = windows.NewLazySystemDLL("dnsapi.dll").NewProc("DnsFlushResolverCache")
+var (
+	procDnsFlushResolverCache = windows.NewLazySystemDLL("dnsapi.dll").NewProc("DnsFlushResolverCache")
+	procNtDeleteKey           = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtDeleteKey")
+)
+
+// keyDelete is the standard DELETE access right, needed by NtDeleteKey.
+const keyDelete = 0x00010000
 
 type registryNRPTStore struct{}
 
@@ -29,7 +35,7 @@ type registryNRPTKey struct{ registry.Key }
 
 func (registryNRPTStore) Open(key string, create bool) (nrptKey, error) {
 	path := nrptLocalPath + `\` + key
-	access := uint32(registry.QUERY_VALUE | registry.SET_VALUE)
+	access := uint32(registry.QUERY_VALUE | registry.SET_VALUE | keyDelete)
 	var k registry.Key
 	var err error
 	if create {
@@ -103,29 +109,23 @@ func (k registryNRPTKey) DeleteValue(name string) error {
 	return nil
 }
 
-func (registryNRPTStore) DeleteIfEmpty(key string) error {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptLocalPath+`\`+key, registry.QUERY_VALUE)
-	if errors.Is(err, registry.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
+// DeleteIfEmpty deletes the key object behind this handle. NtDeleteKey takes
+// the handle, not a name, so a key that someone else put under the same name
+// after this handle was opened is never deleted. Values added to this same key
+// object between the check and the delete would still go with it.
+func (k registryNRPTKey) DeleteIfEmpty() error {
 	info, err := k.Stat()
-	k.Close()
 	if err != nil {
 		return err
 	}
 	if info.ValueCount != 0 || info.SubKeyCount != 0 {
 		return fmt.Errorf("NRPT rule key has %d values and %d subkeys; not deleted", info.ValueCount, info.SubKeyCount)
 	}
-	parent, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptLocalPath, registry.ENUMERATE_SUB_KEYS|registry.SET_VALUE)
-	if err != nil {
+	if err := procNtDeleteKey.Find(); err != nil {
 		return err
 	}
-	defer parent.Close()
-	if err := registry.DeleteKey(parent, key); err != nil && !errors.Is(err, registry.ErrNotExist) {
-		return err
+	if status, _, _ := procNtDeleteKey.Call(uintptr(k.Key)); status != 0 {
+		return fmt.Errorf("NtDeleteKey: %w", windows.NTStatus(status))
 	}
 	return nil
 }
@@ -189,7 +189,9 @@ func AcquireWindowsNRPTOwnership(timeout time.Duration) (previousCrashed bool, e
 		switch {
 		case err == nil && (event == windows.WAIT_OBJECT_0 || event == windows.WAIT_ABANDONED):
 			done <- result{crashed: event == windows.WAIT_ABANDONED}
-			select {} // hold the mutex and this thread until the process exits
+			for { // hold the mutex and this thread until the process exits
+				time.Sleep(time.Hour)
+			}
 		case err == nil && event == uint32(windows.WAIT_TIMEOUT):
 			err = errors.New("another DobbyVPN process owns the NRPT rule")
 		case err == nil:

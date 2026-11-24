@@ -40,27 +40,42 @@ jobs:
         with:
           go-version-file: .go-version
           cache: false
-      # Through the product code: add the rule with a local DNS responder as
-      # the tunnel server and resolve through it, remove it with EngineStop,
-      # recover after a crash and after an interrupted write, check that a
-      # second process cannot take ownership and that foreign rules stay.
+      # Through the product code: two local DNS responders play the tunnel
+      # server and an ordinary server; the test adds the rule and resolves
+      # through it, removes it with EngineStop and resolves ordinary names
+      # again, checks the owner mutex with real second processes (held,
+      # killed, timed out), recovers a rule left by a killed process and
+      # interrupted writes, and checks that foreign rules stay.
       - name: Add, resolve through and remove the NRPT rule on the runner
         working-directory: core
         env:
           GOTOOLCHAIN: local
           DOBBY_NRPT_LIVE: "1"
+          DOBBY_NRPT_CI_MARKER: ${{ github.run_id }}-${{ github.run_attempt }}
+          DOBBY_NRPT_CI_STATE: ${{ runner.temp }}/nrpt-ci-state.json
         run: go test -count=1 -run '^TestWindowsNRPTRuleOnRealDNSClient$' -v ./tunnel/platform_engine
-      # Second attempt if the test was killed: removes only the DobbyVPN key
-      # while it still carries the DobbyVPN comment, and this CI's own rules.
-      - name: Remove leftover test NRPT rules and show the table
+      # Second attempt if the test was killed. It removes only what the test
+      # recorded as created by this run, after checking the exact marker.
+      - name: Remove leftover NRPT rules created by this run
         if: always()
         shell: pwsh
+        env:
+          STATE: ${{ runner.temp }}/nrpt-ci-state.json
+          MARKER: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
+          if (-not (Test-Path $env:STATE)) { Write-Output 'No CI state; nothing was created.'; exit 0 }
+          $state = Get-Content $env:STATE -Raw | ConvertFrom-Json
+          if ($state.Marker -ne $env:MARKER -or $state.Refused) { Write-Output 'Test did not start for this run; nothing to remove.'; exit 0 }
           $owned = 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\{6d0b1b5e-7c3a-4f52-9e1d-2a8b4c6f0d17}'
-          if ((Test-Path $owned) -and ((Get-ItemProperty -Path $owned -Name Comment -ErrorAction SilentlyContinue).Comment -like 'DobbyVPN*')) {
-            Remove-Item -Path $owned -Recurse -Force
+          $ownedComment = 'DobbyVPN tunnel DNS. Added while connected and removed by the DobbyVPN service.'
+          if ($state.OwnedKey -and (Test-Path $owned)) {
+            $comment = (Get-ItemProperty -Path $owned -Name Comment -ErrorAction SilentlyContinue).Comment
+            if ($comment -eq $ownedComment -or $comment -eq $state.ForeignComment) { Remove-Item -Path $owned -Recurse -Force }
           }
-          Get-DnsClientNrptRule | Where-Object { $_.Comment -like 'DobbyVPN CI foreign rule *' } | Remove-DnsClientNrptRule -Force
+          if ($state.ForeignRule) {
+            Get-DnsClientNrptRule -Name $state.ForeignRule -ErrorAction SilentlyContinue |
+              Where-Object { $_.Comment -eq $state.ForeignComment } | Remove-DnsClientNrptRule -Force
+          }
           Clear-DnsClientCache
           Get-DnsClientNrptRule | Format-List Name, Namespace, NameServers, Comment
           Get-DnsClientNrptPolicy | Format-List Namespace, NameServers

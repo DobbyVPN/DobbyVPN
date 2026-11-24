@@ -20,11 +20,12 @@ import (
 // it is ours: it carries the fixed comment, or it has no values at all (an
 // interrupted write or removal; such a key is not an active rule).
 //
-// Every change goes through one open handle, so the checked key is the key
-// that is changed. Writing puts the comment first and ConfigOptions, which
-// makes the rule take effect, last; removal goes in reverse and deletes the
-// key only once it is empty. An interruption at any step therefore leaves a
-// key that the next removal still recognizes as ours.
+// Every change, including deleting the key, goes through one open handle, so
+// the checked key is the key that is changed. Writing puts the comment first,
+// before any value that can describe a rule, and ConfigOptions last; removal
+// deletes values not in that list first, then the list in reverse, and the
+// comment last. An interruption at any step therefore leaves a key that the
+// next removal still recognizes as ours.
 const (
 	OwnedNRPTRuleKey  = "{6d0b1b5e-7c3a-4f52-9e1d-2a8b4c6f0d17}"
 	OwnedNRPTComment  = "DobbyVPN tunnel DNS. Added while connected and removed by the DobbyVPN service."
@@ -49,6 +50,10 @@ type nrptKey interface {
 	Values() (nrptValues, error)
 	Set(name string, value nrptValue) error
 	DeleteValue(name string) error
+	// DeleteIfEmpty deletes the key this handle refers to, only if it has no
+	// values and no subkeys. A key that was replaced under the same name
+	// after this handle was opened is a different key and is not deleted.
+	DeleteIfEmpty() error
 	Close() error
 }
 
@@ -57,8 +62,6 @@ type nrptKey interface {
 type nrptStore interface {
 	// Open returns nil, nil when the key is absent and create is false.
 	Open(key string, create bool) (nrptKey, error)
-	// DeleteIfEmpty deletes the key only if it has no values and no subkeys.
-	DeleteIfEmpty(key string) error
 	Reload() error
 }
 
@@ -194,13 +197,7 @@ func removeOwnedNRPT(store nrptStore) (bool, error) {
 		if !ownedNRPTKey(current) {
 			return ErrForeignNRPTRule
 		}
-		for _, name := range slices.Backward(nrptWriteOrder) {
-			if _, present := current[name]; present {
-				if err := key.DeleteValue(name); err != nil {
-					return fmt.Errorf("delete NRPT value %s: %w", name, err)
-				}
-			}
-		}
+		// The comment goes last, so the key stays recognizable as ours.
 		for name := range current {
 			if !slices.Contains(nrptWriteOrder, name) {
 				if err := key.DeleteValue(name); err != nil {
@@ -208,17 +205,23 @@ func removeOwnedNRPT(store nrptStore) (bool, error) {
 				}
 			}
 		}
-		return nil
+		for _, name := range slices.Backward(nrptWriteOrder) {
+			if _, present := current[name]; present {
+				if err := key.DeleteValue(name); err != nil {
+					return fmt.Errorf("delete NRPT value %s: %w", name, err)
+				}
+			}
+		}
+		return key.DeleteIfEmpty()
 	}()
 	if err := errors.Join(clearErr, key.Close()); err != nil {
 		return false, err
 	}
-	deleteErr := store.DeleteIfEmpty(OwnedNRPTRuleKey)
 	if left, err := store.Open(OwnedNRPTRuleKey, false); err != nil {
-		return false, errors.Join(deleteErr, fmt.Errorf("verify NRPT rule removal: %w", err))
+		return false, fmt.Errorf("verify NRPT rule removal: %w", err)
 	} else if left != nil {
 		_ = left.Close()
-		return false, errors.Join(deleteErr, errors.New("NRPT rule key remained after removal"))
+		return false, errors.New("a key is at the NRPT rule name after removal")
 	}
 	if err := store.Reload(); err != nil {
 		return true, fmt.Errorf("reload DNS Client after removing NRPT rule: %w", err)
