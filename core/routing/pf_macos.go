@@ -297,11 +297,12 @@ func (k *MacOSKillSwitch) logExcluded() {
 // SetLinks sets the physical interfaces and gateways that replies to inbound
 // connections from excluded networks leave through. A reload affects only new
 // connections: a state pf already holds keeps the link and gateway it was
-// created with until the connection ends, so a connection that stays up across
-// a gateway change, or after its network left ExcludeIPs, keeps its old reply
-// path for its own lifetime. Killing those states selectively is not possible
-// with pfctl (-k kills by address, and killing all states would cut the VPN
-// transport), and no new connection can use them.
+// created with until it expires, which can be after its connection closed, so
+// a connection that stays up across a gateway change, or after its network
+// left ExcludeIPs, keeps its old reply path. Packets with the same addresses
+// and ports match such a state until then, but they can only reach that same
+// excluded peer. Killing those states selectively is not possible with pfctl
+// (-k kills by address, and killing all states would cut the VPN transport).
 func (k *MacOSKillSwitch) SetLinks(ctx context.Context, links []PFLink) error {
 	return k.update(ctx, func() (bool, error) {
 		if slices.Equal(k.links, links) {

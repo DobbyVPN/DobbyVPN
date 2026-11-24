@@ -65,7 +65,11 @@ const pfExcludedInTag = "DOBBYVPN_EXCLUDED_IN"
 // S/SA admit only an initial SYN. Only an inbound SYN (flags S/SA) creates
 // such a state, so a packet from the peer of an application's own connection
 // cannot open one, and a peer's source port 53 never does, so no DNS path
-// opens. Connections open before the anchor loaded, UDP and ICMP are not
+// opens. pf matches states by addresses and ports, not by socket: in a TCP
+// simultaneous open, where the excluded peer sends a SYN to the exact local
+// port an application is dialing it from at that moment, the application's
+// packets would match the inbound state. They can only reach that same peer,
+// which the application already reaches through the backend. Connections open before the anchor loaded, UDP and ICMP are not
 // covered. links are the physical interfaces; without them no inbound rule is
 // rendered.
 func MacOSPFRules(tunName string, dnsServers []netip.Addr, excluded []netip.Prefix, destinations []PFDestination, links ...PFLink) string {

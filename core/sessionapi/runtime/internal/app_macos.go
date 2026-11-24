@@ -175,9 +175,9 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 			repaired, repairErr := plan.Repair()
 			refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			current, _, refreshErr := capturePhysical(refreshCtx)
-			if refreshErr == nil {
-				refreshErr = refreshMacOSPFLinks(refreshCtx, guard)
-			}
+			// The interfaces can change even when the physical service
+			// cannot be captured, so they are refreshed either way.
+			refreshErr = errors.Join(refreshErr, refreshMacOSPFLinks(refreshCtx, guard))
 			cancel()
 			if err := errors.Join(repairErr, refreshErr); err != nil {
 				observed := physical
