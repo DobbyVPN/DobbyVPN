@@ -49,6 +49,7 @@ final class MacLogRecordAccessibilityElement: NSObject, NSAccessibilityStaticTex
 final class DobbyLogTextView: NSTextView {
     var onSendLogs: () -> Void = {}
     var onUploadLogs: (() -> Void)?
+    var copyLastReference: (title: String, action: () -> Void)?
     var onClear: () -> Void = {}
     var onAccessibilityObservation: ((MacLogAccessibilityObservation) -> Void)?
     private var recordElements: [String: MacLogRecordAccessibilityElement] = [:]
@@ -91,6 +92,7 @@ final class DobbyLogTextView: NSTextView {
     private var logsMenu: NSMenu {
         let menu = NSMenu()
         if let onUploadLogs { menu.addItem(LogsMenuItem("Upload logs", handler: onUploadLogs)) }
+        if let copyLastReference { menu.addItem(LogsMenuItem(copyLastReference.title, handler: copyLastReference.action)) }
         menu.addItem(LogsMenuItem("Send logs") { [weak self] in self?.onSendLogs() })
         menu.addItem(LogsMenuItem("Clear") { [weak self] in self?.onClear() })
         return menu

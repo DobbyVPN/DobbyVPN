@@ -483,6 +483,8 @@ struct DobbyLogView: NSViewRepresentable {
     let interactive: Bool
     let onSendLogs: () -> Void
     var onUploadLogs: (() -> Void)? = nil
+    /// "Copy last reference (…)" and its action, only after an upload.
+    var copyLastReference: (title: String, action: () -> Void)? = nil
     let onClear: () -> Void
     var onReadingPositionRestored: (MacLogRestoreObservation) -> Void = { _ in }
     var onReadingPositionCaptured: (MacLogReadingAnchor) -> Void = { _ in }
@@ -554,6 +556,7 @@ struct DobbyLogView: NSViewRepresentable {
         let coordinator = context.coordinator
         view.onSendLogs = onSendLogs
         view.onUploadLogs = onUploadLogs
+        view.copyLastReference = copyLastReference
         view.onAccessibilityObservation = onAccessibilityObservation
         view.onClear = { [weak coordinator] in
             coordinator?.resetForClear()

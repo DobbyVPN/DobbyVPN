@@ -64,6 +64,7 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published var uploadStatus = ""
     @Published var uploadError = ""
     @Published var latestUpload: DobbyUploadReference?
+    @Published var uploadResult: DobbyUploadReference?
     private var uploadTask: Task<Void, Never>?
     private var uploadCancellation: DobbyUploadCancellation?
     private let uploadReferenceKey = "DobbyVPN.latestLogUpload"
@@ -626,7 +627,7 @@ extension DobbySessionViewModel {
         recordDiagnostic(message)
     }
 
-    private func recordDiagnostic(
+    func recordDiagnostic(
         _ message: String,
         event: String = "ui.failure",
         level: String = "ERROR"
@@ -709,7 +710,7 @@ extension DobbySessionViewModel {
                 self.uploadStatus = "Uploading logs…"
                 try await uploadDiagnostics(preparation, file: file)
                 let result = DobbyUploadReference(reference: preparation.reference, completed: Date(), provider: preparation.provider)
-                self.latestUpload = result
+                self.finishUpload(result)
                 UserDefaults.standard.set(try JSONEncoder().encode(result), forKey: self.uploadReferenceKey)
             } catch is CancellationError {
                 self.uploadError = "Log upload cancelled"
