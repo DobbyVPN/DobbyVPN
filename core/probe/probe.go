@@ -15,10 +15,7 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-const (
-	probeTimeout          = 2 * time.Second
-	httpProbeMinSuccesses = 2
-)
+const httpProbeMinSuccesses = 2
 
 var httpProbeURLs = []string{
 	"https://www.google.com/generate_204",
@@ -332,7 +329,7 @@ func probeEndpoint(parent context.Context, endpointURL string, timeout time.Dura
 	}
 
 	result := probeEndpointResult{
-		latencyMs: maxInt64(1, time.Since(startedAt).Milliseconds()),
+		latencyMs: max(1, time.Since(startedAt).Milliseconds()),
 		status:    resp.StatusCode,
 	}
 	return finish(result)
@@ -350,9 +347,7 @@ func probeFailureStage(stage int32) string {
 		return probeStageConnect
 	case 2:
 		return probeStageTLS
-	case 3:
-		return probeStageResponse
-	case 4:
+	case 3, 4:
 		return probeStageResponse
 	default:
 		return probeStageRequest
@@ -378,11 +373,4 @@ func probeErrorClass(err error) string {
 		return "network"
 	}
 	return probeErrorProtocol
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }

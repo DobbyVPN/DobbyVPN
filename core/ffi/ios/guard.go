@@ -20,11 +20,3 @@ func init() {
 func guard(fn string) func() {
 	return exportguard.Guard(logCategory, fn)
 }
-
-func guardErr(fn string, errp *error) func() {
-	return exportguard.GuardErr(logCategory, fn, errp)
-}
-
-func guardStatus(fn string, statusp *int32) func() {
-	return exportguard.GuardStatus(logCategory, fn, statusp)
-}
