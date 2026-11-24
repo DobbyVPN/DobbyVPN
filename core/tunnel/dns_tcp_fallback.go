@@ -3,83 +3,164 @@ package tunnel
 import (
 	"context"
 	"net"
+	"net/netip"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	"github.com/xjasonlyu/tun2socks/v2/proxy"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 type udpDNSOverTCPKey struct{}
 
 // WithUDPDNSOverTCP marks an attempt whose protocol does not carry UDP DNS
-// reliably. The tunnel then answers every UDP query to port 53 at once with
-// the query marked as a truncated response, so the system resolver retries
-// over TCP through the tunnel, as the Outline device does on Unix (#532).
-func WithUDPDNSOverTCP(ctx context.Context) context.Context {
-	return context.WithValue(ctx, udpDNSOverTCPKey{}, true)
+// reliably. The tunnel then answers a DNS query sent over UDP to one of the
+// tunnel resolvers at once with a truncated response, so the system resolver
+// retries over TCP through the tunnel, as the Outline device does on Unix
+// (#532). Other UDP to port 53 is not touched.
+func WithUDPDNSOverTCP(ctx context.Context, resolvers []netip.Addr) context.Context {
+	normalized := make([]netip.Addr, 0, len(resolvers))
+	for _, resolver := range resolvers {
+		normalized = append(normalized, resolver.Unmap().WithZone(""))
+	}
+	return context.WithValue(ctx, udpDNSOverTCPKey{}, normalized)
 }
 
 // UDPDNSOverTCPRequested reports whether ctx carries WithUDPDNSOverTCP.
 func UDPDNSOverTCPRequested(ctx context.Context) bool {
-	forced, _ := ctx.Value(udpDNSOverTCPKey{}).(bool)
-	return forced
+	_, requested := ctx.Value(udpDNSOverTCPKey{}).([]netip.Addr)
+	return requested
 }
 
-// truncatingDNSProxy dials UDP to port 53 locally; everything else goes to
-// the attempt's VPN proxy.
-type truncatingDNSProxy struct{ proxy.Proxy }
+func udpDNSOverTCPResolvers(ctx context.Context) []netip.Addr {
+	resolvers, _ := ctx.Value(udpDNSOverTCPKey{}).([]netip.Addr)
+	return resolvers
+}
+
+// truncatingDNSProxy takes UDP to port 53 of the tunnel resolvers; all other
+// UDP goes to the attempt's VPN proxy unchanged.
+type truncatingDNSProxy struct {
+	proxy.Proxy
+	resolvers []netip.Addr
+}
 
 func (p truncatingDNSProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
-	if metadata.DstPort != 53 {
+	if metadata.DstPort != 53 || !slices.Contains(p.resolvers, metadata.DstIP.Unmap().WithZone("")) {
 		return p.Proxy.DialUDP(metadata)
 	}
-	return newTruncatedDNSPacketConn(), nil
+	return newDNSFallbackPacketConn(func() (net.PacketConn, error) { return p.Proxy.DialUDP(metadata) }), nil
 }
 
-type truncatedDNSReply struct {
+// truncatedDNSResponse returns the response to a valid DNS query (QR clear,
+// opcode QUERY, at least one parsable question): the header with QR and TC set
+// and the questions, without answers or additional records. ok is false for
+// anything else, which then goes to the resolver unchanged.
+func truncatedDNSResponse(query []byte) (response []byte, ok bool) {
+	var parser dnsmessage.Parser
+	header, err := parser.Start(query)
+	if err != nil || header.Response || header.OpCode != 0 {
+		return nil, false
+	}
+	questions, qerr := parser.AllQuestions()
+	if qerr != nil || len(questions) == 0 {
+		return nil, false
+	}
+	builder := dnsmessage.NewBuilder(nil, dnsmessage.Header{
+		ID: header.ID, Response: true, Truncated: true, RecursionDesired: header.RecursionDesired,
+	})
+	if builder.StartQuestions() != nil {
+		return nil, false
+	}
+	for _, question := range questions {
+		if builder.Question(question) != nil {
+			return nil, false
+		}
+	}
+	response, err = builder.Finish()
+	return response, err == nil
+}
+
+type dnsFallbackPacket struct {
 	payload []byte
 	from    net.Addr
 }
 
-// truncatedDNSPacketConn returns each DNS query it is sent as a truncated
-// response with no answers (QR and TC set, ANCOUNT 0). A packet too short to
-// be DNS gets no reply.
-type truncatedDNSPacketConn struct {
-	replies chan truncatedDNSReply
+// dnsFallbackPacketConn answers valid DNS queries with a truncated response
+// itself and passes any other packet to the real VPN UDP path, which it opens
+// only when such a packet arrives; replies of both reach the reader.
+type dnsFallbackPacketConn struct {
+	dial    func() (net.PacketConn, error)
+	packets chan dnsFallbackPacket
 	done    chan struct{}
 	once    sync.Once
 
 	mu       sync.Mutex
+	real     net.PacketConn
 	deadline time.Time
 }
 
-func newTruncatedDNSPacketConn() *truncatedDNSPacketConn {
-	return &truncatedDNSPacketConn{replies: make(chan truncatedDNSReply, 16), done: make(chan struct{})}
+func newDNSFallbackPacketConn(dial func() (net.PacketConn, error)) *dnsFallbackPacketConn {
+	return &dnsFallbackPacketConn{dial: dial, packets: make(chan dnsFallbackPacket, 16), done: make(chan struct{})}
 }
 
-func (c *truncatedDNSPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+func (c *dnsFallbackPacketConn) deliver(packet dnsFallbackPacket) {
+	select {
+	case c.packets <- packet:
+	case <-c.done:
+	default: // the client is not reading; it will retry
+	}
+}
+
+func (c *dnsFallbackPacketConn) realConn() (net.PacketConn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.real != nil {
+		return c.real, nil
+	}
+	select {
+	case <-c.done:
+		return nil, net.ErrClosed
+	default:
+	}
+	conn, err := c.dial()
+	if err != nil {
+		return nil, err
+	}
+	c.real = conn
+	go func() {
+		buf := make([]byte, 64*1024)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			c.deliver(dnsFallbackPacket{payload: append([]byte(nil), buf[:n]...), from: from})
+		}
+	}()
+	return conn, nil
+}
+
+func (c *dnsFallbackPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	select {
 	case <-c.done:
 		return 0, net.ErrClosed
 	default:
 	}
-	if len(b) < 12 {
+	if response, ok := truncatedDNSResponse(b); ok {
+		c.deliver(dnsFallbackPacket{payload: response, from: addr})
 		return len(b), nil
 	}
-	reply := append([]byte(nil), b...)
-	reply[2] |= 0x80 // response
-	reply[2] |= 0x02 // truncated: retry over TCP
-	reply[6], reply[7] = 0, 0
-	select {
-	case c.replies <- truncatedDNSReply{payload: reply, from: addr}:
-	default: // the client is not reading; it will retry
+	conn, err := c.realConn()
+	if err != nil {
+		return 0, err
 	}
-	return len(b), nil
+	return conn.WriteTo(b, addr)
 }
 
-func (c *truncatedDNSPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+func (c *dnsFallbackPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	c.mu.Lock()
 	deadline := c.deadline
 	c.mu.Unlock()
@@ -90,8 +171,8 @@ func (c *truncatedDNSPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 		expired = timer.C
 	}
 	select {
-	case reply := <-c.replies:
-		return copy(b, reply.payload), reply.from, nil
+	case packet := <-c.packets:
+		return copy(b, packet.payload), packet.from, nil
 	case <-c.done:
 		return 0, nil, net.ErrClosed
 	case <-expired:
@@ -99,22 +180,28 @@ func (c *truncatedDNSPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	}
 }
 
-func (c *truncatedDNSPacketConn) Close() error {
+func (c *dnsFallbackPacketConn) Close() error {
 	c.once.Do(func() { close(c.done) })
+	c.mu.Lock()
+	conn := c.real
+	c.mu.Unlock()
+	if conn != nil {
+		return conn.Close()
+	}
 	return nil
 }
 
-func (c *truncatedDNSPacketConn) LocalAddr() net.Addr {
+func (c *dnsFallbackPacketConn) LocalAddr() net.Addr {
 	return &net.UDPAddr{IP: net.IPv4zero, Port: 0}
 }
 
-func (c *truncatedDNSPacketConn) SetDeadline(t time.Time) error { return c.SetReadDeadline(t) }
+func (c *dnsFallbackPacketConn) SetDeadline(t time.Time) error { return c.SetReadDeadline(t) }
 
-func (c *truncatedDNSPacketConn) SetReadDeadline(t time.Time) error {
+func (c *dnsFallbackPacketConn) SetReadDeadline(t time.Time) error {
 	c.mu.Lock()
 	c.deadline = t
 	c.mu.Unlock()
 	return nil
 }
 
-func (c *truncatedDNSPacketConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *dnsFallbackPacketConn) SetWriteDeadline(time.Time) error { return nil }

@@ -510,7 +510,9 @@ func (e *Engine) attachLocked(ctx context.Context, generation uint64, address st
 	}
 	dnsOverTCP := UDPDNSOverTCPRequested(ctx)
 	if dnsOverTCP {
-		wrapper.vpn = truncatingDNSProxy{wrapper.vpn}
+		// Only queries the VPN path would carry: bypass destinations
+		// (ExcludeIPs) are chosen before this proxy and stay direct.
+		wrapper.vpn = truncatingDNSProxy{Proxy: wrapper.vpn, resolvers: udpDNSOverTCPResolvers(ctx)}
 	}
 	// Bind the UDP dispatcher to this attempt. An admitted flow keeps its
 	// target even if dispatch runs after replacement of the active attempt.

@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
+	"core/common"
 	"core/dnscache"
 	"core/iprange"
 	"core/log"
@@ -410,7 +412,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	// A protocol that does not carry UDP DNS reliably has the tunnel answer it
 	// with a truncated response, so resolvers retry over TCP (#532).
 	if dns, ok := device.(interface{ UDPDNSOverTCP() bool }); ok && dns.UDPDNSOverTCP() {
-		owned.socketContext = tunnel.WithUDPDNSOverTCP(owned.socketContext)
+		owned.socketContext = tunnel.WithUDPDNSOverTCP(owned.socketContext, tunnelResolvers())
 	}
 	// Retain the device-reported numeric upstream inventory in this
 	// attempt's direct policy, including IPv6 answers.
@@ -749,4 +751,15 @@ func connectedHealthTimeout(ctx context.Context) (time.Duration, error) {
 
 func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyAddr string) error {
 	return measureConnectedHealth(ctx, proxyAddr)
+}
+
+// tunnelResolvers are the tunnel DNS servers published to the system resolver.
+func tunnelResolvers() []netip.Addr {
+	var resolvers []netip.Addr
+	for _, server := range common.VPNDNSServers() {
+		if address, err := netip.ParseAddr(server); err == nil {
+			resolvers = append(resolvers, address)
+		}
+	}
+	return resolvers
 }
