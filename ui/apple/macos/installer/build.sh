@@ -85,6 +85,9 @@ build_package() {
     # A signing tool may replace the app and create signature resources under
     # the builder's private umask. Set the public modes on the exact payload
     # pkgbuild will install, leaving private signing inputs alone.
+    # On macOS, restrictive symlink permissions prevent ordinary users from
+    # reading the sealed target during signature verification.
+    find Payload -type l ! -perm -004 -exec chmod -h 755 {} +
     find Payload -type d -exec chmod 755 {} +
     find Payload -type f -perm -100 -exec chmod 755 {} +
     find Payload -type f ! -perm -100 -exec chmod 644 {} +
