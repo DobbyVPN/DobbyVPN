@@ -48,8 +48,8 @@ final class PacketTunnel: NEPacketTunnelProvider {
             }
         }
         var context = SCDynamicStoreContext(version: 0, info: Unmanaged.passUnretained(handler).toOpaque(),
-            retain: { UnsafeRawPointer(Unmanaged<UplinkObservation>.fromOpaque($0!).retain().toOpaque()) },
-            release: { Unmanaged<UplinkObservation>.fromOpaque($0!).release() }, copyDescription: nil)
+            retain: { UnsafeRawPointer(Unmanaged<UplinkObservation>.fromOpaque($0).retain().toOpaque()) },
+            release: { Unmanaged<UplinkObservation>.fromOpaque($0).release() }, copyDescription: nil)
         guard let store = withExtendedLifetime(handler, { SCDynamicStoreCreate(nil, "DobbyVPN uplink" as CFString, { _, _, info in
             guard let info else { return }
             Unmanaged<UplinkObservation>.fromOpaque(info).takeUnretainedValue().changed()
