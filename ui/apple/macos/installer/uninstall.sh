@@ -40,6 +40,21 @@ CONTROL_SOCKET="/var/run/dobbyvpn/control.sock"
 CONTROL_DIRECTORY="/var/run/dobbyvpn"
 UNINSTALLER="/usr/local/libexec/dobbyvpn-uninstall"
 CLI_LINK="/usr/local/bin/dobby-cli"
+extensions="$APP_BUNDLE/Contents/Library/SystemExtensions"
+
+# A partially removed service can still have active Network Extension
+# preferences. Keep its signed removal tool until the installer's account
+# has removed those preferences. Never infer that account from the console.
+owner_uid=""
+if [ -f "$PLIST_DEST" ]; then
+    owner_uid="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:DOBBYVPN_CONTROL_PEER_UID' "$PLIST_DEST")"
+elif [ -d "$extensions" ]; then
+    owner_uid="${DOBBYVPN_CONTROL_PEER_UID:-}"
+fi
+if [[ -f "$PLIST_DEST" || -d "$extensions" ]] && ! [[ "$owner_uid" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Cannot identify the installed DobbyVPN owner. For a missing service plist, supply the installing account's numeric DOBBYVPN_CONTROL_PEER_UID to uninstall." >&2
+    exit 1
+fi
 
 capture_command launchctl-print launchctl print system/com.dobby.vpnservice
 service_state="$CAPTURE_OUTPUT"
@@ -85,15 +100,8 @@ if [[ -e "$CONTROL_DIRECTORY/pf.token" || -L "$CONTROL_DIRECTORY/pf.token" ]]; t
     "$APP_BUNDLE/Contents/Resources/dobbyvpn-backend" -mode release-legacy-protection
 fi
 
-# Read the installed service owner before retiring its plist. Use that
-# account's privileges for its private files, including on headless uninstall.
-if [ -f "$PLIST_DEST" ]; then
-    owner_uid="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:DOBBYVPN_CONTROL_PEER_UID' "$PLIST_DEST")"
-    if ! [[ "$owner_uid" =~ ^[1-9][0-9]*$ ]]; then
-        echo "Installed service has an invalid configuration owner" >&2
-        exit 1
-    fi
-    if [ -d "$APP_BUNDLE/Contents/Library/SystemExtensions/vpn.dobby.desktop.PacketTunnel.systemextension" ]; then
+if [ -n "$owner_uid" ]; then
+    if [ -d "$extensions" ]; then
         /bin/launchctl asuser "$owner_uid" /usr/bin/sudo -n -H -u "#$owner_uid" \
             "$APP_BUNDLE/Contents/MacOS/DobbyVPNMacApp" --network-extension uninstall
         protection="/Library/Application Support/DobbyVPN/Protection"

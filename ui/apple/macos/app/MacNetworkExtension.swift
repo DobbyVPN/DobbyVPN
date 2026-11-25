@@ -217,11 +217,13 @@ enum MacNetworkExtension {
                 if vpn != nil || owned(manager) { throw hostError("Use the signed DobbyVPN installer to remove the existing protected configuration") }
                 return
             }
+            // Uninstall is an explicit release of protection. Restore direct
+            // traffic before waiting for the tunnel to finish disconnecting.
+            if owned(manager) { try await manager.removeFromPreferences() }
             if let vpn {
                 try await transition(vpn.connection, start: false)
                 try await vpn.removeFromPreferences()
             }
-            if owned(manager) { try await manager.removeFromPreferences() }
             for id in [protectionID, tunnelID] {
                 do { try await ExtensionRequest().submit(id, remove: true) }
                 catch let error as NSError where error.domain == OSSystemExtensionErrorDomain &&
