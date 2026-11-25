@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import plistlib
@@ -129,7 +130,12 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
         copy_file(source / "dobbyvpn-backend", resources / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", resources / "dobby-cli", executable=True)
         from macos_extensions import stage
-        stage(contents, source, version)
+        # sysextd keeps the existing executable when both version strings
+        # match. Give each package build, including Debug, its own identity.
+        built = datetime.now(timezone.utc)
+        seconds = built.hour * 3600 + built.minute * 60 + built.second
+        build_version = f"{built.year}.{built.timetuple().tm_yday}.{seconds * 2 + int(not debug)}"
+        stage(contents, source, version, build_version)
         copy_file(MACOS_ICON, resources / "AppIcon.icns")
         copy_file(MACOS_PRIVACY_MANIFEST, resources / "PrivacyInfo.xcprivacy")
         copy_license_documents(resources / "licenses")
@@ -144,7 +150,7 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
             "CFBundleURLTypes": [{"CFBundleURLName": "DobbyVPN", "CFBundleURLSchemes": ["dobbyvpn"]}],
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version,
-            "CFBundleVersion": version,
+            "CFBundleVersion": build_version,
             "DobbySourceCommit": os.environ.get("GITHUB_SHA", "N/A"),
             "LSMinimumSystemVersion": "12.0",
         }

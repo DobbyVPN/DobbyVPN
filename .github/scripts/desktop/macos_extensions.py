@@ -55,7 +55,7 @@ def build(go: str, arch: str, output: Path, debug: bool) -> None:
         "-o", output / "DobbyProtection")
 
 
-def stage(contents: Path, source: Path, version: str) -> None:
+def stage(contents: Path, source: Path, version: str, build_version: str) -> None:
     import shutil
     for executable, (suffix, kind, cls) in EXTENSIONS.items():
         identifier = f"vpn.dobby.desktop.{suffix}"
@@ -65,7 +65,7 @@ def stage(contents: Path, source: Path, version: str) -> None:
         info = {
             "CFBundleIdentifier": identifier, "CFBundleExecutable": executable,
             "CFBundleName": f"DobbyVPN {suffix}", "CFBundlePackageType": "SYSX",
-            "CFBundleVersion": version, "CFBundleShortVersionString": version,
+            "CFBundleVersion": build_version, "CFBundleShortVersionString": version,
             "LSMinimumSystemVersion": MACOS_MINIMUM_SYSTEM_VERSION,
             "NSSystemExtensionUsageDescription": "DobbyVPN manages VPN traffic and protects connections during recovery.",
             "NetworkExtension": {"NEMachServiceName": f"{TEAM}.{identifier}",
