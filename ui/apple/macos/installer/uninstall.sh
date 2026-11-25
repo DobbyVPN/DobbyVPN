@@ -86,27 +86,13 @@ fi
 # can be repeated, and a reboot clears pf state and /var/run as well.
 PF_ANCHOR="com.apple/dobbyvpn"
 PF_TOKEN="$CONTROL_DIRECTORY/pf.token"
-capture_command pf-flush /sbin/pfctl -a "$PF_ANCHOR" -F rules
-pf_flush_status="$CAPTURE_STATUS"
-if [ "$pf_flush_status" -eq 0 ]; then
-    capture_command pf-flush-tables /sbin/pfctl -a "$PF_ANCHOR" -F Tables
-    pf_flush_status="$CAPTURE_STATUS"
-fi
-if [ "$pf_flush_status" -ne 0 ]; then
-    printf 'pf anchor flush failed (status %s); a reboot removes the rules\n' "$pf_flush_status" >&2
-fi
-if [ "$pf_flush_status" -eq 0 ] && [ -f "$PF_TOKEN" ] && [ ! -L "$PF_TOKEN" ]; then
-    pf_token="$(tr -cd '0-9' <"$PF_TOKEN")"
-    pf_release_status=0
-    if [ -n "$pf_token" ]; then
-        capture_command pf-release /sbin/pfctl -X "$pf_token"
-        pf_release_status="$CAPTURE_STATUS"
-    fi
-    if [ "$pf_release_status" -eq 0 ]; then
-        rm -f "$PF_TOKEN"
-    else
-        printf 'pf enable reference release failed (status %s); %s is kept\n' "$pf_release_status" "$PF_TOKEN" >&2
-    fi
+if [ -f "$PF_TOKEN" ] && [ ! -L "$PF_TOKEN" ] && [ "$(stat -f %u "$PF_TOKEN")" = 0 ]; then
+    pf_token="$(cat "$PF_TOKEN")"
+    if ! [[ "$pf_token" =~ ^[0-9]+$ ]]; then echo "Invalid legacy DobbyVPN pf token" >&2; exit 1; fi
+    /sbin/pfctl -a "$PF_ANCHOR" -F rules
+    /sbin/pfctl -a "$PF_ANCHOR" -F Tables
+    /sbin/pfctl -X "$pf_token"
+    rm -f "$PF_TOKEN"
 fi
 
 # Read the installed service owner before retiring its plist. Use that
@@ -116,6 +102,16 @@ if [ -f "$PLIST_DEST" ]; then
     if ! [[ "$owner_uid" =~ ^[1-9][0-9]*$ ]]; then
         echo "Installed service has an invalid configuration owner" >&2
         exit 1
+    fi
+    if [ -d "$APP_BUNDLE/Contents/Library/SystemExtensions/vpn.dobby.desktop.PacketTunnel.systemextension" ]; then
+        /bin/launchctl asuser "$owner_uid" /usr/bin/sudo -n -H -u "#$owner_uid" \
+            "$APP_BUNDLE/Contents/MacOS/DobbyVPNMacApp" --network-extension uninstall
+        protection="/Library/Application Support/DobbyVPN/Protection"
+        if [ -d "$protection" ] && [ ! -L "$protection" ]; then
+            rm -f "$protection/tunnel.lock"
+            /usr/bin/find "$protection" -maxdepth 1 -type s -name '*.sock' -delete
+            rmdir "$protection"
+        fi
     fi
     capture_command remove-configuration /usr/bin/sudo -n -H -u "#$owner_uid" /bin/sh -eu -c '
         cd -P -- "$HOME"

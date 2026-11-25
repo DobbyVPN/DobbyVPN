@@ -13,7 +13,6 @@ import (
 	"core/sessionapi"
 	"core/sessionapi/mobilebinding"
 	"core/sessionapi/runtime"
-	"core/sessionapi/runtimebridge"
 )
 
 // Closing the listener stops new transports. The manager also fences requests
@@ -69,7 +68,7 @@ func desktopProcessBinding() *mobilebinding.Binding {
 			panic(fmt.Sprintf("failed to locate desktop connection URL storage: %v", err))
 		}
 		manager := sessionapi.NewManager(sessionapi.ManagerOptions{
-			Runtime:        runtimebridge.New(nil),
+			Runtime:        desktopRuntime(),
 			SourceStore:    sourceStore,
 			RestoreLoader:  runtime.ProtectedRestoreLoader(),
 			StartupFailure: startupFailure,

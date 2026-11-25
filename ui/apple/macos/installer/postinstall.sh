@@ -29,6 +29,25 @@ if ! [[ "$CONSOLE_UID" =~ ^[0-9]+$ ]] || [ "$CONSOLE_UID" -eq 0 ]; then
     exit 1
 fi
 
+# Keep the same inode while either extension can hold process-owned locks.
+# Package receipts must never replace it during an upgrade.
+support="/Library/Application Support/DobbyVPN"
+protection="$support/Protection"
+for directory in "$support" "$protection"; do
+    if [ -L "$directory" ]; then echo "Unexpected symbolic link at $directory" >&2; exit 1; fi
+    if [ ! -e "$directory" ]; then (umask 077; mkdir "$directory"); fi
+    if [ ! -d "$directory" ] || [ "$(stat -f %u "$directory")" != 0 ] ||
+        (( 8#$(stat -f %Lp "$directory") & 022 )); then
+        echo "Unsafe ownership or permissions at $directory" >&2; exit 1
+    fi
+done
+chmod 700 "$protection"
+lease="$protection/tunnel.lock"
+if [ ! -e "$lease" ] && [ ! -L "$lease" ]; then (umask 077; set -C; : > "$lease"); fi
+if [ -L "$lease" ] || [ ! -f "$lease" ] || [ "$(stat -f '%u:%l:%Lp' "$lease")" != "0:1:600" ]; then
+    echo "Invalid protection lease at $lease" >&2; exit 1
+fi
+
 chmod +x "$RESOURCES/dobbyvpn-backend"
 
 mkdir -p "/Library/LaunchDaemons"

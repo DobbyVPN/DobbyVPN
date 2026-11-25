@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"runtime"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 
@@ -45,6 +46,12 @@ func (p *BypassPolicy) Excluded() (configured, hosts *iprange.Set) {
 
 func (p *BypassPolicy) IsBypass(metadata *M.Metadata) bool {
 	if p == nil || metadata == nil {
+		return false
+	}
+	// macOS keeps application DNS on the tunnel even when the resolver
+	// address is inside an outgoing exclusion. Endpoint bootstrap uses its
+	// own physical resolver and never enters this application routing path.
+	if runtime.GOOS == "darwin" && metadata.DstPort == 53 {
 		return false
 	}
 	destination := metadata.DstIP

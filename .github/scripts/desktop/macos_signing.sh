@@ -13,6 +13,9 @@ WORK="${RUNNER_TEMP:?RUNNER_TEMP is required}/dobbyvpn-macos-signing"
 KEYCHAIN="$WORK/signing.keychain-db"
 REQUIRED=(
   MACOS_DEVELOPER_ID_APP_P12
+  MACOS_HOST_PROFILE
+  MACOS_TUNNEL_PROFILE
+  MACOS_FILTER_PROFILE
   MACOS_DEVELOPER_ID_INSTALLER_P12
   MACOS_DEVELOPER_ID_P12_PASSWORD
   APP_STORE_API_KEY
@@ -86,6 +89,15 @@ prepare() {
   done
   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$KEYCHAIN"
 
+  local role key
+  for role in host provider filter; do
+    case "$role" in
+      host) key=MACOS_HOST_PROFILE ;;
+      provider) key=MACOS_TUNNEL_PROFILE ;;
+      filter) key=MACOS_FILTER_PROFILE ;;
+    esac
+    (umask 077; printf '%s' "${!key}" | base64 --decode > "$WORK/$role-MAC_APP_DIRECT.provisionprofile")
+  done
   local app installer
   app="$(select_identity "Developer ID Application")"
   installer="$(select_identity "Developer ID Installer")"
@@ -101,22 +113,9 @@ prepare() {
   echo "macOS signing prepared: Developer ID Application and Developer ID Installer identities imported."
 }
 
-codesign_file() {
-  codesign --force --sign "${MACOS_APP_IDENTITY:?}" --keychain "${MACOS_SIGNING_KEYCHAIN:?}" \
-    --options runtime --timestamp "$1"
-}
-
 sign_app() {
-  local app="$1" main file
-  [[ -d "$app" ]] || fail "app bundle not found: $app"
-  main="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
-  # Inside-out: nested executables first, so the bundle seal covers their final signatures.
-  while IFS= read -r -d '' file; do
-    [[ "$file" == "$main" ]] && continue
-    if file -b "$file" | grep -q '^Mach-O'; then codesign_file "$file"; fi
-  done < <(find "$app/Contents" -type f -print0)
-  codesign_file "$app"
-  codesign --verify --strict --deep --verbose=2 "$app"
+  python3 "$(dirname "$0")/sign_macos_extensions.py" "$1" --profiles "$WORK" \
+    --identity "${MACOS_APP_IDENTITY:?}" --keychain "${MACOS_SIGNING_KEYCHAIN:?}"
 }
 
 # Prints a labelled check; a non-zero exit fails the job through set -e.

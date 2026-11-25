@@ -440,7 +440,7 @@ def _select_host(platform: str, architecture: str | None) -> tuple[str, str]:
     return platform, selected_arch
 
 
-MACOS_EXECUTABLES = ("DobbyVPNMacApp", "dobbyvpn-backend", "dobby-cli")
+MACOS_EXECUTABLES = ("DobbyVPNMacApp", "dobbyvpn-backend", "dobby-cli", "DobbyPacketTunnel", "DobbyProtection")
 
 
 def _macos_uuids(path: Path) -> set[tuple[bytes, bytes]]:
@@ -516,10 +516,16 @@ def _build(args: argparse.Namespace) -> int:
                 env=environment,
             )
 
+        if platform == "macos":
+            import desktop_build
+            import macos_extensions
+            go = desktop_build.prepare_toolchain("macos", args.skip_deps)
+            macos_extensions.build(str(go), arch, directory, args.debug)
+
         if args.debug and platform == "macos":
             symbols = directory / "DebugSymbols"
             symbols.mkdir(exist_ok=True)
-            for name in ("DobbyVPNMacApp", "dobbyvpn-backend", "dobby-cli"):
+            for name in MACOS_EXECUTABLES:
                 _run("macOS debug symbols", ["dsymutil", str(directory / name), "-o", str(symbols / f"{name}.dSYM")], env=environment)
 
     if architecture == "universal":
@@ -676,7 +682,11 @@ def _verify_macos_package_source(
     expected = {"arm64", "x86_64"} if architecture == "universal" else {
         "arm64" if architecture == "arm64" else "x86_64"
     }
-    for rel in ("MacOS/DobbyVPNMacApp", "Resources/dobbyvpn-backend", "Resources/dobby-cli"):
+    for rel in (
+        "MacOS/DobbyVPNMacApp", "Resources/dobbyvpn-backend", "Resources/dobby-cli",
+        "Library/SystemExtensions/vpn.dobby.desktop.PacketTunnel.systemextension/Contents/MacOS/DobbyPacketTunnel",
+        "Library/SystemExtensions/vpn.dobby.desktop.Protection.systemextension/Contents/MacOS/DobbyProtection",
+    ):
         binary = contents / rel
         observed = _run("read macOS executable architectures", ["lipo", "-archs", str(binary)], capture=True)
         if set((observed.stdout or b"").decode().split()) != expected:

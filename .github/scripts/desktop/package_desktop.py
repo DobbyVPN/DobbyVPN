@@ -128,6 +128,8 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
         copy_file(source / "DobbyVPNMacApp", executable, executable=True)
         copy_file(source / "dobbyvpn-backend", resources / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", resources / "dobby-cli", executable=True)
+        from macos_extensions import stage
+        stage(contents, source, version)
         copy_file(MACOS_ICON, resources / "AppIcon.icns")
         copy_file(MACOS_PRIVACY_MANIFEST, resources / "PrivacyInfo.xcprivacy")
         copy_license_documents(resources / "licenses")

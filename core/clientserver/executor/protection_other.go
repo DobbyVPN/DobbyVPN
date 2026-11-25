@@ -1,4 +1,4 @@
-//go:build !(linux || windows || ios || android)
+//go:build !(linux || darwin || windows || ios || android)
 
 package executor
 

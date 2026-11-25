@@ -24,6 +24,12 @@ on:
     secrets:
       MACOS_DEVELOPER_ID_APP_P12:
         required: false
+      MACOS_HOST_PROFILE:
+        required: false
+      MACOS_TUNNEL_PROFILE:
+        required: false
+      MACOS_FILTER_PROFILE:
+        required: false
       MACOS_DEVELOPER_ID_INSTALLER_P12:
         required: false
       MACOS_DEVELOPER_ID_P12_PASSWORD:
@@ -139,6 +145,9 @@ jobs:
         if: ${{ inputs.release && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha }}
         env:
           MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
+          MACOS_HOST_PROFILE: ${{ secrets.MACOS_HOST_PROFILE }}
+          MACOS_TUNNEL_PROFILE: ${{ secrets.MACOS_TUNNEL_PROFILE }}
+          MACOS_FILTER_PROFILE: ${{ secrets.MACOS_FILTER_PROFILE }}
           MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
           MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
           APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}

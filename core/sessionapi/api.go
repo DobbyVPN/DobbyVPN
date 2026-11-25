@@ -281,6 +281,12 @@ type DesktopProtection interface {
 	SetEnabled(context.Context, bool) error
 }
 
+// FirstStartProtection rolls back a newly requested desktop guard when every
+// candidate fails before the user's first successful connection.
+type FirstStartProtection interface {
+	RollbackFirstStart(context.Context) error
+}
+
 type ManagerOptions struct {
 	RestoreLoader      ConfigLoader // Used only before a retained desktop tunnel has been re-established.
 	Protection         DesktopProtection
@@ -326,6 +332,7 @@ type session struct {
 	networkGeneration     uint64
 	networkLedger         *ledger
 	vpnActive             bool
+	rollbackFirstStart    bool
 	stopRequested         bool
 	startOriginGeneration uint64
 
@@ -754,6 +761,10 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	if restoreEpoch == nil {
 		s.restoreEpoch++
 	}
+	// On macOS the user can retry an unsuccessful first activation with
+	// ordinary internet restored. Retained and restored networks stay guarded.
+	_, rollback := m.protection.(FirstStartProtection)
+	s.rollbackFirstStart = rollback && !s.retainedProtection && restoreEpoch == nil
 	s.restorePrepared = false
 	s.activeInventory = s.loaded
 	// A new direct Start supersedes any stop intent from an earlier completed
@@ -1244,6 +1255,7 @@ func (m *Manager) advanceWithLease(s *session, generation uint64, state State, p
 		s.startOriginGeneration = 0
 		s.lastConnectedAt = m.now()
 		s.hasConnectedAt = true
+		s.rollbackFirstStart = false
 		s.lastFailure, s.lastFailureMessage = "", ""
 		s.recovering = false
 		s.recoveryOriginGeneration = 0
@@ -1334,6 +1346,14 @@ func (m *Manager) recoverPartialProtectionLocked(s *session, cause error) error 
 	// Preparation can install the base policy before the network lease is
 	// ready. After rollback, inspect the kernel under the same intent lock as
 	// Stop so a surviving guard remains visible and can be released.
+	if m.shouldRollbackFirstStart(s, cause) {
+		ctx := s.cleanupBudget.begin()
+		if err := errors.Join(m.stopActivationLocked(ctx), m.protection.(FirstStartProtection).RollbackFirstStart(ctx)); err != nil {
+			return err
+		}
+		s.retainedProtection, s.rollbackFirstStart = false, false
+		return nil
+	}
 	if cause != nil && !s.vpnActive && !s.stopRequested && !s.closing && m.protection != nil {
 		retained, err := m.protection.Recover(s.cleanupBudget.begin())
 		s.retainedProtection = retained
@@ -1356,12 +1376,16 @@ func (m *Manager) finishProtectedFailureLocked(s *session, cause error) {
 	m.appendLocked(s)
 }
 
+func (m *Manager) shouldRollbackFirstStart(s *session, cause error) bool {
+	return cause != nil && s.rollbackFirstStart && !s.stopRequested && !s.closing && s.pending == nil && !s.restartAfterCleanup
+}
+
 func (m *Manager) retireFinishedResources(s *session, work *ledger, cause error) (releaseNetwork bool, cleanupErr error) {
 	if work != nil && CodeOf(cause) != FailureCleanup {
 		cleanupErr = work.release(m.cleanupContext(s))
 	}
 	s.mu.Lock()
-	releaseNetwork = s.stopRequested || s.closing || !s.vpnActive
+	releaseNetwork = s.stopRequested || s.closing || !s.vpnActive || m.shouldRollbackFirstStart(s, cause)
 	network := s.networkLedger
 	s.mu.Unlock()
 	if cleanupErr == nil && CodeOf(cause) != FailureCleanup && releaseNetwork && network != nil {
