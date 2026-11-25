@@ -140,14 +140,14 @@ func DobbyProviderRoutesReady() *C.char {
 	}
 	owner := state.active.ref
 	fields := map[string]any{
-        "session_id": owner.SessionID, "network_generation": owner.Generation,
-        "interface": name, "packet_provider": true, "ipv4": v4, "ipv6": v6,
-        "requested_mtu": platform_engine.TunnelMTU, "requested_dns_servers": common.VPNDNSServers(),
-    }
-    if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, fields); err != nil {
-        log.Errorf("MacPacketProvider", "retain desktop tunnel policy: %v", err)
-    }
-    log.Info("MacPacketProvider", "macOS retained network ready", fields)
+		"session_id": owner.SessionID, "network_generation": owner.Generation,
+		"interface": name, "packet_provider": true, "ipv4": v4, "ipv6": v6,
+		"requested_mtu": platform_engine.TunnelMTU, "requested_dns_servers": common.VPNDNSServers(),
+	}
+	if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, fields); err != nil {
+		log.Errorf("MacPacketProvider", "retain desktop tunnel policy: %v", err)
+	}
+	log.Info("MacPacketProvider", "macOS retained network ready", fields)
 	return nil
 }
 
