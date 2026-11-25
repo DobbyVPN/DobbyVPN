@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import NetworkExtension
 import Security
 import SystemExtensions
@@ -127,9 +128,32 @@ enum MacNetworkExtension {
             let status = connection.status
             recordPreference("Observed VPN connection status", fields: ["start": start, "status": status.rawValue])
             if start && status == .connected || !start && terminal.contains(status) { return }
-            if start && terminal.contains(status) { throw hostError("Packet tunnel stopped before activation") }
+            if start && terminal.contains(status) {
+                if #available(macOS 13.0, *) {
+                    try await connection.fetchLastDisconnectError()
+                }
+                throw hostError("Packet tunnel stopped before activation")
+            }
         }
         throw hostError("Packet tunnel status observation ended")
+    }
+
+    // Recovery can begin while the physical interface is still down. macOS
+    // rejects a tunnel start in that interval, before the provider can run.
+    private static func waitForNetworkPath() async {
+        let monitor = NWPathMonitor()
+        let (statuses, continuation) = AsyncStream<NWPath.Status>.makeStream()
+        monitor.pathUpdateHandler = { continuation.yield($0.status) }
+        monitor.start(queue: DispatchQueue(label: "vpn.dobby.desktop.reconnect-path"))
+        defer {
+            monitor.cancel()
+            continuation.finish()
+        }
+        for await status in statuses {
+            recordPreference("Observed network path before packet tunnel recovery",
+                             fields: ["path_status": String(describing: status)])
+            if status == .satisfied { return }
+        }
     }
 
     private static func saveVPN(_ vpn: NETunnelProviderManager, configuration: [String: String]?) async throws {
@@ -254,6 +278,7 @@ enum MacNetworkExtension {
             // The control service confirmed this provider's socket disappeared.
             // macOS can still report connected or disconnecting for that process.
             try await transition(vpn.connection, start: false)
+            await waitForNetworkPath()
             try await transition(vpn.connection, start: true)
         default: throw hostError("Unknown Network Extension operation")
         }
