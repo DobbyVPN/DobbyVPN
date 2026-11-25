@@ -142,7 +142,7 @@ enum MacNetworkExtension {
     // rejects a tunnel start in that interval, before the provider can run.
     private static func waitForNetworkPath() async {
         let monitor = NWPathMonitor()
-        let (statuses, continuation) = AsyncStream<NWPath.Status>.makeStream()
+        let (statuses, continuation) = AsyncStream<Network.NWPath.Status>.makeStream()
         monitor.pathUpdateHandler = { continuation.yield($0.status) }
         monitor.start(queue: DispatchQueue(label: "vpn.dobby.desktop.reconnect-path"))
         defer {
