@@ -93,7 +93,7 @@ final class PacketTunnel: NEPacketTunnelProvider {
                 let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
                 let ipv4 = NEIPv4Settings(addresses: [spec.IPv4], subnetMasks: [spec.Mask])
                 ipv4.includedRoutes = [.default()]
-                let ipv6 = NEIPv6Settings(addresses: [spec.IPv6], networkPrefixLengths: [128])
+                let ipv6 = NEIPv6Settings(addresses: [spec.IPv6], networkPrefixLengths: [120])
                 ipv6.includedRoutes = [.default()]
                 let dns = NEDNSSettings(servers: spec.DNS)
                 dns.matchDomains = [""]
