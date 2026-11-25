@@ -34,6 +34,7 @@ final class PacketTunnel: NEPacketTunnelProvider {
     private let logger = Logger(subsystem: "vpn.dobby.desktop.PacketTunnel", category: "lifecycle")
     private var lease: Int32 = -1
     private var generation: UInt64 = 0
+    private var cleanupPending = false
     private var networkStore: SCDynamicStore?
 
     private func observeUplink(_ start: UInt64) throws {
@@ -64,6 +65,10 @@ final class PacketTunnel: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         lifecycle.async {
+            if self.cleanupPending, let error = self.stopEngine() {
+                completionHandler(error)
+                return
+            }
             guard self.lease < 0,
                   let config = (self.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
                   let key = config["connection"] as? String, let session = config["session"] as? String,
@@ -182,7 +187,8 @@ final class PacketTunnel: NEPacketTunnelProvider {
         if lease >= 0 { close(lease); lease = -1 }
     }
 
-    private func stopEngine() {
+    @discardableResult
+    private func stopEngine() -> Error? {
         generation &+= 1
         if let networkStore { SCDynamicStoreSetDispatchQueue(networkStore, nil) }
         networkStore = nil
@@ -194,16 +200,36 @@ final class PacketTunnel: NEPacketTunnelProvider {
         }
         if let error = goError(DobbyProviderStop()) {
             logger.error("Packet runtime cleanup failed: \(error.localizedDescription, privacy: .public)")
+            cleanupPending = true
+            // Retain the process reservation while the old runtime owns resources.
+            // A subsequent Start or Stop can retry even in the same extension process.
+            return error
         }
         output.sync {}
+        cleanupPending = false
         closeLease()
+        return nil
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         lifecycle.async {
             self.logger.info("Stopping packet tunnel, system reason \(reason.rawValue)")
-            self.stopEngine()
-            completionHandler()
+            self.finishStop(completionHandler)
+        }
+    }
+
+    private func finishStop(_ complete: @escaping () -> Void) {
+        if stopEngine() == nil {
+            complete()
+        } else {
+            let stoppedGeneration = generation
+            lifecycle.asyncAfter(deadline: .now() + .seconds(1)) {
+                if self.generation == stoppedGeneration && self.cleanupPending {
+                    self.finishStop(complete)
+                } else {
+                    complete()
+                }
+            }
         }
     }
 }

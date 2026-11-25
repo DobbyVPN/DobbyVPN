@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import NetworkExtension
 import Security
 import SystemExtensions
@@ -44,8 +44,8 @@ private final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate
 @MainActor
 enum MacNetworkExtension {
     static func run(_ args: [String]) -> Never {
-        let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
+        // The preference command runs alongside the user-facing app. Keep it
+        // off the window server so its exit cannot replace the window identity.
         Task { @MainActor in
             do {
                 try await perform(args)
@@ -56,8 +56,7 @@ enum MacNetworkExtension {
                 exit(EXIT_FAILURE)
             }
         }
-        app.run()
-        exit(EXIT_FAILURE)
+        dispatchMain()
     }
 
     private static func ownedVPN() async throws -> NETunnelProviderManager? {
