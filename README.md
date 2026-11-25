@@ -64,13 +64,17 @@ the physical return path for TCP connections that those peers initiate.
 Connections initiated by the Linux host continue to follow the VPN policy.
 
 
+### Connecting for the first time on macOS
+
+Install the universal package and open **Dobby VPN** from Applications. On the first connection, macOS asks you to approve **DobbyVPN Protection** and **DobbyVPN PacketTunnel** in System Settings. Allow Dobby VPN to add its VPN configuration and filter network traffic. The window and `dobby-cli` use the same connection and approvals. Keep System Integrity Protection enabled.
+
 ### Uninstalling on macOS
 
 ```sh
 sudo /usr/local/libexec/dobbyvpn-uninstall
 ```
 
-The script must run as root. It stops and unregisters the
+macOS may ask for administrator approval to remove each system extension. The script must run as root. It stops and unregisters the
 `com.dobby.vpnservice` background service, then removes
 `/Library/LaunchDaemons/com.dobby.vpnservice.plist`, the control socket
 `/var/run/dobbyvpn/control.sock` (and its directory if empty), the
@@ -145,7 +149,7 @@ DobbyVPN. Updates will arrive through F-Droid.
 
 From 1.5.3, [GitHub Releases](https://github.com/DobbyVPN/DobbyVPN/releases)
 include native Debug builds with a `-debug` filename suffix: Linux DEB,
-Windows MSI, macOS PKGs for Intel and Apple silicon, an Android APK, and an
+Windows MSI, a universal macOS PKG for Intel and Apple silicon, an Android APK, and an
 unsigned iOS Xcode archive. These builds retain symbols and disable Go
 optimization and inlining for debugging. Prebuilt third-party libraries retain
 their upstream build settings.
@@ -342,9 +346,7 @@ supported.
 
 ## macOS package signing
 
-Production macOS packages are signed with Developer ID, notarized by Apple and
-include a stapled notarization ticket. Test and Release use the same package bytes.
-Debug packages remain unsigned to support debugging.
+From 1.5.17, the distributed Release and Debug installers use Developer ID signing and Apple notarization. The Debug package includes symbols. For live debugger attachment, use a development-signed build with the debugging entitlement.
 
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)
