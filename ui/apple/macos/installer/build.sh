@@ -76,17 +76,18 @@ build_package() {
     ln -s "/Applications/$APP_BUNDLE/Contents/Resources/dobby-cli" Payload/usr/local/bin/dobby-cli
     cp ../../uninstall.sh Payload/usr/local/libexec/dobbyvpn-uninstall
     chmod 755 Payload/usr/local/libexec/dobbyvpn-uninstall
-    # Normalize only the public staged payload, before signing/packaging. The
-    # caller's umask continues to protect private scratch and credential files.
-    find Payload -type d -exec chmod 755 {} +
-    find Payload -type f -perm -100 -exec chmod 755 {} +
-    find Payload -type f ! -perm -100 -exec chmod 644 {} +
     chmod 755 Scripts Scripts/preinstall Scripts/postinstall
     write_fixed_payload_component_plist
     # Release CI sets this after preparing Developer ID signing; local builds stay unsigned.
     if [[ -n "${MACOS_SIGNING_SCRIPT:-}" ]]; then
       /bin/bash "$MACOS_SIGNING_SCRIPT" sign-app "Payload/Applications/$APP_BUNDLE"
     fi
+    # A signing tool may replace the app and create signature resources under
+    # the builder's private umask. Set the public modes on the exact payload
+    # pkgbuild will install, leaving private signing inputs alone.
+    find Payload -type d -exec chmod 755 {} +
+    find Payload -type f -perm -100 -exec chmod 755 {} +
+    find Payload -type f ! -perm -100 -exec chmod 644 {} +
     pkgbuild --root Payload \
              --component-plist component.plist \
              --scripts Scripts \
