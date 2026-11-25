@@ -346,5 +346,17 @@ Production macOS packages are signed with Developer ID, notarized by Apple and
 include a stapled notarization ticket. Test and Release use the same package bytes.
 Debug packages remain unsigned to support debugging.
 
+## Pull request reviews
+
+Ready (non-draft) pull requests receive an automated review pass once CI checks
+complete:
+
+- **`critic: passed`:** No blocking defects were found on the current head
+  commit. Pushing a new commit clears this label until the updated commit is
+  reviewed.
+- **`critic: needs fixes`:** One or more blocking defects were flagged in the
+  review comment. Pushing fixes triggers a follow-up review that updates the
+  label automatically.
+
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)
