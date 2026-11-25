@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	"core/log"
+	"core/routing"
 	"core/sessionapi"
 )
 
@@ -68,6 +69,12 @@ func (d *Desktop) Recover(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("unknown Mac protection state %q", value)
 	}
 	armed := value == "armed"
+	if !armed {
+		armed, err = routing.LegacyMacOSGuardActive(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
 	d.mu.Lock()
 	d.desired = armed
 	d.mu.Unlock()
@@ -98,7 +105,21 @@ func (d *Desktop) SetEnabled(ctx context.Context, enabled bool) error {
 	d.prefs.Lock()
 	defer d.prefs.Unlock()
 	_, err := host(ctx, "disarm")
-	return err
+	return errors.Join(err, routing.ReleaseLegacyMacOSGuard(ctx))
+}
+
+// Keep an interrupted older installation's protection until its successor
+// starts or the user releases it, including across a failed restore.
+func (d *Desktop) ReleaseIdleLegacyGuard(ctx context.Context) error {
+	d.prefs.Lock()
+	defer d.prefs.Unlock()
+	d.mu.Lock()
+	desired := d.desired
+	d.mu.Unlock()
+	if desired {
+		return nil
+	}
+	return routing.ReleaseLegacyMacOSGuard(ctx)
 }
 
 type desktopNetwork struct {
@@ -132,6 +153,9 @@ func (d *Desktop) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 	d.mu.Unlock()
 	defer func() { cancel(); d.mu.Lock(); d.pending = nil; d.mu.Unlock() }()
 	_, err = host(setup, "connect", key, ref.SessionID, strconv.FormatUint(ref.Generation, 10))
+	if err == nil {
+		err = routing.ReleaseLegacyMacOSGuard(setup)
+	}
 	return n, err
 }
 

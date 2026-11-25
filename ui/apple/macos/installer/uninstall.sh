@@ -79,20 +79,10 @@ else
     esac
 fi
 
-# A backend that died while connected leaves its kill switch in pf.  Flush
-# only the product anchor and release only the product's enable reference;
-# the main ruleset is untouched and pf stays enabled if another owner uses it.
-# A failure does not stop the uninstall: the token file stays so the release
-# can be repeated, and a reboot clears pf state and /var/run as well.
-PF_ANCHOR="com.apple/dobbyvpn"
-PF_TOKEN="$CONTROL_DIRECTORY/pf.token"
-if [ -f "$PF_TOKEN" ] && [ ! -L "$PF_TOKEN" ] && [ "$(stat -f %u "$PF_TOKEN")" = 0 ]; then
-    pf_token="$(cat "$PF_TOKEN")"
-    if ! [[ "$pf_token" =~ ^[0-9]+$ ]]; then echo "Invalid legacy DobbyVPN pf token" >&2; exit 1; fi
-    /sbin/pfctl -a "$PF_ANCHOR" -F rules
-    /sbin/pfctl -a "$PF_ANCHOR" -F Tables
-    /sbin/pfctl -X "$pf_token"
-    rm -f "$PF_TOKEN"
+# The daemon is stopped. Its migration cleanup verifies the saved token and
+# current pf reference before releasing the legacy installation's anchor.
+if [[ -e "$CONTROL_DIRECTORY/pf.token" || -L "$CONTROL_DIRECTORY/pf.token" ]]; then
+    "$APP_BUNDLE/Contents/Resources/dobbyvpn-backend" -mode release-legacy-protection
 fi
 
 # Read the installed service owner before retiring its plist. Use that

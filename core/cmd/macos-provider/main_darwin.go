@@ -92,7 +92,7 @@ func DobbyProviderCheckUplink() *C.char {
 		return failure(err)
 	}
 	if physical.Identity != state.active.physicalIdentity {
-		return failure(errors.New("underlying macOS service changed"))
+		return failure(fmt.Errorf("underlying macOS service changed from %s to %s", state.active.physicalIdentity, physical.Identity))
 	}
 	return nil
 }
@@ -139,8 +139,15 @@ func DobbyProviderRoutesReady() *C.char {
 		return failure(errors.New("installed packet flow interface missing"))
 	}
 	owner := state.active.ref
-	log.Info("MacPacketProvider", "macOS retained network ready", map[string]any{"session_id": owner.SessionID,
-		"network_generation": owner.Generation, "interface": name, "packet_provider": true})
+	fields := map[string]any{
+        "session_id": owner.SessionID, "network_generation": owner.Generation,
+        "interface": name, "packet_provider": true, "ipv4": v4, "ipv6": v6,
+        "requested_mtu": platform_engine.TunnelMTU, "requested_dns_servers": common.VPNDNSServers(),
+    }
+    if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, fields); err != nil {
+        log.Errorf("MacPacketProvider", "retain desktop tunnel policy: %v", err)
+    }
+    log.Info("MacPacketProvider", "macOS retained network ready", fields)
 	return nil
 }
 

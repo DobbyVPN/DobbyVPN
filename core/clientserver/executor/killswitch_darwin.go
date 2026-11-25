@@ -4,4 +4,5 @@ package executor
 
 import "core/routing"
 
-var releaseUnadoptedKillSwitch = routing.ReleaseUnadoptedMacOSKillSwitch
+var releaseUnadoptedKillSwitch = macDesktop.ReleaseIdleLegacyGuard
+var releaseLegacyInstallationGuard = routing.ReleaseLegacyMacOSGuard

@@ -684,11 +684,12 @@ def _verify_macos_package_source(
     expected = {"arm64", "x86_64"} if architecture == "universal" else {
         "arm64" if architecture == "arm64" else "x86_64"
     }
-    for rel in (
-        "MacOS/DobbyVPNMacApp", "Resources/dobbyvpn-backend", "Resources/dobby-cli",
-        "Library/SystemExtensions/vpn.dobby.desktop.PacketTunnel.systemextension/Contents/MacOS/DobbyPacketTunnel",
-        "Library/SystemExtensions/vpn.dobby.desktop.Protection.systemextension/Contents/MacOS/DobbyProtection",
-    ):
+    binaries = ["MacOS/DobbyVPNMacApp", "Resources/dobbyvpn-backend", "Resources/dobby-cli"]
+    version = tuple(map(int, info["CFBundleShortVersionString"].split(".")))
+    if version >= (1, 5, 17) or (contents / "Library/SystemExtensions").is_dir():
+        for suffix, executable in (("PacketTunnel", "DobbyPacketTunnel"), ("Protection", "DobbyProtection")):
+            binaries.append(f"Library/SystemExtensions/vpn.dobby.desktop.{suffix}.systemextension/Contents/MacOS/{executable}")
+    for rel in binaries:
         binary = contents / rel
         observed = _run("read macOS executable architectures", ["lipo", "-archs", str(binary)], capture=True)
         if set((observed.stdout or b"").decode().split()) != expected:

@@ -14,6 +14,12 @@ import (
 	"core/tunnel/protected_dialer"
 )
 
+const mobileRuntime = false
+
+// Only NewPacketFlow can supply the OS-owned device on macOS. The common
+// lifecycle returns its ordinary missing-core error for an unbound runtime.
+func newPlatformCore(io.ReadWriteCloser, *dnscache.Cache) sessionCore { return nil }
+
 // NewPacketFlow runs the normal protocol readiness, health and cleanup
 // lifecycle inside a Network Extension. macOS supplies the interface.
 func NewPacketFlow(device *platform_engine.PacketFlowDevice, physical routing.MacOSPhysicalNetwork, factory DeviceFactory) sessionapi.Runtime {

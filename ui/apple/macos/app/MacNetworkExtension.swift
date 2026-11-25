@@ -1,5 +1,6 @@
 import AppKit
 import NetworkExtension
+import Security
 import SystemExtensions
 
 private let tunnelID = "vpn.dobby.desktop.PacketTunnel"
@@ -141,11 +142,20 @@ enum MacNetworkExtension {
                 try await transition(vpn.connection, start: false)
             }
         case "uninstall":
-            if let vpn = try await ownedVPN() {
+            let vpn = try await ownedVPN()
+            let manager = try await filter()
+            // A diagnostic app without installation entitlements cannot have
+            // activated extensions. Leave an existing signed installation to
+            // its entitled host if its preferences are present.
+            guard let task = SecTaskCreateFromSelf(nil),
+                  SecTaskCopyValueForEntitlement(task, "com.apple.developer.system-extension.install" as CFString, nil) as? Bool == true else {
+                if vpn != nil || owned(manager) { throw hostError("Use the signed DobbyVPN installer to remove the existing protected configuration") }
+                return
+            }
+            if let vpn {
                 try await transition(vpn.connection, start: false)
                 try await vpn.removeFromPreferences()
             }
-            let manager = try await filter()
             if owned(manager) { try await manager.removeFromPreferences() }
             for id in [protectionID, tunnelID] {
                 do { try await ExtensionRequest().submit(id, remove: true) }

@@ -185,6 +185,10 @@ func run() {
 
 func (c *Executor) Execute(mode string) {
 	switch mode {
+	case "release-legacy-protection":
+		if err := releaseLegacyInstallationGuard(context.Background()); err != nil {
+			exitWithShutdownError(err)
+		}
 	case "release-protection":
 		if err := removeDesktopInstallationState(context.Background(), connectionSourceStore); err != nil {
 			exitWithShutdownError(err)
