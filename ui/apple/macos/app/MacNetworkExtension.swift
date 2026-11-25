@@ -164,6 +164,11 @@ enum MacNetworkExtension {
             proto.serverAddress = "DobbyVPN"
             proto.includeAllNetworks = true
             proto.excludeLocalNetworks = false
+            if #available(macOS 13.3, *) {
+                proto.excludeAPNs = false
+                proto.excludeCellularServices = false
+            }
+            if #available(macOS 14.4, *) { proto.excludeDeviceCommunication = false }
             proto.providerConfiguration = ["connection": args[1], "session": args[2], "generation": args[3]]
             vpn.protocolConfiguration = proto
             vpn.localizedDescription = "DobbyVPN"
