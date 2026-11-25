@@ -59,10 +59,13 @@ func (m *Manager) StopAndWait(ctx context.Context) error {
 	s := m.session
 	s.mu.Lock()
 	s.closing, s.stopRequested = true, true
+	if setup := s.protectionSetup; setup != nil {
+		setup.cancel()
+	}
 	s.cancelProtectedFetchLocked()
 	s.pending = nil
 	s.recovering, s.restartAfterCleanup, s.recoveryOriginGeneration = false, false, 0
-	if !s.cleanupDone && !s.cleanupFailed {
+	if !s.cleanupDone && !s.cleanupFailed && s.protectionSetup == nil {
 		wasDormant := s.state == StateFailed
 		s.state = StateStopping
 		if s.cleanupBudget == nil || wasDormant {
@@ -80,7 +83,7 @@ func (m *Manager) StopAndWait(ctx context.Context) error {
 	budget := m.cleanupContext(s)
 	for {
 		s.mu.Lock()
-		complete, failed, message, changed := s.cleanupDone, s.cleanupFailed, s.lastFailureMessage, s.changed
+		complete, failed, message, changed := s.cleanupDone && s.protectionSetup == nil, s.cleanupFailed, s.lastFailureMessage, s.changed
 		s.mu.Unlock()
 		if failed {
 			return failure(FailureCleanup, message)
@@ -94,7 +97,7 @@ func (m *Manager) StopAndWait(ctx context.Context) error {
 			return failureWithCause(FailureCleanup, "shutdown still owns resources", ctx.Err())
 		case <-budget.Done():
 			s.mu.Lock()
-			complete = s.cleanupDone && !s.cleanupFailed
+			complete = s.cleanupDone && s.protectionSetup == nil && !s.cleanupFailed
 			s.mu.Unlock()
 			if complete {
 				return nil
@@ -113,7 +116,7 @@ func (m *Manager) Resume() error {
 	if !s.closing {
 		return nil
 	}
-	if !s.cleanupDone || s.cleanupFailed {
+	if !s.cleanupDone || s.cleanupFailed || s.protectionSetup != nil {
 		return failure(FailureCleanup, "previous service still owns resources")
 	}
 	s.closing = false

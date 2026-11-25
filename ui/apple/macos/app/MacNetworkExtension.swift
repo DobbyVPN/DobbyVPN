@@ -132,6 +132,34 @@ enum MacNetworkExtension {
         throw hostError("Packet tunnel status observation ended")
     }
 
+    private static func saveVPN(_ vpn: NETunnelProviderManager, configuration: [String: String]?) async throws {
+        let proto = NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = tunnelID
+        proto.serverAddress = "DobbyVPN"
+        proto.includeAllNetworks = true
+        proto.excludeLocalNetworks = false
+        if #available(macOS 13.3, *) {
+            proto.excludeAPNs = false
+            proto.excludeCellularServices = false
+        }
+        if #available(macOS 14.4, *) { proto.excludeDeviceCommunication = false }
+        proto.providerConfiguration = configuration
+        vpn.protocolConfiguration = proto
+        vpn.localizedDescription = "DobbyVPN"
+        vpn.isEnabled = true
+        var fields: [String: Any] = [:]
+        fields["session_id"] = configuration?["session"]
+        fields["generation"] = configuration?["generation"]
+        recordPreference("Saving packet tunnel preferences", fields: fields)
+        try await vpn.saveToPreferences()
+        try await vpn.loadFromPreferences()
+    }
+
+    private static func activateExtensions() async throws {
+        let request = ExtensionRequest()
+        for id in [protectionID, tunnelID] { try await request.submit(id) }
+    }
+
     private static func arm() async throws {
         let guardManager = try await filter()
         if let current = guardManager.providerConfiguration, current.filterPacketProviderBundleIdentifier != protectionID {
@@ -157,7 +185,13 @@ enum MacNetworkExtension {
             let manager = try await filter()
             print(owned(manager) && manager.isEnabled ? "armed" : "idle")
         case "arm":
-            try await ExtensionRequest().submit(protectionID)
+            // A cold restore, including an active upgrade from the PF client,
+            // can be the first use of both system extensions and the VPN
+            // configuration. Finish those approvals before enabling the filter.
+            try await activateExtensions()
+            if try await ownedVPN() == nil {
+                try await saveVPN(NETunnelProviderManager(), configuration: nil)
+            }
             try await arm()
         case "disarm":
             let manager = try await filter()
@@ -196,27 +230,10 @@ enum MacNetworkExtension {
         case "connect":
             guard args.count == 4, args[1].count == 32, args[1].allSatisfy(\.isHexDigit),
                   !args[2].isEmpty, UInt64(args[3]) != nil else { throw hostError("Invalid network generation") }
-            let request = ExtensionRequest()
-            for id in [protectionID, tunnelID] { try await request.submit(id) }
+            try await activateExtensions()
             let vpn = try await ownedVPN() ?? NETunnelProviderManager()
             try await transition(vpn.connection, start: false)
-            let proto = NETunnelProviderProtocol()
-            proto.providerBundleIdentifier = tunnelID
-            proto.serverAddress = "DobbyVPN"
-            proto.includeAllNetworks = true
-            proto.excludeLocalNetworks = false
-            if #available(macOS 13.3, *) {
-                proto.excludeAPNs = false
-                proto.excludeCellularServices = false
-            }
-            if #available(macOS 14.4, *) { proto.excludeDeviceCommunication = false }
-            proto.providerConfiguration = ["connection": args[1], "session": args[2], "generation": args[3]]
-            vpn.protocolConfiguration = proto
-            vpn.localizedDescription = "DobbyVPN"
-            vpn.isEnabled = true
-            recordPreference("Saving packet tunnel preferences", fields: ["session_id": args[2], "generation": args[3]])
-            try await vpn.saveToPreferences()
-            try await vpn.loadFromPreferences()
+            try await saveVPN(vpn, configuration: ["connection": args[1], "session": args[2], "generation": args[3]])
             // Both preference approvals precede traffic interruption. The
             // packet provider waits for the independently running filter.
             try await arm()

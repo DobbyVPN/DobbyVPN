@@ -189,26 +189,104 @@ func (m *Manager) loadRestoreActivation(ctx context.Context, store ActivationSto
 	return decodeActivation(raw)
 }
 
+type protectionPreparation struct {
+	cancel  context.CancelFunc
+	cleanup context.Context
+}
+
+// releaseProtectionLocked is the explicit Stop path. A previously failed
+// preparation may have left policy installed even without a working tunnel.
+func (m *Manager) releaseProtectionLocked(ctx context.Context, s *session) error {
+	if m.protection == nil {
+		return nil
+	}
+	if err := m.protection.SetEnabled(ctx, false); err != nil {
+		return err
+	}
+	if s.retainedProtection || s.protectionCleanupPending {
+		s.restorePrepared = true
+	}
+	s.retainedProtection = false
+	if s.protectionCleanupPending {
+		s.protectionCleanupPending = false
+		s.lastFailure, s.lastFailureMessage = "", ""
+		m.appendLocked(s)
+	}
+	return nil
+}
+
+// Configure and Start need any pending platform change to settle before they
+// load a subscription or connect. Snapshot and Stop remain available while
+// macOS is waiting for the user to approve an extension.
+func (s *session) lockAfterProtectionSetup(ctx context.Context) error {
+	s.mu.Lock()
+	for s.protectionSetup != nil {
+		changed := s.changed
+		s.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return failureWithCause(FailureCanceled, "canceled while waiting for protection setup", ctx.Err())
+		}
+		s.mu.Lock()
+	}
+	if s.protectionCleanupPending {
+		s.mu.Unlock()
+		return failure(FailureCleanup, "Stop to clean up the previous protection request")
+	}
+	return nil
+}
+
 // The kernel can have no existing policy after reboot or installation upgrade.
-// Rebuild it from enabled Go intent before the first network operation. Publish
-// an actionable generation so that Stop can cancel the fetch on a cold boot.
+// Publish the pending setup before asking the OS and protect the first fetch.
 func (m *Manager) prepareRestoreProtection(ctx context.Context, s *session, sequence, epoch uint64) (uint64, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.restoreEpoch != epoch || s.sequence != sequence || s.closing {
+	if s.restoreEpoch != epoch || s.sequence != sequence || s.closing || s.protectionSetup != nil {
+		s.mu.Unlock()
 		return 0, failure(FailureConflict, "automatic startup was superseded")
 	}
 	if m.protection == nil || s.retainedProtection {
+		s.mu.Unlock()
 		return sequence, nil
 	}
-	if err := m.protection.PrepareRestore(ctx); err != nil {
-		return 0, failureWithCause(FailurePlatform, "could not establish network protection before subscription recovery", err)
-	}
-	s.retainedProtection = true
+	request, cancel := context.WithCancel(ctx)
+	setup := &protectionPreparation{cancel: cancel}
+	s.protectionSetup = setup
+	s.cleanupDone = false
 	if s.generation == 0 {
 		s.generation++
 	}
 	m.appendLocked(s)
+	s.mu.Unlock()
+
+	err := m.protection.PrepareRestore(request)
+	cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if setup.cleanup != nil {
+		s.mu.Unlock()
+		cleanupErr := m.protection.SetEnabled(setup.cleanup, false)
+		s.mu.Lock()
+		s.cleanupBudget.finish()
+		s.protectionCleanupPending = cleanupErr != nil
+		if cleanupErr != nil {
+			s.lastFailure, s.lastFailureMessage = FailureCleanup, cleanupErr.Error()
+		}
+	} else {
+		s.retainedProtection = err == nil
+		// An OS request can apply part of its policy before returning an
+		// error. Explicit Stop must still be able to reconcile that state.
+		s.protectionCleanupPending = err != nil
+	}
+	s.protectionSetup = nil
+	s.cleanupDone = true
+	m.appendLocked(s)
+	if setup.cleanup != nil || s.closing || s.restoreEpoch != epoch {
+		return 0, failure(FailureConflict, "automatic startup was superseded")
+	}
+	if err != nil {
+		return 0, failureWithCause(FailurePlatform, "could not establish network protection before subscription recovery", err)
+	}
 	return s.sequence, nil
 }
 

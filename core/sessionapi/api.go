@@ -320,14 +320,16 @@ const (
 )
 
 type session struct {
-	cancelRestoreFetch    context.CancelFunc
-	offlineAcceptedAt     string
-	offlineRefreshPending bool
-	retainedProtection    bool
-	mu                    sync.Mutex
-	closing               bool
-	changed               chan struct{}
-	cleanupBudget         *cleanupBudget
+	protectionSetup          *protectionPreparation
+	protectionCleanupPending bool
+	cancelRestoreFetch       context.CancelFunc
+	offlineAcceptedAt        string
+	offlineRefreshPending    bool
+	retainedProtection       bool
+	mu                       sync.Mutex
+	closing                  bool
+	changed                  chan struct{}
+	cleanupBudget            *cleanupBudget
 
 	networkGeneration     uint64
 	networkLedger         *ledger
@@ -495,7 +497,9 @@ func (m *Manager) configure(ctx context.Context, sessionID string, expectedSeque
 	if err != nil {
 		return ConfigureResult{}, err
 	}
-	s.mu.Lock()
+	if err := s.lockAfterProtectionSetup(ctx); err != nil {
+		return ConfigureResult{}, err
+	}
 	preloadErr := validateConfigureBeforeLoad(ctx, s, expectedSequence)
 	if preloadErr == nil && restoreEpoch != nil && s.restoreEpoch != *restoreEpoch {
 		preloadErr = failure(FailureConflict, "automatic startup was superseded")
@@ -715,7 +719,9 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 		}
 		expectedSequence = configured.Sequence
 	}
-	s.mu.Lock()
+	if setupErr := s.lockAfterProtectionSetup(requestCtx); setupErr != nil {
+		return StartResult{}, setupErr
+	}
 	if restoreEpoch != nil && s.restoreEpoch != *restoreEpoch {
 		s.mu.Unlock()
 		return StartResult{}, failure(FailureConflict, "automatic startup was superseded")
@@ -884,20 +890,25 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 	s.cancelProtectedFetchLocked()
 	s.offlineRefreshPending = false
 	s.configureRequest++
-	defer func() { s.restorePrepared = false }()
 	// A persistence failure is reported, but cannot prevent the requested
 	// release of app-owned protection. OS teardown does not call this path.
 	persistErr := m.stopActivationLocked(ctx)
-	if m.protection != nil {
-		removeErr := m.protection.SetEnabled(ctx, false)
-		if removeErr == nil {
-			if s.retainedProtection {
-				s.restorePrepared = true
-			}
-			s.retainedProtection = false
+	if setup := s.protectionSetup; setup != nil {
+		// The preparation worker owns any late installation and disarms it
+		// before admitting another Configure or Start.
+		s.restorePrepared = false
+		if setup.cleanup == nil {
+			s.cleanupBudget = &cleanupBudget{}
+			setup.cleanup = s.cleanupBudget.begin()
+			setup.cancel()
 		}
-		persistErr = errors.Join(persistErr, removeErr)
+		s.stopRequested = true
+		s.cleanupDone = false
+		m.appendLocked(s)
+		return StopResult{Generation: generation, Sequence: s.sequence}, persistErr
 	}
+	defer func() { s.restorePrepared = false }()
+	persistErr = errors.Join(persistErr, m.releaseProtectionLocked(ctx, s))
 	defer func() { err = errors.Join(err, persistErr) }()
 	// A stop from cleanup may arrive just after its replacement is reserved.
 	generation = s.generation
@@ -951,6 +962,9 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 
 // stopGenerationInactive is evaluated while holding the session mutex.
 func stopGenerationInactive(s *session, generation uint64) bool {
+	if s.protectionSetup != nil || s.protectionCleanupPending {
+		return false
+	}
 	if s.state != StateIdle && s.state != StateConfigured && s.state != StateFailed {
 		return false
 	}
@@ -1484,7 +1498,7 @@ func primaryActionLocked(s *session) string {
 	if canRetry(s) {
 		return "RETRY"
 	}
-	if s.retainedProtection && !s.vpnActive && s.state != StateStopping || s.state == StateFailed && s.cleanupFailed {
+	if s.protectionCleanupPending || s.protectionSetup != nil || s.retainedProtection && !s.vpnActive && s.state != StateStopping || s.state == StateFailed && s.cleanupFailed {
 		return primaryActionStop
 	}
 	if s.pending != nil {
