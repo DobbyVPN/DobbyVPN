@@ -99,8 +99,8 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 			{Table: g.table, Name: "excluded4", KeyType: nftables.TypeIPAddr, Interval: true},
 			{Table: g.table, Name: "excluded6", KeyType: nftables.TypeIP6Addr, Interval: true},
 		} {
-			if err := g.conn.AddSet(set, nil); err != nil {
-				return err
+			if setErr := g.conn.AddSet(set, nil); setErr != nil {
+				return setErr
 			}
 		}
 		priority := nftables.ChainPriorityMangle
