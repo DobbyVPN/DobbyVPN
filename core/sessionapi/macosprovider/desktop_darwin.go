@@ -30,6 +30,16 @@ func host(ctx context.Context, args ...string) (string, error) {
 		return "", errors.New("macOS VPN installation owner unavailable")
 	}
 	cmd := exec.CommandContext(ctx, "/bin/launchctl", append([]string{"asuser", uid, "/usr/bin/sudo", "-n", "-H", "-u", "#" + uid, hostPath, "--network-extension"}, args...)...)
+	// launchctl and sudo run the signed preference helper as the GUI user.
+	// Stop must retire the whole operation before it reconciles preferences.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
 	output, err := cmd.Output()
 	if exit, ok := err.(*exec.ExitError); ok {
 		output = append(output, exit.Stderr...)
@@ -143,6 +153,23 @@ func (n *desktopNetwork) Stop(ctx context.Context) error {
 	return nil
 }
 
+func (n *desktopNetwork) reconnect(ctx context.Context) error {
+	d := n.owner
+	d.prefs.Lock()
+	defer d.prefs.Unlock()
+	d.mu.Lock()
+	if !d.desired || d.active != n {
+		d.mu.Unlock()
+		return errors.New("Mac VPN reconnection superseded")
+	}
+	setup, cancel := context.WithCancel(ctx)
+	d.pending = cancel
+	d.mu.Unlock()
+	defer func() { cancel(); d.mu.Lock(); d.pending = nil; d.mu.Unlock() }()
+	_, err := host(setup, "reconnect", n.key)
+	return err
+}
+
 func (d *Desktop) Start(ctx context.Context, ref sessionapi.SessionRef, profile sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	d.mu.Lock()
 	n := d.active
@@ -151,6 +178,12 @@ func (d *Desktop) Start(ctx context.Context, ref sessionapi.SessionRef, profile 
 		return nil, errors.New("Mac packet tunnel not prepared")
 	}
 	identity, err := n.call(ctx, operation{Action: "identity", Ref: ref})
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, os.ErrNotExist) {
+		if err := n.reconnect(ctx); err != nil {
+			return nil, err
+		}
+		identity, err = n.call(ctx, operation{Action: "identity", Ref: ref})
+	}
 	if err != nil {
 		return nil, err
 	}

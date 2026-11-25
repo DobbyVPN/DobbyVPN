@@ -6,6 +6,7 @@ package routing
 #cgo LDFLAGS: -framework CoreFoundation -framework SystemConfiguration
 #include <CoreFoundation/CoreFoundation.h>
 #include <SystemConfiguration/SystemConfiguration.h>
+#include <ifaddrs.h>
 #include <net/if.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,84 @@ static void dobby_physical_dns(CFDictionaryRef snapshot, CFStringRef *state, CFS
    out[used] = 0;
   }
  }
+}
+
+// A configured service can have only a self-assigned address. It cannot
+// carry the default route just because it precedes another live service.
+static int dobby_has_uplink(const struct ifaddrs *links, const char *name, CFDictionaryRef ip, int family) {
+ const CFStringRef routerKey = family == AF_INET ? kSCPropNetIPv4Router : kSCPropNetIPv6Router;
+ const CFStringRef peersKey = family == AF_INET ? kSCPropNetIPv4DestAddresses : kSCPropNetIPv6DestAddresses;
+ CFStringRef router = CFDictionaryGetValue(ip, routerKey);
+ CFArrayRef peers = CFDictionaryGetValue(ip, peersKey);
+ for (const struct ifaddrs *link = links; link; link = link->ifa_next) {
+  if (!link->ifa_addr || link->ifa_addr->sa_family != family || strcmp(link->ifa_name, name) != 0) continue;
+  if ((link->ifa_flags & (IFF_UP | IFF_RUNNING | IFF_LOOPBACK)) != (IFF_UP | IFF_RUNNING)) continue;
+  if (router && CFGetTypeID(router) == CFStringGetTypeID() && CFStringGetLength(router)) return 1;
+  if ((link->ifa_flags & IFF_POINTOPOINT) && peers && CFGetTypeID(peers) == CFArrayGetTypeID() && CFArrayGetCount(peers)) return 1;
+ }
+ return 0;
+}
+
+// All-network VPN routing promotes the utun to the global primary. Select
+// live physical services in the user's network service order and read their
+// IP and DNS entities from the same dynamic-store snapshot.
+static int dobby_provider_capture(dobby_physical_network *result) {
+ SCDynamicStoreRef store = SCDynamicStoreCreate(NULL, CFSTR("DobbyVPN provider uplink"), NULL, NULL);
+ if (store == NULL) return SCError();
+ CFStringRef orderKey = CFSTR("Setup:/Network/Global/IPv4");
+ const void *patternValues[] = {CFSTR("State:/Network/Service/[^/]+/(IPv4|IPv6|DNS)"), CFSTR("Setup:/Network/Service/[^/]+/DNS")};
+ CFArrayRef patterns = CFArrayCreate(NULL, patternValues, 2, &kCFTypeArrayCallBacks);
+ const void *orderKeys[] = {orderKey};
+ CFArrayRef keys = CFArrayCreate(NULL, orderKeys, 1, &kCFTypeArrayCallBacks);
+ CFDictionaryRef snapshot = SCDynamicStoreCopyMultiple(store, keys, patterns);
+ CFRelease(patterns); CFRelease(keys); CFRelease(store);
+ if (snapshot == NULL) return kSCStatusFailed;
+ CFDictionaryRef order = CFDictionaryGetValue(snapshot, orderKey);
+ CFArrayRef services = order && CFGetTypeID(order) == CFDictionaryGetTypeID()
+     ? CFDictionaryGetValue(order, kSCPropNetServiceOrder) : NULL;
+ CFMutableDictionaryRef selected = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+ CFStringRef stateDNS[2] = {NULL, NULL}, setupDNS[2] = {NULL, NULL};
+ const CFStringRef families[] = {kSCEntNetIPv4, kSCEntNetIPv6};
+ int status = kSCStatusNoLink;
+ struct ifaddrs *links = NULL;
+ if (services && CFGetTypeID(services) == CFArrayGetTypeID() && getifaddrs(&links) == 0) {
+  for (int f=0; f<2; f++) {
+   for (CFIndex i=0; i<CFArrayGetCount(services); i++) {
+    CFStringRef service = CFArrayGetValueAtIndex(services, i);
+    if (CFGetTypeID(service) != CFStringGetTypeID()) continue;
+    CFStringRef key = SCDynamicStoreKeyCreateNetworkServiceEntity(NULL, kSCDynamicStoreDomainState, service, families[f]);
+    CFDictionaryRef ip = CFDictionaryGetValue(snapshot, key);
+    if (!ip || CFGetTypeID(ip) != CFDictionaryGetTypeID()) { CFRelease(key); continue; }
+    CFStringRef iface = CFDictionaryGetValue(ip, kSCPropInterfaceName);
+    char name[IF_NAMESIZE];
+    if (!iface || CFGetTypeID(iface) != CFStringGetTypeID() ||
+        !CFStringGetCString(iface,name,sizeof(name),kCFStringEncodingUTF8) ||
+        strncmp(name,"utun",4)==0 || strcmp(name,"lo0")==0) { CFRelease(key); continue; }
+    unsigned int index=if_nametoindex(name);
+    if (!index || !dobby_has_uplink(links, name, ip, f == 0 ? AF_INET : AF_INET6)) { CFRelease(key); continue; }
+    if (f==0) result->ipv4=index; else result->ipv6=index;
+    CFDictionarySetValue(selected,key,ip);
+    CFRelease(key);
+    stateDNS[f]=SCDynamicStoreKeyCreateNetworkServiceEntity(NULL,kSCDynamicStoreDomainState,service,kSCEntNetDNS);
+    setupDNS[f]=SCDynamicStoreKeyCreateNetworkServiceEntity(NULL,kSCDynamicStoreDomainSetup,service,kSCEntNetDNS);
+    const CFStringRef dnsKeys[]={stateDNS[f],setupDNS[f]};
+    for(int j=0;j<2;j++) {
+     CFTypeRef value=CFDictionaryGetValue(snapshot,dnsKeys[j]);
+     if(value) CFDictionarySetValue(selected,dnsKeys[j],value);
+    }
+    break;
+   }
+  }
+  if (result->ipv4 || result->ipv6) {
+   dobby_physical_dns(snapshot,stateDNS,setupDNS,result->dns,sizeof(result->dns));
+   result->snapshot=CFPropertyListCreateData(NULL,selected,kCFPropertyListXMLFormat_v1_0,0,NULL);
+   status=result->snapshot ? kSCStatusOK : kSCStatusFailed;
+  }
+ }
+ for(int f=0;f<2;f++){if(stateDNS[f]) CFRelease(stateDNS[f]); if(setupDNS[f]) CFRelease(setupDNS[f]);}
+ if (links) freeifaddrs(links);
+ CFRelease(selected); CFRelease(snapshot);
+ return status;
 }
 
 // Copy only the physical primary services. The supplemental VPN DNS service
@@ -128,11 +207,24 @@ type MacOSPhysicalNetwork struct {
 }
 
 func CaptureMacOSPhysicalNetwork(ctx context.Context) (MacOSPhysicalNetwork, error) {
+	return captureMacOSNetwork(ctx, false)
+}
+
+func CaptureMacOSProviderNetwork(ctx context.Context) (MacOSPhysicalNetwork, error) {
+	return captureMacOSNetwork(ctx, true)
+}
+
+func captureMacOSNetwork(ctx context.Context, provider bool) (MacOSPhysicalNetwork, error) {
 	if err := ctx.Err(); err != nil {
 		return MacOSPhysicalNetwork{}, err
 	}
 	var captured C.dobby_physical_network
-	status := C.dobby_physical_capture(&captured)
+	var status C.int
+	if provider {
+		status = C.dobby_provider_capture(&captured)
+	} else {
+		status = C.dobby_physical_capture(&captured)
+	}
 	if captured.snapshot != 0 {
 		defer C.CFRelease(C.CFTypeRef(captured.snapshot))
 	}

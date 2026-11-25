@@ -29,11 +29,12 @@ import (
 )
 
 type provider struct {
-	device *platform_engine.PacketFlowDevice
-	server *macosprovider.Server
-	ref    sessionapi.SessionRef
-	ctx    context.Context
-	cancel context.CancelFunc
+	physicalIdentity string
+	device           *platform_engine.PacketFlowDevice
+	server           *macosprovider.Server
+	ref              sessionapi.SessionRef
+	ctx              context.Context
+	cancel           context.CancelFunc
 }
 
 var state struct {
@@ -60,7 +61,7 @@ func DobbyProviderStart(key, session *C.char, generation C.uint64_t) *C.char {
 		return failure(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	physical, err := routing.CaptureMacOSPhysicalNetwork(ctx)
+	physical, err := routing.CaptureMacOSProviderNetwork(ctx)
 	if err != nil {
 		cancel()
 		return failure(err)
@@ -73,9 +74,26 @@ func DobbyProviderStart(key, session *C.char, generation C.uint64_t) *C.char {
 		device.Close()
 		return failure(err)
 	}
-	state.active = &provider{ref: ref, device: device, server: server, ctx: ctx, cancel: cancel}
+	state.active = &provider{physicalIdentity: physical.Identity, ref: ref, device: device, server: server, ctx: ctx, cancel: cancel}
 	log.Info("MacPacketProvider", "Packet flow prepared", map[string]any{"session_id": ref.SessionID, "network_generation": ref.Generation,
 		"network_identity": physical.Identity, "ipv4_interface": physical.IPv4, "ipv6_interface": physical.IPv6})
+	return nil
+}
+
+//export DobbyProviderCheckUplink
+func DobbyProviderCheckUplink() *C.char {
+	state.RLock()
+	defer state.RUnlock()
+	if state.active == nil {
+		return failure(errors.New("packet provider stopped"))
+	}
+	physical, err := routing.CaptureMacOSProviderNetwork(state.active.ctx)
+	if err != nil {
+		return failure(err)
+	}
+	if physical.Identity != state.active.physicalIdentity {
+		return failure(errors.New("underlying macOS service changed"))
+	}
 	return nil
 }
 

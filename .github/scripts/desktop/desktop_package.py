@@ -518,9 +518,11 @@ def _build(args: argparse.Namespace) -> int:
 
         if platform == "macos":
             import desktop_build
-            import macos_extensions
             go = desktop_build.prepare_toolchain("macos", args.skip_deps)
-            macos_extensions.build(str(go), arch, directory, args.debug)
+            _run("macOS Network Extensions", [
+                sys.executable, str(Path(__file__).with_name("macos_extensions.py")),
+                str(go), arch, str(directory), *(["--debug"] if args.debug else []),
+            ], env=environment)
 
         if args.debug and platform == "macos":
             symbols = directory / "DebugSymbols"

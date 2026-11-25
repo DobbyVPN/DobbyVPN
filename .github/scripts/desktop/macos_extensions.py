@@ -9,7 +9,7 @@ import sys
 
 from desktop_build import (
     GO_MODULE_DIR, ROOT_DIR, MACOS_MINIMUM_SYSTEM_VERSION,
-    configure_macos_bridge_link, configure_macos_compiler, configure_macos_deployment_target,
+    configure_macos_bridge_link, configure_macos_compiler, configure_macos_deployment_target, go_build_identity,
 )
 
 # The Mach service names belong to the same signing team as the containing app.
@@ -35,7 +35,7 @@ def build(go: str, arch: str, output: Path, debug: bool) -> None:
     def run(*args: str | Path) -> None:
         subprocess.run(args, cwd=GO_MODULE_DIR, env=env, check=True)
 
-    run(go, "build", "-mod=readonly", "-buildmode=c-archive", "-trimpath",
+    run(go, "build", "-mod=readonly", "-buildmode=c-archive", "-trimpath", "-ldflags", go_build_identity(debug),
         *(["-gcflags=all=-N -l"] if debug else []), "-o", archive, "./cmd/macos-provider")
     module = Path(subprocess.check_output(
         [go, "list", "-m", "-f", "{{.Dir}}", "trusttunnel-go"], cwd=GO_MODULE_DIR, env=env, text=True

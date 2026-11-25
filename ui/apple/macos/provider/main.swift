@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SystemConfiguration
 import NetworkExtension
 import os
 
@@ -22,12 +23,44 @@ private func goError(_ message: UnsafeMutablePointer<CChar>?) -> Error? {
     return providerError(String(cString: message))
 }
 
+private final class UplinkObservation {
+    let changed: () -> Void
+    init(_ changed: @escaping () -> Void) { self.changed = changed }
+}
+
 final class PacketTunnel: NEPacketTunnelProvider {
     private let lifecycle = DispatchQueue(label: "vpn.dobby.desktop.PacketTunnel.lifecycle")
     private let output = DispatchQueue(label: "vpn.dobby.desktop.PacketTunnel.output")
     private let logger = Logger(subsystem: "vpn.dobby.desktop.PacketTunnel", category: "lifecycle")
     private var lease: Int32 = -1
     private var generation: UInt64 = 0
+    private var networkStore: SCDynamicStore?
+
+    private func observeUplink(_ start: UInt64) throws {
+        // Callbacks run on lifecycle. The weak capture and generation check
+        // retire queued notifications when macOS replaces the tunnel.
+        let handler = UplinkObservation { [weak self] in
+            guard let self, self.generation == start else { return }
+            if let error = goError(DobbyProviderCheckUplink()) {
+                self.logger.error("Reacquiring the underlying network: \(error.localizedDescription, privacy: .public)")
+                self.stopEngine()
+                self.cancelTunnelWithError(error)
+            }
+        }
+        var context = SCDynamicStoreContext(version: 0, info: Unmanaged.passUnretained(handler).toOpaque(),
+            retain: { UnsafeRawPointer(Unmanaged<UplinkObservation>.fromOpaque($0!).retain().toOpaque()) },
+            release: { Unmanaged<UplinkObservation>.fromOpaque($0!).release() }, copyDescription: nil)
+        guard let store = withExtendedLifetime(handler, { SCDynamicStoreCreate(nil, "DobbyVPN uplink" as CFString, { _, _, info in
+            guard let info else { return }
+            Unmanaged<UplinkObservation>.fromOpaque(info).takeUnretainedValue().changed()
+        }, &context) }) else { throw providerError("Cannot open network service store (\(SCError()))") }
+        let keys = ["Setup:/Network/Global/IPv4"]
+        let patterns = ["State:/Network/Service/[^/]+/(IPv4|IPv6|DNS)", "Setup:/Network/Service/[^/]+/DNS"]
+        guard SCDynamicStoreSetNotificationKeys(store, keys as CFArray, patterns as CFArray),
+              SCDynamicStoreSetDispatchQueue(store, lifecycle) else { throw providerError("Cannot observe underlying network changes") }
+        networkStore = store
+        if let error = goError(DobbyProviderCheckUplink()) { throw error }
+    }
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         lifecycle.async {
@@ -89,6 +122,8 @@ final class PacketTunnel: NEPacketTunnelProvider {
             rollback(error, complete)
             return
         }
+        do { try observeUplink(start) }
+        catch { rollback(error, complete); return }
         guard DobbyAcquireTunnelLease(lease) else {
             rollback(NSError(domain: NSPOSIXErrorDomain, code: Int(errno)), complete)
             return
@@ -149,11 +184,19 @@ final class PacketTunnel: NEPacketTunnelProvider {
 
     private func stopEngine() {
         generation &+= 1
-        closeLease()
+        if let networkStore { SCDynamicStoreSetDispatchQueue(networkStore, nil) }
+        networkStore = nil
+        // Revoke physical egress first. Keep the separate process reservation
+        // until Go has closed its socket and the final packet reader has left.
+        if lease >= 0 && !DobbyReleaseTunnelLease(lease) {
+            logger.error("Failed to revoke the tunnel lease, errno \(errno)")
+            closeLease()
+        }
         if let error = goError(DobbyProviderStop()) {
             logger.error("Packet runtime cleanup failed: \(error.localizedDescription, privacy: .public)")
         }
         output.sync {}
+        closeLease()
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {

@@ -75,12 +75,31 @@ enum MacNetworkExtension {
         filter.providerConfiguration?.filterPacketProviderBundleIdentifier == protectionID
     }
 
-    private static func waitForStop(_ manager: NETunnelProviderManager) async throws {
-        if [.disconnected, .invalid].contains(manager.connection.status) { return }
-        manager.connection.stopVPNTunnel()
-        while ![.disconnected, .invalid].contains(manager.connection.status) {
-            try await Task.sleep(nanoseconds: 100_000_000)
+    // Register before asking the OS to change state. Read status on the main
+    // actor after each notification, including those queued during the request.
+    private static func transition(_ connection: NEVPNConnection, start: Bool) async throws {
+        let (updates, continuation) = AsyncStream<Void>.makeStream()
+        let token = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange,
+            object: connection, queue: .main) { _ in continuation.yield(()) }
+        defer {
+            NotificationCenter.default.removeObserver(token)
+            continuation.finish()
         }
+        let terminal: [NEVPNStatus] = [.disconnected, .invalid]
+        if start {
+            if connection.status == .connected { return }
+            try connection.startVPNTunnel()
+        } else {
+            if terminal.contains(connection.status) { return }
+            if connection.status != .disconnecting { connection.stopVPNTunnel() }
+        }
+        if start && connection.status == .connected || !start && terminal.contains(connection.status) { return }
+        for await _ in updates {
+            let status = connection.status
+            if start && status == .connected || !start && terminal.contains(status) { return }
+            if start && terminal.contains(status) { throw hostError("Packet tunnel stopped before activation") }
+        }
+        throw hostError("Packet tunnel status observation ended")
     }
 
     private static func arm() async throws {
@@ -119,11 +138,11 @@ enum MacNetworkExtension {
             if let vpn = try await ownedVPN(),
                let config = (vpn.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
                config["connection"] as? String == args[1] {
-                try await waitForStop(vpn)
+                try await transition(vpn.connection, start: false)
             }
         case "uninstall":
             if let vpn = try await ownedVPN() {
-                try await waitForStop(vpn)
+                try await transition(vpn.connection, start: false)
                 try await vpn.removeFromPreferences()
             }
             let manager = try await filter()
@@ -139,7 +158,7 @@ enum MacNetworkExtension {
             let request = ExtensionRequest()
             for id in [protectionID, tunnelID] { try await request.submit(id) }
             let vpn = try await ownedVPN() ?? NETunnelProviderManager()
-            try await waitForStop(vpn)
+            try await transition(vpn.connection, start: false)
             let proto = NETunnelProviderProtocol()
             proto.providerBundleIdentifier = tunnelID
             proto.serverAddress = "DobbyVPN"
@@ -154,17 +173,17 @@ enum MacNetworkExtension {
             // Both preference approvals precede traffic interruption. The
             // packet provider waits for the independently running filter.
             try await arm()
-            try vpn.connection.startVPNTunnel()
-            var started = false
-            while vpn.connection.status != .connected {
-                switch vpn.connection.status {
-                case .connecting, .reasserting: started = true
-                case .disconnected where started, .invalid, .disconnecting:
-                    throw hostError("Packet tunnel stopped before activation")
-                default: break
-                }
-                try await Task.sleep(nanoseconds: 100_000_000)
-            }
+            try await transition(vpn.connection, start: true)
+        case "reconnect":
+            guard args.count == 2, let vpn = try await ownedVPN(),
+                  (vpn.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["connection"] as? String == args[1]
+            else { throw hostError("Desktop network generation has retired") }
+            let guardManager = try await filter()
+            guard owned(guardManager), guardManager.isEnabled else { throw hostError("Independent traffic protection is unavailable") }
+            // The control service confirmed this provider's socket disappeared.
+            // macOS can still report connected or disconnecting for that process.
+            try await transition(vpn.connection, start: false)
+            try await transition(vpn.connection, start: true)
         default: throw hostError("Unknown Network Extension operation")
         }
     }

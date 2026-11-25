@@ -45,6 +45,11 @@ bool DobbyAcquireTunnelLease(int fd) {
     return fcntl(fd, F_SETLK, &lock) == 0;
 }
 
+bool DobbyReleaseTunnelLease(int fd) {
+    struct flock lock = {.l_type = F_UNLCK, .l_whence = SEEK_SET, .l_len = 1};
+    return fcntl(fd, F_SETLK, &lock) == 0;
+}
+
 bool DobbyTunnelOwnsLease(int fd) {
     struct flock lock = {.l_type = F_RDLCK, .l_whence = SEEK_SET, .l_len = 1};
     return fcntl(fd, F_GETLK, &lock) == 0 && lock.l_type == F_WRLCK;
