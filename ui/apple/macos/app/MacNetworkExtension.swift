@@ -6,6 +6,17 @@ import SystemExtensions
 private let tunnelID = "vpn.dobby.desktop.PacketTunnel"
 private let protectionID = "vpn.dobby.desktop.Protection"
 
+private let preferenceDiagnostics = MacDesktopSessionClient()
+
+private func recordPreference(_ message: String, fields: [String: Any] = [:], level: String = "INFO") {
+    do {
+        try preferenceDiagnostics.appendDiagnostic(message, event: "macos.network-extension",
+                                                    level: level, source: "macos-preferences", fields: fields)
+    } catch {
+        NSLog("DobbyVPN preference diagnostic write failed: %@", String(reflecting: error))
+    }
+}
+
 private func hostError(_ message: String) -> NSError {
     NSError(domain: "vpn.dobby.desktop", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
 }
@@ -15,6 +26,7 @@ private final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate
     private var completion: CheckedContinuation<Void, Error>?
 
     func submit(_ id: String, remove: Bool = false) async throws {
+        recordPreference("Requesting system extension change", fields: ["identifier": id, "remove": remove])
         let request = remove
             ? OSSystemExtensionRequest.deactivationRequest(forExtensionWithIdentifier: id, queue: .main)
             : OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: id, queue: .main)
@@ -25,6 +37,7 @@ private final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate
         }
     }
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
+        recordPreference("Waiting for System Settings approval", fields: ["identifier": request.identifier])
         NSLog("DobbyVPN needs System Settings approval for %@", request.identifier)
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties,
@@ -48,10 +61,20 @@ enum MacNetworkExtension {
         // off the window server so its exit cannot replace the window identity.
         Task { @MainActor in
             do {
+                if let operation = args.first, operation != "status" {
+                    recordPreference("Starting Network Extension operation", fields: ["operation": operation])
+                }
                 try await perform(args)
+                if let operation = args.first, operation != "status" {
+                    recordPreference("Completed Network Extension operation", fields: ["operation": operation])
+                }
                 exit(EXIT_SUCCESS)
             } catch {
                 let error = error as NSError
+                recordPreference("Network Extension operation failed", fields: [
+                    "operation": args.first ?? "", "domain": error.domain, "code": error.code,
+                    "error": error.localizedDescription,
+                ], level: "ERROR")
                 FileHandle.standardError.write(Data("\(error.domain) \(error.code) \(error.localizedDescription)\n".utf8))
                 exit(EXIT_FAILURE)
             }
@@ -86,6 +109,7 @@ enum MacNetworkExtension {
             continuation.finish()
         }
         let terminal: [NEVPNStatus] = [.disconnected, .invalid]
+        recordPreference("Requested VPN connection transition", fields: ["start": start, "status": connection.status.rawValue])
         if start {
             if connection.status == .connected { return }
             try connection.startVPNTunnel()
@@ -96,6 +120,7 @@ enum MacNetworkExtension {
         if start && connection.status == .connected || !start && terminal.contains(connection.status) { return }
         for await _ in updates {
             let status = connection.status
+            recordPreference("Observed VPN connection status", fields: ["start": start, "status": status.rawValue])
             if start && status == .connected || !start && terminal.contains(status) { return }
             if start && terminal.contains(status) { throw hostError("Packet tunnel stopped before activation") }
         }
@@ -115,7 +140,9 @@ enum MacNetworkExtension {
             guardManager.localizedDescription = "DobbyVPN traffic protection"
             guardManager.providerConfiguration = config
             guardManager.isEnabled = true
+            recordPreference("Saving enabled content filter preferences")
             try await guardManager.saveToPreferences()
+            recordPreference("Saved enabled content filter preferences")
         }
     }
 
@@ -182,6 +209,7 @@ enum MacNetworkExtension {
             vpn.protocolConfiguration = proto
             vpn.localizedDescription = "DobbyVPN"
             vpn.isEnabled = true
+            recordPreference("Saving packet tunnel preferences", fields: ["session_id": args[2], "generation": args[3]])
             try await vpn.saveToPreferences()
             try await vpn.loadFromPreferences()
             // Both preference approvals precede traffic interruption. The

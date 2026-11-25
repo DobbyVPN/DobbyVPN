@@ -34,6 +34,12 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
         URL(fileURLWithPath: uiLogPath)
     }
 
+    func appendDiagnostic(_ message: String, event: String, level: String, source: String = "native-ui",
+                          fields: [String: Any]) throws {
+        try DiagnosticFiles.append(message, event: event, level: level, source: source, to: uiDiagnosticPath,
+                                   fields: fields, legacyDesktop: true, legacyExcludedPaths: [backendLogPath])
+    }
+
     var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
     }
@@ -90,9 +96,7 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
                                          "elapsed_ms": (clock() - started) * 1000]
             if let error { fields["error"] = error }
             do {
-                try DiagnosticFiles.append(message, event: event, level: level, source: "native-ui",
-                                           to: uiDiagnosticPath, fields: fields, legacyDesktop: true,
-                                           legacyExcludedPaths: [backendLogPath])
+                try appendDiagnostic(message, event: event, level: level, fields: fields)
             } catch {
                 FileHandle.standardError.write(Data("UI control diagnostic write failed: \(String(reflecting: error))\n".utf8))
             }
@@ -140,17 +144,15 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
     ) {
         guard method == "Configure", let source = parameters["source"] as? String else { return }
         do {
-            try DiagnosticFiles.append(
+            try appendDiagnostic(
                 "Read the Configure response from the Go backend",
                 event: "subscription.configure-pipe-response-read",
                 level: "INFO",
-                source: "native-ui",
-                to: uiDiagnosticPath,
                 fields: [
                     "parameters": ["source": source],
                     "succeeded": succeeded,
                     "response_read_monotonic_uptime": ProcessInfo.processInfo.systemUptime,
-                ], legacyDesktop: true, legacyExcludedPaths: [backendLogPath]
+                ]
             )
         } catch {
             FileHandle.standardError.write(Data(
