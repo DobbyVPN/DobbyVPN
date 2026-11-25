@@ -199,6 +199,11 @@ enum MacNetworkExtension {
                 manager.isEnabled = false
                 try await manager.saveToPreferences()
             }
+            // A backend that restarted before loading its subscription can
+            // have no connection key while its previous packet tunnel is live.
+            if let vpn = try await ownedVPN() {
+                try await transition(vpn.connection, start: false)
+            }
         case "stop":
             guard args.count == 2 else { throw hostError("Missing connection identity") }
             if let vpn = try await ownedVPN(),

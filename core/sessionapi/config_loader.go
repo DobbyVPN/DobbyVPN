@@ -204,6 +204,12 @@ func cacheEligibleDialFailure(err error) bool {
 	if nested := errors.Unwrap(err); nested != nil {
 		return cacheEligibleDialFailure(nested)
 	}
+	// net/http's TLS handshake timeout implements net.Error but does not
+	// wrap context.DeadlineExceeded or a socket errno.
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return true
+	}
 	var dns *net.DNSError
 	var errno syscall.Errno
 	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &dns) ||
