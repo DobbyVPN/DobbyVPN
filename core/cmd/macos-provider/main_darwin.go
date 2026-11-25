@@ -12,6 +12,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -27,6 +31,7 @@ import (
 type provider struct {
 	device *platform_engine.PacketFlowDevice
 	server *macosprovider.Server
+	ref    sessionapi.SessionRef
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -68,9 +73,56 @@ func DobbyProviderStart(key, session *C.char, generation C.uint64_t) *C.char {
 		device.Close()
 		return failure(err)
 	}
-	state.active = &provider{device: device, server: server, ctx: ctx, cancel: cancel}
+	state.active = &provider{ref: ref, device: device, server: server, ctx: ctx, cancel: cancel}
 	log.Info("MacPacketProvider", "Packet flow prepared", map[string]any{"session_id": ref.SessionID, "network_generation": ref.Generation,
 		"network_identity": physical.Identity, "ipv4_interface": physical.IPv4, "ipv6_interface": physical.IPv6})
+	return nil
+}
+
+//export DobbyProviderRoutesReady
+func DobbyProviderRoutesReady() *C.char {
+	state.RLock()
+	defer state.RUnlock()
+	if state.active == nil {
+		return failure(errors.New("missing packet flow during route activation"))
+	}
+	v4, v6 := platform_engine.MacOSTunnelAddresses()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return failure(err)
+	}
+	name := ""
+	for _, link := range interfaces {
+		if !strings.HasPrefix(link.Name, "utun") {
+			continue
+		}
+		addrs, err := link.Addrs()
+		if err != nil {
+			return failure(err)
+		}
+		has4, has6 := false, false
+		for _, addr := range addrs {
+			prefix, err := netip.ParsePrefix(addr.String())
+			if err != nil {
+				continue
+			}
+			ip := prefix.Addr().String()
+			has4 = has4 || ip == v4.Local
+			has6 = has6 || ip == v6.Local
+		}
+		if has4 && has6 {
+			if name != "" {
+				return failure(fmt.Errorf("multiple interfaces have the configured packet flow addresses"))
+			}
+			name = link.Name
+		}
+	}
+	if name == "" {
+		return failure(errors.New("installed packet flow interface missing"))
+	}
+	owner := state.active.ref
+	log.Info("MacPacketProvider", "macOS retained network ready", map[string]any{"session_id": owner.SessionID,
+		"network_generation": owner.Generation, "interface": name, "packet_provider": true})
 	return nil
 }
 

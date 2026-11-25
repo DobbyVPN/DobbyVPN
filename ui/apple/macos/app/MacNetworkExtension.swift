@@ -138,7 +138,6 @@ enum MacNetworkExtension {
                   !args[2].isEmpty, UInt64(args[3]) != nil else { throw hostError("Invalid network generation") }
             let request = ExtensionRequest()
             for id in [protectionID, tunnelID] { try await request.submit(id) }
-            try await arm()
             let vpn = try await ownedVPN() ?? NETunnelProviderManager()
             try await waitForStop(vpn)
             let proto = NETunnelProviderProtocol()
@@ -152,6 +151,9 @@ enum MacNetworkExtension {
             vpn.isEnabled = true
             try await vpn.saveToPreferences()
             try await vpn.loadFromPreferences()
+            // Both preference approvals precede traffic interruption. The
+            // packet provider waits for the independently running filter.
+            try await arm()
             try vpn.connection.startVPNTunnel()
             var started = false
             while vpn.connection.status != .connected {

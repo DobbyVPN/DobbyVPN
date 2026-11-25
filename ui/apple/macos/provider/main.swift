@@ -85,6 +85,10 @@ final class PacketTunnel: NEPacketTunnelProvider {
             }
             return
         }
+        if let error = goError(DobbyProviderRoutesReady()) {
+            rollback(error, complete)
+            return
+        }
         guard DobbyAcquireTunnelLease(lease) else {
             rollback(NSError(domain: NSPOSIXErrorDomain, code: Int(errno)), complete)
             return
