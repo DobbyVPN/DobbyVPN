@@ -26,7 +26,8 @@ ANDROID_PAIRING_FIELDS = frozenset({
     "build_run_id", "build_manifest_sha256", "product_sha",
     "unsigned_product_apk_sha256", "test_companion_sha256",
     "torturer_repository", "torturer_sha", "torturer_tree_sha256",
-    "target_package", "target_version_code", "signer_certificate_sha256",
+    "target_package", "target_version_code",
+    "app_signer_certificate_sha256", "companion_signer_certificate_sha256",
 })
 REQUIRED_CHECKS = frozenset({
     "resolve_build", "ios_analysis", "android_reproducibility", "fdroid_preflight",
@@ -156,11 +157,14 @@ def _validate_android_pairing(result: dict[str, Any], build: dict[str, Any]) -> 
         raise TestManifestError("Android pairing names a different target package")
     if type(pairing.get("target_version_code")) is not int or pairing["target_version_code"] <= 0:
         raise TestManifestError("Android pairing has an invalid target version code")
-    if (
-        not isinstance(pairing.get("signer_certificate_sha256"), str)
-        or not SHA256_RE.fullmatch(pairing["signer_certificate_sha256"])
-    ):
-        raise TestManifestError("Android pairing has an invalid signer certificate digest")
+    for signer_key in ("app_signer_certificate_sha256", "companion_signer_certificate_sha256"):
+        if (
+            not isinstance(pairing.get(signer_key), str)
+            or not SHA256_RE.fullmatch(pairing[signer_key])
+        ):
+            raise TestManifestError("Android pairing has an invalid signer certificate digest")
+    if pairing["app_signer_certificate_sha256"] != pairing["companion_signer_certificate_sha256"]:
+        raise TestManifestError("Android pairing app and companion signer certificates differ")
 
 
 def validate_android_pairing(result: Any, unsigned_product_apk_sha256: str) -> None:
@@ -175,8 +179,6 @@ def validate_android_pairing(result: Any, unsigned_product_apk_sha256: str) -> N
         raise TestManifestError("selected unsigned product APK digest is invalid")
     if pairing.get("unsigned_product_apk_sha256") != unsigned_product_apk_sha256:
         raise TestManifestError("Test Android pairing does not match the selected product APK")
-    if pairing.get("signer_certificate_sha256") != pairing.get("test_companion_sha256"):
-        raise TestManifestError("Test Android pairing signer does not match the companion digest")
 
 
 def guard_candidate(result: Any) -> dict[str, Any]:

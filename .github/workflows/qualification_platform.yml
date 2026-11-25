@@ -73,7 +73,7 @@ jobs:
       contents: read
       actions: read
     outputs:
-      android_pairing: ${{ steps.android_companion.outputs.pairing }}
+      android_pairing: ${{ steps.android_pairing.outputs.pairing }}
     env:
       DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
       DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
@@ -371,14 +371,6 @@ jobs:
               "torturer_sha": tests_sha,
               "torturer_tree_sha256": tests_tree,
           }
-          signer_payload = Path(os.environ["RUN_DIR"]) / "apk-signer-pairing.json"
-          if signer_payload.is_file():
-              signed = json.loads(signer_payload.read_text())
-              pairing.update(
-                  target_package=signed["target_package"],
-                  target_version_code=int(signed["target_version_code"]),
-                  signer_certificate_sha256=signed["companion_signer_certificate_sha256"],
-              )
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write("pairing=" + json.dumps(pairing, separators=(",", ":")) + "\n")
           PYTHON
@@ -745,6 +737,32 @@ jobs:
               printf 'ADB=%s\n' "$(command -v adb)" >> "$GITHUB_ENV"
               ;;
           esac
+
+      - name: Record the Android Build/Test signer pairing
+        id: android_pairing
+        if: inputs.platform == 'android'
+        shell: bash
+        env:
+          ANDROID_PAIRING_BASE: ${{ steps.android_companion.outputs.pairing }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          pairing = json.loads(os.environ["ANDROID_PAIRING_BASE"])
+          payload = Path(os.environ["RUN_DIR"]) / "apk-signer-pairing.json"
+          if not payload.exists():
+              raise SystemExit("the Android signer pairing payload is missing")
+          signed = json.loads(payload.read_text())
+          pairing.update(
+              target_package=signed["target_package"],
+              target_version_code=int(signed["target_version_code"]),
+              app_signer_certificate_sha256=signed["app_signer_certificate_sha256"],
+              companion_signer_certificate_sha256=signed["companion_signer_certificate_sha256"],
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("pairing=" + json.dumps(pairing, separators=(",", ":")) + "\n")
+          PYTHON
 
       - name: Start Android live ADB diagnostics
         if: inputs.platform == 'android'
