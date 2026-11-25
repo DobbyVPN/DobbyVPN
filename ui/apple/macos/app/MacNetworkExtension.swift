@@ -79,7 +79,12 @@ enum MacNetworkExtension {
                 exit(EXIT_FAILURE)
             }
         }
-        dispatchMain()
+        // Network Extension delivers VPN status changes through the main run
+        // loop. Keep that loop alive without registering another window app.
+        RunLoop.main.add(Port(), forMode: .default)
+        RunLoop.main.run()
+        FileHandle.standardError.write(Data("Network Extension command run loop ended before completion\n".utf8))
+        exit(EXIT_FAILURE)
     }
 
     private static func ownedVPN() async throws -> NETunnelProviderManager? {
