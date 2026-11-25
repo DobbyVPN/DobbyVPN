@@ -1149,7 +1149,7 @@ def _smoke_macos(args: argparse.Namespace) -> int:
     installed = args.run_dir / "installed.json"
     _describe(argparse.Namespace(
         platform="macos", arch="universal", version=args.version, source_sha=args.source_sha,
-        package=args.package, output=build, debug=args.debug,
+        package=args.package, output=build,
     ))
     executable = Path("/Applications/Dobby VPN.app/Contents/MacOS/DobbyVPNMacApp")
     if executable.parent.parent.parent.exists():
@@ -1209,6 +1209,7 @@ def _parser() -> argparse.ArgumentParser:
     describe.add_argument("--arch", choices=("amd64", "arm64", "universal"))
     describe.add_argument("--version", required=True)
     describe.add_argument("--source-sha", required=True)
+    describe.add_argument("--debug", action="store_true")
     describe.add_argument("--package", type=Path, required=True)
     describe.add_argument("--output", type=Path, required=True)
     smoke = commands.add_parser("smoke-macos", help="verify native ARM execution of the exact universal package")
@@ -1216,7 +1217,6 @@ def _parser() -> argparse.ArgumentParser:
     smoke.add_argument("--version", required=True)
     smoke.add_argument("--source-sha", required=True)
     smoke.add_argument("--run-dir", type=Path, required=True)
-    smoke.add_argument("--debug", action="store_true")
     install = commands.add_parser("install", help="install the package described by a build result")
     install.add_argument("--build-descriptor", type=Path, required=True)
     install.add_argument("--run-dir", type=Path, required=True)

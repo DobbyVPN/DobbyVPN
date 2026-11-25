@@ -172,13 +172,13 @@ jobs:
           APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
         run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
 
-      - name: Smoke-test the Debug installer on ARM
+      - name: Verify the packaged Debug macOS binaries and symbols
         run: |
           set -euo pipefail
-          python3 .github/scripts/desktop/desktop_package.py smoke-macos --debug \
+          python3 .github/scripts/desktop/desktop_package.py describe --debug --platform macos --arch universal \
             --package "$RUNNER_TEMP/apple-packages/dobbyVPN-macos-universal-debug.pkg" \
             --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
-            --run-dir "$RUNNER_TEMP/macos-package-smoke-debug"
+            --output "$RUNNER_TEMP/macos-debug-package.json"
 
       - name: Upload dobbyVPN-macos-universal-debug.pkg
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
