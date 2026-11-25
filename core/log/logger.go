@@ -171,6 +171,7 @@ func SetPolicy(digest string, policy any) error {
 	if err != nil {
 		return err
 	}
+	data = []byte(redactText(string(data)))
 	initMu.Lock()
 	policyContext = data
 	initMu.Unlock()
@@ -186,6 +187,7 @@ func SetPolicyDetail(key string, value any) error {
 	if err != nil {
 		return err
 	}
+	detail = []byte(redactText(string(detail)))
 	initMu.Lock()
 	retained := make(map[string]json.RawMessage)
 	if len(policyContext) != 0 {
@@ -235,6 +237,8 @@ func writeEventAt(occurredAt time.Time, level slog.Level, event, category, messa
 	if occurredAt.IsZero() {
 		occurredAt = time.Now()
 	}
+	message = redactText(message)
+	arguments = redactArguments(arguments)
 	initMu.Lock()
 	defer initMu.Unlock()
 	if lg.logger == nil {

@@ -11,6 +11,7 @@ import android.util.Base64
 import android.util.Log
 import com.dobby.ui.MainActivity
 import com.dobby.presentation.ConsentLaunchQueue
+import com.dobby.presentation.DiagnosticRedaction
 import com.dobby.presentation.ServiceReadinessQueue
 import com.dobby.presentation.PreparationDelivery
 import java.io.File
@@ -386,9 +387,9 @@ object NativeVpnBridge {
                 .put("source_commit", com.dobby.vpn.BuildConfig.PROJECT_REPOSITORY_COMMIT)
                 .put("build_configuration", com.dobby.vpn.BuildConfig.BUILD_TYPE)
                 .put("event", event)
-                .put("message", message)
+                .put("message", DiagnosticRedaction.redact(message))
                 .apply {
-                    if (failure != null) put("error_detail", stackTrace(failure))
+                    if (failure != null) put("error_detail", DiagnosticRedaction.redact(stackTrace(failure)))
                 }
                 .toString()
             if (serviceRecord) {
