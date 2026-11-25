@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"core/iprange"
 	"core/log"
@@ -41,17 +42,17 @@ func NewServer(ctx context.Context, key string, ref sessionapi.SessionRef, rt se
 	if ref.SessionID == "" || ref.Generation == 0 {
 		return nil, errors.New("missing desktop network generation")
 	}
-	if i, err := os.Lstat(path); err == nil {
+	if i, statErr := os.Lstat(path); statErr == nil {
 		if i.Mode()&os.ModeSocket == 0 {
 			return nil, fmt.Errorf("unexpected object at packet provider socket")
 		}
-		if err := os.Remove(path); err != nil {
-			return nil, err
+		if removeErr := os.Remove(path); removeErr != nil {
+			return nil, removeErr
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, statErr
 	}
-	l, err := net.Listen("unix", path)
+	l, err := (&net.ListenConfig{}).Listen(ctx, "unix", path)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +68,7 @@ func NewServer(ctx context.Context, key string, ref sessionapi.SessionRef, rt se
 	lifetime, cancel := context.WithCancel(context.Background())
 	s := &Server{session: ref.SessionID, instance: hex.EncodeToString(nonce[:]), runtime: rt,
 		network: network, cancel: cancel, listener: l}
-	s.http = &http.Server{Handler: http.HandlerFunc(s.handle), BaseContext: func(net.Listener) context.Context { return lifetime }}
+	s.http = &http.Server{Handler: http.HandlerFunc(s.handle), ReadHeaderTimeout: 10 * time.Second, BaseContext: func(net.Listener) context.Context { return lifetime }}
 	go func() {
 		if err := s.http.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Errorf("MacPacketProvider", "Local runtime server: %v", err)
@@ -129,9 +130,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "packet provider restarted", http.StatusConflict)
 		return
 	}
-	var health <-chan error
 	s.mu.Lock()
-	err := s.executeLocked(r.Context(), op, &health)
+	health, err := s.executeLocked(r.Context(), op)
 	s.mu.Unlock()
 	if health != nil && err == nil {
 		select {
@@ -148,18 +148,19 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Set("Dobby-Failure", string(sessionapi.CodeOf(err)))
 		http.Error(w, err.Error(), http.StatusConflict)
+		return
 	}
 }
 
-func (s *Server) executeLocked(ctx context.Context, op operation, health *<-chan error) error {
+func (s *Server) executeLocked(ctx context.Context, op operation) (<-chan error, error) {
 	gen := op.Ref.Generation
 	if gen == 0 {
-		return errors.New("missing protocol generation")
+		return nil, errors.New("missing protocol generation")
 	}
 	switch op.Action {
 	case "start":
 		if gen <= s.generation || s.attempt != nil {
-			return errors.New("overlapping or retired protocol generation")
+			return nil, errors.New("overlapping or retired protocol generation")
 		}
 		s.generation = gen
 		profile := sessionapi.RuntimeProfile{Summary: op.Summary, Config: op.Config,
@@ -174,35 +175,34 @@ func (s *Server) executeLocked(ctx context.Context, op operation, health *<-chan
 			cancel()
 			s.attemptCancel = nil
 		}
-		return err
+		return nil, err
 	case "stop":
 		if gen < s.generation {
-			return nil
+			return nil, nil
 		}
 		if gen > s.generation && s.attempt != nil {
-			return errors.New("another protocol generation owns the network")
+			return nil, errors.New("another protocol generation owns the network")
 		}
 		// A cancellation can arrive before the corresponding start request.
 		s.generation = gen
-		return s.stopAttempt(ctx)
+		return nil, s.stopAttempt(ctx)
 	}
 	if gen != s.generation || s.attempt == nil {
-		return errors.New("protocol generation is no longer active")
+		return nil, errors.New("protocol generation is no longer active")
 	}
 	switch op.Action {
 	case "health":
 		lease, ok := s.attempt.(sessionapi.HealthMonitoringLease)
 		if !ok {
-			return errors.New("protocol health monitor unavailable")
+			return nil, errors.New("protocol health monitor unavailable")
 		}
-		*health = lease.HealthFailures()
-		return nil
+		return lease.HealthFailures(), nil
 	case "probe":
 		if lease, ok := s.attempt.(sessionapi.ProbingLease); ok {
 			lease.ProbeNow(op.Reason)
 		}
-		return nil
+		return nil, nil
 	default:
-		return fmt.Errorf("unknown packet provider operation %q", op.Action)
+		return nil, fmt.Errorf("unknown packet provider operation %q", op.Action)
 	}
 }

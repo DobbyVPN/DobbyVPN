@@ -731,10 +731,7 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	if canRetry(s) {
 		result, err = m.retryLocked(requestCtx, s, target, source != nil)
 		if err == nil {
-			s.restorePrepared = false
-			if restoreEpoch == nil {
-				s.restoreEpoch++
-			}
+			s.acceptStartLocked(restoreEpoch)
 		}
 		s.mu.Unlock()
 		return result, err
@@ -746,10 +743,7 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	if configurationBlocked(s) {
 		result, err = m.replaceLocked(requestCtx, s, target)
 		if err == nil {
-			s.restorePrepared = false
-			if restoreEpoch == nil {
-				s.restoreEpoch++
-			}
+			s.acceptStartLocked(restoreEpoch)
 		}
 		s.mu.Unlock()
 		return result, err
@@ -758,14 +752,11 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 		s.mu.Unlock()
 		return StartResult{}, err
 	}
-	if restoreEpoch == nil {
-		s.restoreEpoch++
-	}
+	s.acceptStartLocked(restoreEpoch)
 	// On macOS the user can retry an unsuccessful first activation with
 	// ordinary internet restored. Retained and restored networks stay guarded.
 	_, rollback := m.protection.(FirstStartProtection)
 	s.rollbackFirstStart = rollback && !s.retainedProtection && restoreEpoch == nil
-	s.restorePrepared = false
 	s.activeInventory = s.loaded
 	// A new direct Start supersedes any stop intent from an earlier completed
 	// switch. While that switch is active, Stop accepts its origin generation
@@ -795,6 +786,14 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	s.mu.Unlock()
 	go m.runStart(ctx, s, generation, target) // #nosec G118 -- generation work intentionally outlives the initiating request and owns its cancel function.
 	return result, nil
+}
+
+// An accepted manual start supersedes any pending automatic restore.
+func (s *session) acceptStartLocked(restoreEpoch *uint64) {
+	s.restorePrepared = false
+	if restoreEpoch == nil {
+		s.restoreEpoch++
+	}
 }
 
 func validateStartTarget(s *session, target StartTarget) error {
