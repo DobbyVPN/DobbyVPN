@@ -81,11 +81,10 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		protected_dialer.SetLinuxSocketMark(0)
 		return nil
 	})
-	guard, err := plan.AcquireLinuxOutputGuard(ctx, config.TunDeviceName, config.RoutingTableID)
+	_, err = plan.AcquireLinuxOutputGuard(ctx, config.TunDeviceName, config.RoutingTableID)
 	if err != nil {
 		return fail(err)
 	}
-	app.Guard = guard
 	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
 		return captureLinuxResolver(queryCtx, config.TunDeviceName, config.RoutingTableID)
 	}

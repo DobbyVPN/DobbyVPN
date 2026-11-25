@@ -163,7 +163,8 @@ Subscriptions use TOML. The CLI also accepts TOML files and inline configuration
 HTTP URLs are rejected, redirects must remain HTTPS, and downloaded or inline
 configuration is limited to 1 MiB. Add each connection variant in an ordered
 `[[Outline]]`, `[[Xray]]`, or `[[TrustTunnel]]` section. The optional root
-`[ExcludeIPs]` section bypasses the VPN for the destinations in its `IPs` list.
+`[ExcludeIPs]` section bypasses the VPN for connections you open to destinations in its `IPs` list.
+Listing a peer leaves the policy for incoming connections from that peer unchanged.
 An optional `logs_endpoint` root setting enables provider log uploads. Place it before the first table, including when piping the subscription to `dobby-cli configure -`. Other root sections or keys are rejected. TrustTunnel
 certificate verification is required, so keep `skip_verification = false`
 (or omit it). This setting is valid only inside `[TrustTunnel.endpoint]`; a

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"net"
 	"net/netip"
 	"os"
 	"os/user"
@@ -17,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"core/iprange"
 	"core/log"
 
 	"github.com/google/nftables"
@@ -39,15 +37,8 @@ type LinuxOutputGuard struct {
 
 	dhcpUIDs []uint32
 
-	excluded4       *nftables.Set
-	excluded6       *nftables.Set
-	excludedHash    string
 	created, closed bool
 }
-
-// excludedSetChunk keeps one element list well below the 64 KiB netlink
-// attribute limit.
-const excludedSetChunk = 1024
 
 func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark int) (*LinuxOutputGuard, error) {
 	linuxGuardLifetime.Lock()
@@ -102,13 +93,14 @@ func (p *Plan) AcquireLinuxOutputGuard(ctx context.Context, tunName string, mark
 			g.conn.DelTable(existing)
 		}
 		g.conn.CreateTable(g.table)
-		// Excluded addresses are interval sets, so one rule per family matches
-		// any number of ranges and a change replaces only the set elements.
-		g.excluded4 = &nftables.Set{Table: g.table, Name: "excluded4", KeyType: nftables.TypeIPAddr, Interval: true}
-		g.excluded6 = &nftables.Set{Table: g.table, Name: "excluded6", KeyType: nftables.TypeIP6Addr, Interval: true}
-		for _, set := range []*nftables.Set{g.excluded4, g.excluded6} {
-			if setErr := g.conn.AddSet(set, nil); setErr != nil {
-				return setErr
+		// Released clients validate these two sets before recovering a retained
+		// table on downgrade. Keep the schema but never populate or match them.
+		for _, set := range []*nftables.Set{
+			{Table: g.table, Name: "excluded4", KeyType: nftables.TypeIPAddr, Interval: true},
+			{Table: g.table, Name: "excluded6", KeyType: nftables.TypeIP6Addr, Interval: true},
+		} {
+			if err := g.conn.AddSet(set, nil); err != nil {
+				return err
 			}
 		}
 		priority := nftables.ChainPriorityMangle
@@ -199,88 +191,6 @@ func matchIP(ip netip.Addr, source bool) []expr.Any {
 	return []expr.Any{&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{family}}, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: offset, Len: length}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ip.AsSlice()}}
 }
 
-// SetExcluded lets packets of already established connections to the excluded
-// addresses (replies to inbound connections) leave outside the tunnel. New
-// connections keep following the normal path. The sets are replaced as a
-// whole in one transaction, only when the configured ranges or the resolved
-// host addresses changed.
-func (g *LinuxOutputGuard) SetExcluded(ctx context.Context, configured, hosts *iprange.Set) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.closed {
-		return errors.New("output guard is closed")
-	}
-	hash := configured.Hash() + hosts.Hash()
-	if hash == g.excludedHash {
-		return nil
-	}
-	excluded := configured
-	if hosts.Len() > 0 {
-		// Interval set elements must not overlap, so host addresses are merged
-		// into the ranges; this happens only when the list changed.
-		excluded = iprange.New(append(configured.Ranges(), hosts.Ranges()...))
-	}
-	elements4, elements6 := ExcludedSetElements(excluded)
-	if err := g.growSendBuffer(len(elements4) + len(elements6)); err != nil {
-		return err
-	}
-	return g.operation(ctx, func() error {
-		// A Flush that fails after sending, for example when the context ends
-		// while it waits for the acknowledgement, may still have changed the
-		// sets; forget the cached hash so the next call applies them again.
-		g.excludedHash = ""
-		for _, update := range []struct {
-			set      *nftables.Set
-			elements []nftables.SetElement
-		}{{g.excluded4, elements4}, {g.excluded6, elements6}} {
-			g.conn.FlushSet(update.set)
-			for start := 0; start < len(update.elements); start += excludedSetChunk {
-				if err := g.conn.SetAddElements(update.set, update.elements[start:min(start+excludedSetChunk, len(update.elements))]); err != nil {
-					return err
-				}
-			}
-		}
-		if err := g.conn.Flush(); err != nil {
-			return err
-		}
-		g.excludedHash = hash
-		log.Info(Category, "output guard excluded ranges applied", map[string]any{"ranges": excluded.Len(), "sha256": configured.Hash(), "host_address_ranges": hosts.Len()})
-		return nil
-	})
-}
-
-// ExcludedSetElements encodes merged ranges as nftables interval set
-// elements: the first address, then the address after the last one marked as
-// the interval end. A range that ends at the last address has no end element.
-func ExcludedSetElements(excluded *iprange.Set) (elements4, elements6 []nftables.SetElement) {
-	for _, r := range excluded.Ranges() {
-		elements := &elements6
-		if r.First.Is4() {
-			elements = &elements4
-		}
-		*elements = append(*elements, nftables.SetElement{Key: r.First.AsSlice()})
-		if next := r.Last.Next(); next.IsValid() {
-			*elements = append(*elements, nftables.SetElement{Key: next.AsSlice(), IntervalEnd: true})
-		}
-	}
-	return elements4, elements6
-}
-
-// growSendBuffer makes room for one batch with all set elements; the kernel
-// rejects a netlink message larger than the socket send buffer.
-func (g *LinuxOutputGuard) growSendBuffer(elements int) error {
-	const baseBuffer, bytesPerElement = 256 << 10, 64
-	raw, err := g.socket.SyscallConn()
-	if err != nil {
-		return err
-	}
-	var setErr error
-	controlErr := raw.Control(func(fd uintptr) {
-		setErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, baseBuffer+elements*bytesPerElement)
-	})
-	return errors.Join(controlErr, setErr)
-}
-
 func (g *LinuxOutputGuard) addLinkMaintenanceRules() {
 	// DHCP clients and IPv6 neighbour discovery must maintain the physical
 	// link while all ordinary application packets remain captured/blocked.
@@ -311,24 +221,6 @@ func (g *LinuxOutputGuard) addLinkMaintenanceRules() {
 		matches = append(matches, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{kind}},
 			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 7, Len: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{255}})
 		g.markTraffic(matches)
-	}
-	g.markTraffic(matchEstablishedTo(unix.NFPROTO_IPV4, g.excluded4))
-	g.markTraffic(matchEstablishedTo(unix.NFPROTO_IPV6, g.excluded6))
-}
-
-func matchEstablishedTo(family byte, set *nftables.Set) []expr.Any {
-	offset, length := uint32(24), uint32(net.IPv6len)
-	if family == unix.NFPROTO_IPV4 {
-		offset, length = 16, net.IPv4len
-	}
-	state := native32(expr.CtStateBitESTABLISHED | expr.CtStateBitRELATED)
-	return []expr.Any{
-		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{family}},
-		&expr.Ct{Key: expr.CtKeySTATE, Register: 1},
-		&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: state, Xor: make([]byte, 4)},
-		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: make([]byte, 4)},
-		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: offset, Len: length},
-		&expr.Lookup{SourceRegister: 1, SetName: set.Name, SetID: set.ID},
 	}
 }
 
