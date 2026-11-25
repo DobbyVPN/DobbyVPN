@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"core/dnscache"
+	"core/log"
 	"core/routing"
 	"core/sessionapi"
 	"core/tunnel"
@@ -43,7 +44,15 @@ func (c *packetFlowCore) Connect(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	protected_dialer.SetPhysicalInterfaces(c.physical.IPv4, c.physical.IPv6)
+	// A LAN can have reachable IPv6 peers without advertising an IPv6
+	// default router. Pin those sockets to the captured physical uplink.
+	// The kernel still requires a route on that interface.
+	ipv6SocketInterface := c.physical.IPv6
+	if ipv6SocketInterface == 0 && c.physical.IPv4 > 0 {
+		ipv6SocketInterface = c.physical.IPv4
+		log.Infof(nativeLogCategory, "No physical IPv6 default service; binding IPv6 sockets to physical interface %d", ipv6SocketInterface)
+	}
+	protected_dialer.SetPhysicalInterfaces(c.physical.IPv4, ipv6SocketInterface)
 	var err error
 	c.Engine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{PacketFlow: c.device})
 	return err

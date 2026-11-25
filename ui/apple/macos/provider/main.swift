@@ -8,6 +8,7 @@ private struct FlowSettings: Decodable {
     let IPv4: String
     let Mask: String
     let IPv6: String
+    let IPv6PrefixLength: Int
     let DNS: [String]
     let MTU: Int
 }
@@ -93,7 +94,7 @@ final class PacketTunnel: NEPacketTunnelProvider {
                 let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
                 let ipv4 = NEIPv4Settings(addresses: [spec.IPv4], subnetMasks: [spec.Mask])
                 ipv4.includedRoutes = [.default()]
-                let ipv6 = NEIPv6Settings(addresses: [spec.IPv6], networkPrefixLengths: [120])
+                let ipv6 = NEIPv6Settings(addresses: [spec.IPv6], networkPrefixLengths: [NSNumber(value: spec.IPv6PrefixLength)])
                 ipv6.includedRoutes = [.default()]
                 let dns = NEDNSSettings(servers: spec.DNS)
                 dns.matchDomains = [""]

@@ -126,7 +126,7 @@ func DobbyProviderRoutesReady() *C.char {
 			}
 			ip := prefix.Addr().String()
 			has4 = has4 || ip == v4.Local
-			has6 = has6 || ip == v6.Local
+			has6 = has6 || (ip == v6.Local && prefix.Bits() == platform_engine.MacOSIPv6PrefixLength)
 		}
 		if has4 && has6 {
 			if name != "" {
@@ -156,9 +156,10 @@ func DobbyProviderSettings() *C.char {
 	v4, v6 := platform_engine.MacOSTunnelAddresses()
 	settings := struct {
 		IPv4, Mask, IPv6 string
+		IPv6PrefixLength int
 		DNS              []string
 		MTU              int
-	}{v4.Local, v4.Mask, v6.Local, common.VPNDNSServers(), platform_engine.TunnelMTU}
+	}{v4.Local, v4.Mask, v6.Local, platform_engine.MacOSIPv6PrefixLength, common.VPNDNSServers(), platform_engine.TunnelMTU}
 	data, _ := json.Marshal(settings)
 	return C.CString(string(data))
 }
