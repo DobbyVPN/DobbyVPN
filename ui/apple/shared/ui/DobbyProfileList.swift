@@ -63,17 +63,27 @@ struct DobbyProfileList: View {
                 }
                 .accessibilityIdentifier("Profile list viewport")
                 .onPreferenceChange(RowHeight.self) { rowHeight = $0 }
+                .background(GeometryReader { _ in
+                    Color.clear.preference(key: TrayCardHeight.self, value: 0)
+                })
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: pt(14)))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("connection.tray")
     }
 
+    /// Notices keep their own ideal height: the card frame grows to it instead of capping the
+    /// card below its fixed content, which used to paint the notice over the controls above.
     private func scrollableNotice<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         let notice = content()
         return GeometryReader { tray in
             ScrollView {
                 notice
                     .fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { noticeGeometry in
+                        Color.clear.preference(key: TrayCardHeight.self, value: noticeGeometry.size.height)
+                    })
                     .frame(maxWidth: .infinity, minHeight: tray.size.height)
             }
         }
@@ -153,6 +163,12 @@ private struct ConnectionButton: View {
 }
 
 private struct RowHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// The fixed notice's ideal height, published so the tray frame never sits below its own content.
+struct TrayCardHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
