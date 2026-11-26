@@ -56,6 +56,14 @@ TOOL_ASSETS = {
         "member": "swiftlint",
         "platform": "darwin",
     },
+    "pmd": {
+        "version": "7.29.0",
+        "url": "https://github.com/pmd/pmd/releases/download/pmd_releases%2F7.29.0/pmd-dist-7.29.0-bin.zip",
+        "sha256": "d27177c185b837fa57f097e482d1253468aa035379c5eb2671fa0a279109b179",
+        "archive": "zip",
+        "member": "pmd",
+        "platform": "linux",
+    },
     "trivy": {
         "version": "0.71.2",
         "url": "https://github.com/aquasecurity/trivy/releases/download/v0.71.2/trivy_0.71.2_Linux-64bit.tar.gz",
@@ -277,12 +285,18 @@ class Tools:
     def __init__(self, temp_root: Path):
         self.root = temp_root
 
-    def get(self, name: str) -> Path:
+    def fetch(self, name: str) -> Path:
+        """Download a pinned tool archive and verify its digest."""
         spec = TOOL_ASSETS[name]
         require_platform(spec["platform"])
         archive = self.root / f"{name}.{spec['archive']}"
         download(spec["url"], archive, spec["sha256"])
         verify_sha256(archive, spec["sha256"])
+        return archive
+
+    def get(self, name: str) -> Path:
+        spec = TOOL_ASSETS[name]
+        archive = self.fetch(name)
         executable = extract_executable(archive, self.root / f"{name}-unpacked", spec["archive"], spec["member"])
         if not executable.is_file():
             raise CheckError(f"pinned {name} executable was not extracted")
@@ -358,6 +372,73 @@ def lint_go(tools: Tools) -> None:
         cwd=GO_MODULE,
         env=go_environment(go),
     )
+
+
+# Keep equal to linters.settings.dupl.threshold in core/.golangci.yml.
+CPD_MINIMUM_TOKENS = 150
+CPD_LANGUAGES = (("Swift", "swift", "*.swift"), ("Kotlin", "kotlin", "*.kt"), ("C#", "cs", "*.cs"))
+SUMMARY_REPORT_LIMIT = 60_000
+
+
+def duplicate_report(tools: Tools, output_dir: Path) -> None:
+    """Report duplicated code. Findings never fail the command; a tool that cannot run does."""
+    require_platform("linux")
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    go = prepare_go_source_checks()
+    go_report = output_dir / "go-dupl.txt"
+    # dupl stays out of linters.enable, so that its findings cannot fail lint-go.
+    run(
+        [
+            str(tools.get("golangci-lint")), "run", "--config", ".golangci.yml", "--enable-only=dupl",
+            "--issues-exit-code=0", f"--output.text.path={go_report}", "--output.text.print-issued-lines=false", "./...",
+        ],
+        cwd=GO_MODULE,
+        env=go_environment(go),
+    )
+    go_text = go_report.read_text(encoding="utf-8") if go_report.is_file() else ""
+    # dupl reports every copy, so one duplicated pair counts as two.
+    results = [("Go (dupl, reported copies)", len(re.findall(r"\(dupl\)$", go_text, re.MULTILINE)), go_text)]
+
+    pmd_root = tools.root / "pmd-unpacked"
+    with zipfile.ZipFile(tools.fetch("pmd")) as distribution:
+        distribution.extractall(pmd_root)
+    spec = TOOL_ASSETS["pmd"]
+    pmd = pmd_root / f"pmd-bin-{spec['version']}" / "bin" / spec["member"]
+    for title, language, pattern in CPD_LANGUAGES:
+        files = tools.root / f"cpd-{language}.files"
+        files.write_text(capture(["git", "ls-files", "--", pattern], emit_stdout=False), encoding="utf-8")
+        report = output_dir / f"{language}-cpd.txt"
+        run([
+            "bash", str(pmd), "cpd", "--language", language, "--minimum-tokens", str(CPD_MINIMUM_TOKENS),
+            "--file-list", str(files), "--format", "text",
+            "--report-file", str(report), "--no-fail-on-violation",
+        ])
+        text = report.read_text(encoding="utf-8").replace(f"{ROOT}{os.sep}", "") if report.is_file() else ""
+        report.write_text(text, encoding="utf-8")
+        results.append((f"{title} (PMD CPD, duplications)", len(re.findall(r"^Found a ", text, re.MULTILINE)), text))
+
+    lines = [
+        "## Duplicate code (report only)", "",
+        f"Duplicates of {CPD_MINIMUM_TOKENS} tokens or more. Findings do not fail CI. "
+        "Go covers the files of the Linux build.", "",
+        "| Check | Findings |", "| --- | ---: |",
+        *(f"| {title} | {count} |" for title, count, _ in results),
+    ]
+    for title, count, text in results:
+        if count:
+            shown = text[:SUMMARY_REPORT_LIMIT]
+            if len(text) > len(shown):
+                shown += "\n[cut here; the artifact has the full report]"
+            lines += ["", f"<details><summary>{title}</summary>", "", "````text", shown, "````", "", "</details>"]
+    summary = "\n".join(lines) + "\n"
+    (output_dir / "summary.md").write_text(summary, encoding="utf-8")
+    if step_summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(step_summary, "a", encoding="utf-8") as stream:
+            stream.write(summary)
+    for title, count, _ in results:
+        log(f"{title}: {count}")
 
 
 def require_android_sdk() -> Path:
@@ -643,23 +724,25 @@ def parse_args() -> argparse.Namespace:
         "check",
         choices=(
             "go-build", "lint-go", "lint-android", "android-security", "lint-swift", "trivy", "security",
-            "actionlint", "cache-clean",
+            "actionlint", "duplicates", "cache-clean",
         ),
     )
     parser.add_argument("--git-repository", type=Path, help="Checkout whose full history TruffleHog scans")
-    parser.add_argument("--output-dir", type=Path, help="Retain Android check reports")
+    parser.add_argument("--output-dir", type=Path, help="Retain check reports")
     parser.add_argument("--require-test-dependencies", action="store_true", help="Require resolved unit/instrumentation test inventories")
     args = parser.parse_args()
     if args.require_test_dependencies and args.check != "lint-android":
         parser.error("--require-test-dependencies requires lint-android")
-    if args.output_dir is not None and args.check not in {"android-security", "lint-android", "trivy"}:
-        parser.error("--output-dir requires an Android check or trivy")
+    if args.output_dir is not None and args.check not in {"android-security", "lint-android", "trivy", "duplicates"}:
+        parser.error("--output-dir requires an Android check, trivy or duplicates")
+    if args.check == "duplicates" and args.output_dir is None:
+        parser.error("duplicates requires --output-dir")
     return args
 
 
 def main() -> int:
     args = parse_args()
-    needs_tools = args.check in {"lint-go", "lint-android", "android-security", "lint-swift", "trivy", "security", "actionlint"}
+    needs_tools = args.check in {"lint-go", "lint-android", "android-security", "lint-swift", "trivy", "security", "actionlint", "duplicates"}
     temporary_tools: tempfile.TemporaryDirectory[str] | None = None
     try:
         tools: Tools | None = None
@@ -690,6 +773,9 @@ def main() -> int:
         elif args.check == "actionlint":
             assert tools is not None
             actionlint(tools)
+        elif args.check == "duplicates":
+            assert tools is not None
+            duplicate_report(tools, args.output_dir)
         elif args.check == "cache-clean":
             clean_caches()
         else:
