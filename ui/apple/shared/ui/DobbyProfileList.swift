@@ -74,7 +74,7 @@ struct DobbyProfileList: View {
     }
 
     /// Notices keep their own ideal height: the card frame grows to it instead of capping the
-    /// card below its fixed content, which used to paint the notice over the on-demand row.
+    /// card below its fixed content, which used to paint the notice over the controls above.
     private func scrollableNotice<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         let notice = content()
         return GeometryReader { tray in
