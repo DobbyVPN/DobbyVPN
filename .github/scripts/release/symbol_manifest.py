@@ -5,7 +5,7 @@ The document this module writes states which exact executable bytes a release
 shipped, which toolchain and build flags produced them, and which symbol files
 belong to them.  A symbol file is only accepted when it matches the shipped
 executable by identity: the Mach-O UUID, the ELF build ID, the PE CodeView
-GUID/age, equal build info, or the same bytes.
+GUID and stamp, equal build info, or the same bytes.
 
 The document carries no credentials, configuration, subscription data or
 traffic payload; it describes build identity only.
@@ -273,7 +273,7 @@ def elf_sections(path: Path) -> dict[str, int]:
 
 
 def pe_debug_identity(path: Path) -> dict[str, Any] | None:
-    """Read the PE CodeView RSDS record: PDB GUID, age and PDB name."""
+    """Read the PE CodeView RSDS record: PDB GUID, age, stamp and PDB name."""
     path = Path(path)
     try:
         data = path.read_bytes()
@@ -321,7 +321,7 @@ def pe_debug_identity(path: Path) -> dict[str, Any] | None:
         entry = file_offset + 28 * index
         if entry + 28 > len(data):
             break
-        (_, _, _, _, debug_type, size_of_data, _, pointer_to_raw) = struct.unpack_from(
+        (_, timestamp, _, _, debug_type, size_of_data, _, pointer_to_raw) = struct.unpack_from(
             "<IIHHIIII", data, entry
         )
         if debug_type != 2 or size_of_data == 0 or pointer_to_raw == 0:
@@ -341,7 +341,9 @@ def pe_debug_identity(path: Path) -> dict[str, Any] | None:
         f"{int.from_bytes(guid_bytes[6:8], 'little'):04X}-"
         f"{guid_bytes[8:10].hex().upper()}-{guid_bytes[10:16].hex().upper()}"
     )
-    return {"guid": guid, "age": age, "pdb_name": name}
+    # For a portable PDB the RSDS age is always 1; the id's stamp is the entry's
+    # TimeDateStamp.
+    return {"guid": guid, "age": age, "timestamp": f"{timestamp:08X}", "pdb_name": name}
 
 
 def pdb_identity(path: Path) -> dict[str, Any] | None:
@@ -349,7 +351,7 @@ def pdb_identity(path: Path) -> dict[str, Any] | None:
 
     A portable PDB starts with the ``BSJB`` metadata signature; its ``#Pdb``
     stream holds the 20-byte id a linker records as the executable's CodeView
-    GUID/age pair. A file that is not a portable PDB returns ``None``.
+    GUID and TimeDateStamp. A file that is not a portable PDB returns ``None``.
     """
     path = Path(path)
     try:
@@ -438,16 +440,18 @@ def match_symbols(symbol_id: dict[str, Any], shipped_id: dict[str, Any]) -> dict
     symbol_pdb = symbol_id.get("pdb_id")
     if shipped_debug and symbol_pdb:
         # Bind on the identity the files actually carry: the PDB's own id must be
-        # the GUID/age pair the executable's CodeView record names, and the names
-        # must agree once both sides are reduced to a file name.
+        # the GUID/stamp pair the executable's CodeView record names — its GUID and
+        # its TimeDateStamp — and the names must agree once both sides are reduced
+        # to a file name.
         pdb_name = symbol_id.get("pdb_name") or symbol_name
         if (
             symbol_pdb.get("guid") == shipped_debug.get("guid")
+            and symbol_pdb.get("stamp") == shipped_debug.get("timestamp")
             and _basename(str(shipped_debug.get("pdb_name") or "")) == _basename(str(pdb_name))
         ):
             return {
                 "kind": "pdb-guid",
-                "value": f"{shipped_debug['guid']}/{shipped_debug['age']}",
+                "value": f"{shipped_debug['guid']}/{symbol_pdb['stamp']}",
             }
     if symbol_id.get("go_buildinfo") and symbol_id["go_buildinfo"] == shipped_id.get("go_buildinfo"):
         return {"kind": "go-buildinfo", "value": json.dumps(symbol_id["go_buildinfo"], sort_keys=True)}
