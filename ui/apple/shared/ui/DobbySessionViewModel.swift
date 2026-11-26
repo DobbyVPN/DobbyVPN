@@ -761,6 +761,7 @@ extension DobbySessionViewModel {
     private var connected: Bool { snapshot.primaryAction == "STOP" }
 
     public var mainActionTitle: String {
+        if vpnPermissionNeeded { return "Allow VPN" }
         if protectedRetryState { return busy ? "Retrying…" : "Retry" }
         if !networkCanBeStopped { return busy ? "Connecting…" : "Auto connect" }
         if snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil { return "Disconnect" }
@@ -768,10 +769,11 @@ extension DobbySessionViewModel {
         return busy ? "Stopping…" : "Stop"
     }
 
-    public var mainActionEnabled: Bool { canRetryActiveSelection || canStop || canAct() }
+    public var mainActionEnabled: Bool { canRetryVPNSetup || canRetryActiveSelection || canStop || canAct() }
 
     public func mainAction() {
-        if protectedRetryState { retryActiveSelection() }
+        if vpnPermissionNeeded { retryVPNSetup() }
+        else if protectedRetryState { retryActiveSelection() }
         else if networkCanBeStopped { stop() }
         else { performPrimaryAction() }
     }
