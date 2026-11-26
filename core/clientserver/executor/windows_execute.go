@@ -69,7 +69,7 @@ func serveDesktopControl(listener net.Listener) (func() error, <-chan error) {
 	startRestore := prepareDesktopRestore(desktopProcessBinding(), releaseUnadoptedKillSwitch)
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, nil)
+		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding(), StreamLogs: captureServiceLogs}, nil)
 	}()
 	startRestore()
 	return listener.Close, serveDone

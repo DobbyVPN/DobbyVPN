@@ -80,8 +80,9 @@ func runLogs(args []string) int {
 	if message := logsArgsError(args); message != "" {
 		return usage(message)
 	}
+	client := dialService()
 	if len(args) == 1 && args[0] == "clear" {
-		return clearApplicationLog()
+		return clearApplicationLog(client)
 	}
 	if len(args) == 1 && args[0] == "upload" {
 		paths, err := diagnosticPaths()
@@ -90,7 +91,7 @@ func runLogs(args []string) int {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := uploadDiagnostics(ctx, dialService(), paths); err != nil {
+		if err := uploadDiagnostics(ctx, client, paths); err != nil {
 			return reportLogsFailure(err, paths[0])
 		}
 		return exitOK
@@ -102,8 +103,10 @@ func runLogs(args []string) int {
 		return reportFailure(err)
 	}
 	if export {
-		flushServiceDiagnostics(dialService())
-		if err := exportDiagnostics(args[1], paths); err != nil {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		flushServiceDiagnostics(client)
+		if err := exportDiagnostics(ctx, client, args[1], paths); err != nil {
 			return reportLogsFailure(err, paths[0])
 		}
 		fmt.Println(args[1])
@@ -121,23 +124,32 @@ func runLogs(args []string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if err := streamDiagnostics(ctx, os.Stdout, paths, follow); err != nil {
+	if err := streamDiagnostics(ctx, client, os.Stdout, paths, follow); err != nil {
 		return reportLogsFailure(err, paths[0])
 	}
 	return exitOK
 }
 
-func permissionHint(err error, backend string) string {
-	absolute, absErr := filepath.Abs(backend)
-	if absErr != nil {
-		return ""
+// serviceLogPaths names the service-owned log files a permission denial may
+// concern, keyed by the path form the capture errors carry.
+func serviceLogPaths(backend string) (map[string]bool, string) {
+	absolute, err := filepath.Abs(backend)
+	if err != nil {
+		return nil, ""
 	}
-	ours := map[string]bool{
+	return map[string]bool{
 		absolute:                              true,
 		absolute + ".lock":                    true,
 		absolute + diagnostics.PreviousSuffix: true,
+	}, absolute
+}
+
+func permissionHint(err error, backend string) string {
+	set, absolute := serviceLogPaths(backend)
+	if set == nil {
+		return ""
 	}
-	if deniedPath(err, ours) {
+	if deniedPath(err, set) {
 		return fmt.Sprintf("dobby-cli: the service log %s is readable only by root; run this command with sudo", absolute)
 	}
 	return ""
@@ -176,11 +188,83 @@ func diagnosticHeader() string {
 	return fmt.Sprintf("DobbyVPN diagnostics\nBuild: %s\nCaptured: %s\n", metadata, time.Now().UTC().Format(time.RFC3339Nano))
 }
 
-func exportDiagnostics(destination string, paths []string) error {
+// diagnosticInputs is one capture of the diagnostics destinations: the files
+// this process may read locally plus the protected service log that the
+// running service serves over its authenticated control socket.
+type diagnosticInputs struct {
+	snapshot *diagnostics.Snapshot
+	remote   []controljson.StreamSegment
+	tail     io.ReadCloser
+}
+
+// close releases the service read. The snapshot's lifecycle belongs to the
+// caller because a follower keeps it open for the next poll.
+func (inputs diagnosticInputs) close() error {
+	if inputs.tail == nil {
+		return nil
+	}
+	return inputs.tail.Close()
+}
+
+// exportInputs orders the export sections as the diagnostics format always
+// has: the service log generations first, then the CLI log.
+func (inputs diagnosticInputs) exportInputs() []diagnostics.ExportInput {
+	ordered := make([]diagnostics.ExportInput, 0, len(inputs.remote)+len(inputs.snapshot.Inputs))
+	for _, segment := range inputs.remote {
+		size := segment.Size - segment.Offset
+		tail := inputs.tail
+		ordered = append(ordered, diagnostics.ExportInput{
+			Path: segment.Path,
+			Size: size,
+			CopyTo: func(output io.Writer) (int64, error) {
+				return io.CopyN(output, tail, size)
+			},
+		})
+	}
+	for _, input := range inputs.snapshot.Inputs {
+		ordered = append(ordered, input.ExportInput())
+	}
+	return ordered
+}
+
+// captureDiagnosticInputs captures every diagnostics destination, routing a
+// protected service log that this process may not read through the running
+// service's control socket. since and metadataOnly pass through to the service
+// read. A declined local read joins with the service failure so the existing
+// permission hint still reports the underlying cause.
+func captureDiagnosticInputs(ctx context.Context, client controljson.Client, paths []string, since map[string]int64, metadataOnly bool) (diagnosticInputs, error) {
+	snapshot, captureErr := diagnostics.Capture(paths)
+	inputs := diagnosticInputs{snapshot: snapshot}
+	set, _ := serviceLogPaths(paths[0])
+	if captureErr == nil || set == nil || !deniedPath(captureErr, set) {
+		return inputs, captureErr
+	}
+	result, tail, callErr := client.CallStream(ctx, controljson.ReadServiceLogsMethod, struct {
+		Since        map[string]int64 `json:"since"`
+		MetadataOnly bool             `json:"metadata_only"`
+	}{since, metadataOnly})
+	if callErr != nil {
+		return inputs, errors.Join(captureErr, callErr)
+	}
+	inputs.remote, inputs.tail = result.Segments, tail
+	return inputs, nil
+}
+
+func exportDiagnostics(ctx context.Context, client controljson.Client, destination string, paths []string) (resultErr error) {
 	if err := applicationlog.Flush(); err != nil {
 		return err
 	}
-	return diagnostics.ExportGzip(destination, paths, diagnosticHeader())
+	inputs, err := captureDiagnosticInputs(ctx, client, paths, nil, false)
+	defer func() {
+		if inputs.snapshot != nil {
+			resultErr = errors.Join(resultErr, inputs.snapshot.Close())
+		}
+		resultErr = errors.Join(resultErr, inputs.close())
+	}()
+	if err != nil {
+		return err
+	}
+	return diagnostics.ExportGzipContext(ctx, destination, inputs.exportInputs(), diagnosticHeader())
 }
 
 // Export remains available with a stopped service or a previous service version.
@@ -199,15 +283,23 @@ func flushServiceDiagnostics(client controljson.Client) {
 
 // Clear stores stable file identities and lengths; it never changes producer
 // bytes. A later process and an existing follower both observe this boundary.
-func saveViewBoundary(paths []string) (resultErr error) {
-	snapshot, err := diagnostics.Capture(paths)
-	defer func() { resultErr = errors.Join(resultErr, snapshot.Close()) }()
+func saveViewBoundary(ctx context.Context, client controljson.Client, paths []string) (resultErr error) {
+	inputs, err := captureDiagnosticInputs(ctx, client, paths, nil, true)
+	defer func() {
+		if inputs.snapshot != nil {
+			resultErr = errors.Join(resultErr, inputs.snapshot.Close())
+		}
+		resultErr = errors.Join(resultErr, inputs.close())
+	}()
 	if err != nil {
 		return err
 	}
-	offsets := make(map[string]int64, len(snapshot.Inputs))
-	for _, input := range snapshot.Inputs {
+	offsets := make(map[string]int64, len(inputs.snapshot.Inputs)+len(inputs.remote))
+	for _, input := range inputs.snapshot.Inputs {
 		offsets[input.ID] = input.Size
+	}
+	for _, segment := range inputs.remote {
+		offsets[segment.ID] = segment.Size
 	}
 	path, err := cliLogPath()
 	if err != nil {
@@ -267,8 +359,15 @@ func (view *logView) close() error {
 	return view.retained.Close()
 }
 
-func (view *logView) copyAvailable(output io.Writer, paths []string, boundary map[string]int64) error {
-	next, captureErr := diagnostics.Capture(paths)
+func (view *logView) copyAvailable(ctx context.Context, client controljson.Client, output io.Writer, paths []string, boundary map[string]int64) error {
+	since := make(map[string]int64, len(view.offsets)+len(boundary))
+	for id, offset := range boundary {
+		since[id] = offset
+	}
+	for id, offset := range view.offsets {
+		since[id] = max(since[id], offset)
+	}
+	next, captureErr := captureDiagnosticInputs(ctx, client, paths, since, false)
 	failures := []error{captureErr}
 	if view.offsets == nil {
 		view.offsets = map[string]int64{}
@@ -287,13 +386,29 @@ func (view *logView) copyAvailable(output io.Writer, paths []string, boundary ma
 		}
 		failures = append(failures, view.retained.Close())
 	}
-	live := make(map[string]int64, len(next.Inputs))
-	for _, input := range next.Inputs {
+	live := make(map[string]int64, len(next.snapshot.Inputs)+len(next.remote))
+	for _, input := range next.snapshot.Inputs {
 		failures = append(failures, view.copyInput(output, input, boundary))
 		live[input.ID] = view.offsets[input.ID]
 	}
-	view.offsets, view.retained = live, next
+	if captureErr == nil {
+		for _, segment := range next.remote {
+			failures = append(failures, view.copyRemote(output, segment, next.tail))
+			live[segment.ID] = view.offsets[segment.ID]
+		}
+	}
+	failures = append(failures, next.close())
+	view.offsets, view.retained = live, next.snapshot
 	return errors.Join(failures...)
+}
+
+func (view *logView) copyRemote(output io.Writer, segment controljson.StreamSegment, tail io.Reader) error {
+	if _, err := fmt.Fprintf(output, "\n--- %s ---\n", segment.Path); err != nil {
+		return err
+	}
+	count, err := io.CopyN(output, tail, segment.Size-segment.Offset)
+	view.offsets[segment.ID] = segment.Offset + count
+	return err
 }
 
 func (view *logView) copyInput(output io.Writer, input diagnostics.Input, boundary map[string]int64) error {
@@ -310,7 +425,7 @@ func (view *logView) copyInput(output io.Writer, input diagnostics.Input, bounda
 	return err
 }
 
-func streamDiagnostics(ctx context.Context, output io.Writer, paths []string, follow bool) (resultErr error) {
+func streamDiagnostics(ctx context.Context, client controljson.Client, output io.Writer, paths []string, follow bool) (resultErr error) {
 	if _, err := io.WriteString(output, diagnosticHeader()); err != nil {
 		return err
 	}
@@ -323,7 +438,7 @@ func streamDiagnostics(ctx context.Context, output io.Writer, paths []string, fo
 		if err != nil {
 			return fmt.Errorf("read log view boundary: %w", err)
 		}
-		if err := view.copyAvailable(output, paths, boundary); err != nil {
+		if err := view.copyAvailable(ctx, client, output, paths, boundary); err != nil {
 			return err
 		}
 		if !follow {
@@ -373,7 +488,17 @@ func uploadLocked(ctx context.Context, client controljson.Client, paths []string
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := diagnostics.ExportGzipContext(ctx, name, paths, diagnosticHeader()); err != nil {
+	inputs, err := captureDiagnosticInputs(ctx, client, paths, nil, false)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if inputs.snapshot != nil {
+			resultErr = errors.Join(resultErr, inputs.snapshot.Close())
+		}
+		resultErr = errors.Join(resultErr, inputs.close())
+	}()
+	if err := diagnostics.ExportGzipContext(ctx, name, inputs.exportInputs(), diagnosticHeader()); err != nil {
 		return fmt.Errorf("create diagnostics archive: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, removeViewTemp(name)) }()

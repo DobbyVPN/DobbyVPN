@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -489,10 +490,12 @@ func applicationLogPath(home string) string {
 	return filepath.Join(home, ".dobbyvpn", "app_logs.txt")
 }
 
-func clearApplicationLog() int {
+func clearApplicationLog(client controljson.Client) int {
 	paths, err := diagnosticPaths()
 	if err == nil {
-		err = saveViewBoundary(paths)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		err = saveViewBoundary(ctx, client, paths)
 	}
 	if err != nil {
 		return reportFailure(fmt.Errorf("clear diagnostic view: %w", err))
