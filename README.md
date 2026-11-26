@@ -348,5 +348,17 @@ supported.
 
 From 1.5.17, the distributed Release and Debug installers use Developer ID signing and Apple notarization. The Debug package includes symbols. For live debugger attachment, use a development-signed build with the debugging entitlement.
 
+## Pull request reviews
+
+Ready (non-draft) pull requests receive an automated review pass once CI checks
+complete:
+
+- **`critic: passed`:** No blocking defects were found on the current head
+  commit. Pushing a new commit clears this label until the updated commit is
+  reviewed.
+- **`critic: needs fixes`:** One or more blocking defects were flagged in the
+  review comment. Pushing fixes triggers a follow-up review that updates the
+  label automatically.
+
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)
