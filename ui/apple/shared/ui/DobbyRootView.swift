@@ -87,9 +87,11 @@ public struct DobbyRootView: View {
     @State private var showingLogMenu = false
     @State private var showingReferenceShare = false
     @State private var rowHeight: CGFloat = 0
+    @State private var trayCardHeight: CGFloat = 0
     @State private var errorDetailHeight: CGFloat = 240
 #if os(iOS)
     @State private var logActionsHeight: CGFloat = 0
+    @State private var columnHeight: CGFloat = 0
 #endif
 
     public init(model: DobbySessionViewModel) {
@@ -99,24 +101,25 @@ public struct DobbyRootView: View {
     public var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                VStack(spacing: pt(8)) {
-                    subscriptionField
-                    if !model.snapshot.offlineAcceptedAt.isEmpty {
-                        Text("Using saved profiles from \(model.snapshot.offlineAcceptedAt)")
-                            .font(.caption)
-                            .accessibilityIdentifier("configuration.offline")
-                    }
-                    if model.vpnPermissionNeeded { vpnPermission }
-                    mainButton
-                    connections
-                        .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))
-                        .padding(.top, pt(8))
+#if os(iOS)
+                // Scroll the controls above a 60-point log floor: when the card cannot fit at
+                // large text sizes the main area scrolls instead of pushing the log pane off
+                // screen or clipping the card.
+                ScrollView {
+                    connectionControlsColumn(height: geometry.size.height)
+                        .background(GeometryReader { content in
+                            Color.clear.preference(key: ColumnHeight.self, value: content.size.height)
+                        })
                 }
-                .padding(.horizontal, pt(12))
-                .padding(.top, pt(8))
-                .padding(.bottom, pt(12))
+                .frame(height: min(columnHeight, max(0, geometry.size.height - pt(60))))
+                .onPreferenceChange(ColumnHeight.self) { columnHeight = $0 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("Connection controls")
+#else
+                connectionControlsColumn(height: geometry.size.height)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("Connection controls")
+#endif
             logs.frame(maxHeight: .infinity)
             }
 #if os(macOS)
@@ -176,6 +179,32 @@ public struct DobbyRootView: View {
             }
         }
 #endif
+    }
+
+    /// Subscription field, connection action, on-demand toggle and the tray above the log pane.
+    private func connectionControlsColumn(height: CGFloat) -> some View {
+        VStack(spacing: pt(8)) {
+            subscriptionField
+            if !model.snapshot.offlineAcceptedAt.isEmpty {
+                Text("Using saved profiles from \(model.snapshot.offlineAcceptedAt)")
+                    .font(.caption)
+                    .accessibilityIdentifier("configuration.offline")
+            }
+            if model.vpnPermissionNeeded { vpnPermission }
+            mainButton
+            connections
+                // The floor is the notice's own ideal height: compression stops there, so a
+                // fixed notice is never drawn outside its frame over the row above or under the
+                // log pane. The cap still follows the four-row / quarter-height policy when it
+                // is the larger of the two.
+                .frame(minHeight: max(pt(72), trayCardHeight),
+                       maxHeight: max(trayHeight(height), trayCardHeight))
+                .onPreferenceChange(TrayCardHeight.self) { trayCardHeight = $0 }
+                .padding(.top, pt(8))
+        }
+        .padding(.horizontal, pt(12))
+        .padding(.top, pt(8))
+        .padding(.bottom, pt(12))
     }
 
     /// Four connections when there is room; on short screens the logs keep a quarter of the height.
@@ -613,6 +642,11 @@ private struct PlainPasteButton: View {
 
 #if os(iOS)
 private struct LogActionsHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct ColumnHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
