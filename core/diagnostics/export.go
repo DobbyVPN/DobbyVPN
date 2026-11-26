@@ -86,30 +86,57 @@ func (input Input) CopyTo(output io.Writer, offset int64) (int64, error) {
 	return count, err
 }
 
-// ExportGzip leaves a complete gzip only after every retained input and the
-// destination close succeed. Missing streams are normal with a stopped backend.
-func ExportGzip(destination string, paths []string, header string) error {
-	return ExportGzipContext(context.Background(), destination, paths, header)
+// ExportInput is one ordered export section: its path label and exactly Size
+// bytes produced by CopyTo when the section is written.
+type ExportInput struct {
+	Path   string
+	Size   int64
+	CopyTo func(io.Writer) (int64, error)
 }
 
-type contextWriter struct {
-	ctx    context.Context
-	writer io.Writer
+// ExportInput converts a captured input into an export section from its start.
+func (input Input) ExportInput() ExportInput {
+	return ExportInput{
+		Path: input.Path,
+		Size: input.Size,
+		CopyTo: func(output io.Writer) (int64, error) {
+			return input.CopyTo(output, 0)
+		},
+	}
 }
 
-func (writer contextWriter) Write(data []byte) (int, error) {
-	if err := writer.ctx.Err(); err != nil {
+// ExportInputs returns the snapshot's sections in capture order.
+func (snapshot *Snapshot) ExportInputs() []ExportInput {
+	inputs := make([]ExportInput, 0, len(snapshot.Inputs))
+	for _, input := range snapshot.Inputs {
+		inputs = append(inputs, input.ExportInput())
+	}
+	return inputs
+}
+
+// ContextWriter stops writes at a chunk boundary once ctx is cancelled.
+type ContextWriter struct {
+	Ctx    context.Context
+	Writer io.Writer
+}
+
+func (writer ContextWriter) Write(data []byte) (int, error) {
+	if err := writer.Ctx.Err(); err != nil {
 		return 0, err
 	}
-	return writer.writer.Write(data)
+	return writer.Writer.Write(data)
+}
+
+// ExportGzip leaves a complete gzip only after every input and the destination
+// close succeed. Missing streams are normal with a stopped backend.
+func ExportGzip(destination string, inputs []ExportInput, header string) error {
+	return ExportGzipContext(context.Background(), destination, inputs, header)
 }
 
 // ExportGzipContext stops copying at a chunk boundary when ctx is cancelled.
-func ExportGzipContext(ctx context.Context, destination string, paths []string, header string) (resultErr error) {
-	snapshot, captureErr := Capture(paths)
+func ExportGzipContext(ctx context.Context, destination string, inputs []ExportInput, header string) (resultErr error) {
 	var output *os.File
 	defer func() {
-		resultErr = errors.Join(resultErr, snapshot.Close())
 		if output != nil {
 			resultErr = errors.Join(resultErr, output.Close())
 			if resultErr != nil {
@@ -117,9 +144,6 @@ func ExportGzipContext(ctx context.Context, destination string, paths []string, 
 			}
 		}
 	}()
-	if captureErr != nil {
-		return captureErr
-	}
 	// O_EXCL refuses existing user files, input files and symlinks.
 	var err error
 	output, err = os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -129,15 +153,15 @@ func ExportGzipContext(ctx context.Context, destination string, paths []string, 
 
 	compressor := gzip.NewWriter(output)
 	defer func() { resultErr = errors.Join(resultErr, compressor.Close()) }()
-	outputWriter := contextWriter{ctx: ctx, writer: compressor}
-	if _, err := io.WriteString(outputWriter, header); err != nil {
+	writer := ContextWriter{Ctx: ctx, Writer: compressor}
+	if _, err := io.WriteString(writer, header); err != nil {
 		return err
 	}
-	for _, input := range snapshot.Inputs {
-		if _, err := fmt.Fprintf(outputWriter, "\n--- %s ---\n", input.Path); err != nil {
+	for _, input := range inputs {
+		if _, err := fmt.Fprintf(writer, "\n--- %s ---\n", input.Path); err != nil {
 			return err
 		}
-		if _, err := input.CopyTo(outputWriter, 0); err != nil {
+		if _, err := input.CopyTo(writer); err != nil {
 			return err
 		}
 	}
