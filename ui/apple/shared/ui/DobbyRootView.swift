@@ -92,6 +92,7 @@ public struct DobbyRootView: View {
 #if os(iOS)
     @State private var logActionsHeight: CGFloat = 0
     @State private var columnHeight: CGFloat = 0
+    @State private var logMenuHeight: CGFloat = 0
 #endif
 
     public init(model: DobbySessionViewModel) {
@@ -102,16 +103,17 @@ public struct DobbyRootView: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
 #if os(iOS)
-                // Scroll the controls above a 60-point log floor: when the card cannot fit at
-                // large text sizes the main area scrolls instead of pushing the log pane off
-                // screen or clipping the card.
+                // Scroll the controls above the log pane's own minimum: the pane keeps its
+                // border, the open log menu and 60 points of log content, so an open menu can
+                // never push the log view off screen when the column is capped at large text
+                // sizes.
                 ScrollView {
                     connectionControlsColumn(height: geometry.size.height)
                         .background(GeometryReader { content in
                             Color.clear.preference(key: ColumnHeight.self, value: content.size.height)
                         })
                 }
-                .frame(height: min(columnHeight, max(0, geometry.size.height - pt(60))))
+                .frame(height: min(columnHeight, max(0, geometry.size.height - (1.5 + logMenuHeight + pt(60)))))
                 .onPreferenceChange(ColumnHeight.self) { columnHeight = $0 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("Connection controls")
@@ -121,6 +123,9 @@ public struct DobbyRootView: View {
                     .accessibilityIdentifier("Connection controls")
 #endif
             logs.frame(maxHeight: .infinity)
+#if os(iOS)
+                .onPreferenceChange(LogMenuHeight.self) { logMenuHeight = $0 }
+#endif
             }
 #if os(macOS)
             // On macOS the window can be stretched arbitrarily wide; let the content follow it
@@ -404,7 +409,16 @@ public struct DobbyRootView: View {
                         Spacer()
                         Button("Send logs") { showingLogMenu = false; sendLogs() }.accessibilityIdentifier("logs.share")
                     }
-                }.padding().background(Color.surface)
+                }
+                .padding()
+                .background(Color.surface)
+                .background(GeometryReader { menu in
+                    Color.clear.preference(key: LogMenuHeight.self, value: menu.size.height)
+                })
+            } else {
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .preference(key: LogMenuHeight.self, value: 0)
             }
             GeometryReader { geometry in
                 VStack(spacing: 0) {
@@ -647,6 +661,11 @@ private struct LogActionsHeight: PreferenceKey {
 }
 
 private struct ColumnHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct LogMenuHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
