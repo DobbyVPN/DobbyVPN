@@ -108,7 +108,10 @@ func controlFailure(fields map[string]any, phase string, err error) {
 	}
 }
 
-type Handler struct{ Binding *mobilebinding.Binding }
+type Handler struct {
+	Binding    *mobilebinding.Binding
+	StreamLogs StreamLogsFunc
+}
 
 func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 	var diagnosticFields map[string]any
@@ -151,6 +154,9 @@ func (h Handler) ServeConn(conn net.Conn) (resultErr error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if request.Method == ReadServiceLogsMethod {
+		return h.serveReadServiceLogs(conn, ctx, request)
+	}
 	id := requestIdentity(request.RequestID)
 	fields := requestFields(id, request.Method, request.Params)
 	diagnosticFields = fields

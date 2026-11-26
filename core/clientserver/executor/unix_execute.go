@@ -161,7 +161,7 @@ func run() {
 	startRestore := prepareDesktopRestore(desktopProcessBinding(), releaseUnadoptedKillSwitch)
 	serveDone := make(chan error, 1)
 	go func() {
-		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, controlplane.AuthenticateLocalPeer)
+		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding(), StreamLogs: captureServiceLogs}, controlplane.AuthenticateLocalPeer)
 	}()
 	log.Debugf(desktopLogCategory, "desktop JSON control socket ready at %s", controlPath)
 	startRestore()
