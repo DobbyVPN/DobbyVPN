@@ -380,51 +380,87 @@ CPD_LANGUAGES = (("Swift", "swift", "*.swift"), ("Kotlin", "kotlin", "*.kt"), ("
 SUMMARY_REPORT_LIMIT = 60_000
 
 
-def duplicate_report(tools: Tools, output_dir: Path) -> None:
-    """Report duplicated code. Findings never fail the command; a tool that cannot run does."""
-    require_platform("linux")
-    output_dir = output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
+def go_duplicates(tools: Tools, report: Path) -> str:
     go = prepare_go_source_checks()
-    go_report = output_dir / "go-dupl.txt"
     # dupl stays out of linters.enable, so that its findings cannot fail lint-go.
     run(
         [
             str(tools.get("golangci-lint")), "run", "--config", ".golangci.yml", "--enable-only=dupl",
-            "--issues-exit-code=0", f"--output.text.path={go_report}", "--output.text.print-issued-lines=false", "./...",
+            "--issues-exit-code=0", f"--output.text.path={report}", "--output.text.print-issued-lines=false", "./...",
         ],
         cwd=GO_MODULE,
         env=go_environment(go),
     )
-    go_text = go_report.read_text(encoding="utf-8") if go_report.is_file() else ""
-    # dupl reports every copy, so one duplicated pair counts as two.
-    results = [("Go (dupl, reported copies)", len(re.findall(r"\(dupl\)$", go_text, re.MULTILINE)), go_text)]
+    return report.read_text(encoding="utf-8")
 
+
+def prepare_pmd(tools: Tools) -> Path:
     pmd_root = tools.root / "pmd-unpacked"
     with zipfile.ZipFile(tools.fetch("pmd")) as distribution:
         distribution.extractall(pmd_root)
     spec = TOOL_ASSETS["pmd"]
-    pmd = pmd_root / f"pmd-bin-{spec['version']}" / "bin" / spec["member"]
-    for title, language, pattern in CPD_LANGUAGES:
-        files = tools.root / f"cpd-{language}.files"
-        files.write_text(capture(["git", "ls-files", "--", pattern], emit_stdout=False), encoding="utf-8")
-        report = output_dir / f"{language}-cpd.txt"
-        run([
-            "bash", str(pmd), "cpd", "--language", language, "--minimum-tokens", str(CPD_MINIMUM_TOKENS),
-            "--file-list", str(files), "--format", "text",
-            "--report-file", str(report), "--no-fail-on-violation",
-        ])
-        text = report.read_text(encoding="utf-8").replace(f"{ROOT}{os.sep}", "") if report.is_file() else ""
-        report.write_text(text, encoding="utf-8")
-        results.append((f"{title} (PMD CPD, duplications)", len(re.findall(r"^Found a ", text, re.MULTILINE)), text))
+    return pmd_root / f"pmd-bin-{spec['version']}" / "bin" / spec["member"]
 
+
+def cpd_duplicates(tools: Tools, pmd: Path, language: str, pattern: str, report: Path) -> str:
+    files = tools.root / f"cpd-{language}.files"
+    files.write_text(capture(["git", "ls-files", "--", pattern], emit_stdout=False), encoding="utf-8")
+    run([
+        "bash", str(pmd), "cpd", "--language", language, "--minimum-tokens", str(CPD_MINIMUM_TOKENS),
+        "--file-list", str(files), "--format", "text",
+        "--report-file", str(report), "--no-fail-on-violation",
+    ])
+    text = report.read_text(encoding="utf-8").replace(f"{ROOT}{os.sep}", "")
+    report.write_text(text, encoding="utf-8")
+    return text
+
+
+def attempt(analysis):
+    """Run one step of the report; return (value, None), or (None, why it did not run)."""
+    try:
+        return analysis(), None
+    except SystemExit as error:  # run() and capture() exit with the status of a failed command
+        return None, f"a command exited with status {error.code} (see the job log)"
+    except Exception as error:
+        return None, " ".join(f"{type(error).__name__}: {error}".split()).replace("|", "/")
+
+
+def duplicate_report(tools: Tools, output_dir: Path) -> None:
+    """Report duplicated code. Neither findings nor a tool that cannot run fail the command.
+
+    Every analysis runs whatever happened to the others. The summary shows for each one its
+    number of findings or why it did not run.
+    """
+    require_platform("linux")
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results: list[tuple[str, int | None, str]] = []  # title, findings (None: did not run), report or reason
+
+    def record(title: str, finding: str, analysis) -> None:
+        text, reason = attempt(analysis)
+        if reason is None:
+            results.append((title, len(re.findall(finding, text, re.MULTILINE)), text))
+        else:
+            results.append((title, None, reason))
+
+    # dupl reports every copy, so one duplicated pair counts as two.
+    record("Go (dupl, reported copies)", r"\(dupl\)$", lambda: go_duplicates(tools, output_dir / "go-dupl.txt"))
+    pmd, pmd_failure = attempt(lambda: prepare_pmd(tools))
+    for title, language, pattern in CPD_LANGUAGES:
+        title = f"{title} (PMD CPD, duplications)"
+        if pmd_failure is None:
+            record(title, r"^Found a ", lambda: cpd_duplicates(
+                tools, pmd, language, pattern, output_dir / f"{language}-cpd.txt"))
+        else:
+            results.append((title, None, f"PMD is unavailable: {pmd_failure}"))
+
+    states = [(title, f"did not run: {text}" if count is None else f"{count} findings") for title, count, text in results]
     lines = [
         "## Duplicate code (report only)", "",
         f"Duplicates of {CPD_MINIMUM_TOKENS} tokens or more. Findings do not fail CI. "
         "Go covers the files of the Linux build.", "",
-        "| Check | Findings |", "| --- | ---: |",
-        *(f"| {title} | {count} |" for title, count, _ in results),
+        "| Check | Result |", "| --- | --- |",
+        *(f"| {title} | {state} |" for title, state in states),
     ]
     for title, count, text in results:
         if count:
@@ -437,8 +473,11 @@ def duplicate_report(tools: Tools, output_dir: Path) -> None:
     if step_summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(step_summary, "a", encoding="utf-8") as stream:
             stream.write(summary)
-    for title, count, _ in results:
-        log(f"{title}: {count}")
+    for title, state in states:
+        log(f"{title}: {state}")
+    for title, count, reason in results:
+        if count is None:
+            print(f"::warning title=Duplicate code report::{title} did not run: {reason}", flush=True)
 
 
 def require_android_sdk() -> Path:
