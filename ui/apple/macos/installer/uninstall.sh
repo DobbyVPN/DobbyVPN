@@ -102,6 +102,7 @@ fi
 
 if [ -n "$owner_uid" ]; then
     if [ -d "$extensions" ]; then
+        echo "Removing DobbyVPN Network Extension preferences and registrations" >&2
         /bin/launchctl asuser "$owner_uid" /usr/bin/sudo -n -H -u "#$owner_uid" \
             "$APP_BUNDLE/Contents/MacOS/DobbyVPNMacApp" --network-extension uninstall
         protection="/Library/Application Support/DobbyVPN/Protection"

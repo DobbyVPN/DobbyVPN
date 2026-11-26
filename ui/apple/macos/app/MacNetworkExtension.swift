@@ -25,6 +25,16 @@ private func hostError(_ message: String) -> NSError {
 @MainActor
 private final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate {
     private var completion: CheckedContinuation<Void, Error>?
+    private var inventoryCompletion: CheckedContinuation<Bool, Error>?
+
+    func requiresDeactivation(_ id: String) async throws -> Bool {
+        let request = OSSystemExtensionRequest.propertiesRequest(forExtensionWithIdentifier: id, queue: .main)
+        request.delegate = self
+        return try await withCheckedThrowingContinuation { continuation in
+            inventoryCompletion = continuation
+            OSSystemExtensionManager.shared.submitRequest(request)
+        }
+    }
 
     func submit(_ id: String, remove: Bool = false) async throws {
         recordPreference("Requesting system extension change", fields: ["identifier": id, "remove": remove])
@@ -51,7 +61,20 @@ private final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
-        Task { @MainActor in completion?.resume(throwing: error); completion = nil }
+        Task { @MainActor in
+            completion?.resume(throwing: error)
+            completion = nil
+            inventoryCompletion?.resume(throwing: error)
+            inventoryCompletion = nil
+        }
+    }
+    nonisolated func request(_ request: OSSystemExtensionRequest, foundProperties properties: [OSSystemExtensionProperties]) {
+        // Completed deactivations can remain listed until the next reboot.
+        let requiresRemoval = properties.contains { !$0.isUninstalling }
+        Task { @MainActor in
+            inventoryCompletion?.resume(returning: requiresRemoval)
+            inventoryCompletion = nil
+        }
     }
 }
 
@@ -254,7 +277,14 @@ enum MacNetworkExtension {
                 try await vpn.removeFromPreferences()
             }
             for id in [protectionID, tunnelID] {
-                do { try await ExtensionRequest().submit(id, remove: true) }
+                do {
+                    let request = ExtensionRequest()
+                    let requiresRemoval = try await request.requiresDeactivation(id)
+                    recordPreference("Checked system extension removal state", fields: [
+                        "identifier": id, "requires_removal": requiresRemoval,
+                    ])
+                    if requiresRemoval { try await request.submit(id, remove: true) }
+                }
                 catch let error as NSError where error.domain == OSSystemExtensionErrorDomain &&
                     error.code == OSSystemExtensionError.Code.extensionNotFound.rawValue { continue }
             }
