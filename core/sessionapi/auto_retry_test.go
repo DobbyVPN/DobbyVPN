@@ -552,3 +552,68 @@ func TestACanceledAttemptDoesNotPublishItsConnection(t *testing.T) {
 		t.Fatal("a canceled completion is not reported as a canceled start")
 	}
 }
+
+// A changed subscription accepted while a failed attempt was still releasing
+// its resources must keep that failure from arming an automatic retry; the
+// same subscription loaded again keeps it eligible.
+func TestAFailureAfterASubscriptionChangeArmsNoAutoRetry(t *testing.T) {
+	runtime := &switchRuntime{err: errors.New("readiness probe failed")}
+	m, timers, id := newRetryManager(t, runtime)
+	startForRetry(t, m, id, StartTarget{Mode: AutoSelect})
+	failed := waitForSnapshot(t, m, id, failedWithRetry)
+	cause := errors.New("readiness probe failed")
+	s := m.session
+	// finish publishes the failure with the cause it selected before the
+	// change; model that publication after the same and a changed Configure.
+	if _, err := m.Configure(context.Background(), id, failed.Sequence, []byte(retryTestConfig)); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	m.scheduleAutoRetryLocked(s, cause)
+	same := !s.autoRetryAt.IsZero()
+	s.mu.Unlock()
+	if !same {
+		t.Fatal("the same subscription loaded again made the failure ineligible for an automatic retry")
+	}
+	snapshot, _ := m.Snapshot(context.Background(), id)
+	changed := retryTestConfig + "[[Outline]]\nServer = 'other.invalid'\nPort = 443\nPassword = 'synthetic'\n\n"
+	if _, err := m.Configure(context.Background(), id, snapshot.Sequence, []byte(changed)); err != nil {
+		t.Fatal(err)
+	}
+	armed := timers.count()
+	s.mu.Lock()
+	m.scheduleAutoRetryLocked(s, cause)
+	at := s.autoRetryAt
+	s.mu.Unlock()
+	if !at.IsZero() || timers.count() != armed {
+		t.Fatalf("a failure published after a subscription change armed an automatic retry at %s", at)
+	}
+}
+
+// A two-profile AUTO_SELECT start fails on its second profile, a later
+// generation than the one the client saw at Start. A delayed Stop for the
+// Start generation still stops the session after an automatic retry began.
+func TestADelayedStopForTheStartGenerationStopsAnAutoRetry(t *testing.T) {
+	runtime := &switchRuntime{err: errors.New("readiness probe failed")}
+	m, timers, id := newRetryManager(t, runtime)
+	twoProfiles := retryTestConfig + "[[Outline]]\nServer = 'second.invalid'\nPort = 443\nPassword = 'synthetic'\n\n"
+	configured, _ := m.Snapshot(context.Background(), id)
+	if _, err := m.Configure(context.Background(), id, configured.Sequence, []byte(twoProfiles)); err != nil {
+		t.Fatal(err)
+	}
+	started := startForRetry(t, m, id, StartTarget{Mode: AutoSelect})
+	failed := waitForSnapshot(t, m, id, failedWithRetry)
+	if failed.Generation <= started.Generation {
+		t.Fatalf("the attempt did not move to a second profile: start %d, failed %d", started.Generation, failed.Generation)
+	}
+	block := make(chan struct{})
+	defer close(block)
+	runtime.setBlock(block)
+	_, fire, _ := timers.last()
+	fire()
+	waitForSnapshot(t, m, id, func(s SnapshotResult) bool { return s.State == StateProbing && s.Generation > failed.Generation })
+	if _, err := m.Stop(context.Background(), id, started.Generation); err != nil {
+		t.Fatalf("a delayed Stop for the Start generation during an automatic retry: %v", err)
+	}
+	waitForSnapshot(t, m, id, func(s SnapshotResult) bool { return s.State == StateIdle })
+}

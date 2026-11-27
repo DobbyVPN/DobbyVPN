@@ -58,10 +58,13 @@ func unfixableCause(err error) bool {
 }
 
 // scheduleAutoRetryLocked arms the next attempt for a session that has just
-// become FAILED with its tunnel kept, after the given cause.
+// become FAILED with its tunnel kept, after the given cause. A subscription
+// that changed after the attempt began, even while its failure was still
+// being cleaned up, arms nothing: a retry would reconnect the replaced one.
 func (m *Manager) scheduleAutoRetryLocked(s *session, cause error) {
 	m.cancelAutoRetryLocked(s)
-	if !canRetry(s) || s.stopRequested || !autoRetryable(s.lastFailure) || unfixableCause(cause) {
+	if !canRetry(s) || s.stopRequested || !autoRetryable(s.lastFailure) || unfixableCause(cause) ||
+		s.loaded.digest != s.activeInventory.digest {
 		return
 	}
 	delay := autoRetryDelay(s.autoRetryCount)
@@ -142,7 +145,12 @@ func (m *Manager) runAutoRetry(s *session, token uint64) {
 	s.autoRetryCount++
 	log.Info("SESSION", "automatic retry started", map[string]any{"attempt": s.autoRetryCount})
 	if s.autoRetryOrigin == 0 {
+		// The client may still hold the generation of the Start or Retry that
+		// failed, earlier than the generation of its last AUTO_SELECT profile.
 		s.autoRetryOrigin = s.generation
+		if s.startOriginGeneration != 0 && s.startOriginGeneration < s.autoRetryOrigin {
+			s.autoRetryOrigin = s.startOriginGeneration
+		}
 	}
 	s.autoRetryGeneration = m.restartFailedLocked(s)
 }
