@@ -65,6 +65,7 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published var uploadStatus = ""
     @Published var uploadError = ""
     @Published var latestUpload: DobbyUploadReference?
+    @Published var uploadResult: DobbyUploadReference?
     private var uploadTask: Task<Void, Never>?
     private var uploadCancellation: DobbyUploadCancellation?
     private let uploadReferenceKey = "DobbyVPN.latestLogUpload"
@@ -626,7 +627,7 @@ extension DobbySessionViewModel {
         recordDiagnostic(message)
     }
 
-    private func recordDiagnostic(
+    func recordDiagnostic(
         _ message: String,
         event: String = "ui.failure",
         level: String = "ERROR"
@@ -709,7 +710,7 @@ extension DobbySessionViewModel {
                 self.uploadStatus = "Uploading logs…"
                 try await uploadDiagnostics(preparation, file: file)
                 let result = DobbyUploadReference(reference: preparation.reference, completed: Date(), provider: preparation.provider)
-                self.latestUpload = result
+                self.finishUpload(result)
                 // The upload already succeeded; failing to save the reference must not be reported as a failed upload.
                 do { try DobbyLatestUploadFile.save(result, forLog: client.uiDiagnosticPath, defaultsKey: self.uploadReferenceKey) }
                 catch { self.recordError("Could not save latest upload reference: \(String(reflecting: error))") }

@@ -79,6 +79,11 @@ public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.sizeCategory) private var sizeCategory
+#if os(macOS)
+    @Environment(\.controlActiveState) private var controlActiveState
+#endif
+    @AccessibilityFocusState private var uploadTitleFocused: Bool
+    @AccessibilityFocusState private var logsFocused: Bool
     @FocusState private var sourceFocused: Bool
     @State private var canPaste = false
     @State private var followingLogs = true
@@ -130,12 +135,20 @@ public struct DobbyRootView: View {
             .frame(maxWidth: .infinity)
 #endif
         }
-        .disabled(showingError || model.vpnSetupExplanationVisible)
-        .accessibilityHidden(showingError || model.vpnSetupExplanationVisible)
+        .disabled(showingError || model.vpnSetupExplanationVisible || showingUploadResult)
+        .accessibilityHidden(showingError || model.vpnSetupExplanationVisible || showingUploadResult)
         .background(Color.paper.ignoresSafeArea().onTapGesture { sourceFocused = false })
         .ignoresSafeArea(.keyboard)
         .overlay { errorPopup }
         .overlay { vpnSetupExplanation }
+        .overlay { uploadResultDialog }
+        .onChange(of: showingUploadResult) { shown in
+            // VoiceOver moves to the result when it appears, after the overlay is in the hierarchy.
+            if shown { DispatchQueue.main.async { uploadTitleFocused = true } }
+        }
+        .onChange(of: model.uploadResult == nil) { closed in
+            if closed { logsFocused = true }
+        }
         .preferredColorScheme(.light)
 #if os(macOS)
         .frame(minWidth: 320, minHeight: 460)
@@ -401,6 +414,12 @@ public struct DobbyRootView: View {
                             .accessibilityIdentifier("logs.upload")
                             .disabled(!model.uploadStatus.isEmpty)
                     }
+                    if let latest = model.latestUpload {
+                        Button { showingLogMenu = false; copyUploadReference(latest.reference) } label: {
+                            Text(latest.menuTitle()).frame(maxWidth: .infinity).contentShape(Rectangle())
+                        }
+                            .accessibilityIdentifier("logs.upload.copy-last")
+                    }
                     HStack {
                         Button("Clear") { showingLogMenu = false; model.clearLogs() }.accessibilityIdentifier("logs.clear")
                         Spacer()
@@ -410,11 +429,11 @@ public struct DobbyRootView: View {
             }
             GeometryReader { geometry in
                 VStack(spacing: 0) {
-                    // Upload history can grow with Dynamic Type.
+                    // Upload progress and errors can grow with Dynamic Type.
                     // Scroll it within the space left after reserving real log
                     // content, rather than pushing the connection controls off screen.
                     ScrollView {
-                        logActions.background(GeometryReader { content in
+                        DobbyUploadLines(model: model).background(GeometryReader { content in
                             Color.clear.preference(key: LogActionsHeight.self, value: content.size.height)
                         })
                     }
@@ -425,49 +444,49 @@ public struct DobbyRootView: View {
                                  onShowMenu: { showingLogMenu.toggle() },
                                  onMenuGestureObservation: model.recordLogMenuGesture, onClear: model.clearLogs)
                         .accessibilityIdentifier("Connection logs")
+                        .accessibilityFocused($logsFocused)
                         .frame(minHeight: pt(60), maxHeight: .infinity)
                 }
             }
             .frame(minHeight: pt(60))
 #else
-            logActions
+            DobbyUploadLines(model: model)
             DobbyLogView(
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
-                interactive: !showingError, onSendLogs: sendLogs, onUploadLogs: model.snapshot.logsUploadAvailable ? { model.startLogsUpload() } : nil, onClear: { followingLogs = true; model.clearLogs() },
+                interactive: !showingError && !showingUploadResult, onSendLogs: sendLogs,
+                onUploadLogs: model.snapshot.logsUploadAvailable ? { model.startLogsUpload() } : nil,
+                lastUpload: model.latestUpload, onCopyLastReference: copyUploadReference,
+                onClear: { followingLogs = true; model.clearLogs() },
                 onReadingPositionRestored: model.recordMacLogRestore,
                 onReadingPositionCaptured: model.recordMacLogCapture,
                 onAccessibilityObservation: model.recordMacLogAccessibility
             )
             .accessibilityIdentifier("Connection logs")
+            .accessibilityFocused($logsFocused)
 #endif
         }
         .background(Color.surface.ignoresSafeArea(edges: .bottom))
     }
 
-    private var logActions: some View {
-        VStack(spacing: 0) {
+    /// Waits behind the other dialogs and while the app is in the background or the window is not focused.
+    private var showingUploadResult: Bool {
+#if os(iOS)
+        let foreground = scenePhase == .active
+#else
+        let foreground = controlActiveState != .inactive
+#endif
+        return model.uploadResultVisible(foreground: foreground)
+    }
 
-            if !model.uploadError.isEmpty {
-                Text(model.uploadError).accessibilityIdentifier("logs.upload.error").padding()
-            }
-            if !model.uploadStatus.isEmpty {
-                HStack {
-                    ProgressView(); Text(model.uploadStatus)
-                    Spacer(); Button("Cancel") { model.cancelLogsUpload() }.accessibilityIdentifier("logs.upload.cancel")
-                }.padding()
-            }
-            if let latest = model.latestUpload {
-                VStack(alignment: .leading) {
-                    Text(latest.reference).textSelection(.enabled).accessibilityIdentifier("logs.upload.reference")
-                    Text("\(latest.completed.formatted()) · \(latest.provider)").font(.caption)
-                    HStack {
-                        Button("Copy reference") { copyUploadReference(latest.reference) }.accessibilityIdentifier("logs.upload.copy")
-                        Button("Share reference") { shareUploadReference(latest.shareText) }.accessibilityIdentifier("logs.upload.share")
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading).padding()
-            }
+    @ViewBuilder
+    private var uploadResultDialog: some View {
+        if showingUploadResult, let result = model.uploadResult {
+            DobbyUploadResultDialog(
+                result: result, stacked: sizeCategory.isAccessibilityCategory, titleFocus: $uploadTitleFocused,
+                copy: { copyUploadReference(result.reference) }, share: { shareUploadReference(result.shareText) },
+                close: model.closeUploadResult
+            )
         }
-        .frame(maxWidth: .infinity)
     }
 
     private func copyUploadReference(_ text: String) {
@@ -669,6 +688,122 @@ private struct LogActionsHeight: PreferenceKey {
 private struct ErrorDetailHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// Upload progress or failure: one line above the logs in the app's text style.
+/// A finished upload opens the result dialog instead, so nothing stays here.
+private struct DobbyUploadLines: View {
+    @ObservedObject var model: DobbySessionViewModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if !model.uploadError.isEmpty {
+                DobbyLogActionLine(text: model.uploadError, textID: "logs.upload.error", action: "Close",
+                                   actionID: "logs.upload.error.close", perform: model.dismissUploadError)
+            }
+            if !model.uploadStatus.isEmpty {
+                DobbyLogActionLine(text: model.uploadStatus, textID: nil, action: "Cancel",
+                                   actionID: "logs.upload.cancel", perform: model.cancelLogsUpload)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// Upload progress or failure above the logs, in the app's text style.
+private struct DobbyLogActionLine: View {
+    let text: String
+    let textID: String?
+    let action: String
+    let actionID: String
+    let perform: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: pt(10)) {
+            Text(text)
+                .dobbyFont(13)
+                .foregroundColor(.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(textID ?? "")
+            Button(action: perform) {
+                Text(action).underline().dobbyFont(12, .semibold).foregroundColor(.ink)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(actionID)
+        }
+        .padding(.horizontal, pt(12))
+        .padding(.vertical, pt(8))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Opens by itself when an upload finishes. The upload address is not shown;
+/// it is in the logs (`ui.logs_upload`).
+private struct DobbyUploadResultDialog: View {
+    let result: DobbyUploadReference
+    let stacked: Bool
+    let titleFocus: AccessibilityFocusState<Bool>.Binding
+    let copy: () -> Void
+    let share: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.32).ignoresSafeArea()
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: pt(10)) {
+                        SockIcon(holey: false).frame(width: pt(26), height: pt(32.5))
+                        Text("Logs uploaded").dobbyFont(18, .semibold).foregroundColor(.ink)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("logs.upload.title")
+                            .accessibilityFocused(titleFocus)
+                    }
+                    Text("Send this number to support")
+                        .dobbyFont(14)
+                        .foregroundColor(.muted)
+                        .padding(.top, pt(8))
+                    Text(result.reference)
+                        .dobbyFont(14, design: .monospaced)
+                        .foregroundColor(.ink)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, pt(10))
+                        .padding(.vertical, pt(8))
+                        .overlay(RoundedRectangle(cornerRadius: pt(6)).stroke(Color.rule, lineWidth: 1))
+                        .padding(.top, pt(10))
+                        .accessibilityIdentifier("logs.upload.reference")
+                    Group {
+                        if stacked {
+                            VStack(spacing: pt(8)) { actions }
+                        } else {
+                            HStack(spacing: pt(8)) { actions }
+                        }
+                    }
+                    .padding(.top, pt(14))
+                }
+                .padding(EdgeInsets(top: pt(16), leading: pt(16), bottom: pt(12), trailing: pt(16)))
+                .background(Color.surface, in: buttonShape)
+                .overlay(buttonShape.stroke(Color.ink, lineWidth: 1.5))
+                .frame(maxWidth: 420)
+                .padding(.horizontal, pt(24))
+                .padding(.vertical, pt(12))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("logs.upload.dialog")
+                .accessibilityAddTraits(.isModal)
+            }
+            .accessibilityIdentifier("logs.upload.dialog.scroll")
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        DialogButton(title: "Copy", filled: true, action: copy).accessibilityIdentifier("logs.upload.copy")
+        DialogButton(title: "Share", filled: false, action: share).accessibilityIdentifier("logs.upload.share")
+        DialogButton(title: "Close", filled: false, action: close).accessibilityIdentifier("logs.upload.close")
+    }
 }
 
 private struct DialogButton: View {

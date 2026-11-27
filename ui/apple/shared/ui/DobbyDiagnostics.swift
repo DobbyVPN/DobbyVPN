@@ -95,6 +95,36 @@ struct DobbyUploadReference: Codable, Sendable {
     let completed: Date
     let provider: String
     var shareText: String { "DobbyVPN logs: \(reference)" }
+
+    /// The logs menu item: "Copy last reference (0192a3b4… · 14:05)", with the date instead of the time when not today.
+    func menuTitle(now: Date = Date(), calendar: Calendar = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = calendar.isDate(completed, inSameDayAs: now) ? "HH:mm" : "d MMM"
+        return "Copy last reference (\(reference.prefix(8))… · \(formatter.string(from: completed)))"
+    }
+}
+
+extension DobbySessionViewModel {
+    /// A confirmed upload: kept for the logs menu, shown once in the result dialog
+    /// (never again after a restart), and logged with its upload address.
+    func finishUpload(_ result: DobbyUploadReference) {
+        latestUpload = result
+        uploadResult = result
+        recordDiagnostic("reference=\(result.reference) address=\(result.provider) " +
+                         "completed=\(ISO8601DateFormatter().string(from: result.completed))",
+                         event: "ui.logs_upload", level: "INFO")
+    }
+
+    func closeUploadResult() { uploadResult = nil }
+    func dismissUploadError() { uploadError = "" }
+
+    /// The result waits behind the error dialog, the import confirmation and the iOS VPN
+    /// setup explanation, and while the app is in the background or its window is not focused.
+    func uploadResultVisible(foreground: Bool) -> Bool {
+        uploadResult != nil && foreground && visibleFailure.isEmpty && pendingImport == nil && !vpnSetupExplanationVisible
+    }
 }
 
 /// The "latest upload" result shared with dobby-cli: `<ui log>.upload`, JSON `{"reference","time","provider"}`
