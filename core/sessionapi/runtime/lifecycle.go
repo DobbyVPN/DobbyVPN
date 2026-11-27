@@ -372,7 +372,7 @@ func (r *runtime) startLocked(ctx context.Context, ref sessionapi.SessionRef, pr
 	var bypass *tunnel.BypassPolicy
 	var err error
 	if r.options.Inputs == nil {
-		bypass, err = tunnel.ResolveBypassPolicyWithResolver(ctx, profile.ExcludeSet, profile.ExcludeHosts, r.network.cache.ResolveAddresses)
+		bypass, err = resolveBypassPolicy(ctx, r.network.cache, profile)
 	} else {
 		bypass, err = r.options.Inputs.Resolve(ctx, profile.ExcludeSet, profile.ExcludeHosts)
 	}
@@ -737,4 +737,12 @@ func connectedHealthTimeout(ctx context.Context) (time.Duration, error) {
 
 func defaultConnectedHealth(ctx context.Context, _ sessionapi.SessionRef, proxyAddr string) error {
 	return measureConnectedHealth(ctx, proxyAddr)
+}
+
+// resolveBypassPolicy resolves the profile's ExcludeIPs. Host names decide
+// what leaves outside the VPN, so they never get a remembered (possibly
+// stale) answer: a name the DNS cannot resolve now is ignored and its traffic
+// stays in the VPN.
+func resolveBypassPolicy(ctx context.Context, cache *dnscache.Cache, profile sessionapi.RuntimeProfile) (*tunnel.BypassPolicy, error) {
+	return tunnel.ResolveBypassPolicyWithResolver(ctx, profile.ExcludeSet, profile.ExcludeHosts, cache.ResolveFreshAddresses)
 }

@@ -159,7 +159,20 @@ func (c *Cache) SetResolver(identity string, resolver Resolver) {
 	log.Infof(Category, "underlying resolver changed network=%s revision=%d", identity, c.revision)
 }
 
+// ResolveAddresses resolves a VPN server endpoint. When the physical
+// network's DNS fails or hangs it may serve the remembered answer (RFC 8767).
 func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return c.resolve(ctx, host, true)
+}
+
+// ResolveFreshAddresses resolves a name whose answer decides what bypasses
+// the VPN (ExcludeIPs host names). It never serves a remembered answer: on a
+// DNS failure it fails, so a stale address cannot be routed outside the VPN.
+func (c *Cache) ResolveFreshAddresses(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return c.resolve(ctx, host, false)
+}
+
+func (c *Cache) resolve(ctx context.Context, host string, allowStale bool) ([]net.IPAddr, error) {
 	parent := ctx
 	if c == nil {
 		return nil, errors.New("underlying resolver is required")
@@ -192,7 +205,7 @@ func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr
 	if resolve == nil {
 		return nil, errors.New("underlying network resolver is unavailable")
 	}
-	if c.hasStaleAnswer(host, revision) {
+	if allowStale && c.hasStaleAnswer(host, revision) {
 		return c.resolveWithStaleAnswer(parent, source, resolve, identity, host, revision)
 	}
 	addresses, _, err := c.lookup(ctx, resolve, identity, host, revision)
