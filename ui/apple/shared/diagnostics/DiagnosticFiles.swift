@@ -323,6 +323,19 @@ public enum DiagnosticFiles {
         public let message: String
         public let raw: String
         public let date: Date?
+
+        public init(
+            id: String, timestamp: String, level: String, source: String,
+            message: String, raw: String, date: Date?
+        ) {
+            self.id = id
+            self.timestamp = timestamp
+            self.level = level
+            self.source = source
+            self.message = message
+            self.raw = raw
+            self.date = date
+        }
     }
 
     private static func identity(_ file: FileHandle) throws -> String {

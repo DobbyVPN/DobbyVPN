@@ -861,16 +861,41 @@ private let logTimeFormat: DateFormatter = {
 
 let logDisplayEntryLimit = 200
 let logDisplayScalarLimit = 32_768
+let logDisplayTruncationMarker = "\n[Display truncated; the complete record stays in the log files and in Send logs.]"
 
-/// The records the log view draws. The full history stays in the log files and
-/// in the `Send logs` export; only the rendered tail is bounded.
+/// The records the log view draws: at most `logDisplayEntryLimit` records and
+/// `logDisplayScalarLimit` message scalars. A newest record longer than the whole
+/// budget is cut on a Character boundary inside the budget and marked. The stored
+/// record and the files are untouched; the full history stays in the log files
+/// and in the `Send logs` export.
 func logDisplayEntries(_ entries: [DobbyLogEntry]) -> [DobbyLogEntry] {
     var kept = Array(entries.suffix(logDisplayEntryLimit))
     var scalars = kept.reduce(0) { $0 + $1.message.unicodeScalars.count }
     while scalars > logDisplayScalarLimit, kept.count > 1 {
         scalars -= kept.removeFirst().message.unicodeScalars.count
     }
+    guard scalars > logDisplayScalarLimit, let newest = kept.last else { return kept }
+    let budget = max(0, logDisplayScalarLimit - logDisplayTruncationMarker.unicodeScalars.count)
+    kept[kept.count - 1] = DobbyLogEntry(
+        id: newest.id, timestamp: newest.timestamp, level: newest.level, source: newest.source,
+        message: logDisplayPrefix(newest.message, scalars: budget) + logDisplayTruncationMarker,
+        raw: newest.raw, date: newest.date
+    )
     return kept
+}
+
+/// The longest Character-aligned prefix of `message` that fits in `budget`
+/// Unicode scalars, so a combining sequence is never split from its base.
+private func logDisplayPrefix(_ message: String, scalars budget: Int) -> String {
+    var used = 0
+    var end = message.startIndex
+    for index in message.indices {
+        let character = message[index]
+        if used + character.unicodeScalars.count > budget { return String(message[..<end]) }
+        used += character.unicodeScalars.count
+        end = message.index(after: index)
+    }
+    return message
 }
 
 func logText(_ entries: [DobbyLogEntry]) -> NSAttributedString {
