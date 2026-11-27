@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/dnscache"
@@ -145,6 +146,9 @@ type runtime struct {
 	active  bool
 	options Options
 	network *networkOwner
+	// cache is the current network's resolver cache, readable without mu: a
+	// network change must reach it while Start holds mu during a DNS lookup.
+	cache atomic.Pointer[dnscache.Cache]
 }
 
 func markCleanupFailure(err error) error {
@@ -163,7 +167,21 @@ type networkOwner struct {
 	lease lease
 }
 
-func (n *networkOwner) Stop(ctx context.Context) error { return n.lease.Stop(ctx) }
+// Stop also ends the cache's background DNS queries, which would otherwise
+// keep using the stopped session's resolver until their timeout.
+func (n *networkOwner) Stop(ctx context.Context) error {
+	n.cache.Close()
+	return n.lease.Stop(ctx)
+}
+
+// NetworkChanged tells the current network's resolver cache that the platform
+// reported a network change, so answers remembered for DNS failures are not
+// reused on what may be another network.
+func (r *runtime) NetworkChanged() {
+	if cache := r.cache.Load(); cache != nil {
+		cache.NetworkChanged()
+	}
+}
 
 func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef, _ sessionapi.RuntimeProfile) (sessionapi.RuntimeLease, error) {
 	r.mu.Lock()
@@ -177,12 +195,14 @@ func (r *runtime) PrepareNetwork(ctx context.Context, ref sessionapi.SessionRef,
 	}
 	n := &networkOwner{ref: ref, cache: dnscache.New()}
 	r.network = n
+	r.cache.Store(n.cache)
 	n.lease.setOnDone(func(error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if r.network == n {
 			r.network = nil
 		}
+		r.cache.CompareAndSwap(n.cache, nil)
 	})
 	// Attempt exclusions are resolved after Connect captures the physical resolver.
 	var err error

@@ -19,7 +19,7 @@ type outlineStreamDialer struct {
 }
 
 func (d outlineStreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
-	conn, err := DialContextWithProtect(withSocketScope(ctx, d.owner), d.dnsCache, "tcp", addr)
+	conn, err := DialContextWithProtect(WithServerEndpoint(withSocketScope(ctx, d.owner)), d.dnsCache, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ type outlinePacketDialer struct {
 }
 
 func (d outlinePacketDialer) DialPacket(ctx context.Context, addr string) (net.Conn, error) {
-	return DialUDPConnWithProtect(withSocketScope(ctx, d.owner), d.dnsCache, "udp", addr)
+	return DialUDPConnWithProtect(WithServerEndpoint(withSocketScope(ctx, d.owner)), d.dnsCache, "udp", addr)
 }
 
 func NewOutlineProviders(owner context.Context, dnsCache *dnscache.Cache, register func(context.Context, net.Conn) error) *configurl.ProviderContainer {

@@ -64,7 +64,7 @@ func resolveOnLink(ctx context.Context, index int32, host string) (addresses []n
 	var canonical string
 	var flags uint64
 	if err := manager.CallWithContext(ctx, "org.freedesktop.resolve1.Manager.ResolveHostname", 0, index, host, int32(unix.AF_UNSPEC), uint64(0)).Store(&records, &canonical, &flags); err != nil {
-		return nil, err
+		return nil, resolvedNegativeAnswer(host, err)
 	}
 	if err := link.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Get", 0, "org.freedesktop.resolve1.Link", "DNS").Store(&after); err != nil {
 		return nil, err
@@ -260,4 +260,15 @@ func openResolvedLink(ctx context.Context, index int32) (*dbus.Conn, dbus.BusObj
 	}
 	object := conn.Object("org.freedesktop.resolve1", path)
 	return conn, object, nil
+}
+
+// resolvedNegativeAnswer turns systemd-resolved's "no such name" and "no such
+// record" errors into a negative answer, so the cache does not replace them
+// with an address remembered for DNS failures.
+func resolvedNegativeAnswer(host string, err error) error {
+	var resolved dbus.Error
+	if errors.As(err, &resolved) && (resolved.Name == "org.freedesktop.resolve1.DnsError.NXDOMAIN" || resolved.Name == "org.freedesktop.resolve1.NoSuchRR") {
+		return &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}
+	return err
 }

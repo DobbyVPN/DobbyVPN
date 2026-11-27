@@ -1058,6 +1058,11 @@ func (m *Manager) NetworkEvent(_ context.Context, sessionID, reason string) erro
 	if len(reason) > 64 {
 		reason = reason[:64]
 	}
+	// A wake or path change may mean another network: endpoint answers kept
+	// for DNS failures must not carry over.
+	if network, ok := m.runtime.(interface{ NetworkChanged() }); ok {
+		network.NetworkChanged()
+	}
 	s.mu.Lock()
 	state, generation := s.state, s.generation
 	if s.offlineRefreshPending && s.attemptCtx != nil && s.vpnActive && state == StateConnected && !s.stopRequested && !s.closing {

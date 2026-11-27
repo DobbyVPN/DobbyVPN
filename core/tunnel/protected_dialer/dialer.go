@@ -129,7 +129,11 @@ func resolvedDialAddresses(ctx context.Context, cache *dnscache.Cache, address s
 	if err != nil {
 		return nil, err
 	}
-	addresses, err := cache.ResolveAddresses(ctx, host)
+	resolve := cache.ResolveAddresses
+	if isServerEndpoint(ctx) {
+		resolve = cache.ResolveServerAddresses
+	}
+	addresses, err := resolve(ctx, host)
 	if err != nil {
 		return nil, err
 	}

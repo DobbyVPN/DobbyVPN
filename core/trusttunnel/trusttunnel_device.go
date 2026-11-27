@@ -60,7 +60,7 @@ func NewTrustTunnelDevice(ctx context.Context, accepted map[string]any, cache *d
 	if !ok {
 		return nil, errors.New("invalid endpoint configuration")
 	}
-	addresses, ip, err := internal.PrepareEndpointAddresses(ctx, endpoint, cache.ResolveAddresses)
+	addresses, ip, err := internal.PrepareEndpointAddresses(ctx, endpoint, cache.ResolveServerAddresses)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare TrustTunnel endpoint addresses: %w", err)
 	}

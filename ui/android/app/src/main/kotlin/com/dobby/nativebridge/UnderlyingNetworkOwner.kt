@@ -164,6 +164,7 @@ internal class UnderlyingNetworkOwner(
             captured
         }
         var addresses: List<InetAddress>? = null
+        var notFound = false
         var error: Throwable? = null
         try {
             check(timeoutMillis > 0) { "DNS deadline expired" }
@@ -171,7 +172,11 @@ internal class UnderlyingNetworkOwner(
                 DnsResolver.getInstance().query(current.network, host, DnsResolver.FLAG_EMPTY,
                     directExecutor, query.signal, object : DnsResolver.Callback<List<InetAddress>> {
                         override fun onAnswer(answer: List<InetAddress>, rcode: Int) {
-                            if (rcode == 0) addresses = answer else error = IllegalStateException("DNS response code $rcode for $host")
+                            // NXDOMAIN is an answer, not a failure: the core must not
+                            // replace it with an address remembered for DNS failures.
+                            if (rcode == 0) addresses = answer
+                            else if (rcode == 3) notFound = true
+                            else error = IllegalStateException("DNS response code $rcode for $host")
                             query.done.countDown()
                         }
                         override fun onError(failure: DnsResolver.DnsException) {
@@ -193,8 +198,9 @@ internal class UnderlyingNetworkOwner(
             synchronized(lock) {
                 check(context() == current) { "Underlying network changed during DNS query" }
             }
+            if (notFound) return JSONObject().put("notFound", true).toString()
+            // An empty answer is passed on as such; the core treats it as negative.
             val answer = checkNotNull(addresses) { "Underlying DNS returned no answer" }
-            check(answer.isNotEmpty()) { "Underlying DNS returned no addresses" }
             return JSONObject().put("addresses", JSONArray(answer.map { it.hostAddress })).toString()
         } finally {
             query.signal.cancel()

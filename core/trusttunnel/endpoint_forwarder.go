@@ -158,7 +158,7 @@ func (f *endpointForwarder) acceptTCP() {
 		go func() {
 			defer f.workers.Done()
 			defer func() { _ = f.release(ownedLocal) }()
-			remote, err := protected_dialer.DialContextWithProtect(f.ctx, f.cache, "tcp", f.address)
+			remote, err := protected_dialer.DialContextWithProtect(protected_dialer.WithServerEndpoint(f.ctx), f.cache, "tcp", f.address)
 			if err != nil {
 				if f.ctx.Err() == nil {
 					log.Warnf("trusttunnel", "endpoint TCP dial failed destination=%s: %v", f.address, err)
@@ -206,7 +206,7 @@ func (f *endpointForwarder) receiveUDP() {
 		remote := f.peers[key]
 		f.mu.Unlock()
 		if remote == nil {
-			dialed, err := protected_dialer.DialUDPConnWithProtect(f.ctx, f.cache, "udp", f.address)
+			dialed, err := protected_dialer.DialUDPConnWithProtect(protected_dialer.WithServerEndpoint(f.ctx), f.cache, "udp", f.address)
 			if err != nil {
 				if f.ctx.Err() == nil {
 					log.Warnf("trusttunnel", "endpoint UDP dial failed destination=%s: %v", f.address, err)
