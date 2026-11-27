@@ -107,6 +107,11 @@ struct DobbyUploadReference: Codable, Sendable {
 }
 
 extension DobbySessionViewModel {
+    func recordLogsShare(kind: String, phase: String, context: String = "") {
+        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
+                         event: "ui.logs_share", level: "INFO")
+    }
+
     /// A confirmed upload: kept for the logs menu, shown once in the result dialog
     /// (never again after a restart), and logged with its upload address.
     func finishUpload(_ result: DobbyUploadReference) {

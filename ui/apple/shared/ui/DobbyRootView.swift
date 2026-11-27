@@ -526,7 +526,9 @@ public struct DobbyRootView: View {
         do { try FileManager.default.removeItem(at: url) } catch { model.reportLogsError(error.localizedDescription) }
         exportedLogsURL = nil
     }
+}
 
+extension DobbyRootView {
     private var showingError: Bool { !model.visibleFailure.isEmpty }
 
     @ViewBuilder

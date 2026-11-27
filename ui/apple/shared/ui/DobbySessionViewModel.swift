@@ -653,11 +653,6 @@ extension DobbySessionViewModel {
             }
         }
     }
-
-    func recordLogsShare(kind: String, phase: String, context: String = "") {
-        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
-                         event: "ui.logs_share", level: "INFO")
-    }
 }
 
 extension DobbySessionViewModel {
