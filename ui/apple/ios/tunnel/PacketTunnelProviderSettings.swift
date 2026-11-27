@@ -62,9 +62,9 @@ extension PacketTunnelProvider {
             let started = DiagnosticFiles.monotonicNow()
             // The OS settings release can block on the system; record that it
             // was entered before calling it, then its outcome after.
-            DiagnosticFiles.stage(
+            logs.writeStage(
                 operation: "os-teardown", stage: "tun-settings-release", role: "ios-tunnel",
-                phase: "begin", attemptID: attempt, to: logs.path)
+                phase: "begin", attemptID: attempt)
             let error = settingsOwner.release(session: sessionID ?? "", generation: generation, timeout: Double(timeoutMillis) / 1000) { completed in
                 self.setTunnelNetworkSettings(nil, completionHandler: completed)
             }
@@ -72,13 +72,12 @@ extension PacketTunnelProvider {
                 networkSession = nil
                 networkGeneration = -1
             }
-            DiagnosticFiles.stage(
+            logs.writeStage(
                 operation: "os-teardown", stage: "tun-settings-release", role: "ios-tunnel",
-                phase: "end", result: error == nil ? "ok" : "error",
-                elapsedMs: DiagnosticFiles.elapsedMs(since: started),
-                attemptID: attempt,
-                extraFields: error.map { ["error": String(reflecting: $0)] } ?? [:],
-                to: logs.path)
+                phase: "end", attemptID: attempt,
+                fields: error.map { ["error": String(reflecting: $0)] } ?? [:],
+                result: error == nil ? "ok" : "error",
+                elapsedMs: DiagnosticFiles.elapsedMs(since: started))
             return tunnelResult(error: error, pending: error != nil)
         }
     }
@@ -262,8 +261,8 @@ extension PacketTunnelProvider {
         // The app's Stop command set the attempt; a stop the OS started keeps
         // the identity of the attempt whose resources are being released.
         let attempt = DiagnosticsAttempt.current
-        DiagnosticFiles.stage(operation: "os-teardown", stage: "teardown", role: "ios-tunnel",
-                              phase: "begin", attemptID: attempt, to: logs.path)
+        logs.writeStage(operation: "os-teardown", stage: "teardown", role: "ios-tunnel",
+                        phase: "begin", attemptID: attempt)
         IOSProviderStopBoundary.perform(
             stopGoSessionAndWait: { DobbyvpnStopSessionAndWait() },
             releasePlatformCallbacks: { callbackBridge = nil },
@@ -277,19 +276,18 @@ extension PacketTunnelProvider {
                     logs.writeLog(level: "ERROR", log: "[tunnel:\(tunnelId)] Go shutdown retains resources: \(failure)")
                 }
                 logs.writeLog(log: "[tunnel:\(tunnelId)] [teardown] end (\(reason)) cleanup_complete=\(failure.isEmpty)")
-                DiagnosticFiles.stage(operation: "os-teardown", stage: "teardown", role: "ios-tunnel",
-                                      phase: "end", result: failure.isEmpty ? "ok" : "failed",
-                                      elapsedMs: DiagnosticFiles.elapsedMs(since: teardownStart), attemptID: attempt, to: logs.path)
+                logs.writeStage(operation: "os-teardown", stage: "teardown", role: "ios-tunnel",
+                                phase: "end", attemptID: attempt,
+                                result: failure.isEmpty ? "ok" : "failed",
+                                elapsedMs: DiagnosticFiles.elapsedMs(since: teardownStart))
                 logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel cleanup wait ended; calling OS completionHandler")
                 completionHandler()
                 logs.writeLog(log: "[tunnel:\(tunnelId)] stopTunnel completionHandler returned")
             },
             recordStage: { stage, phase, result, elapsedMs, extra in
-                // The Go raw-capture monitor owns rotation of this destination.
-                DiagnosticFiles.stage(operation: "os-teardown", stage: stage, role: "ios-tunnel",
-                                      phase: phase, result: result, elapsedMs: elapsedMs,
-                                      attemptID: attempt, extraFields: extra,
-                                      to: self.logs.path, rotating: false)
+                self.logs.writeStage(operation: "os-teardown", stage: stage, role: "ios-tunnel",
+                                     phase: phase, attemptID: attempt, fields: extra,
+                                     result: result, elapsedMs: elapsedMs)
             }
         )
     }

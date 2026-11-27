@@ -169,17 +169,18 @@ public enum DiagnosticFiles {
     /// One lifecycle stage record, mirroring the Go stage shape so one reader
     /// can order records from both processes.
     ///
-    /// Rotation ownership: `rotating` is true where Swift appends to the macOS
-    /// UI log it owns, and false where the Go raw-capture monitor owns rotation
-    /// of the same destination (`OpenAppender` in the product's Go diagnostics)
-    /// — two rotation owners on one file would corrupt its generations. A write
+    /// Rotation ownership: every caller passes `rotating` explicitly — there is
+    /// no default, so a write can never silently claim rotation of a file the Go
+    /// raw-capture monitor owns (`OpenAppender` in the product's Go diagnostics).
+    /// Pass true only where Swift owns the destination (the macOS UI log); two
+    /// rotation owners on one file would corrupt its generations. A write
     /// failure is reported to stderr, which the Go capture retains on iOS, and
     /// returned so a caller never treats a lost record as written.
     @discardableResult
     public static func stage(
         operation: String, stage: String, role: String, phase: String,
         result: String? = nil, elapsedMs: Int? = nil, attemptID: String? = nil,
-        extraFields: [String: Any] = [:], to path: URL, rotating: Bool = true
+        extraFields: [String: Any] = [:], to path: URL, rotating: Bool
     ) -> Bool {
         var fields: [String: Any] = [
             "operation": operation,
