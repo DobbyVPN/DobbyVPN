@@ -171,6 +171,22 @@ public final class DobbySessionViewModel: ObservableObject {
         snapshot.state == "FAILED" && snapshot.vpnActive && snapshot.canRetry && snapshot.primaryAction == "RETRY"
     }
 
+    /// The line next to Retry and Stop while the service reconnects a FAILED
+    /// connection: a countdown to its next automatic attempt, then
+    /// "Reconnecting…" while an attempt after the failure runs. A Retry or the
+    /// automatic attempt keeps the failure until it connects; a fresh Start
+    /// clears it, so that case shows no line.
+    public func reconnectText(now: Date) -> String? {
+        if protectedRetryState, !busy, let next = snapshot.nextRetryAt {
+            let seconds = Int(next.timeIntervalSince(now).rounded(.up))
+            return seconds > 0 ? "Reconnecting in \(seconds) s…" : "Reconnecting…"
+        }
+        if snapshot.vpnActive, snapshot.lastFailure != nil, snapshot.state == "PROBING" || snapshot.state == "PREPARING" {
+            return "Reconnecting…"
+        }
+        return nil
+    }
+
     public var canRetryActiveSelection: Bool {
         !busy && !snapshot.sessionID.isEmpty && protectedRetryState
     }

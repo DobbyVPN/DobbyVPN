@@ -142,6 +142,8 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let pendingTarget: DobbySelection?
     public let canSwitch: Bool
     public let logsUploadAvailable: Bool
+    /// When the service retries a FAILED connection by itself; nil when no attempt is scheduled.
+    public let nextRetryAt: Date?
 
     /// Snapshot schema version this app understands; the Go service sends its own.
     public static let expectedProtocolVersion = 1
@@ -176,6 +178,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         case pendingTarget = "pending_target"
         case canSwitch = "can_switch"
         case logsUploadAvailable = "logs_upload_available"
+        case nextRetryAtUnixMs = "next_retry_at_unix_ms"
     }
 
     public init(from decoder: Decoder) throws {
@@ -213,13 +216,17 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         pendingTarget = try values.decodeIfPresent(DobbySelection.self, forKey: .pendingTarget)
         canSwitch = try values.decode(Bool.self, forKey: .canSwitch)
         logsUploadAvailable = try values.decode(Bool.self, forKey: .logsUploadAvailable)
+        // Older services do not send it; a missing or non-positive value means no scheduled attempt.
+        let nextRetryMs = try values.decodeIfPresent(Int64.self, forKey: .nextRetryAtUnixMs) ?? 0
+        nextRetryAt = nextRetryMs > 0 ? Date(timeIntervalSince1970: TimeInterval(nextRetryMs) / 1000) : nil
     }
 
     public init(
         sessionID: String, sequence: Int64, generation: Int64, state: String, primaryAction: String,
         configured: Bool, sourceURL: String, sourceError: String,
         activeProfile: DobbyProfile?, lastFailure: DobbyFailure?, recovering: Bool,
-        networkGeneration: UInt64 = 0, vpnActive: Bool = false, canRetry: Bool = false
+        networkGeneration: UInt64 = 0, vpnActive: Bool = false, canRetry: Bool = false,
+        nextRetryAt: Date? = nil
     ) {
         self.sessionID = sessionID
         self.sequence = sequence
@@ -244,6 +251,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         pendingTarget = nil
         canSwitch = false
         logsUploadAvailable = false
+        self.nextRetryAt = nextRetryAt
     }
 }
 

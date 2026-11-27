@@ -285,6 +285,7 @@ public struct DobbyRootView: View {
         .accessibilityIdentifier("VPN connection action")
         .accessibilityValue(model.status)
         .keyboardShortcut(.return, modifiers: .command)
+        reconnectLine(identifier: "connection.reconnect")
         if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
             Button("Stop", action: model.stop)
                 .disabled(!model.canStop)
@@ -533,6 +534,7 @@ public struct DobbyRootView: View {
                     .padding(.vertical, pt(8))
                     .overlay(RoundedRectangle(cornerRadius: pt(6)).stroke(Color.rule, lineWidth: 1))
                     .padding(.top, pt(10))
+                    reconnectLine(identifier: "failure.reconnect", top: pt(10))
                     Group {
                         if sizeCategory.isAccessibilityCategory {
                             VStack(spacing: pt(8)) { failureActions(loadFailed: loadFailed) }
@@ -560,6 +562,22 @@ public struct DobbyRootView: View {
                 .accessibilityIdentifier("error.dialog.scroll")
               }
             }
+        }
+    }
+
+    /// "Reconnecting in 15 s…" counting down, or "Reconnecting…", next to Retry
+    /// and Stop while the service reconnects a FAILED connection.
+    @ViewBuilder
+    private func reconnectLine(identifier: String, top: CGFloat = 0) -> some View {
+        if model.reconnectText(now: Date()) != nil {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(model.reconnectText(now: context.date) ?? "")
+                    .dobbyFont(13)
+                    .foregroundColor(.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(identifier)
+            }
+            .padding(.top, top)
         }
     }
 
