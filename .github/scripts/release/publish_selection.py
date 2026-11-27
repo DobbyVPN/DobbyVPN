@@ -33,6 +33,7 @@ ASSET_NAMES = (
     "dobbyVPN-macos-amd64-debug.pkg",
     "DobbyVPN.xcarchive-debug.tar.gz",
     "DobbyVPN-v{version}-debug.apk",
+    "DobbyVPN-v{version}-build-identity.json",
 )
 
 

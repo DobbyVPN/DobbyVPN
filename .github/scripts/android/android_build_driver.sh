@@ -14,6 +14,7 @@ first_output=''
 reproducibility=''
 dependency_manifest=''
 metadata_output=''
+symbols_output=''
 source_repository='DobbyVPN/DobbyVPN'
 local_build=0
 single_build=0
@@ -38,6 +39,7 @@ while (($#)); do
     --reproducibility) reproducibility=${2:?missing --reproducibility value}; release_provenance_requested=1; shift 2 ;;
     --dependency-manifest) dependency_manifest=${2:?missing --dependency-manifest value}; release_provenance_requested=1; shift 2 ;;
     --metadata-output) metadata_output=${2:?missing --metadata-output value}; shift 2 ;;
+    --symbols-output) symbols_output=${2:?missing --symbols-output value}; shift 2 ;;
     --gradle-archive) gradle_archive=$2; shift 2 ;;
     --gradle-root) gradle_root=$2; shift 2 ;;
     --go-binary) go_binary=$2; shift 2 ;;
@@ -359,6 +361,35 @@ python3 "$source_root/.github/scripts/dependency_fetch.py" retry --cwd "$source_
   --init-script "$source_root/.github/scripts/android/resolve_dependencies.gradle" \
   resolveDobbyDependencies --no-daemon --stacktrace
 
+write_symbol_bundle() {
+  local destination=$1
+  local build_root="$source_root/ui/android/app/build"
+  local kept="$build_root/generated/go-symbols/release"
+  local stripped="$build_root/generated/go-libs-stripped/release"
+  local debug_apk="$source_root/runtime/android-release/DobbyVPN-v${version_name}-debug.apk"
+  [[ -d "$kept" ]] || { echo "no unstripped ABI libs at $kept" >&2; exit 1; }
+  [[ -d "$stripped" ]] || { echo "no stripped ABI libs at $stripped" >&2; exit 1; }
+  if [[ ! -f "$debug_apk" ]]; then
+    # The diagnostic variant is built here so the symbol bundle carries its
+    # identity: a variant name without its bytes proves nothing.
+    mkdir -p "$(dirname -- "$debug_apk")"
+    ( cd -- "$source_root"
+      "$gradle_bin" -p ui/android :app:assembleDebug "${gradle_flags[@]}" \
+        -PprojectRepositoryCommit="$source_commit" -PprojectRepositoryCommitLink="$source_commit_link" \
+        -PdobbyGoBinary="$go_bin" \
+        -Pandroid.injected.version.code="$version_code" -Pandroid.injected.version.name="$version_name"
+    )
+    cp -- "$source_root/ui/android/app/build/outputs/apk/debug/app-debug.apk" "$debug_apk"
+  fi
+  python3 "$source_root/.github/scripts/release/symbol_manifest.py" create-android \
+    --product-root "$source_root" \
+    --go-libs "$kept" --stripped-libs "$stripped" \
+    --release-apk "$output" --debug-apk "$debug_apk" \
+    --output "$destination" --version "$version_name" \
+    --source-sha "$source_commit" --source-tree "$source_tree" \
+    --android-version-code "$version_code"
+}
+
 run_unsigned_build() {
   local cache=$1 tmp=$2 destination=$3 built
   export GOCACHE="$cache" GOTMPDIR="$tmp"
@@ -433,6 +464,9 @@ document = {
 manifest = Path(os.environ["METADATA_OUTPUT"])
 manifest.write_text(json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
+  if [[ -n "$symbols_output" ]]; then
+    write_symbol_bundle "$symbols_output"
+  fi
   echo "android_build_driver mode=single-build source_commit=$source_commit source_tree=$source_tree artifact=$output"
   exit 0
 fi

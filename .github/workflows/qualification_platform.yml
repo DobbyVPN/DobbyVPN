@@ -73,7 +73,7 @@ jobs:
       contents: read
       actions: read
     outputs:
-      android_pairing: ${{ steps.android_companion.outputs.pairing }}
+      android_pairing: ${{ steps.android_pairing.outputs.pairing }}
     env:
       DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
       DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
@@ -555,7 +555,9 @@ jobs:
               run_timed android-temporary-test-signature python3 .github/scripts/android/android_apk_signing.py sign-test \
                 --unsigned-app "$unsigned_app" --unsigned-companion "$unsigned_companion" \
                 --signed-app "$signed_app" --signed-companion "$signed_companion" \
-                --apksigner "$apksigner_bin" --keytool "$keytool_bin"
+                --apksigner "$apksigner_bin" --keytool "$keytool_bin" \
+                --aapt "$sdk_root/build-tools/$build_tools/aapt" \
+                --pairing-output "$RUN_DIR/apk-signer-pairing.json"
               printf 'ANDROID_SIGNED_APP=%s\nANDROID_SIGNED_COMPANION=%s\n' \
                 "$signed_app" "$signed_companion" >> "$GITHUB_ENV"
               emulator_bin="$sdk_root/emulator/emulator"
@@ -735,6 +737,32 @@ jobs:
               printf 'ADB=%s\n' "$(command -v adb)" >> "$GITHUB_ENV"
               ;;
           esac
+
+      - name: Record the Android Build/Test signer pairing
+        id: android_pairing
+        if: inputs.platform == 'android'
+        shell: bash
+        env:
+          ANDROID_PAIRING_BASE: ${{ steps.android_companion.outputs.pairing }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          pairing = json.loads(os.environ["ANDROID_PAIRING_BASE"])
+          payload = Path(os.environ["RUN_DIR"]) / "apk-signer-pairing.json"
+          if not payload.exists():
+              raise SystemExit("the Android signer pairing payload is missing")
+          signed = json.loads(payload.read_text())
+          pairing.update(
+              target_package=signed["target_package"],
+              target_version_code=int(signed["target_version_code"]),
+              app_signer_certificate_sha256=signed["app_signer_certificate_sha256"],
+              companion_signer_certificate_sha256=signed["companion_signer_certificate_sha256"],
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("pairing=" + json.dumps(pairing, separators=(",", ":")) + "\n")
+          PYTHON
 
       - name: Start Android live ADB diagnostics
         if: inputs.platform == 'android'
@@ -1504,6 +1532,17 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}
           if-no-files-found: error
           include-hidden-files: true
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Retain signed Android test companion and signer pairing
+        if: always() && inputs.platform == 'android'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-android-test-companion-signed-attempt-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dobbyvpn-android-test-signed/DobbyVPN-test-companion.apk
+            ${{ runner.temp }}/dobbyvpn-release-run/apk-signer-pairing.json
+          if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 
       - name: Remove disposable qualification scratch

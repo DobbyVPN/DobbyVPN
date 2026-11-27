@@ -254,8 +254,11 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
                 // driver explicitly so -static-libstdc++ takes effect. Xray's
                 // anet dependency updates Go's IPv6 interface cache on Android
                 // and requires this linker option on Go 1.23+.
+                // Both variants keep all symbol sections: the release APK gets
+                // its debug content stripped explicitly from this output, so
+                // the retained symbol file and the shipped lib share one link.
                 goBuild.add(
-                    "-ldflags=-buildid= -X core/buildinfo.Version=$releaseVersionName -X core/buildinfo.Commit=$sourceCommit -X core/buildinfo.Configuration=${if (variant == "debug") "Debug" else "Release"} ${if (variant == "release") "-s -w" else ""} -checklinkname=0 -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
+                    "-ldflags=-buildid= -X core/buildinfo.Version=$releaseVersionName -X core/buildinfo.Commit=$sourceCommit -X core/buildinfo.Configuration=${if (variant == "debug") "Debug" else "Release"} -checklinkname=0 -extld=${linker.absolutePath} -extldflags=-static-libstdc++",
                 )
                 goBuild.addAll(listOf("-o", output.absolutePath, "./cmd/dobbyandroid"))
                 commandLine(*goBuild.toTypedArray())
@@ -283,7 +286,9 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
                 environment("CGO_CFLAGS", if (variant == "debug") "-O0 -g" else "")
                 environment("CGO_CPPFLAGS", "")
                 environment("CGO_CXXFLAGS", if (variant == "debug") "-O0 -g" else "")
-                environment("CGO_LDFLAGS", "")
+                // The shipped library must carry a build ID that survives
+                // stripping; cgo passes this straight to the NDK linker.
+                environment("CGO_LDFLAGS", "-Wl,--build-id=sha1")
                 environment("CFLAGS", "")
                 environment("CPPFLAGS", "")
                 environment("CXXFLAGS", "")
@@ -297,13 +302,112 @@ val backendTasks = listOf("release", "debug").flatMap { variant ->
     }
 }
 
+val ndkStripBinary = providers.provider {
+    val ndk = File(ndkHome.get())
+    ndk.resolve("toolchains/llvm/prebuilt")
+        .listFiles()
+        ?.singleOrNull()
+        ?.resolve("bin/llvm-strip")
+        ?.takeIf { it.isFile }
+        ?: error("Android NDK llvm-strip is unavailable under $ndk")
+}
+
+val ndkReadelfBinary = providers.provider {
+    val ndk = File(ndkHome.get())
+    ndk.resolve("toolchains/llvm/prebuilt")
+        .listFiles()
+        ?.singleOrNull()
+        ?.resolve("bin/llvm-readelf")
+        ?.takeIf { it.isFile }
+        ?: error("Android NDK llvm-readelf is unavailable under $ndk")
+}
+
+// Release ships stripped libs, but the unstripped link is what a symbol file
+// must match. One link feeds both: strip copies into the packaged directory and
+// keep the link output beside it.
+val stripGoJniLibsRelease by tasks.registering {
+    val sourceDirectory = layout.buildDirectory.dir("generated/go-libs/release")
+    val strippedDirectory = layout.buildDirectory.dir("generated/go-libs-stripped/release")
+    val symbolsDirectory = layout.buildDirectory.dir("generated/go-symbols/release")
+    dependsOn(backendTasks.filter { it.name.startsWith("buildGoBackend_release_") })
+    doLast {
+        val strip = ndkStripBinary.get()
+        val readelf = ndkReadelfBinary.get()
+        val source = sourceDirectory.get().asFile
+        val strippedRoot = strippedDirectory.get().asFile
+        val symbolsRoot = symbolsDirectory.get().asFile
+        val libs = source.walkTopDown().filter { it.isFile && it.name.endsWith(".so") }.toList()
+        check(libs.isNotEmpty()) { "no release libs were built under $source" }
+        libs.forEach { lib ->
+            val relative = lib.relativeTo(source)
+            val stripped = strippedRoot.resolve(relative)
+            val symbols = symbolsRoot.resolve(relative)
+            stripped.parentFile.mkdirs()
+            symbols.parentFile.mkdirs()
+            val stripProcess = ProcessBuilder(
+                strip.absolutePath, "--strip-all", "-o", stripped.absolutePath, lib.absolutePath,
+            ).redirectErrorStream(true).start()
+            val stripOutput = stripProcess.inputStream.bufferedReader().readText()
+            check(stripProcess.waitFor() == 0) {
+                "${strip.name} failed for ${lib.name}: $stripOutput"
+            }
+            lib.copyTo(symbols, overwrite = true)
+            val kept = sections(readelf, symbols)
+            val shipped = sections(readelf, stripped)
+            val keptIds = buildId(readelf, symbols)
+            val shippedIds = buildId(readelf, stripped)
+            check(kept.contains(".debug_info") && kept.contains(".symtab")) {
+                "retained lib ${lib.name} lost its debug sections"
+            }
+            check(!shipped.contains(".debug_info") && !shipped.contains(".symtab")) {
+                "shipped lib ${lib.name} still carries debug sections"
+            }
+            check(keptIds.isNotEmpty() && keptIds == shippedIds) {
+                "build identity differs between retained and shipped ${lib.name}"
+            }
+        }
+    }
+}
+
+fun readelfOutput(readelf: File, vararg arguments: String): String {
+    val process = ProcessBuilder(listOf(readelf.absolutePath, *arguments))
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readText()
+    val status = process.waitFor()
+    check(status == 0) { "${readelf.name} exited $status: $output" }
+    return output
+}
+
+fun sections(readelf: File, lib: File): Set<String> {
+    val pattern = Regex("""^\s*\[\s*\d+\]\s+(\S+)\s+""")
+    return readelfOutput(readelf, "-S", "-W", lib.absolutePath)
+        .lineSequence()
+        .mapNotNull { line: String -> pattern.find(line)?.groupValues?.get(1) }
+        .toSet()
+}
+
+fun buildId(readelf: File, lib: File): String {
+    return Regex("""Build ID:\s*([0-9a-fA-F]+)""")
+        .find(readelfOutput(readelf, "-n", lib.absolutePath))
+        ?.groupValues
+        ?.get(1)
+        ?.lowercase()
+        ?: ""
+}
+
 val goJniSources = listOf("release", "debug").associateWith { variant ->
     val taskSuffix = variant.replaceFirstChar { it.uppercase() }
     tasks.register<GeneratedSourceSync>("stageGoJniLibs$taskSuffix") {
-        from(layout.buildDirectory.dir("generated/go-libs/$variant"))
+        if (variant == "release") {
+            dependsOn(stripGoJniLibsRelease)
+            from(layout.buildDirectory.dir("generated/go-libs-stripped/release"))
+        } else {
+            dependsOn(backendTasks.filter { it.name.startsWith("buildGoBackend_${variant}_") })
+            from(layout.buildDirectory.dir("generated/go-libs/$variant"))
+        }
         include("**/*.so")
         generatedDirectory.set(layout.buildDirectory.dir("generated/android-jni-libs/$variant"))
-        dependsOn(backendTasks.filter { it.name.startsWith("buildGoBackend_${variant}_") })
     }
 }
 

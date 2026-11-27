@@ -145,6 +145,19 @@ def _sign(
     print(f"Signed APK payload verified: {signed.name}")
 
 
+def _aapt_package_identity(aapt: Path, apk: Path, environment: dict[str, str]) -> tuple[str, int]:
+    """Read the target package name and version code from one APK."""
+    output = _run(
+        [str(aapt), "dump", "badging", str(apk)],
+        environment=environment,
+        label=f"APK manifest inspection for {apk.name}",
+    ).decode("utf-8", errors="replace")
+    match = re.search(r"(?m)^package: name='([^']+)' versionCode='([0-9]+)'", output)
+    if match is None:
+        raise SigningError(f"{apk.name} has no readable package identity")
+    return match.group(1), int(match.group(2))
+
+
 def sign_test_pair(
     unsigned_app: Path,
     unsigned_companion: Path,
@@ -153,6 +166,8 @@ def sign_test_pair(
     *,
     apksigner: Path,
     keytool: Path,
+    aapt: Path | None = None,
+    pairing_output: Path | None = None,
 ) -> str:
     """Create a temporary signer, sign both APKs, and verify their payloads."""
     if not keytool.is_file() or not apksigner.is_file():
@@ -196,6 +211,21 @@ def sign_test_pair(
             companion_digest = _signer_digest(apksigner, signed_companion, environment)
             if app_digest != companion_digest:
                 raise SigningError("application and test companion signer certificates differ")
+            if pairing_output is not None:
+                if aapt is None or not aapt.is_file():
+                    raise SigningError("aapt is required to record the target package")
+                package_name, version_code = _aapt_package_identity(aapt, unsigned_app, environment)
+                pairing_output.parent.mkdir(parents=True, exist_ok=True)
+                pairing_output.write_text(
+                    json.dumps({
+                        "target_package": package_name,
+                        "target_version_code": version_code,
+                        "app_signer_certificate_sha256": app_digest,
+                        "companion_signer_certificate_sha256": companion_digest,
+                        "signer_compatible": True,
+                    }, sort_keys=True, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             return app_digest
     finally:
         environment.pop(store_password_env, None)
@@ -513,6 +543,8 @@ def _parser() -> argparse.ArgumentParser:
     test.add_argument("--signed-companion", type=Path, required=True)
     test.add_argument("--apksigner", type=Path, required=True)
     test.add_argument("--keytool", type=Path, required=True)
+    test.add_argument("--aapt", type=Path)
+    test.add_argument("--pairing-output", type=Path)
     release = commands.add_parser("sign-release")
     release.add_argument("--unsigned-apk", type=Path, required=True)
     release.add_argument("--signed-apk", type=Path, required=True)
@@ -562,6 +594,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.signed_companion,
                 apksigner=args.apksigner,
                 keytool=args.keytool,
+                aapt=args.aapt,
+                pairing_output=args.pairing_output,
             )
             print(f"Temporary Android test signer SHA-256: {digest}")
         elif args.command == "sign-release":
