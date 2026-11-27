@@ -218,6 +218,34 @@ def _path_scope(path: str) -> str:
     return "shared"
 
 
+def windows_ui_changed(paths: Iterable[object]) -> bool:
+    """True when a changed path is in the Windows UI project (its lock file included) or is global.json.
+
+    An empty list and the paths that cannot be read as repository paths fail toward True, like every other CI scope decision.
+    """
+    paths = list(paths)
+    if not paths:
+        return True
+    for path in paths:
+        if not isinstance(path, str) or not path:
+            return True
+        if path == "global.json" or path.startswith("ui/windows/"):
+            return True
+    return False
+
+
+def windows_ui_changed_in_files(files: Iterable[dict[str, object]]) -> bool:
+    """The same decision for pull request file entries (both names of a rename count)."""
+    paths: list[object] = []
+    for item in files:
+        if not isinstance(item, dict):
+            return True
+        paths.append(item.get("filename"))
+        if item.get("previous_filename") is not None:
+            paths.append(item["previous_filename"])
+    return windows_ui_changed(paths)
+
+
 def classify_paths(paths: Iterable[str]) -> tuple[str, str]:
     """Select a narrow scope only when every changed path has one clear owner."""
     selected = tuple(paths)
@@ -276,6 +304,23 @@ def select_pull_request_scope(
     opener: Callable | None = None,
 ) -> tuple[str, str]:
     """Choose full CI whenever the API cannot establish the complete file set."""
+    return select_pull_request_selection(
+        repository, pull_request, token, expected_head_sha=expected_head_sha,
+        expected_base_sha=expected_base_sha, expected_changed_files=expected_changed_files, opener=opener,
+    )[:2]
+
+
+def select_pull_request_selection(
+    repository: str,
+    pull_request: int,
+    token: str,
+    *,
+    expected_head_sha: str,
+    expected_base_sha: str,
+    expected_changed_files: int,
+    opener: Callable | None = None,
+) -> tuple[str, str, bool]:
+    """The scope, its reason and whether the Windows UI restore is needed; an uncertain file list selects all of them."""
     try:
         files = pull_request_files(
             repository,
@@ -288,8 +333,9 @@ def select_pull_request_scope(
         )
     except ScopeDetectionError as error:
         print(f"CI scope detection is uncertain; selecting full CI: {error}", file=sys.stderr)
-        return "full", "file-list-incomplete"
-    return classify_pull_request_files(files)
+        return "full", "file-list-incomplete", True
+    files = list(files)
+    return (*classify_pull_request_files(files), windows_ui_changed_in_files(files))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -302,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-changed-files", required=True, type=int)
     args = parser.parse_args(argv)
 
-    scope, reason = select_pull_request_scope(
+    scope, reason, windows_ui = select_pull_request_selection(
         args.repository,
         args.pull_request,
         args.token,
@@ -312,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"scope={scope}")
     print(f"reason={reason}")
+    print(f"windows_ui={'true' if windows_ui else 'false'}")
     return 0
 
 

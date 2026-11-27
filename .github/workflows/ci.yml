@@ -38,6 +38,8 @@ jobs:
       scope: ${{ steps.classify.outputs.scope || 'full' }}
       reason: ${{ steps.classify.outputs.reason || 'classification-unavailable' }}
       reused_run_id: ${{ steps.classify.outputs.reused_run_id || '' }}
+      # Whether ui/windows/**, global.json or the Windows project's lock file changed; true whenever that cannot be told.
+      windows_ui: ${{ steps.classify.outputs.windows_ui || 'true' }}
     steps:
       - name: Check out trusted CI helpers
         if: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
@@ -80,6 +82,7 @@ jobs:
                 echo "scope=full" >> "$GITHUB_OUTPUT"
                 echo "reason=push-classification-failed" >> "$GITHUB_OUTPUT"
                 echo "reused_run_id=" >> "$GITHUB_OUTPUT"
+                echo "windows_ui=true" >> "$GITHUB_OUTPUT"
               fi
             fi
             exit 0
@@ -88,6 +91,7 @@ jobs:
             echo "scope=full" >> "$GITHUB_OUTPUT"
             echo "reason=non-pull-request-event" >> "$GITHUB_OUTPUT"
             echo "reused_run_id=" >> "$GITHUB_OUTPUT"
+            echo "windows_ui=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           classifier_output="$RUNNER_TEMP/ci-scope-output"
@@ -104,6 +108,7 @@ jobs:
             echo "CI scope classifier failed; selecting full CI." >&2
             echo "scope=full" >> "$GITHUB_OUTPUT"
             echo "reason=classifier-failed" >> "$GITHUB_OUTPUT"
+            echo "windows_ui=true" >> "$GITHUB_OUTPUT"
           fi
 
   go_build:
@@ -143,6 +148,33 @@ jobs:
 
       - name: Build Go product packages
         run: ${{ matrix.python }} .github/scripts/source_checks.py go-build
+
+  windows_ui_restore:
+    name: Windows UI NuGet restore
+    needs: ci_scope
+    # Runs only when ui/windows/** (the project's packages.lock.json included) or global.json changed; the manual 'ci' run
+    # and every classification that cannot be established select it too (see the windows_ui output of ci_scope).
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && needs.ci_scope.outputs.windows_ui == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned .NET SDK
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      # No NuGet cache: the packages are about 570 MB to download and 1.9 GB unpacked, which costs more to save and restore than to fetch.
+      # Resolves every package and framework pack of the Windows project (the project enforces its lock file), so a
+      # missing or wrongly versioned package fails here instead of in the Windows package build. It does not compile.
+      - name: Restore the Windows UI project
+        run: dotnet restore ui/windows/DobbyVPN.Windows/DobbyVPN.Windows.csproj -r win-x64 -p:Platform=x64 -p:EnableWindowsTargeting=true
 
   android_lint:
     name: Android lint
@@ -432,6 +464,7 @@ jobs:
     needs:
       - ci_scope
       - go_build
+      - windows_ui_restore
       - android_lint
       - lint_go
       - apple_checks
@@ -447,6 +480,8 @@ jobs:
           REUSED_RUN_ID: ${{ needs.ci_scope.outputs.reused_run_id || '' }}
           CI_SCOPE_RESULT: ${{ needs.ci_scope.result }}
           GO_BUILD_RESULT: ${{ needs.go_build.result }}
+          WINDOWS_UI: ${{ needs.ci_scope.outputs.windows_ui || 'true' }}
+          WINDOWS_UI_RESTORE_RESULT: ${{ needs.windows_ui_restore.result }}
           ANDROID_LINT_RESULT: ${{ needs.android_lint.result }}
           LINT_GO_RESULT: ${{ needs.lint_go.result }}
           APPLE_RESULT: ${{ needs.apple_checks.result }}
@@ -472,6 +507,12 @@ jobs:
           require_common() {
             require_result 'Git history secret scan' success "$SECURITY_RESULT"
             require_result 'GitHub workflow validation' success "$ACTIONLINT_RESULT"
+            # Conditional on the changed paths, in every scope: required when they changed, skipped when they did not.
+            if [ "$WINDOWS_UI" = true ]; then
+              require_result 'Windows UI NuGet restore' success "$WINDOWS_UI_RESTORE_RESULT"
+            else
+              require_result 'Windows UI NuGet restore' skipped "$WINDOWS_UI_RESTORE_RESULT"
+            fi
           }
           require_unselected_platform_jobs() {
             require_result 'Go source build' skipped "$GO_BUILD_RESULT"
