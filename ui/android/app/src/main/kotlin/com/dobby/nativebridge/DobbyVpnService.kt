@@ -12,6 +12,7 @@ import com.dobby.presentation.PartialTunnelCleanup
 import com.dobby.vpn.R
 import com.dobby.ui.decodeSessionSnapshot
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -36,7 +37,8 @@ class DobbyVpnService : VpnService() {
     private var operationFailure: Throwable? = null
     // The notification follows Go's state changes. Snapshot reads and the
     // notification actions run here, off the service lock and Go's callback.
-    private val notifier = Executors.newSingleThreadExecutor()
+    private val notifier = Executors.newSingleThreadScheduledExecutor()
+    private var notificationPending = false
     @Volatile private var shownState = "CONNECTING"
     @Volatile private var shownRetryAt = 0L
     @Volatile private var shownCanRetry = false
@@ -328,12 +330,7 @@ class DobbyVpnService : VpnService() {
         Log.i(TAG, message)
         NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.state", message)
         if (vpnInterface != null) {
-            try {
-                ensureForeground()
-            } catch (failure: Throwable) {
-                recordFailure("vpn.service.foreground_failed", failure)
-            }
-            onNotifier(::refreshNotification)
+            redrawNotification()
         } else if (state == "IDLE" || state == "FAILED") {
             goStopConfirmed = released && underlyingNetwork == null
             // Explicit Stop releases the network, not this reusable Android
@@ -434,34 +431,49 @@ class DobbyVpnService : VpnService() {
         }
     }
 
+    @Synchronized
     internal fun redrawNotification() {
-        if (vpnInterface != null) onNotifier(::refreshNotification)
+        if (vpnInterface == null || retiring || notificationPending) return
+        // Android can discard frequent updates to one notification. Read the latest
+        // snapshot once per burst so the final protected failure reaches the drawer.
+        notificationPending = true
+        notifier.schedule({
+            try {
+                refreshNotification()
+            } catch (failure: Exception) {
+                recordFailure("vpn.service.notification_failed", failure)
+            }
+        }, 1, TimeUnit.SECONDS)
     }
 
     // Reads the state Go has just published, with the time of a scheduled
     // automatic retry, and redraws the notification once per state change.
     private fun refreshNotification() {
-        val snapshot = try {
-            JSONObject(NativeGoSession.snapshot(""))
-        } catch (failure: Throwable) {
-            recordFailure("vpn.service.notification_failed", failure)
-            return
+        synchronized(this) {
+            notificationPending = false
+            if (vpnInterface == null || retiring) return
         }
-        val session = runCatching { decodeSessionSnapshot(snapshot, "Snapshot") }.getOrNull() ?: return
-        shownState = session.state
-        shownCanRetry = session.protectedFailure
-        shownRetryAt = snapshot.getJSONObject("result").optLong("next_retry_at_unix_ms")
+        val envelope = NativeGoSession.snapshot("")
+        val snapshot = JSONObject(envelope)
+        val session = decodeSessionSnapshot(snapshot, envelope)
+        val retryAt = snapshot.getJSONObject("result").optLong("next_retry_at_unix_ms")
         synchronized(this) {
             if (vpnInterface == null || retiring) return
+            shownState = session.state
+            shownCanRetry = session.protectedFailure
+            shownRetryAt = retryAt
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
         }
+        NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.notification_updated",
+            "state=${session.state} generation=${session.generation} retry=${session.protectedFailure} next_retry_at_unix_ms=$retryAt")
     }
 
     // Retry repeats the failed selection, as the app's Retry does; Disconnect
     // stops the session. Both act on the current snapshot.
     private fun runNotificationAction(retry: Boolean) {
         val outcome = runCatching {
-            val session = decodeSessionSnapshot(JSONObject(NativeGoSession.snapshot("")), "Snapshot")
+            val envelope = NativeGoSession.snapshot("")
+            val session = decodeSessionSnapshot(JSONObject(envelope), envelope)
             when {
                 retry && session.protectedFailure && prepare(this) == null -> NativeGoSession.startSelection(
                     session.sessionId, session.sequence, session.activeMode, session.activeIndex, session.activeDigest, false,
