@@ -13,6 +13,7 @@ import (
 
 	xrayerrors "github.com/xtls/xray-core/common/errors"
 	xraynet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport/internet"
 )
 
@@ -64,7 +65,7 @@ func (d *protectedSystemDialer) Dial(ctx context.Context, source xraynet.Address
 		}
 	}
 	if destination.Address.Family().IsDomain() {
-		addresses, err := d.resolver.ResolveAddresses(ctx, destination.Address.Domain())
+		addresses, err := d.resolveDestination(ctx, destination.Address.Domain())
 		if err != nil {
 			return nil, err
 		}
@@ -85,6 +86,23 @@ func (d *protectedSystemDialer) Dial(ctx context.Context, source xraynet.Address
 		return nil, errors.Join(failures...)
 	}
 	return d.dialResolved(ctx, source, destination, destination.NetAddr(), sockopt)
+}
+
+// serverOutbounds are the Xray outbounds whose destination is the server from
+// the profile. Direct outbounds (freedom) and the rest dial other names.
+var serverOutbounds = map[string]bool{
+	"vless": true, "vmess": true, "trojan": true, "shadowsocks": true, "shadowsocks-2022": true,
+	"hysteria": true, "wireguard": true, "socks": true, "http": true,
+}
+
+// resolveDestination may use the server's remembered address only when the
+// dialing outbound proxies to the profile's server; any other name, and a dial
+// whose outbound is unknown, is resolved without remembered answers.
+func (d *protectedSystemDialer) resolveDestination(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if outbounds := session.OutboundsFromContext(ctx); len(outbounds) > 0 && serverOutbounds[outbounds[len(outbounds)-1].Name] {
+		return d.resolver.ResolveServerAddresses(ctx, host)
+	}
+	return d.resolver.ResolveAddresses(ctx, host)
 }
 
 // AfterFunc propagates cancellation asynchronously. Recheck the synchronous

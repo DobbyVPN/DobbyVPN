@@ -32,36 +32,61 @@ func TestServerEndpointUsesRememberedAddressWhenRouterDNSStops(t *testing.T) {
 	cache := dnscache.New()
 	t.Cleanup(cache.Close)
 	cache.SetResolver("home-wifi", routerDNS("192.0.2.10"))
-	if _, err := cache.ResolveAddresses(context.Background(), "vpn.example"); err != nil {
+	if _, err := cache.ResolveServerAddresses(context.Background(), "vpn.example"); err != nil {
 		t.Fatal(err)
 	}
-	addresses, err := cache.ResolveAddresses(context.Background(), "vpn.example")
+	addresses, err := cache.ResolveServerAddresses(context.Background(), "vpn.example")
 	if err != nil || len(addresses) != 1 || addresses[0].IP.String() != "192.0.2.10" {
 		t.Fatalf("the endpoint must use the remembered address: %v err=%v", addresses, err)
 	}
 }
 
-// An ExcludeIPs host name with the same remembered answer and a router DNS
-// that stopped answering is not resolved from memory: its traffic stays in
-// the VPN, as before #507, and no possibly stale address is routed outside.
+// Any other name (an Xray direct destination, the subscription address, an
+// ExcludeIPs host name) fails as before when the router's DNS stops: its
+// earlier answer was never remembered.
+func TestOtherNameFailsWhenRouterDNSStops(t *testing.T) {
+	cache := dnscache.New()
+	t.Cleanup(cache.Close)
+	cache.SetResolver("home-wifi", routerDNS("192.0.2.20"))
+	if _, err := cache.ResolveAddresses(context.Background(), "site.example"); err != nil {
+		t.Fatal(err)
+	}
+	if addresses, err := cache.ResolveAddresses(context.Background(), "site.example"); err == nil {
+		t.Fatalf("a name other than the server must not get a remembered answer: %v", addresses)
+	}
+}
+
+// Even the server's own name gets no remembered answer outside the server
+// endpoint path, e.g. when it is also listed in ExcludeIPs.
+func TestServerNameOutsideEndpointPathGetsNoRememberedAnswer(t *testing.T) {
+	cache := dnscache.New()
+	t.Cleanup(cache.Close)
+	cache.SetResolver("home-wifi", routerDNS("192.0.2.10"))
+	if _, err := cache.ResolveServerAddresses(context.Background(), "vpn.example"); err != nil {
+		t.Fatal(err)
+	}
+	if addresses, err := cache.ResolveAddresses(context.Background(), "vpn.example"); err == nil {
+		t.Fatalf("ResolveAddresses must not serve the remembered answer: %v", addresses)
+	}
+}
+
+// An ExcludeIPs host name with a stopped router DNS is ignored: its traffic
+// stays in the VPN, as before #507, and no old address is routed outside.
 func TestExcludedHostWithStoppedRouterDNSStaysInTheVPN(t *testing.T) {
 	cache := dnscache.New()
 	t.Cleanup(cache.Close)
 	cache.SetResolver("home-wifi", routerDNS("192.0.2.20"))
-	// The name was resolved once while DNS worked, so an answer is remembered.
-	if _, err := cache.ResolveAddresses(context.Background(), "nas.example"); err != nil {
+	// The name was resolved once while DNS worked.
+	if _, err := tunnel.ResolveBypassPolicyWithResolver(context.Background(), iprange.New(nil), []string{"nas.example"}, cache.ResolveAddresses); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cache.ResolveFreshAddresses(context.Background(), "nas.example"); err == nil {
-		t.Fatal("an ExcludeIPs host must not get the remembered answer when DNS fails")
-	}
-	policy, err := tunnel.ResolveBypassPolicyWithResolver(context.Background(), iprange.New(nil), []string{"nas.example"}, cache.ResolveFreshAddresses)
+	policy, err := tunnel.ResolveBypassPolicyWithResolver(context.Background(), iprange.New(nil), []string{"nas.example"}, cache.ResolveAddresses)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stale := &M.Metadata{Network: M.TCP, DstIP: netip.MustParseAddr("192.0.2.20"), DstPort: 445}
-	if policy.IsBypass(stale) {
-		t.Fatal("the remembered address must not be routed outside the VPN")
+	old := &M.Metadata{Network: M.TCP, DstIP: netip.MustParseAddr("192.0.2.20"), DstPort: 445}
+	if policy.IsBypass(old) {
+		t.Fatal("the old address must not be routed outside the VPN")
 	}
 }
 
@@ -72,7 +97,7 @@ func TestExcludedHostWithWorkingDNSBypassesTheVPN(t *testing.T) {
 	cache.SetResolver("home-wifi", func(context.Context, string) ([]net.IPAddr, error) {
 		return []net.IPAddr{{IP: net.ParseIP("192.0.2.30")}}, nil
 	})
-	policy, err := tunnel.ResolveBypassPolicyWithResolver(context.Background(), iprange.New(nil), []string{"nas.example"}, cache.ResolveFreshAddresses)
+	policy, err := tunnel.ResolveBypassPolicyWithResolver(context.Background(), iprange.New(nil), []string{"nas.example"}, cache.ResolveAddresses)
 	if err != nil {
 		t.Fatal(err)
 	}

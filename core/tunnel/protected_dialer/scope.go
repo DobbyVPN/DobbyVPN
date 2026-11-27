@@ -45,6 +45,20 @@ func IsApplicationBypass(ctx context.Context) bool {
 	return bypass
 }
 
+type serverEndpointKey struct{}
+
+// WithServerEndpoint marks a dial to the VPN server endpoint of the current
+// profile. Only such a dial may use the server's remembered address when the
+// physical network's DNS fails (dnscache.ResolveServerAddresses).
+func WithServerEndpoint(ctx context.Context) context.Context {
+	return context.WithValue(ctx, serverEndpointKey{}, true)
+}
+
+func isServerEndpoint(ctx context.Context) bool {
+	server, _ := ctx.Value(serverEndpointKey{}).(bool)
+	return server
+}
+
 type SocketScope struct {
 	mu          sync.Mutex
 	ctx         context.Context

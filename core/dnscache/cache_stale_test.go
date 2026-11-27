@@ -46,7 +46,7 @@ func useClock(t *testing.T) *time.Time {
 
 func addressesOf(t *testing.T, cache *Cache) string {
 	t.Helper()
-	addresses, err := cache.ResolveAddresses(context.Background(), "endpoint.example")
+	addresses, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestLastKnownAnswerStaysOnItsNetwork(t *testing.T) {
 	cache.SetResolver("network-a", scriptedResolver([]string{"192.0.2.1"}))
 	addressesOf(t, cache)
 	cache.SetResolver("network-b", scriptedResolver(nil))
-	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
+	if _, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example"); err == nil {
 		t.Fatal("another network must not use the first network's answer")
 	}
 }
@@ -106,7 +106,7 @@ func TestLastKnownAnswerSkipsReplacedNetworkDuringQuery(t *testing.T) {
 		return identity, resolver, nil
 	})
 	addressesOf(t, cache)
-	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
+	if _, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example"); err == nil {
 		t.Fatal("a network replaced during the failed query must not use the old answer")
 	}
 }
@@ -119,7 +119,7 @@ func TestLastKnownAnswerSkipsSameIdentityAfterNetworkChange(t *testing.T) {
 	cache.SetResolver("network-a", scriptedResolver([]string{"192.0.2.1"}, nil))
 	addressesOf(t, cache)
 	cache.NetworkChanged()
-	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
+	if _, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example"); err == nil {
 		t.Fatal("an answer from before a network change must not be used")
 	}
 }
@@ -139,7 +139,7 @@ func TestLastKnownAnswerSkipsChangeBeforeServing(t *testing.T) {
 		return "network-a", resolver, nil
 	})
 	addressesOf(t, cache)
-	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
+	if _, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example"); err == nil {
 		t.Fatal("a network change before serving must reject the remembered answer")
 	}
 }
@@ -157,7 +157,7 @@ func TestLastKnownAnswersAreBounded(t *testing.T) {
 	})
 	for i := range staleAnswerEntries + 1 {
 		*clock = clock.Add(time.Second)
-		if _, err := cache.ResolveAddresses(context.Background(), fmt.Sprintf("host%d.example", i)); err != nil {
+		if _, err := cache.ResolveServerAddresses(context.Background(), fmt.Sprintf("host%d.example", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -165,10 +165,10 @@ func TestLastKnownAnswersAreBounded(t *testing.T) {
 		t.Fatalf("remembered %d names, want at most %d", len(cache.lastGood), staleAnswerEntries)
 	}
 	fail = true
-	if _, err := cache.ResolveAddresses(context.Background(), "host0.example"); err == nil {
+	if _, err := cache.ResolveServerAddresses(context.Background(), "host0.example"); err == nil {
 		t.Fatal("the oldest name must have been evicted")
 	}
-	if _, err := cache.ResolveAddresses(context.Background(), fmt.Sprintf("host%d.example", staleAnswerEntries)); err != nil {
+	if _, err := cache.ResolveServerAddresses(context.Background(), fmt.Sprintf("host%d.example", staleAnswerEntries)); err != nil {
 		t.Fatalf("the newest name must still be remembered: %v", err)
 	}
 }
@@ -179,7 +179,7 @@ func TestLastKnownAnswerExpires(t *testing.T) {
 	cache.SetResolver("network-a", scriptedResolver([]string{"192.0.2.1"}, nil))
 	addressesOf(t, cache)
 	*clock = clock.Add(StaleAnswerLimit + time.Minute)
-	if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
+	if _, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example"); err == nil {
 		t.Fatal("an answer older than the limit must not be used")
 	}
 }
@@ -201,7 +201,7 @@ func TestNegativeAnswerIsNotReplaced(t *testing.T) {
 	})
 	addressesOf(t, cache)
 	for range 2 {
-		if _, err := cache.ResolveAddresses(context.Background(), "endpoint.example"); err == nil {
+		if _, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example"); err == nil {
 			t.Fatal("a negative or empty answer must not be replaced by the last known one")
 		}
 	}
@@ -288,7 +288,7 @@ type lookupResult struct {
 func resolveAsync(ctx context.Context, cache *Cache) chan lookupResult {
 	result := make(chan lookupResult, 1)
 	go func() {
-		addresses, err := cache.ResolveAddresses(ctx, "endpoint.example")
+		addresses, err := cache.ResolveServerAddresses(ctx, "endpoint.example")
 		text := make([]string, 0, len(addresses))
 		for _, address := range addresses {
 			text = append(text, address.IP.String())
@@ -495,12 +495,12 @@ func TestRememberedAnswerIsIsolatedFromCallers(t *testing.T) {
 	cache := New()
 	t.Cleanup(cache.Close)
 	cache.SetResolver("network-a", scriptedResolver([]string{"192.0.2.1"}, nil, nil))
-	fresh, err := cache.ResolveAddresses(context.Background(), "endpoint.example")
+	fresh, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example")
 	if err != nil {
 		t.Fatal(err)
 	}
 	fresh[0].IP[len(fresh[0].IP)-1] = 99
-	stale, err := cache.ResolveAddresses(context.Background(), "endpoint.example")
+	stale, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example")
 	if err != nil || stale[0].IP.String() != "192.0.2.1" {
 		t.Fatalf("remembered answer changed through a returned one: %v %v", stale, err)
 	}

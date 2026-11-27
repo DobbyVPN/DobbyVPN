@@ -17,9 +17,13 @@ import (
 const Category = "DNSCache"
 const ServerResolveTimeout = 5 * time.Second
 
-// StaleAnswerLimit bounds how old a remembered answer may be when it is served
-// because the physical network's DNS failed; staleAnswerEntries bounds how many
-// host names are remembered (the client resolves only a few).
+// StaleAnswerLimit bounds how old a remembered server answer may be when it is
+// served because the physical network's DNS failed. It is the lower end of the
+// 1 to 3 days RFC 8767 suggests. Any network change drops remembered answers
+// anyway, so the limit only matters on one network whose DNS stays broken. A
+// server address the admin changed meanwhile fails to connect as it would
+// without the answer. staleAnswerEntries bounds how many server names are
+// remembered (a profile has only a few).
 const (
 	StaleAnswerLimit   = 24 * time.Hour
 	staleAnswerEntries = 64
@@ -50,9 +54,10 @@ var now = time.Now
 
 // Resolver is scoped to the physical network. Its native resolver or captured
 // DNS servers own caching and DNS64 answers; Dobby must not pin another CDN TTL.
-// The only exception is serve-stale on resolver failure (RFC 8767): when a
-// query fails with an error or timeout, or has not answered within
-// staleAnswerWait, the last successful answer for the host from the same
+// The only exception is serve-stale for the VPN server endpoint
+// (ResolveServerAddresses, RFC 8767): when a query fails with an error or
+// timeout, or has not answered within staleAnswerWait, the last successful
+// answer for the server name from the same
 // resolver revision may be used, at most StaleAnswerLimit old. The query then
 // finishes in the background and its answer replaces the remembered one. Any
 // resolver or network change starts a new revision, so an answer is never
@@ -159,20 +164,23 @@ func (c *Cache) SetResolver(identity string, resolver Resolver) {
 	log.Infof(Category, "underlying resolver changed network=%s revision=%d", identity, c.revision)
 }
 
-// ResolveAddresses resolves a VPN server endpoint. When the physical
-// network's DNS fails or hangs it may serve the remembered answer (RFC 8767).
+// ResolveAddresses resolves any name through the physical network: a
+// subscription address, an Xray direct destination, an ExcludeIPs host name.
+// It never serves or stores a remembered answer: on a DNS failure it fails,
+// as before serve-stale.
 func (c *Cache) ResolveAddresses(ctx context.Context, host string) ([]net.IPAddr, error) {
-	return c.resolve(ctx, host, true)
-}
-
-// ResolveFreshAddresses resolves a name whose answer decides what bypasses
-// the VPN (ExcludeIPs host names). It never serves a remembered answer: on a
-// DNS failure it fails, so a stale address cannot be routed outside the VPN.
-func (c *Cache) ResolveFreshAddresses(ctx context.Context, host string) ([]net.IPAddr, error) {
 	return c.resolve(ctx, host, false)
 }
 
-func (c *Cache) resolve(ctx context.Context, host string, allowStale bool) ([]net.IPAddr, error) {
+// ResolveServerAddresses resolves the VPN server endpoint of the current
+// profile. Only this call remembers answers, and when the physical network's
+// DNS fails or hangs it may serve the remembered answer (RFC 8767). Callers
+// use it only where the name is known to be the server endpoint.
+func (c *Cache) ResolveServerAddresses(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return c.resolve(ctx, host, true)
+}
+
+func (c *Cache) resolve(ctx context.Context, host string, server bool) ([]net.IPAddr, error) {
 	parent := ctx
 	if c == nil {
 		return nil, errors.New("underlying resolver is required")
@@ -205,20 +213,20 @@ func (c *Cache) resolve(ctx context.Context, host string, allowStale bool) ([]ne
 	if resolve == nil {
 		return nil, errors.New("underlying network resolver is unavailable")
 	}
-	if allowStale && c.hasStaleAnswer(host, revision) {
+	if server && c.hasStaleAnswer(host, revision) {
 		return c.resolveWithStaleAnswer(parent, source, resolve, identity, host, revision)
 	}
-	addresses, _, err := c.lookup(ctx, resolve, identity, host, revision)
+	addresses, _, err := c.lookup(ctx, resolve, identity, host, revision, server)
 	if err != nil {
 		return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
 	}
 	return addresses, nil
 }
 
-// lookup runs one query. A successful answer is remembered and a negative one
-// (no such host, empty answer) forgets the remembered answer; failed reports a
-// query that failed in this revision.
-func (c *Cache) lookup(ctx context.Context, resolve Resolver, identity, host string, revision uint64) ([]net.IPAddr, bool, error) {
+// lookup runs one query. A successful server answer is remembered and a
+// negative one (no such host, empty answer) forgets the remembered answer;
+// failed reports a query that failed in this revision.
+func (c *Cache) lookup(ctx context.Context, resolve Resolver, identity, host string, revision uint64, server bool) ([]net.IPAddr, bool, error) {
 	started := time.Now()
 	addresses, err := resolve(ctx, host)
 	var dnsErr *net.DNSError
@@ -243,7 +251,9 @@ func (c *Cache) lookup(ctx context.Context, resolve Resolver, identity, host str
 		}
 		return nil, failed, err
 	}
-	c.remember(host, revision, addresses)
+	if server {
+		c.remember(host, revision, addresses)
+	}
 	return addresses, false, nil
 }
 
@@ -333,7 +343,7 @@ func (c *Cache) startRefresh(resolve Resolver, identity, host string, revision u
 	c.mu.Unlock()
 	go func() {
 		defer cancel()
-		r.addresses, r.failed, r.err = c.lookup(ctx, resolve, identity, host, revision)
+		r.addresses, r.failed, r.err = c.lookup(ctx, resolve, identity, host, revision, true)
 		c.mu.Lock()
 		if c.refreshing[host] == r {
 			delete(c.refreshing, host)
