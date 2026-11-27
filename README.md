@@ -93,19 +93,23 @@ the accepted URL and restores it when the app reopens. The startup log shows the
 version and commit. File and inline configuration remain available in the CLI.
 
 The VPN interface, routes and DNS stay active while DobbyVPN switches protocols.
-If no protocol works, the app shows the failure with **Retry** and **Stop**.
-Retry uses the saved selection without removing the interface; Stop releases
-the app's VPN protection. Existing application connections may need to reconnect
-after a transport failure.
+If a server becomes unreachable and VPN protection is still active, DobbyVPN
+retries the saved selection automatically. **Retry** starts the next attempt
+immediately. **Stop** cancels scheduled attempts and releases VPN protection.
+Existing application connections may need to reconnect after a transport failure.
 
 VPN DNS uses `9.9.9.9`, `1.1.1.1`, `2620:fe::fe` and
 `2606:4700:4700::1111`. Gateway hostnames use the underlying network's DNS.
+If that resolver temporarily fails, DobbyVPN can reuse a recent address for
+the VPN server from the same network.
 IPv4 and IPv6 application traffic are supported independently of the gateway's
 address family. IPv6 destinations require IPv6 connectivity at the VPN exit. Xray configurations retain their protocol and transport settings,
 including Trojan and Hysteria2.
 
-Android supports the system's **Always-on VPN** and **Block connections without
-VPN** settings. On iOS, connect once to save a selection, then enable **Connect on
+On Android, allowing notifications lets you retry a protected failure or
+disconnect from the VPN notification. You can still connect if you decline
+notification permission. Android supports the system's **Always-on VPN** and
+**Block connections without VPN** settings. On iOS, connect once to save a selection, then enable **Connect on
 demand** to let the system start it automatically. Stop disables On Demand.
 
 Logs show timestamps and messages, with emphasis for warnings and errors.
@@ -133,7 +137,9 @@ logs and exports remain unsanitized.
 When enabled by your provider, Upload in the log menu sends a complete compressed
 snapshot and shows a support reference after the server confirms it. You can
 cancel the upload, copy the full reference, or share its text. Linux and other
-desktop platforms also support `dobby-cli logs upload`. Manual Share/Save remains
+desktop platforms also support `dobby-cli logs upload`. On macOS and Windows,
+the window and `dobby-cli logs` show the same latest successful upload reference.
+Manual Share/Save remains
 available if an upload fails or exceeds the size limit.
 
 For providers, the [HTTPS log-upload guide](docs/log-upload.md) explains the
@@ -258,9 +264,11 @@ exits with 2 even when the service is down.
 After an automatically selected connection becomes unhealthy, DobbyVPN allows
 up to three automatic recovery attempts. If another health failure occurs
 before five uninterrupted connected minutes, the connection fails while VPN
-protection remains active. Choose Retry to start another selection attempt or
-Stop to release it. Five uninterrupted connected minutes reset the
-recovery allowance. The same ordered `[[Outline]]`, `[[Xray]]`, and
+protection remains active. Five uninterrupted connected minutes reset this
+initial recovery allowance. After a retryable protected failure, DobbyVPN
+tries again after 5, 15, 30 and 60 seconds, then every two minutes. Thirty
+seconds of healthy connection reset the delay for the next protected failure.
+The same ordered `[[Outline]]`, `[[Xray]]`, and
 `[[TrustTunnel]]` section format works for one profile or several.
 
 `[ExcludeIPs]` intentionally bypasses the VPN for the destinations in `IPs`. The
