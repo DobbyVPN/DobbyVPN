@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,11 +28,12 @@ type SourceDirectoryOwner struct {
 }
 
 type FileSourceStore struct {
-	Path           string
-	DirectoryOwner *SourceDirectoryOwner
+	ProtectedDirectory string
+	Path               string
+	DirectoryOwner     *SourceDirectoryOwner
 }
 
-func (s FileSourceStore) Load(ctx context.Context) ([]byte, error) {
+func (s FileSourceStore) Load(ctx context.Context) (raw []byte, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -40,14 +42,28 @@ func (s FileSourceStore) Load(ctx context.Context) ([]byte, error) {
 			return nil, fmt.Errorf("prepare saved configuration directory: %w", err)
 		}
 	}
-	raw, err := s.read(s.Path)
-	if err == nil {
-		return raw, nil
+	if s.Path == "" {
+		return nil, nil
 	}
+	if err := validateSourcePath(filepath.Dir(s.Path), s.Path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	file, err := os.Open(s.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-	return nil, err
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
+	raw, err = io.ReadAll(io.LimitReader(file, maxStoredSourceURL+1))
+	if len(raw) > maxStoredSourceURL {
+		return nil, fmt.Errorf("saved configuration URL exceeds %d bytes", maxStoredSourceURL)
+	}
+	return raw, err
 }
 
 func (s FileSourceStore) Save(ctx context.Context, raw []byte) error {
@@ -113,24 +129,14 @@ func (s FileSourceStore) Clear(ctx context.Context) error {
 	return nil
 }
 
-func (s FileSourceStore) read(path string) ([]byte, error) {
-	if path == "" {
-		return nil, os.ErrNotExist
+// RemoveInstallation clears the saved selection before removing its source.
+func (s FileSourceStore) RemoveInstallation(ctx context.Context) error {
+	activation := s
+	activation.Path += activationSuffix
+	if err := activation.Clear(ctx); err != nil {
+		return err
 	}
-	if err := validateSourcePath(filepath.Dir(path), path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, os.ErrNotExist
-		}
-		return nil, err
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > maxStoredSourceURL {
-		return nil, fmt.Errorf("saved configuration URL exceeds %d bytes", maxStoredSourceURL)
-	}
-	return raw, nil
+	return errors.Join(s.Clear(ctx), s.ClearAccepted(ctx))
 }
 
 func validateSourcePath(dir, path string) error {

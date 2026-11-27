@@ -1,4 +1,4 @@
-//go:build !(android || ios)
+//go:build !(android || ios || darwin)
 
 package runtime
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	goruntime "runtime"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -34,29 +35,20 @@ type nativeRuntime struct {
 	mu sync.Mutex
 }
 
-func newNativeRuntime(dnsCache *dnscache.Cache, bypass *tunnel.BypassPolicy) *nativeRuntime {
-	cfg := common.GetNetworkConfig()
-
-	c := &nativeRuntime{
-		app: &internal.App{
-			DNSCache:     dnsCache,
-			BypassPolicy: bypass,
-			RoutingConfig: &internal.RoutingConfig{
-				TunDeviceName:        ownedTunName,
-				TunDeviceIP:          cfg.TunDevice,
-				TunDeviceMTU:         platform_engine.TunnelMTU,
-				TunGatewayCIDR:       cfg.TunGateway + "/32",
-				RoutingTableID:       ownedRoutingTableID,
-				RoutingTablePriority: ownedRoutingPriority,
-				DNSServers:           common.VPNDNSServers(),
-			},
-		},
+func newNativeRuntime(dnsCache *dnscache.Cache) *nativeRuntime {
+	routing := &internal.RoutingConfig{
+		TunDeviceMTU:   platform_engine.TunnelMTU,
+		RoutingTableID: ownedRoutingTableID,
+		DNSServers:     common.VPNDNSServers(),
+	}
+	if goruntime.GOOS == "linux" {
+		routing.TunDeviceName = ownedTunName
+		routing.RoutingTablePriority = ownedRoutingPriority
+	}
+	return &nativeRuntime{
+		app:   &internal.App{DNSCache: dnsCache, RoutingConfig: routing},
 		state: stateIdle,
 	}
-	if err := log.SetPolicyDetail("desktop_tunnel", c.app.RoutingConfig); err != nil {
-		log.Errorf(nativeLogCategory, "retain desktop tunnel policy: %v", err)
-	}
-	return c
 }
 
 func (c *nativeRuntime) setNetworkRef(ref sessionapi.SessionRef) { c.app.NetworkRef = ref }
@@ -276,7 +268,18 @@ func (c *nativeRuntime) generationValue() uint64 {
 }
 
 func (c *nativeRuntime) Attach(ctx context.Context, generation uint64, address string, cache *dnscache.Cache, bypass *tunnel.BypassPolicy) error {
-	return c.app.Engine.Attach(ctx, generation, address, cache, bypass)
+	if c.app.Guard == nil {
+		return c.app.Engine.Attach(ctx, generation, address, cache, bypass)
+	}
+	configured, hosts := bypass.Excluded()
+	err := c.app.Guard.SetExcluded(ctx, configured, hosts)
+	if err == nil {
+		err = c.app.Engine.Attach(ctx, generation, address, cache, bypass)
+	}
+	if err != nil {
+		err = errors.Join(err, c.app.Guard.SetExcluded(sessionapi.CleanupContext(ctx), nil, nil))
+	}
+	return err
 }
 func (c *nativeRuntime) Detach(ctx context.Context, generation uint64) error {
 	return c.app.Engine.Detach(ctx, generation)

@@ -19,6 +19,7 @@ import (
 	"core/routing"
 	"core/tunnel/protected_dialer"
 
+	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
 	"github.com/xjasonlyu/tun2socks/v2/core/device/tun"
 	"github.com/xjasonlyu/tun2socks/v2/dialer"
@@ -48,12 +49,11 @@ type windowsAdapterState struct {
 var adapter windowsAdapterState
 
 const (
-	windowsTunMTU             = TunnelMTU
 	windowsAdapterPrefix      = "DobbyVPN-"
 	windowsAdapterRandomBytes = 16
 )
 
-func startPlatformEngine(c EngineConfig) (bool, error) {
+func startPlatformEngine(c EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
 	startedAt := time.Now()
 	uplinkIface := c.UplinkIface
 	if err := prepareWindowsStateForStart(); err != nil {
@@ -64,8 +64,13 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("create owned Wintun identity: %w", err)
 	}
+	// Select against the interface inventory before adding our own adapter.
+	tunAddress, err := common.TUNDeviceIPv4()
+	if err != nil {
+		return false, err
+	}
 	resetTun2SocksInterfaceBinding()
-	accepted, err := startStack(c, func() (device.Device, error) { return tun.Open(adapterName, windowsTunMTU) })
+	accepted, err := startStack(handler, func() (device.Device, error) { return tun.Open(adapterName, TunnelMTU) })
 	if accepted {
 		adapter.ownedAdapterName = adapterName
 	}
@@ -126,9 +131,7 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 	adapter.dnsKnown = true
 	log.Debugf(Category, "[Engine][Windows] getCurrentDNS elapsed=%s total=%s", time.Since(dnsReadStartedAt).Truncate(time.Millisecond), time.Since(startedAt).Truncate(time.Millisecond))
 
-	tunCfg := common.GetNetworkConfig()
-
-	adapter.tunnelIPv4, err = windowsTunnelIPv4Prefix(tunCfg.TunDevice)
+	adapter.tunnelIPv4, err = windowsTunnelIPv4Prefix(tunAddress)
 	if err != nil {
 		return true, err
 	}
@@ -141,12 +144,13 @@ func startPlatformEngine(c EngineConfig) (bool, error) {
 		return true, fmt.Errorf("add owned Wintun IPv6 address: %w", err)
 	}
 	adapter.ipv6Mutated = true
-	if err := waitForPreferredIPv4(ifName, tunCfg.TunDevice, 5*time.Second); err != nil {
+	if err := waitForPreferredIPv4(ifName, adapter.tunnelIPv4.Addr(), adapter.lastLUID.IPAddress, 5*time.Second); err != nil {
 		return true, err
 	}
 	adapter.dnsMutated = true // SetDNS may have changed state before returning an error.
-	servers := make([]netip.Addr, 0, len(common.VPNDNSServers()))
-	for _, address := range common.VPNDNSServers() {
+	requestedDNS := common.VPNDNSServers()
+	servers := make([]netip.Addr, 0, len(requestedDNS))
+	for _, address := range requestedDNS {
 		servers = append(servers, netip.MustParseAddr(address))
 	}
 	if err := routing.SetWindowsDNS(adapter.lastLUID, true, servers); err != nil {
@@ -205,6 +209,19 @@ type WindowsProtection interface {
 // Read once after StartOwnedEngine succeeds. The network owner retains this
 // reference; the guard serializes updates and rejects operations after Close.
 func WindowsNetworkProtection() WindowsProtection { return adapter.networkGuard }
+
+// WindowsTunnelPolicy snapshots the current owner's setup. The network owner
+// calls it after StartOwnedEngine succeeds, before it can begin Stop.
+func WindowsTunnelPolicy() map[string]any {
+	return map[string]any{
+		"interface":             adapter.lastIface,
+		"tunnel_luid":           uint64(adapter.lastLUID),
+		"ipv4_prefix":           adapter.tunnelIPv4,
+		"ipv6_prefix":           adapter.tunnelIPv6,
+		"requested_mtu":         TunnelMTU,
+		"requested_dns_servers": common.VPNDNSServers(),
+	}
+}
 
 var openWindowsNetworkGuard = func(tunnelLUID uint64) (WindowsProtection, error) {
 	guard, err := routing.OpenWindowsNetworkGuard(tunnelLUID)
@@ -380,81 +397,32 @@ func setInterfaceDADTransmits(luid winipcfg.LUID, transmits uint32) error {
 	return row.Set()
 }
 
-func waitForPreferredIPv4(name, expectedAddress string, timeout time.Duration) error {
-	iface, err := net.InterfaceByName(name)
-	if err != nil {
-		return fmt.Errorf("resolve interface %q for IPv4 readiness: %w", name, err)
-	}
-	expected := net.ParseIP(expectedAddress).To4()
-	if expected == nil {
-		return fmt.Errorf("parse expected IPv4 address for interface %q", name)
-	}
+func waitForPreferredIPv4(name string, address netip.Addr, lookup func(netip.Addr) (*winipcfg.MibUnicastIPAddressRow, error), timeout time.Duration) error {
 	startedAt := time.Now()
 	deadline := startedAt.Add(timeout)
 	for {
-		found, preferred, skipAsSource, duplicate, err := interfaceIPv4State(uint32(iface.Index), expected)
-		if err != nil {
+		row, err := lookup(address)
+		if err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
 			return fmt.Errorf("read IPv4 readiness for interface %q: %w", name, err)
 		}
-		if found && preferred && !skipAsSource {
-			log.Debugf(
-				Category,
-				"[Engine][Windows] IPv4 source ready iface=%s elapsed=%s",
-				name,
-				time.Since(startedAt).Truncate(time.Millisecond),
-			)
-			return nil
+		if row != nil {
+			switch row.DadState {
+			case winipcfg.DadStatePreferred:
+				if !row.SkipAsSource {
+					log.Debugf(Category, "[Engine][Windows] IPv4 source ready iface=%s elapsed=%s", name, time.Since(startedAt).Truncate(time.Millisecond))
+					return nil
+				}
+			case winipcfg.DadStateDuplicate:
+				return fmt.Errorf("IPv4 address %s for interface %q is duplicate", address, name)
+			}
 		}
-		if duplicate {
-			return fmt.Errorf("IPv4 address for interface %q is duplicate", name)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return fmt.Errorf("IPv4 address %s for interface %q not preferred after %s found=%t skipAsSource=%t",
+				address, name, timeout, row != nil, row != nil && row.SkipAsSource)
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf(
-				"IPv4 address for interface %q not preferred after %s found=%t skipAsSource=%t",
-				name,
-				time.Since(startedAt).Truncate(time.Millisecond),
-				found,
-				skipAsSource,
-			)
-		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(min(remaining, 50*time.Millisecond))
 	}
-}
-
-func interfaceIPv4State(interfaceIndex uint32, expected net.IP) (found, preferred, skipAsSource, duplicate bool, err error) {
-	var table *windows.MibUnicastIpAddressTable
-	if err = windows.GetUnicastIpAddressTable(windows.AF_INET, &table); err != nil {
-		return
-	}
-	defer windows.FreeMibTable(unsafe.Pointer(table))
-	if table.NumEntries == 0 {
-		return false, false, false, false, nil
-	}
-	rows := unsafe.Slice(&table.Table[0], table.NumEntries)
-	return findInterfaceIPv4State(rows, interfaceIndex, expected)
-}
-
-func findInterfaceIPv4State(rows []windows.MibUnicastIpAddressRow, interfaceIndex uint32, expected net.IP) (found, preferred, skipAsSource, duplicate bool, err error) {
-	expected = expected.To4()
-	if expected == nil {
-		return false, false, false, false, fmt.Errorf("expected address is not IPv4")
-	}
-	for index := range rows {
-		row := &rows[index]
-		if row.InterfaceIndex != interfaceIndex || row.Address.Family != windows.AF_INET {
-			continue
-		}
-		raw := (*windows.RawSockaddrInet4)(unsafe.Pointer(&row.Address))
-		if !net.IP(raw.Addr[:]).Equal(expected) {
-			continue
-		}
-		return true,
-			row.DadState == windows.IpDadStatePreferred,
-			row.SkipAsSource != 0,
-			row.DadState == windows.IpDadStateDuplicate,
-			nil
-	}
-	return false, false, false, false, nil
 }
 
 func windowsTunnelIPv4Prefix(address string) (netip.Prefix, error) {
@@ -462,7 +430,8 @@ func windowsTunnelIPv4Prefix(address string) (netip.Prefix, error) {
 	if err != nil || !addr.Is4() {
 		return netip.Prefix{}, fmt.Errorf("parse tunnel IPv4 address %q", address)
 	}
-	return netip.PrefixFrom(addr, 24), nil
+	// The explicit tunnel routes carry traffic. Claim only the adapter's own address.
+	return netip.PrefixFrom(addr, 32), nil
 }
 
 func getCurrentDNS(luid winipcfg.LUID) ([]netip.Addr, bool, error) {

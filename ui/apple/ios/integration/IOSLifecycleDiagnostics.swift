@@ -1,5 +1,20 @@
 import Foundation
 
+public enum IOSFlowPressure: Int, Comparable {
+    case normal, warning, critical
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    public static func effective(system: Self, availableBytes: UInt64) -> Self {
+        // Apple also returns zero when a process has no available-memory
+        // estimate. In that case retain the OS pressure signal.
+        guard availableBytes != 0 else { return system }
+        if availableBytes < 4 * 1024 * 1024 { return .critical }
+        if availableBytes < 8 * 1024 * 1024 { return max(system, .warning) }
+        return system
+    }
+}
+
 /// Errors raised when a provider envelope contains bytes that cannot be
 /// represented as the UTF-8 text consumed by the Go bridge.
 internal enum IOSProviderPayloadError: Error, Equatable {
@@ -98,5 +113,124 @@ public final class IOSCommandLogSampler {
         if let lastSnapshot, current - lastSnapshot < 60 { return false }
         lastSnapshot = current
         return true
+    }
+}
+
+/// Retains the OS failure separately from Go's snapshot. A control-only
+/// provider can be connected even when no VPN session has ever been active.
+public final class IOSDisconnectHistory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var revision: UInt64 = 0
+    private var armed = false
+    private var stopping = false
+    private var failure = ""
+
+    private var reportedReplacement: String?
+    private var replacementFailure = false
+
+    public func observedReplacement(of previousLaunch: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard reportedReplacement != previousLaunch, !stopping else { return }
+        reportedReplacement = previousLaunch
+        replacementFailure = true
+        failure = "The VPN extension restarted unexpectedly."
+    }
+
+    public func begin(_ method: String) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        if method == "Stop" {
+            revision &+= 1
+            armed = false
+            stopping = true
+            replacementFailure = false
+            failure = ""
+        } else if method == "Start" {
+            revision &+= 1
+            stopping = false
+        }
+        return revision
+    }
+
+    public func acceptedStart(_ ticket: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if ticket == revision { armed = true }
+    }
+
+    public func observedSnapshot(_ ticket: UInt64, state: String, recovering: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard ticket == revision else { return }
+        if state == "IDLE" || state == "CONFIGURED" {
+            stopping = false
+        }
+        guard !stopping else { return }
+        armed = recovering || ["PROBING", "PREPARING", "CONNECTED"].contains(state)
+        if state == "CONNECTED" && !recovering {
+            revision &+= 1
+            if !replacementFailure { failure = "" }
+        }
+    }
+
+    public func disconnected() -> UInt64? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard armed else { return nil }
+        armed = false
+        revision &+= 1
+        failure = "The VPN extension disconnected unexpectedly."
+        return revision
+    }
+
+    public func receivedReason(_ reason: String, ticket: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if ticket == revision && !failure.isEmpty { failure += " " + reason }
+    }
+
+    public var message: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return failure
+    }
+
+    public func acknowledge(_ message: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !message.isEmpty, failure == message else { return }
+        replacementFailure = false
+        revision &+= 1
+        failure = ""
+    }
+}
+
+public struct IOSProviderRunRecord: Codable {
+    public let launchID: String
+    public var protected = false
+    public var peakBytes: UInt64 = 0
+    public var peakResources = ""
+    /// Most recent resource sample, refreshed every 250 ms while protected.
+    public var latestResources: String?
+    public var unexpectedPreviousLaunch: String?
+
+    public init(launchID: String, replacing previous: Self?) {
+        self.launchID = launchID
+        if let previous, previous.launchID != launchID, previous.protected {
+            unexpectedPreviousLaunch = previous.launchID
+        }
+    }
+
+    public static func load(from path: URL) throws -> Self? {
+        do {
+            return try JSONDecoder().decode(Self.self, from: Data(contentsOf: path))
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
+        }
+    }
+
+    public func save(to path: URL) throws {
+        try JSONEncoder().encode(self).write(to: path, options: .atomic)
     }
 }

@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,22 +27,46 @@ import (
 	"core/sessionapi"
 )
 
+// Exit codes. Scripts may rely on these values.
 const (
-	exitOK                   = 0
-	exitArgs                 = 2
-	exitConnect              = 3
-	exitRuntime              = 4
+	exitOK = 0
+	// exitArgs: wrong command line or a rejected configuration source.
+	exitArgs = 2
+	// exitConnect: the Dobby VPN service could not be reached.
+	exitConnect = 3
+	// exitRuntime: the operation failed (including a timeout).
+	exitRuntime = 4
+	// exitConflict: the accepted configuration or session generation changed.
 	exitConflict             = 8
 	stderrLabel              = "stderr"
 	sessionIDRequiredMessage = "--session-id requires one value"
 )
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() {
+	code := run(os.Args[1:])
+	_ = applicationlog.Flush()
+	os.Exit(code)
+}
 
 func run(args []string) int {
 	if isHelpCommand(args) {
+		if len(args) > 1 {
+			return usage("help accepts no arguments")
+		}
 		printHelp()
 		return exitOK
+	}
+	// Reject malformed commands before any side effect: no upload
+	// cleanup, log file or service connection for a typo.
+	var execute serviceCommand
+	var message string
+	if args[0] == "logs" {
+		message = logsArgsError(args[1:])
+	} else {
+		execute, message = parseServiceCommand(args)
+	}
+	if message != "" {
+		return usage(message)
 	}
 	if err := cleanupAbandonedUploads(); err != nil {
 		fmt.Fprintf(os.Stderr, "dobby-cli: upload temporary cleanup: %v\n", err)
@@ -58,12 +84,12 @@ func run(args []string) int {
 	applicationlog.Info("CLI", "dobby-cli command started", map[string]any{"command": args[0]})
 	client := dialService()
 	timeout := 30 * time.Second
-	if args[0] == "start" {
+	if args[0] == startCommand {
 		timeout = 2 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return runServiceCommand(ctx, client, args)
+	return execute(ctx, client)
 }
 
 func initApplicationLogger() error {
@@ -118,29 +144,36 @@ func prepareCLIHistory() error {
 }
 
 func isHelpCommand(args []string) bool {
-	return len(args) == 0 || args[0] == "--help" || args[0] == "-h"
+	return len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help"
 }
 
-func runServiceCommand(ctx context.Context, client controljson.Client, args []string) int {
+type serviceCommand func(context.Context, controljson.Client) int
+
+func parseServiceCommand(args []string) (run serviceCommand, usageMessage string) {
 	switch args[0] {
 	case "configure":
 		if len(args) != 2 {
-			return usage("configure requires a source")
+			return nil, "configure requires a source"
 		}
-		return configureJSON(ctx, client, args[1])
-	case "start":
-		return startJSON(ctx, client, args[1:])
+		return func(ctx context.Context, client controljson.Client) int { return configureJSON(ctx, client, args[1]) }, ""
+	case startCommand:
+		options, message := parseStartOptions(args[1:])
+		return options.start, message
 	case "stop":
-		return stopJSON(ctx, client, args[1:])
+		options, message := parseStopOptions(args[1:])
+		return options.stop, message
 	case "snapshot":
 		if len(args) != 1 {
-			return usage("snapshot accepts no options")
+			return nil, "snapshot accepts no options"
 		}
-		return snapshotJSON(ctx, client)
+		return snapshotJSON, ""
 	case "external-ip":
-		return externalIP()
+		if len(args) != 1 {
+			return nil, "external-ip accepts no options"
+		}
+		return func(context.Context, controljson.Client) int { return externalIP() }, ""
 	default:
-		return usage("unknown command")
+		return nil, "unknown command"
 	}
 }
 
@@ -158,8 +191,11 @@ func writeJSONFailure(err error) int {
 	code := string(sessionapi.FailureInternal)
 	message := err.Error()
 	var remote *controljson.CallError
+	var unavailable *serviceUnavailableError
 	if errors.As(err, &remote) {
 		code, message = remote.Code, remote.Message
+	} else if errors.As(err, &unavailable) {
+		code = failureServiceUnavailable
 	}
 	if encodeErr := json.NewEncoder(os.Stdout).Encode(wire.Response[any]{
 		Error: &wire.Failure{Code: code, Message: message},
@@ -235,7 +271,7 @@ func parseStartOptions(args []string) (options startOptions, errorMessage string
 				return options, sessionIDRequiredMessage
 			}
 			value, remaining, ok := takeOptionValue(args)
-			if !ok {
+			if !ok || value == "" {
 				return options, sessionIDRequiredMessage
 			}
 			options.sessionID = value
@@ -245,7 +281,7 @@ func parseStartOptions(args []string) (options startOptions, errorMessage string
 				return options, "--config-digest requires one value"
 			}
 			value, remaining, ok := takeOptionValue(args)
-			if !ok {
+			if !ok || value == "" {
 				return options, "--config-digest requires one value"
 			}
 			options.digest = value
@@ -260,11 +296,7 @@ func parseStartOptions(args []string) (options startOptions, errorMessage string
 	return options, ""
 }
 
-func startJSON(ctx context.Context, client controljson.Client, args []string) int {
-	options, parseError := parseStartOptions(args)
-	if parseError != "" {
-		return usage(parseError)
-	}
+func (options startOptions) start(ctx context.Context, client controljson.Client) int {
 	current, err := callSnapshot(ctx, client, "")
 	if err != nil {
 		return writeJSONFailure(err)
@@ -340,7 +372,7 @@ func parseStopOptions(args []string) (options stopOptions, errorMessage string) 
 				return options, sessionIDRequiredMessage
 			}
 			value, remaining, ok := takeOptionValue(args)
-			if !ok {
+			if !ok || value == "" {
 				return options, sessionIDRequiredMessage
 			}
 			options.sessionID = value
@@ -369,11 +401,7 @@ func parseStopOptions(args []string) (options stopOptions, errorMessage string) 
 	return options, ""
 }
 
-func stopJSON(ctx context.Context, client controljson.Client, args []string) int {
-	options, parseError := parseStopOptions(args)
-	if parseError != "" {
-		return usage(parseError)
-	}
+func (options stopOptions) stop(ctx context.Context, client controljson.Client) int {
 	snapshot, err := callSnapshot(ctx, client, "")
 	if err != nil {
 		return writeJSONFailure(err)
@@ -381,27 +409,36 @@ func stopJSON(ctx context.Context, client controljson.Client, args []string) int
 	if options.sessionID != "" && (snapshot.SessionID != options.sessionID || snapshot.Generation != options.generation) {
 		return writeJSONFailure(&controljson.CallError{Code: string(sessionapi.FailureConflict), Message: "session generation changed; refresh its snapshot before stopping"})
 	}
-	if snapshot.Generation == 0 || snapshot.CleanupComplete {
-		if err := cleanupFailure(&snapshot); err != nil {
-			return writeJSONFailure(err)
+	if snapshot.Generation == 0 || (snapshot.CleanupComplete && snapshot.PrimaryAction != "STOP") {
+		if cleanupErr := cleanupFailure(&snapshot); cleanupErr != nil {
+			return writeJSONFailure(cleanupErr)
 		}
 		return writeJSONResult(snapshot)
 	}
-	var stopped wire.Generation
-	if err := client.Call(ctx, "Stop", struct {
-		SessionID  string `json:"session_id"`
-		Generation uint64 `json:"generation"`
-	}{snapshot.SessionID, snapshot.Generation}, &stopped); err != nil {
+	stopped, err := callStop(ctx, client, snapshot.SessionID, snapshot.Generation)
+	if err != nil {
 		return writeJSONFailure(err)
 	}
-	return waitForDisconnect(ctx, client, snapshot.SessionID)
+	return waitForDisconnect(ctx, client, snapshot.SessionID, stopped.Generation)
 }
 
-func waitForDisconnect(ctx context.Context, client controljson.Client, sessionID string) int {
+func callStop(ctx context.Context, client controljson.Client, sessionID string, generation uint64) (wire.Generation, error) {
+	var stopped wire.Generation
+	err := client.Call(ctx, "Stop", struct {
+		SessionID  string `json:"session_id"`
+		Generation uint64 `json:"generation"`
+	}{sessionID, generation}, &stopped)
+	return stopped, err
+}
+
+func waitForDisconnect(ctx context.Context, client controljson.Client, sessionID string, generation uint64) int {
 	for {
 		current, err := callSnapshot(ctx, client, sessionID)
 		if err != nil {
 			return writeJSONFailure(err)
+		}
+		if current.Generation != generation {
+			return writeJSONFailure(&controljson.CallError{Code: string(sessionapi.FailureConflict), Message: "session restarted while waiting for stop cleanup; refresh its snapshot"})
 		}
 		if current.CleanupComplete {
 			if err := cleanupFailure(&current); err != nil {
@@ -430,6 +467,10 @@ func callSnapshot(ctx context.Context, client controljson.Client, sessionID stri
 	err := client.Call(ctx, "Snapshot", struct {
 		SessionID string `json:"session_id"`
 	}{SessionID: sessionID}, &snapshot)
+	if err == nil && snapshot.ProtocolVersion != wire.ProtocolVersion {
+		// A service that predates the field reports 0, which is also a mismatch.
+		err = &controljson.CallError{Code: string(sessionapi.FailureConflict), Message: wire.RestartMessage}
+	}
 	return snapshot, err
 }
 
@@ -473,11 +514,7 @@ func cleanupSession(client controljson.Client, sessionID string, generation uint
 	if current.Generation != generation || current.CleanupComplete {
 		return cleanupFailure(&current)
 	}
-	var stopped wire.Generation
-	if err := client.Call(ctx, "Stop", struct {
-		SessionID  string `json:"session_id"`
-		Generation uint64 `json:"generation"`
-	}{sessionID, generation}, &stopped); err != nil {
+	if _, err := callStop(ctx, client, sessionID, generation); err != nil {
 		return fmt.Errorf("stop cleanup session: %w", err)
 	}
 	for {
@@ -513,11 +550,22 @@ func failureError(failure *wire.Failure) error {
 	return &controljson.CallError{Code: failure.Code, Message: failure.Message}
 }
 
+// configureStdin is the reader behind `dobby-cli configure -`.
+var configureStdin io.Reader = os.Stdin
+
+const (
+	sourceSizeLimit = 1 << 20
+	stdinSource     = "-"
+	startCommand    = "start"
+)
+
 func readSource(source string) (data []byte, resultErr error) {
-	const limit = 1 << 20
+	if source == stdinSource {
+		return readStdinSource(configureStdin)
+	}
 	cleanPath := filepath.Clean(source)
 	if isInlineTOMLSource(source) {
-		return readInlineTOMLSource(source, cleanPath, limit)
+		return readInlineTOMLSource(source, cleanPath)
 	}
 
 	sourceURL, isURL, err := parseSourceURL(source)
@@ -527,49 +575,92 @@ func readSource(source string) (data []byte, resultErr error) {
 	if isURL {
 		return sourceURL, nil
 	}
-	return readSourceFile(cleanPath, limit)
+	return readSourceFile(cleanPath)
 }
 
-func readInlineTOMLSource(source, path string, limit int) ([]byte, error) {
+// readStdinSource reads a subscription from stdin so that it never appears in
+// the process list or shell history. The text is an HTTPS URL (surrounding
+// whitespace is ignored) or an inline TOML profile; a file path is not accepted.
+// Errors never echo the input, which usually carries a secret token.
+func readStdinSource(input io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(input, sourceSizeLimit+1))
+	if err != nil {
+		return nil, errors.New("cannot read the configuration from stdin")
+	}
+	if len(data) > sourceSizeLimit {
+		return nil, errors.New("configuration exceeds the 1 MiB size limit")
+	}
+	text := string(data)
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("stdin is empty; pass an HTTPS subscription URL or TOML profile")
+	}
+	if isInlineTOMLSource(text) {
+		return data, nil
+	}
+	trimmed := strings.TrimSpace(text)
+	if _, isURL, parseErr := parseSourceURL(trimmed); parseErr != nil || !isURL {
+		return nil, errors.New("stdin must contain an HTTPS subscription URL or a TOML profile")
+	}
+	return []byte(trimmed), nil
+}
+
+func readInlineTOMLSource(source, path string) ([]byte, error) {
 	_, statErr := os.Stat(path)
 	if statErr == nil {
-		return readSourceFile(path, limit)
+		return readSourceFile(path)
 	}
 	if !errors.Is(statErr, os.ErrNotExist) &&
 		!errors.Is(statErr, syscall.ENAMETOOLONG) &&
 		!strings.ContainsAny(source, "\r\n") {
 		return nil, fmt.Errorf("cannot read configuration file: %w", statErr)
 	}
-	if len(source) > limit {
+	if len(source) > sourceSizeLimit {
 		return nil, errors.New("configuration exceeds the 1 MiB size limit")
 	}
 	return []byte(source), nil
 }
 
-func readSourceFile(path string, limit int) (data []byte, resultErr error) {
+func readSourceFile(path string) (data []byte, resultErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
-	data, err = io.ReadAll(io.LimitReader(file, int64(limit+1)))
+	data, err = io.ReadAll(io.LimitReader(file, sourceSizeLimit+1))
 	if err != nil {
 		return nil, fmt.Errorf("cannot read configuration file: %w", err)
 	}
-	if len(data) > limit {
+	if len(data) > sourceSizeLimit {
 		return nil, errors.New("configuration exceeds the 1 MiB size limit")
 	}
 
 	return data, nil
 }
 
+// Recognize an assignment only at the start of the first content line. The
+// backend decodes the document and decides which keys and values are valid.
+const tomlKeyPart = `(?:[A-Za-z0-9_-]+|'[^']*'|"(?:[^"\\]|\\.)*")`
+
+var tomlAssignment = regexp.MustCompile(`^` + tomlKeyPart + `(?:[ \t]*\.[ \t]*` + tomlKeyPart + `)*[ \t]*=`)
+
 func isInlineTOMLSource(source string) bool {
-	for _, line := range strings.Split(source, "\n") {
-		candidate := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+	var sawAssignment bool
+	for line := range strings.SplitSeq(source, "\n") {
+		candidate := strings.TrimSpace(line)
 		if candidate == "" || strings.HasPrefix(candidate, "#") {
 			continue
 		}
-		return strings.HasPrefix(candidate, "[")
+		if strings.HasPrefix(candidate, "[") {
+			return true
+		}
+		if !sawAssignment {
+			if !tomlAssignment.MatchString(candidate) {
+				return false
+			}
+			// A single assignment can also be a filename. Look for the
+			// following table before treating the source as an inline profile.
+			sawAssignment = true
+		}
 	}
 	return false
 }
@@ -600,6 +691,7 @@ func isWindowsPath(source string) bool {
 }
 
 func externalIP() int {
+	const maxResponseBytes = 64
 	client := &http.Client{Timeout: 10 * time.Second}
 	var failures []error
 	for _, endpoint := range []string{"https://api.ipify.org", "https://ifconfig.me/ip"} {
@@ -613,7 +705,7 @@ func externalIP() int {
 			failures = append(failures, fmt.Errorf("external IP request failed: %w", err))
 			continue
 		}
-		body, readErr := io.ReadAll(response.Body)
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 		closeErr := response.Body.Close()
 		if closeErr != nil {
 			failures = append(failures, fmt.Errorf("close external IP response: %w", closeErr))
@@ -627,12 +719,13 @@ func externalIP() int {
 			failures = append(failures, fmt.Errorf("external IP response status=%d body=%q", response.StatusCode, body))
 			continue
 		}
-		value := strings.TrimSpace(string(body))
-		if value != "" {
-			fmt.Println(value)
+		// IPv4 and IPv6 text plus the usual trailing newline fit within 64 bytes.
+		address, parseErr := netip.ParseAddr(strings.TrimSpace(string(body)))
+		if len(body) <= maxResponseBytes && parseErr == nil && address.Zone() == "" {
+			fmt.Println(address)
 			return exitOK
 		}
-		failures = append(failures, errors.New("external IP response body is empty"))
+		failures = append(failures, errors.New("external IP response is not a single IP address"))
 	}
 	reportCLIError("external IP lookup failed", errors.Join(failures...))
 	return exitRuntime
@@ -641,6 +734,11 @@ func externalIP() int {
 func reportFailure(err error) int {
 	if err == nil {
 		err = errors.New("desktop backend returned no result")
+	}
+	var unavailable *serviceUnavailableError
+	if errors.As(err, &unavailable) {
+		fmt.Fprintf(os.Stderr, "dobby-cli: %v\n", unavailable)
+		return exitConnect
 	}
 	var remote *controljson.CallError
 	if errors.As(err, &remote) {
@@ -678,5 +776,7 @@ func usage(message string) int {
 }
 
 func printHelp() {
-	fmt.Println("dobby-cli configure <file-or-https-url> | start (--auto | --profile <index>) [--session-id <id> --config-digest <digest>] | stop [--session-id <id> --generation <number>] | snapshot | logs [--follow] | logs export <new-file> | logs upload | logs clear | external-ip")
+	fmt.Println("dobby-cli configure <file-or-https-url|-> | start (--auto | --profile <index>) [--session-id <id> --config-digest <digest>] | stop [--session-id <id> --generation <number>] | snapshot | logs [--follow] | logs export <new-file> | logs upload | logs clear | external-ip")
+	fmt.Println("configure -: read the HTTPS subscription URL or TOML profile from stdin (keeps the URL out of the process list).")
+	fmt.Println("Exit codes: 0 success; 2 invalid command line or rejected configuration source; 3 Dobby VPN service unavailable; 4 operation failed; 8 conflict (state changed, take a new snapshot).")
 }

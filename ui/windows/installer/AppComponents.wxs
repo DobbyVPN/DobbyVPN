@@ -1,5 +1,8 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <Fragment>
+    <!-- The installer asks DobbyVPN.exe to close and waits 10 seconds; if it is still running, the process is terminated with exit code 0
+         (the TerminateProcess attribute is the exit code, not a switch). How an instance in another session (RDP, fast user switching)
+         is handled was not verified. The window is not restarted after the update (MSIDISABLERMRESTART). -->
     <util:CloseApplication Id="CloseDobbyFrontend" Target="DobbyVPN.exe" CloseMessage="yes" Timeout="10" ElevatedCloseMessage="yes" RebootPrompt="no" TerminateProcess="0" />
     <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
 		<!-- The v1.5.1 executable path changed; this needs a new MSI component identity. -->
@@ -34,7 +37,7 @@
 		</Component>
 		<!-- The v1.5.1 service key file and runtime closure changed. -->
 		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNServerService" Guid="5810499f-aa36-44a7-b9df-9a9505597be2">
-			<File Source="dobbyVPN-windows\bin\dobbyvpn-backend.exe" KeyPath="yes" />
+			<File Id="DobbyBackendFile" Source="dobbyVPN-windows\bin\dobbyvpn-backend.exe" KeyPath="yes" />
 			<File Source="dobbyVPN-windows\bin\dobby_bridge.dll" />
 			<File Source="wintun\bin\$(var.DOBBYVPN_PLATFORM)\wintun.dll" />
 
@@ -49,6 +52,10 @@
 					Arguments="-mode=service" >
 				<ServiceDependency Id="Nsi" />
 				<ServiceDependency Id="TcpIp" />
+				<!-- Match the Go cleanup budget without reconfiguring SCM during automatic startup. -->
+				<ServiceConfig PreShutdownDelay="30000" OnInstall="yes" OnReinstall="yes" />
+				<util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+					ThirdFailureActionType="restart" RestartServiceDelayInSeconds="1" ResetPeriodInDays="1" />
 			</ServiceInstall>
 			<ServiceControl
 					Id="svc.Control"
@@ -67,6 +74,15 @@
 			</RegistryValue>
 		</Component>
 		
+		<!-- Event Log source for startup failures that happen before the service handler runs.
+		     EventCreate.exe supplies the message text for event IDs 1-1000. -->
+		<Component Directory="DobbyVPNFolderBin" Id="DobbyVPNEventSource" Guid="390613db-cd4a-4303-8b6a-d0cb483b7396">
+			<RegistryKey Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\DobbyVPN Go backend" ForceDeleteOnUninstall="yes">
+				<RegistryValue Name="EventMessageFile" Type="expandable" Value="%SystemRoot%\System32\EventCreate.exe" KeyPath="yes" />
+				<RegistryValue Name="TypesSupported" Type="integer" Value="7" />
+			</RegistryKey>
+		</Component>
+
 		<!-- The unpackaged WinUI app loads its self-contained runtime files beside the EXE. -->
 		<Files Directory="DobbyVPNFolderBin" Include="dobbyVPN-windows\bin\**">
 			<Exclude Files="dobbyVPN-windows\bin\DobbyVPN.exe" />

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	socks5 "github.com/things-go/go-socks5"
+	"github.com/things-go/go-socks5/bufferpool"
 	"golang.getoutline.org/sdk/transport"
 
 	"core/auth"
@@ -23,10 +25,17 @@ import (
 	"core/tunnel/protected_dialer"
 )
 
+// Windows needs real server reachability to try the next DNS address family.
+const forceTCPDNSForPlatform = runtime.GOOS == "android" || runtime.GOOS == "linux" ||
+	runtime.GOOS == "darwin" || runtime.GOOS == "ios"
+
 const (
 	networkTCP = "tcp"
 	nilString  = "<nil>"
 )
+
+// Share the library's normal TCP copy buffer size across device replacements.
+var socksCopyBuffers = bufferpool.NewPool(32 * 1024)
 
 type OutlineDevice struct {
 	mu            sync.Mutex
@@ -44,6 +53,8 @@ type OutlineDevice struct {
 	websocket     bool
 	hasTCPPath    bool
 	hasUDPPath    bool
+	ipv6          ipv6Capability
+	dnsRequests   chan struct{}
 }
 
 func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {
@@ -85,10 +96,12 @@ func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dns
 		websocket:    isWebSocket,
 		hasTCPPath:   hasTCPPath,
 		hasUDPPath:   hasUDPPath,
+		dnsRequests:  make(chan struct{}, 64),
 	}
 
 	username, password := auth.GenerateRandomAuth(), auth.GenerateRandomAuth()
 	server := socks5.NewServer(
+		socks5.WithBufferPool(socksCopyBuffers),
 		socks5.WithGPool(od),
 		socks5.WithResolver(od),
 		socks5.WithCredential(socks5.StaticCredentials{username: password}),

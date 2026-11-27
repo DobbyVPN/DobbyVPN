@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"net/url"
 
+	"core/log"
+
 	"github.com/google/uuid"
 )
 
@@ -24,13 +26,16 @@ func (m *Manager) PrepareLogUpload(_ context.Context, sessionID, digest string) 
 	if sessionID == "" || digest == "" {
 		return LogUploadPreparation{}, failure(FailureInvalidArgument, "session ID and configuration digest are required")
 	}
+	if err := log.Flush(); err != nil {
+		return LogUploadPreparation{}, failureWithCause(FailureInternal, "could not flush diagnostics", err)
+	}
 	s, err := m.get(sessionID)
 	if err != nil {
 		return LogUploadPreparation{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if digest != s.digest {
+	if digest != s.loaded.digest {
 		return LogUploadPreparation{}, failure(FailureConflict, "configuration changed; refresh its snapshot")
 	}
 	if s.logsEndpoint == "" {

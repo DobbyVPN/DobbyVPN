@@ -37,9 +37,7 @@ class DeliveryIntegrationTest < Minitest::Test
       assert_equal "${{ steps.ios_notes.outputs.ios_release_notes_b64 }}", resolve.fetch("outputs").fetch("ios_release_notes_b64")
       metadata = jobs.fetch("app_store").fetch("steps").find { |s| s["name"] == "Set selected release metadata and exact notes" }
       assert_equal "${{ needs.resolve_publish.outputs.ios_release_notes_b64 }}", metadata.fetch("env").fetch("RELEASE_NOTES_B64")
-      # Replace only the unrelated GitHub expression; the shell step itself is real.
-      script = metadata.fetch("run").sub("${{ needs.resolve_publish.outputs.android_version_code }}", "1000000")
-      run_step(script, "VERSION_NAME" => "1.0.0", "APPLE_BUILD_NUMBER" => "1000000", "SOURCE_SHA" => "a" * 40,
+      run_step(metadata.fetch("run"), "VERSION_NAME" => "1.0.0", "APPLE_BUILD_NUMBER" => "1000000",
                "RELEASE_NOTES_B64" => b64, "RUNNER_TEMP" => dir, "GITHUB_ENV" => env_file)
       notes_path = File.read(env_file).match(/^APP_STORE_RELEASE_NOTES_FILE=(.*)$/)[1]
       assert_equal notes.b, File.binread(notes_path)
@@ -85,6 +83,42 @@ class DeliveryIntegrationTest < Minitest::Test
     end
     with_lane_env("APP_STORE_RELEASE_NOTES" => "iOS improvements") do
       assert_equal "Apple connection reached", assert_raises(RuntimeError) { $delivery_lanes.fetch(:submit_app_store_review).call }.message
+    end
+  end
+
+  def test_signing_removes_decoded_inputs_on_success_and_failed_import
+    password = "test password with spaces"
+    env = {
+      "CERT_P12_BASE64" => Base64.strict_encode64("cert"),
+      "CERT_P12_PASSWORD" => "p12", "KEYCHAIN_PASSWORD" => password,
+      "PROVISION_DOBBY_BASE64" => Base64.strict_encode64("app"),
+      "PROVISION_DOBBY_TUNNEL_BASE64" => Base64.strict_encode64("tunnel"),
+    }
+    with_lane_env(env) do
+      [false, true].each do |fail_import|
+        files, commands = [], []
+        actions = Object.new
+        actions.define_singleton_method(:create_keychain) { |**_| }
+        actions.define_singleton_method(:import_certificate) do |certificate_path:, **_|
+          files << [certificate_path, File.binread(certificate_path)]
+          raise "import failed" if fail_import
+        end
+        actions.define_singleton_method(:system) { |*args| commands << args; true }
+        actions.define_singleton_method(:install_provisioning_profile) do |path:|
+          files << [path, File.binread(path)]
+        end
+        run = -> { actions.instance_exec(&$delivery_lanes.fetch(:prepare_signing)) }
+        if fail_import
+          assert_equal "import failed", assert_raises(RuntimeError, &run).message
+          assert_empty commands
+        else
+          run.call
+          assert_equal [["security", "set-key-partition-list", "-S", "apple-tool:,apple:", "-s",
+                         "-k", password, File.expand_path("~/Library/Keychains/build.keychain-db")]], commands
+        end
+        assert_equal(fail_import ? ["cert"] : %w[cert app tunnel], files.map(&:last))
+        refute File.exist?(File.dirname(files.first.first))
+      end
     end
   end
 

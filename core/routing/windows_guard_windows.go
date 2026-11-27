@@ -15,6 +15,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"core/iprange"
 	"core/log"
 
 	"golang.org/x/sys/windows"
@@ -22,15 +23,13 @@ import (
 
 const (
 	wfpAuthnWinNT         = 10
-	wfpSessionDynamic     = 1
+	wfpPersistent         = 1
 	wfpUint8              = 1
 	wfpUint16             = 2
 	wfpUint64             = 4
-	wfpByteBlobType       = 12
 	wfpFilterWeightMax    = 15
-	wfpFilterWeight       = wfpFilterWeightMax
+	wfpByteBlobType       = 12
 	wfpMatchEqual         = 0
-	wfpMatchNotEqual      = 10
 	wfpActionBlock        = 0x1001
 	wfpProtocolTCP        = 6
 	wfpProtocolUDP        = 17
@@ -40,6 +39,8 @@ const (
 	wfpSecurityDescriptor = 14
 	wfpActionPermit       = 0x1002
 	wfpMatchFlagsAllSet   = 6
+	wfpMatchRange         = 5
+	wfpRangeType          = 258
 )
 
 var (
@@ -152,11 +153,12 @@ var (
 	wfpConditionUser          = windows.GUID{Data1: 0xaf043a0a, Data2: 0xb34d, Data3: 0x4f86, Data4: [8]byte{0x97, 0x9c, 0xc9, 0x03, 0x71, 0xaf, 0x6e, 0x66}}
 )
 
-// WindowsNetworkGuard owns one dynamic WFP session from network activation to
+// WindowsNetworkGuard manages persistent provider-owned filters from activation to
 // Stop. Only the retained tunnel, loopback, required system traffic, and actual
 // backend destinations are permitted. There is no executable-wide exemption.
-// Process termination removes the session through Windows, as for Wintun.
+// Enforcement survives the service handle closing.
 type WindowsNetworkGuard struct {
+	policy            *WindowsServiceProtection
 	mu                sync.Mutex
 	engine            windows.Handle
 	sublayerKey       windows.GUID
@@ -167,24 +169,34 @@ type WindowsNetworkGuard struct {
 	retiredThrough    uint64
 	bootstrapIdentity string
 	bootstrapIDs      []uint64
+	excluded          *iprange.Set
+	excludedHosts     *iprange.Set
+	excludedHash      string
+	excludedIDs       []uint64
 }
 
 func OpenWindowsNetworkGuard(tunnelLUID uint64) (*WindowsNetworkGuard, error) {
+	return ServiceWindowsProtection.open(tunnelLUID)
+}
+
+func (policy *WindowsServiceProtection) open(tunnelLUID uint64) (*WindowsNetworkGuard, error) {
 	if tunnelLUID == 0 {
 		return nil, errors.New("open Windows network guard: tunnel LUID is zero")
 	}
-	g := &WindowsNetworkGuard{tunnelLUID: tunnelLUID, attempts: make(map[uint64]map[string]uint64)}
-	sessionName, _ := windows.UTF16PtrFromString("DobbyVPN network protection")
-	session := fwpmSession{displayData: fwpmDisplayData{name: sessionName}, flags: wfpSessionDynamic}
-	_, err := windowsDNSWFPCall(windowsDNSWFP.engineOpen, "FwpmEngineOpen0", 0, wfpAuthnWinNT, 0, uintptr(unsafe.Pointer(&session)), uintptr(unsafe.Pointer(&g.engine)))
-	runtime.KeepAlive(&session)
-	if err != nil || g.engine == 0 {
-		return g.failInstall(errors.Join(err, errors.New("WFP network session acquisition failed")))
+	policy.mu.Lock()
+	defer policy.mu.Unlock()
+	if policy.active != nil {
+		return nil, errors.New("Windows network protection is already active")
 	}
-	g.sublayerKey, err = windows.GenerateGUID()
+	if err := policy.closeRestoreLocked(); err != nil {
+		return nil, err
+	}
+	g, err := policy.openEngine(0)
 	if err != nil {
-		return g.failInstall(err)
+		return nil, err
 	}
+	g.tunnelLUID = tunnelLUID
+	g.attempts = make(map[uint64]map[string]uint64)
 	exe, err := os.Executable()
 	if err != nil {
 		return g.failInstall(err)
@@ -194,20 +206,29 @@ func OpenWindowsNetworkGuard(tunnelLUID uint64) (*WindowsNetworkGuard, error) {
 		return g.failInstall(err)
 	}
 	err = g.transaction(context.Background(), func() error {
-		name, _ := windows.UTF16PtrFromString("DobbyVPN network protection")
-		layer := fwpmSublayer{sublayerKey: g.sublayerKey, displayData: fwpmDisplayData{name: name}, weight: ^uint16(0)}
-		_, err := windowsDNSWFPCall(windowsDNSWFP.subLayerAdd, "FwpmSubLayerAdd0", uintptr(g.engine), uintptr(unsafe.Pointer(&layer)), 0)
-		runtime.KeepAlive(&layer)
-		if err != nil {
-			return err
-		}
-		return g.installBase()
+		return g.replaceBase()
 	})
 	if err != nil {
 		return g.failInstall(err)
 	}
+	policy.active = g
 	log.Info(Category, "Windows network protection acquired", map[string]any{"sublayer_id": g.sublayerKey.String(), "filter_ids": g.filterIDs, "tunnel_luid": tunnelLUID})
 	return g, nil
+}
+
+func (g *WindowsNetworkGuard) replaceBase() error {
+	existing, err := g.ownedPolicy()
+	if err != nil {
+		return err
+	}
+	if existing {
+		if err := g.clearPolicyFilters(false); err != nil {
+			return err
+		}
+	} else if err := g.installPolicy(); err != nil {
+		return err
+	}
+	return g.installBase()
 }
 
 // Conditions retain all Go storage referenced by native WFP unions until Add
@@ -244,7 +265,46 @@ func (c *wfpConditions) remote(address netip.Addr) windows.GUID {
 	c.scalar(wfpConditionRemoteAddress, wfpByteArray16, uintptr(unsafe.Pointer(b)))
 	return wfpLayerConnectV6
 }
+
+// fwpRange matches FWP_RANGE0.
+type fwpRange struct{ low, high wfpValue }
+
+func (c *wfpConditions) remoteRange(r iprange.Range) windows.GUID {
+	bounds := new(fwpRange)
+	layer := wfpLayerConnectV4
+	if r.First.Is4() {
+		first, last := r.First.As4(), r.Last.As4()
+		bounds.low = wfpValue{dataType: wfpUint32, value: uintptr(binary.BigEndian.Uint32(first[:]))}
+		bounds.high = wfpValue{dataType: wfpUint32, value: uintptr(binary.BigEndian.Uint32(last[:]))}
+	} else {
+		first, last := new([16]byte), new([16]byte)
+		*first, *last = r.First.As16(), r.Last.As16()
+		c.roots = append(c.roots, first, last)
+		bounds.low = wfpValue{dataType: wfpByteArray16, value: uintptr(unsafe.Pointer(first))}
+		bounds.high = wfpValue{dataType: wfpByteArray16, value: uintptr(unsafe.Pointer(last))}
+		layer = wfpLayerConnectV6
+	}
+	c.roots = append(c.roots, bounds)
+	c.values = append(c.values, fwpmFilterCondition{fieldKey: wfpConditionRemoteAddress, matchType: wfpMatchRange, conditionValue: wfpValue{dataType: wfpRangeType, value: uintptr(unsafe.Pointer(bounds))}})
+	return layer
+}
+
+// excludedRangeConditions limits a permit to this backend and one address
+// range. Each condition has its own field: how WFP combines several conditions
+// on one field differs between fields and Windows versions, so the filter
+// does not rely on it. The backend only relays TCP and UDP.
+func excludedRangeConditions(r iprange.Range, appID []byte) (*wfpConditions, windows.GUID) {
+	c := &wfpConditions{}
+	layer := c.remoteRange(r)
+	c.blob(wfpConditionAppID, wfpByteBlobType, appID)
+	return c, layer
+}
+
 func (g *WindowsNetworkGuard) add(name string, layer windows.GUID, action uint32, weight uint8, c *wfpConditions) (uint64, error) {
+	return g.addPolicyFilter(name, layer, action, weight, c, wfpAttemptFilter)
+}
+
+func (g *WindowsNetworkGuard) addPolicyFilter(name string, layer windows.GUID, action uint32, weight uint8, c *wfpConditions, role byte) (uint64, error) {
 	key, err := windows.GenerateGUID()
 	if err != nil {
 		return 0, err
@@ -253,7 +313,13 @@ func (g *WindowsNetworkGuard) add(name string, layer windows.GUID, action uint32
 	if err != nil {
 		return 0, err
 	}
-	filter := fwpmFilter{filterKey: key, displayData: fwpmDisplayData{name: label}, layerKey: layer, sublayerKey: g.sublayerKey, weight: wfpValue{dataType: wfpUint8, value: uintptr(weight)}, action: fwpmAction{actionType: action}}
+	filter := fwpmFilter{providerKey: &g.policy.provider, providerData: wfpByteBlob{size: 1, data: &role}, filterKey: key, displayData: fwpmDisplayData{name: label}, layerKey: layer, sublayerKey: g.sublayerKey, weight: wfpValue{dataType: wfpUint8, value: uintptr(weight)}, action: fwpmAction{actionType: action}}
+	// Only the fail-closed base belongs in BFE's persistent store. Source and
+	// interface allowances are rebuilt after reboot or service adoption.
+	if role == wfpBaseFilter {
+		filter.flags = wfpPersistent
+	}
+
 	if len(c.values) > 0 {
 		filter.numFilterConditions = uint32(len(c.values))
 		filter.filterCondition = &c.values[0]
@@ -270,7 +336,11 @@ func (g *WindowsNetworkGuard) add(name string, layer windows.GUID, action uint32
 	return id, nil
 }
 func (g *WindowsNetworkGuard) base(name string, layer windows.GUID, action uint32, weight uint8, c *wfpConditions) error {
-	id, err := g.add(name, layer, action, weight, c)
+	role := byte(wfpBaseFilter)
+	if name == "Permit retained VPN interface" {
+		role = wfpAttemptFilter
+	}
+	id, err := g.addPolicyFilter(name, layer, action, weight, c, role)
 	if err == nil {
 		g.filterIDs = append(g.filterIDs, id)
 	}
@@ -286,6 +356,9 @@ func (g *WindowsNetworkGuard) installBase() error {
 		loop.values[0].matchType = wfpMatchFlagsAllSet
 		if err := g.base("Permit loopback", layer, wfpActionPermit, 15, loop); err != nil {
 			return err
+		}
+		if g.tunnelLUID == 0 {
+			continue
 		}
 		tun := &wfpConditions{}
 		tun.integer64(wfpConditionNextHop, g.tunnelLUID)
@@ -433,6 +506,11 @@ func (g *WindowsNetworkGuard) Authorize(ctx context.Context, generation uint64, 
 	if g.engine == 0 || generation == 0 || generation <= g.retiredThrough {
 		return errors.New("Windows transport owner is retired")
 	}
+	// A direct connection to an excluded address is already permitted by the
+	// range filters; no filter per address and port is added.
+	if g.excluded.Contains(ip) || g.excludedHosts.Contains(ip) {
+		return ctx.Err()
+	}
 	key := network + "/" + ip.String() + "/" + strconv.Itoa(int(port))
 	entries := g.attempts[generation]
 	if _, ok := entries[key]; ok {
@@ -484,6 +562,47 @@ func (g *WindowsNetworkGuard) Retire(ctx context.Context, generation uint64) err
 	return nil
 }
 
+// SetExcluded permits only this backend to reach the excluded addresses
+// outside the tunnel, with one filter per configured range and per resolved
+// host address. The previous filters are replaced in the same
+// transaction, only when the ranges or the host addresses changed.
+func (g *WindowsNetworkGuard) SetExcluded(ctx context.Context, configured, hosts *iprange.Set) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.engine == 0 {
+		return errors.New("Windows network protection closed")
+	}
+	hash := configured.Hash() + hosts.Hash()
+	if hash == g.excludedHash {
+		return nil
+	}
+	var replacement []uint64
+	err := g.transaction(ctx, func() error {
+		if err := g.deleteIDs(g.excludedIDs); err != nil {
+			return err
+		}
+		for _, r := range append(configured.Ranges(), hosts.Ranges()...) {
+			// A cancelled attach stops here; the transaction is aborted.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			c, layer := excludedRangeConditions(r, g.appID)
+			id, err := g.add("Excluded range", layer, wfpActionPermit, 15, c)
+			if err != nil {
+				return err
+			}
+			replacement = append(replacement, id)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	g.excluded, g.excludedHosts, g.excludedHash, g.excludedIDs = configured, hosts, hash, replacement
+	log.Info(Category, "Windows excluded ranges applied", map[string]any{"filters": len(replacement), "sha256": configured.Hash(), "host_address_ranges": hosts.Len()})
+	return nil
+}
+
 // UpdateBootstrap allows only this backend to query the captured physical DNS
 // servers. The Windows DNS client chooses caching and DNS64 behavior. No global
 // resolver or public-server fallback is admitted outside the tunnel.
@@ -531,7 +650,7 @@ func (g *WindowsNetworkGuard) UpdateBootstrap(ctx context.Context, identity stri
 	return nil
 }
 func (g *WindowsNetworkGuard) failInstall(cause error) (*WindowsNetworkGuard, error) {
-	if err := g.Close(); err != nil {
+	if err := g.closeEngine(); err != nil {
 		return g, errors.Join(cause, err)
 	}
 	return nil, cause
@@ -540,8 +659,23 @@ func (g *WindowsNetworkGuard) Close() error {
 	if g == nil {
 		return nil
 	}
+	g.policy.mu.Lock()
+	defer g.policy.mu.Unlock()
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.engine == 0 {
+		return nil
+	}
+	if g.policy.active == g {
+		if err := g.transaction(context.Background(), func() error { return g.reconcile(g.policy.retain) }); err != nil {
+			return err
+		}
+		g.policy.active = nil
+	}
+	return g.closeEngine()
+}
+
+func (g *WindowsNetworkGuard) closeEngine() error {
 	if g.engine == 0 {
 		return nil
 	}
@@ -550,7 +684,7 @@ func (g *WindowsNetworkGuard) Close() error {
 		return err
 	}
 	g.engine = 0
-	log.Info(Category, "Windows network protection removed", map[string]any{"sublayer_id": g.sublayerKey.String()})
+	log.Info(Category, "Windows network protection handle closed", map[string]any{"sublayer_id": g.sublayerKey.String()})
 	return nil
 }
 

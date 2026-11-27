@@ -1,0 +1,31 @@
+name: Fast behavioral tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    name: Fast behavioral tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: .go-version
+          cache: false
+      - name: Check public Go behavior
+        working-directory: core
+        env:
+          GOTOOLCHAIN: local
+        run: go test -race -count=1 -tags=ci -p 2 ./protocol ./sessionapi ./outline ./cmd/dobbyvpn

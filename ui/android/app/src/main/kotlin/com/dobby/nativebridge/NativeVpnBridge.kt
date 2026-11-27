@@ -33,7 +33,6 @@ object NativeVpnBridge {
     private const val CONSENT_LAUNCH_FAILED = "FAILED"
     private const val DIAGNOSTIC_DIRECTORY = "diagnostics"
     private const val UI_DIAGNOSTIC_FILE = "ui_diagnostics.jsonl"
-    private const val NATIVE_DIAGNOSTIC_FILE = "native_logs.jsonl"
     private const val SAVED_SOURCE_DIRECTORY = "configs"
     private const val SAVED_SOURCE_FILE = "connection-url.txt"
     private const val GO_DIAGNOSTIC_FILE = "go_app_logs.jsonl"
@@ -93,8 +92,7 @@ object NativeVpnBridge {
         start = {
             val context = checkNotNull(preparationContext)
             val intent = Intent(context, DobbyVpnService::class.java).setAction(DobbyVpnService.ACTION_PREPARE)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
-            else context.startService(intent)
+            context.startForegroundService(intent)
         },
         complete = { request, error ->
             completePreparation(request, if (error == null) PreparationResult.Ready else PreparationResult.Failed(error))
@@ -289,6 +287,13 @@ object NativeVpnBridge {
         val stamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
         val archive = File.createTempFile("DobbyVPN_logs_${stamp}_", ".jsonl.gz", context.cacheDir)
         try {
+            if (NativeGoSession.isLoggerReady()) {
+                val failure = NativeGoSession.flushDiagnostics()
+                if (failure != "") {
+                    recordNativeFailure(context, "logs.export_flush_failed",
+                        IOException(failure ?: "Go logger returned no diagnostic flush result"))
+                }
+            }
             val metadata = JSONObject().put("app_version", com.dobby.vpn.BuildConfig.VERSION_NAME)
                 .put("source_commit", com.dobby.vpn.BuildConfig.PROJECT_REPOSITORY_COMMIT)
                 .put("platform", "Android ${Build.VERSION.RELEASE}")

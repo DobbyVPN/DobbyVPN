@@ -7,6 +7,7 @@ import NetworkExtension
 
 extension PacketTunnelProvider {
     func handleGoPublishedState(sessionID: String?, generation: Int64, state: String?, failureCode: String?) {
+        logResources("state-\(state ?? "unknown")")
         // State is a wake hint only. ReleaseTunnel is the sole settings cleanup path.
         logs.writeLog(log: "Go state session=\(sessionID ?? "") generation=\(generation) state=\(state ?? "") failure=\(failureCode ?? "")")
     }
@@ -52,6 +53,7 @@ extension PacketTunnelProvider {
             guard descriptor >= 0 else {
                 return tunnelResult(error: NSError(domain: NSPOSIXErrorDomain, code: Int(errno)), pending: true)
             }
+            recordProtection(true, sessionID: sessionID, generation: generation)
             return tunnelResult(fd: descriptor, pending: true)
         }
     }
@@ -64,6 +66,7 @@ extension PacketTunnelProvider {
             if error == nil && networkSession == sessionID && networkGeneration == generation {
                 networkSession = nil
                 networkGeneration = -1
+                recordProtection(false)
             }
             return tunnelResult(error: error, pending: error != nil)
         }
@@ -96,13 +99,16 @@ extension PacketTunnelProvider {
         return ["revision": "\(physicalRevision):\(interface.index)", "interface_index": interface.index]
     }
 
-    private func updatePhysicalPath(_ path: Network.NWPath) {
+    @discardableResult
+    private func updatePhysicalPath(_ path: Network.NWPath) -> UInt64 {
         physicalPathLock.lock()
         if physicalPath != path {
             physicalPath = path
             physicalRevision += 1
         }
+        let revision = physicalRevision
         physicalPathLock.unlock()
+        return revision
     }
 
     private func fixedTunnelSettings(dnsServers: [String]) -> NEPacketTunnelNetworkSettings {
@@ -152,7 +158,7 @@ extension PacketTunnelProvider {
 
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            self.updatePhysicalPath(path)
+            let revision = self.updatePhysicalPath(path)
             let status = path.status
             let ifaces = path.availableInterfaces.map { "\($0.name)[\(self.interfaceTypeKey($0.type))]" }.joined(separator: ",")
             let expensive = path.isExpensive
@@ -160,6 +166,14 @@ extension PacketTunnelProvider {
             let signature = "status=\(status) ifaces=[\(ifaces)] expensive=\(expensive) " +
                 "constrained=\(constrained) supportsIPv4=\(path.supportsIPv4) " +
                 "supportsIPv6=\(path.supportsIPv6)"
+            let uplink = path.availableInterfaces.first {
+                $0.type != .loopback && !$0.name.hasPrefix("utun") && path.usesInterfaceType($0.type)
+            }
+            let flowPath = "\(status):\(uplink?.index ?? 0):\(path.supportsIPv4):\(path.supportsIPv6)"
+            if let previous = self.lastFlowPath, previous != flowPath {
+                self.retirePhysicalPathFlows(revision: revision)
+            }
+            self.lastFlowPath = flowPath
             if self.lastPathSignature != signature {
                 let previous = self.lastPathSignature ?? "(none)"
                 self.lastPathSignature = signature

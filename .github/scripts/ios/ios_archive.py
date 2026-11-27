@@ -194,7 +194,7 @@ def sign_archive_for_export(
     version: str,
     build_number: str,
 ) -> None:
-    """Apply selected source entitlements and sign the extracted archive in place."""
+    """Apply selected source entitlements and sign the archive in place."""
     if not TEAM_ID.fullmatch(team_id):
         raise ArchiveError("Apple team ID must be ten uppercase letters or digits")
     if not identity:
@@ -487,7 +487,16 @@ def main(argv: list[str] | None = None) -> int:
                 version=args.version,
                 build_number=args.build_number,
             )
-            print("Signed the extracted iOS archive with selected source entitlements")
+            print("Signed the iOS archive with selected source entitlements")
+        elif args.command == "pack":
+            pack_archive(
+                args.archive_dir,
+                args.output,
+                source_sha=args.source_sha,
+                version=args.version,
+                build_number=args.build_number,
+            )
+            print(f"Verified and packed unsigned iOS archive: {args.output}")
         else:
             _validate_archive(
                 args.archive_dir,
@@ -495,17 +504,7 @@ def main(argv: list[str] | None = None) -> int:
                 version=args.version,
                 build_number=args.build_number,
             )
-            if args.command == "pack":
-                pack_archive(
-                    args.archive_dir,
-                    args.output,
-                    source_sha=args.source_sha,
-                    version=args.version,
-                    build_number=args.build_number,
-                )
-                print(f"Verified and packed unsigned iOS archive: {args.output}")
-            else:
-                print("Unsigned iOS archive content matches selected Build metadata")
+            print("Unsigned iOS archive content matches selected Build metadata")
         return 0
     except (
         OSError,

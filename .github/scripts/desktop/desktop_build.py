@@ -116,6 +116,7 @@ CLI_NAMES = {
 }
 MACOS_MINIMUM_SYSTEM_VERSION = "12.0"
 PROBE_TIMEOUT_SECONDS = 30
+WINDOWS_GO_SCHEDULER = "asyncpreemptoff=1"
 GOOS_BY_PLATFORM = {
     "linux": "linux",
     "macos": "darwin",
@@ -168,12 +169,9 @@ def child_environment(
     if executable in {"go", "go.exe"}:
         child_env["GOTOOLCHAIN"] = "local"
     if host_platform() == "windows" and executable in {"go", "go.exe"}:
-        # Some Windows Go compilers have stalled in asyncPreempt/badmcall and
-        # recursive panic reporting, even during compile -V=full. Upstream:
-        # golang/go#67108 and #79249. Scope this mitigation to Go tools, not
-        # the VPN runtime, until a Windows qualification proves it unnecessary.
+        # The compiler can also fail in asyncPreempt/badmcall during startup.
         child_env["GODEBUG"] = ",".join(
-            filter(None, (child_env.get("GODEBUG"), "asyncpreemptoff=1"))
+            filter(None, (child_env.get("GODEBUG"), WINDOWS_GO_SCHEDULER))
         )
     return child_env
 
@@ -182,8 +180,9 @@ def run_bounded_capture(
     command: list[str],
     cwd: Path = ROOT_DIR,
     timeout_seconds: int = PROBE_TIMEOUT_SECONDS,
+    *, env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    child_env = child_environment(command)
+    child_env = child_environment(command, env)
     return _run_bounded_capture(
         command,
         cwd=cwd,
@@ -223,10 +222,12 @@ def run(
     return result
 
 
-def run_capture(command: list[str], cwd: Path = ROOT_DIR) -> str | None:
+def run_capture(
+    command: list[str], cwd: Path = ROOT_DIR, *, env: dict[str, str] | None = None,
+) -> str | None:
     printable = " ".join(command)
     try:
-        result = run_bounded_capture(command, cwd)
+        result = run_bounded_capture(command, cwd, env=env) if env is not None else run_bounded_capture(command, cwd)
     except FileNotFoundError as error:
         emit_process_diagnostic(f"[!] Probe command was not found: {printable}: {error}")
         return None
@@ -672,6 +673,12 @@ def configure_macos_bridge_link(environment: dict[str, str]) -> None:
     )
 
 
+def configure_macos_compiler(environment: dict[str, str], arch: str) -> None:
+    target = {"amd64": "x86_64", "arm64": "arm64"}[arch]
+    triple = f"{target}-apple-macosx{MACOS_MINIMUM_SYSTEM_VERSION}"
+    environment.update(CC=f"clang -target {triple}", CXX=f"clang++ -target {triple}")
+
+
 def configure_macos_deployment_target(
     target_platform: str, environment: dict[str, str]
 ) -> None:
@@ -929,6 +936,23 @@ def verify_go_debug(go: Path, binary: Path) -> None:
         fail(f"Go debugging compiler flags missing from {binary}")
 
 
+def windows_go_runtime_ldflags(
+    go: Path, package: str, env: dict[str, str], build_tags: tuple[str, ...] = (),
+) -> str:
+    # A cold Windows process can fail inside Go before main or the SCM
+    # dispatcher (golang/go#67108, #79249). The pinned Go toolchain accepts
+    # this runtime knob at startup but omits it from the //go:debug keys.
+    # Use cmd/go's own linker setting and preserve its per-package defaults.
+    command = [str(go), "list", "-f", "{{.DefaultGODEBUG}}"]
+    if build_tags:
+        command.append(f"-tags={','.join(build_tags)}")
+    result = run_bounded_capture([*command, package], GO_MODULE_DIR, env=env)
+    emit_process_streams("Windows Go runtime defaults", result.stdout, result.stderr)
+    result.check_returncode()
+    defaults = ",".join(filter(None, (result.stdout.strip(), WINDOWS_GO_SCHEDULER)))
+    return f" -X=runtime.godebugDefault={defaults}"
+
+
 def build_cli(
     target_platform: str, go_executable: Path, arch: str | None = None, *, debug: bool = False,
 ) -> Path:
@@ -939,10 +963,13 @@ def build_cli(
     env.update({"CGO_ENABLED": "0", "GOOS": GOOS_BY_PLATFORM[target_platform], "GOARCH": target_arch})
     configure_macos_deployment_target(target_platform, env)
     ldflags = go_build_identity(debug)
+    if target_platform == "windows":
+        ldflags += windows_go_runtime_ldflags(go_executable, "./cmd/dobbyvpn/", env)
     if target_platform == "macos":
         # The CLI shares the runtime's native physical-network resolver and DNS
         # ownership code, so it needs the same cgo framework closure as the service.
         env["CGO_ENABLED"] = "1"
+        configure_macos_compiler(env, target_arch)
         configure_macos_bridge_link(env)
         ldflags += (
             f" -linkmode=external -extldflags "
@@ -1026,7 +1053,10 @@ def build_service(
             env["CGO_CFLAGS"] = "-O0 -g"
             env["CGO_CXXFLAGS"] = "-O0 -g"
         ldflags = go_build_identity(debug)
+        if target_platform == "windows":
+            ldflags += windows_go_runtime_ldflags(go, "./clientserver/", env, build_tags)
         if target_platform == "macos":
+            configure_macos_compiler(env, target_arch)
             # Keep the package's declared macOS 12 floor valid for both
             # the Go backend and the native operator CLI.
             # CGO_LDFLAGS is repeated for every cgo package, so add libc++
@@ -1112,20 +1142,17 @@ def _quote_go_ldflags_token(value: str) -> str:
 
 
 def read_version() -> str:
-    """Read the one repository-owned desktop version source."""
-    value = (ROOT_DIR / "VERSION").read_text(encoding="utf-8").strip()
+    """Resolve the version shared by desktop packages, UI and Go binaries."""
+    value = os.environ.get("VERSION_NAME")
+    if value is None:
+        components = ("APP_MAJOR_VERSION", "APP_MINOR_VERSION", "APP_MAINTENANCE_VERSION")
+        if all(key in os.environ for key in components):
+            value = ".".join(os.environ[key] for key in components)
+        else:
+            value = (ROOT_DIR / "VERSION").read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value):
-        fail(f"VERSION must contain a numeric x.y.z value, got {value!r}")
+        fail(f"desktop version must be a numeric x.y.z value, got {value!r}")
     return value
-
-
-def required_service_platforms(require_all: bool, platform_value: str) -> list[str]:
-    if require_all:
-        return ["linux", "macos", "windows"]
-    platforms = selected_platforms(platform_value)
-    if platforms == ["linux", "macos", "windows"]:
-        return platforms
-    return platforms
 
 
 def required_service_paths(require_all: bool, platform_value: str) -> list[Path]:
@@ -1153,19 +1180,12 @@ def require_services(require_all: bool, platform_value: str) -> None:
 
 def run_native_package() -> None:
     """Assemble release archives without a JVM or third-party packager."""
-    major = os.environ.get("APP_MAJOR_VERSION")
-    minor = os.environ.get("APP_MINOR_VERSION")
-    maintenance = os.environ.get("APP_MAINTENANCE_VERSION")
-    if major is not None and minor is not None and maintenance is not None:
-        version = f"{major}.{minor}.{maintenance}"
-    else:
-        version = os.environ.get("VERSION_NAME") or read_version()
     run(
         [
             sys.executable,
             str(ROOT_DIR / ".github" / "scripts" / "desktop" / "package_desktop.py"),
             "--version",
-            version,
+            read_version(),
             "--staging-root",
             str(SERVICES_DIR),
             "--output",
@@ -1210,7 +1230,7 @@ def build_native_ui(
         fail("native desktop UI must be built on its target platform")
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    version = os.environ.get("VERSION_NAME") or read_version()
+    version = read_version()
     commit = os.environ.get("GITHUB_SHA") or run_capture(["git", "rev-parse", "HEAD"]) or "N/A"
     if target_platform == "windows":
         project = ROOT_DIR / "ui" / "windows" / "DobbyVPN.Windows" / "DobbyVPN.Windows.csproj"
@@ -1229,8 +1249,18 @@ def build_native_ui(
 
     environment = os.environ.copy()
     environment["MACOSX_DEPLOYMENT_TARGET"] = MACOS_MINIMUM_SYSTEM_VERSION
-    run(["swift", "build", "--package-path", str(ROOT_DIR / "ui" / "apple"), "--configuration", "debug" if debug else "release", "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
-    binary = ROOT_DIR / "ui" / "apple" / ".build" / ("debug" if debug else "release") / "DobbyVPNMacApp"
+    swift_arch = {"arm64": "arm64", "amd64": "x86_64"}[arch or default_service_arch("macos")]
+    package = ROOT_DIR / "ui" / "apple"
+    command = [
+        "swift", "build", "--package-path", str(package),
+        "--scratch-path", str(package / ".build" / swift_arch),
+        "--arch", swift_arch, "--configuration", "debug" if debug else "release",
+    ]
+    run([*command, "--product", "DobbyVPNMacApp"], cwd=ROOT_DIR, env=environment)
+    bin_path = run_capture([*command, "--show-bin-path"], cwd=ROOT_DIR, env=environment)
+    if not bin_path:
+        fail(f"Swift did not report the build path for {swift_arch}")
+    binary = Path(bin_path) / "DobbyVPNMacApp"
     if not binary.is_file():
         fail(f"Swift build did not produce {binary}")
     if output.suffix == ".app":
@@ -1241,6 +1271,7 @@ def build_native_ui(
         resources = output / "Contents" / "Resources"
         resources.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / "ui" / "apple" / "macos" / "AppIcon.icns", resources / "AppIcon.icns")
+        shutil.copyfile(ROOT_DIR / "ui" / "apple" / "macos" / "PrivacyInfo.xcprivacy", resources / "PrivacyInfo.xcprivacy")
         info = {
             "CFBundleDisplayName": "Dobby VPN",
             "CFBundleExecutable": "DobbyVPNMacApp",

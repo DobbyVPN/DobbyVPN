@@ -371,6 +371,7 @@ import (
 	"context"
 	"unsafe"
 
+	"core/log"
 	"core/sessionapi/mobilebinding"
 )
 
@@ -467,6 +468,14 @@ func Java_com_dobby_nativebridge_NativeGoSession_initializeLogger(
 	return jniResult(env, initializeLogger(jniString(env, path)))
 }
 
+//export Java_com_dobby_nativebridge_NativeGoSession_flushDiagnostics
+func Java_com_dobby_nativebridge_NativeGoSession_flushDiagnostics(env *C.JNIEnv, _ C.jclass) C.jstring {
+	if err := log.Flush(); err != nil {
+		return jniResult(env, err.Error())
+	}
+	return jniResult(env, "")
+}
+
 //export Java_com_dobby_nativebridge_NativeGoSession_attachNative
 func Java_com_dobby_nativebridge_NativeGoSession_attachNative(env *C.JNIEnv, _ C.jclass, context C.jobject, sourcePath C.jstring) C.jstring {
 	if env == nil || unsafe.Pointer(context) == nil {
@@ -505,6 +514,13 @@ func jniResult(env *C.JNIEnv, value string) C.jstring {
 	copy := C.CString(value)
 	defer C.free(unsafe.Pointer(copy))
 	return C.dobby_new_jstring(env, copy)
+}
+
+//export Java_com_dobby_nativebridge_NativeGoSession_parseImportLink
+func Java_com_dobby_nativebridge_NativeGoSession_parseImportLink(
+	env *C.JNIEnv, _ C.jclass, value C.jstring,
+) C.jstring {
+	return jniResult(env, mobilebinding.ParseImportLink(jniString(env, value)))
 }
 
 //export Java_com_dobby_nativebridge_NativeGoSession_configure

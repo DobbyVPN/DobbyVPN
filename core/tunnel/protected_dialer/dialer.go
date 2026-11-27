@@ -356,7 +356,8 @@ func (p *ProtectedDirectProxy) DialContext(ctx context.Context, metadata *M.Meta
 	if p == nil {
 		return nil, fmt.Errorf("protected direct proxy is required")
 	}
-	return DialContextWithProtect(withSocketScope(ctx, p.OwnerContext), p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
+	ctx = WithApplicationBypass(withSocketScope(ctx, p.OwnerContext))
+	return DialContextWithProtect(ctx, p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
 }
 
 func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, error) {
@@ -367,5 +368,6 @@ func (p *ProtectedDirectProxy) DialUDP(metadata *M.Metadata) (net.PacketConn, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = WithApplicationBypass(ctx)
 	return DialUDPWithProtect(ctx, p.DNSCache, metadata.Network.String(), metadata.DestinationAddress())
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"core/buildinfo"
 	"core/clientserver/controljson"
 	"core/diagnostics"
+	applicationlog "core/log"
 	"core/sessionapi"
 
 	"github.com/google/uuid"
@@ -66,7 +68,18 @@ func diagnosticPaths() ([]string, error) {
 	return paths, nil
 }
 
+func logsArgsError(args []string) string {
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "--follow" || args[0] == "clear" || args[0] == "upload")) ||
+		(len(args) == 2 && args[0] == "export") {
+		return ""
+	}
+	return "logs accepts --follow, export <new-file.gz>, upload, or clear"
+}
+
 func runLogs(args []string) int {
+	if message := logsArgsError(args); message != "" {
+		return usage(message)
+	}
 	if len(args) == 1 && args[0] == "clear" {
 		return clearApplicationLog()
 	}
@@ -78,22 +91,20 @@ func runLogs(args []string) int {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		if err := uploadDiagnostics(ctx, dialService(), paths); err != nil {
-			return reportFailure(err)
+			return reportLogsFailure(err, paths[0])
 		}
 		return exitOK
 	}
 	follow := len(args) == 1 && args[0] == "--follow"
 	export := len(args) == 2 && args[0] == "export"
-	if len(args) > 0 && !follow && !export {
-		return usage("logs accepts --follow, export <new-file.gz>, upload, or clear")
-	}
 	paths, err := diagnosticPaths()
 	if err != nil {
 		return reportFailure(err)
 	}
 	if export {
+		flushServiceDiagnostics(dialService())
 		if err := exportDiagnostics(args[1], paths); err != nil {
-			return reportFailure(err)
+			return reportLogsFailure(err, paths[0])
 		}
 		fmt.Println(args[1])
 		return exitOK
@@ -111,9 +122,53 @@ func runLogs(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := streamDiagnostics(ctx, os.Stdout, paths, follow); err != nil {
-		return reportFailure(err)
+		return reportLogsFailure(err, paths[0])
 	}
 	return exitOK
+}
+
+func permissionHint(err error, backend string) string {
+	absolute, absErr := filepath.Abs(backend)
+	if absErr != nil {
+		return ""
+	}
+	ours := map[string]bool{
+		absolute:                              true,
+		absolute + ".lock":                    true,
+		absolute + diagnostics.PreviousSuffix: true,
+	}
+	if deniedPath(err, ours) {
+		return fmt.Sprintf("dobby-cli: the service log %s is readable only by root; run this command with sudo", absolute)
+	}
+	return ""
+}
+
+// deniedPath reports whether any joined error is a permission denial on one of paths.
+func deniedPath(err error, paths map[string]bool) bool {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrPermission) && paths[pathErr.Path] {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, inner := range joined.Unwrap() {
+			if deniedPath(inner, paths) {
+				return true
+			}
+		}
+	}
+	if wrapped := errors.Unwrap(err); wrapped != nil {
+		return deniedPath(wrapped, paths)
+	}
+	return false
+}
+
+func reportLogsFailure(err error, backend string) int {
+	if runtime.GOOS == "linux" {
+		if hint := permissionHint(err, backend); hint != "" {
+			fmt.Fprintln(os.Stderr, hint)
+		}
+	}
+	return reportFailure(err)
 }
 
 func diagnosticHeader() string {
@@ -122,7 +177,24 @@ func diagnosticHeader() string {
 }
 
 func exportDiagnostics(destination string, paths []string) error {
+	if err := applicationlog.Flush(); err != nil {
+		return err
+	}
 	return diagnostics.ExportGzip(destination, paths, diagnosticHeader())
+}
+
+// Export remains available with a stopped service or a previous service version.
+func flushServiceDiagnostics(client controljson.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := client.Call(ctx, "FlushDiagnostics", struct{}{}, nil)
+	var unavailable *serviceUnavailableError
+	var command *controljson.CallError
+	if err == nil || errors.As(err, &unavailable) ||
+		(errors.As(err, &command) && command.Code == string(sessionapi.FailureInvalidArgument) && command.Message == "unknown command") {
+		return
+	}
+	applicationlog.Warn("DIAGNOSTICS", "Service diagnostics could not be flushed for export", map[string]any{"error": err.Error()})
 }
 
 // Clear stores stable file identities and lengths; it never changes producer
@@ -271,7 +343,13 @@ func uploadDiagnostics(ctx context.Context, client controljson.Client, paths []s
 	return uploadDiagnosticsWithHTTP(ctx, client, paths, &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
 }
 
-func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, paths []string, transport *http.Client) (resultErr error) {
+func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, paths []string, transport *http.Client) error {
+	return withUploadLock(false, func(dir string) error {
+		return uploadLocked(ctx, client, paths, transport, dir)
+	})
+}
+
+func uploadLocked(ctx context.Context, client controljson.Client, paths []string, transport *http.Client, tempDir string) (resultErr error) {
 	snapshot, snapshotErr := callSnapshot(ctx, client, "")
 	if snapshotErr != nil {
 		return snapshotErr
@@ -283,26 +361,6 @@ func uploadDiagnosticsWithHTTP(ctx context.Context, client controljson.Client, p
 	}{snapshot.SessionID, snapshot.Digest}, &prepared); err != nil {
 		return err
 	}
-	logPath, pathErr := cliLogPath()
-	if pathErr != nil {
-		return pathErr
-	}
-	tempDir := filepath.Join(filepath.Dir(logPath), "upload-temp")
-	if err := os.MkdirAll(tempDir, 0o700); err != nil {
-		return err
-	}
-	lock, lockErr := os.OpenFile(filepath.Join(tempDir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if lockErr != nil {
-		return lockErr
-	}
-	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	if err := tryUploadLock(lock); err != nil {
-		if uploadLockContended(err) {
-			return fmt.Errorf("another log upload is in progress: %w", err)
-		}
-		return fmt.Errorf("lock upload directory: %w", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, releaseUploadLock(lock)) }()
 	if err := cleanupUploadTemps(tempDir); err != nil {
 		return err
 	}
@@ -415,7 +473,11 @@ func cleanupUploadTemps(dir string) error {
 	return nil
 }
 
-func cleanupAbandonedUploads() (resultErr error) {
+func cleanupAbandonedUploads() error {
+	return withUploadLock(true, cleanupUploadTemps)
+}
+
+func withUploadLock(skipIfBusy bool, action func(string) error) (resultErr error) {
 	path, pathErr := cliLogPath()
 	if pathErr != nil {
 		return pathErr
@@ -431,10 +493,13 @@ func cleanupAbandonedUploads() (resultErr error) {
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
 	if err := tryUploadLock(lock); err != nil {
 		if uploadLockContended(err) {
-			return nil
+			if skipIfBusy {
+				return nil
+			}
+			return fmt.Errorf("another log upload is in progress: %w", err)
 		}
-		return fmt.Errorf("lock upload directory for cleanup: %w", err)
+		return fmt.Errorf("lock upload directory: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, releaseUploadLock(lock)) }()
-	return cleanupUploadTemps(dir)
+	return action(dir)
 }

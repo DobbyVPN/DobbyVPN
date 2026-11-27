@@ -15,20 +15,71 @@ DobbyVPN has native apps for Windows, macOS, Android and iOS. Linux uses the
 command-line interface. Desktop installations include a background VPN service
 and the `dobby-cli` command.
 
+### Supported platforms
+
+| Platform | Minimum version | Architectures | Package |
+|---|---|---|---|
+| Windows | Windows 10 version 1809 (build 17763) | x64 | MSI |
+| macOS | macOS 12 | Apple silicon (arm64), Intel (x86_64) | PKG |
+| Linux | Debian/Ubuntu-based systems; requires `init-system-helpers` 1.54 or later | amd64 | DEB |
+| Android | Android 15 (API 35); installs on Android 8.0 (API 26) and later | arm64-v8a, x86_64 | APK |
+| iOS | iOS 15.6 | arm64 | App Store |
+
 Android permits installation on Android 8.0 (API 26) and later. Current testing
 uses Android 15 (API 35), and support is limited to Android 15 and later.
 Android 8–14 are not currently tested or supported.
 
+Where `dobby-cli` is installed:
+
+- **macOS:** the package links `/usr/local/bin/dobby-cli` to the copy inside
+  the app, on both Intel and Apple silicon, so `dobby-cli` works from a new
+  terminal. The linked file is
+  `/Applications/Dobby VPN.app/Contents/Resources/dobby-cli`.
+- **Linux:** the DEB links `/usr/local/bin/dobby-cli` to
+  `/opt/dobbyvpn/bin/dobby-cli`.
+- **Windows:** the installer does not change `PATH`. Run the command by its
+  full path, normally `"C:\Program Files\DobbyVPN\bin\dobby-cli.exe"`
+  (use `& "C:\Program Files\DobbyVPN\bin\dobby-cli.exe" snapshot` in
+  PowerShell).
+
 After installing a desktop package, `dobby-cli snapshot` connects to the
 installed background service. On macOS it uses the packaged socket without
-an environment override. `DOBBYVPN_CONTROL_SOCKET` can still select an
-alternative Unix socket when needed.
+an environment override; on Linux the service socket lives in the system
+runtime directory `/run/dobbyvpn/control.sock` and works without a desktop
+session. `DOBBYVPN_CONTROL_SOCKET` can still select an alternative Unix
+socket when needed.
 
 Linux DEB installation starts the service when system policy permits. Upgrades
 preserve disabled and masked services. The first upgrade from the older 1.5.4
 package may re-enable a disabled, unmasked service because that package did
 not retain enablement history; later upgrades preserve the administrator's
 choice. Removing or purging the package preserves subscription data.
+
+On a remotely managed Linux host, configure a systemd drop-in for
+`dobbyvpn.service` before enabling VPN auto-connect. Under `[Service]`, set
+`Environment="DOBBYVPN_LINUX_MANAGEMENT_PEERS=192.0.2.10"`, replacing the
+example with the IP address your administrator connects from. You can list
+multiple exact IPv4 and IPv6 addresses separated by spaces. The service keeps
+the physical return path for TCP connections that those peers initiate.
+Connections initiated by the Linux host continue to follow the VPN policy.
+
+
+### Connecting for the first time on macOS
+
+Install the universal package and open **Dobby VPN** from Applications. On the first connection, macOS asks you to approve **DobbyVPN Protection** and **DobbyVPN PacketTunnel** in System Settings. Allow Dobby VPN to add its VPN configuration and filter network traffic. The window and `dobby-cli` use the same connection and approvals. Keep System Integrity Protection enabled.
+
+### Uninstalling on macOS
+
+```sh
+sudo /usr/local/libexec/dobbyvpn-uninstall
+```
+
+macOS may ask for administrator approval to remove each system extension. The script must run as root. It stops and unregisters the
+`com.dobby.vpnservice` background service, then removes
+`/Library/LaunchDaemons/com.dobby.vpnservice.plist`, the control socket
+`/var/run/dobbyvpn/control.sock` (and its directory if empty), the
+`com.dobby.pkg` package receipt, `/Applications/Dobby VPN.app` and the script
+itself. Logs in `/Library/Logs/DobbyVPN` are not removed.
 
 Enter or paste an HTTPS subscription URL to load its profiles automatically.
 Choose **Auto connect** to try profiles in subscription order, or **Connect**
@@ -98,7 +149,7 @@ DobbyVPN. Updates will arrive through F-Droid.
 
 From 1.5.3, [GitHub Releases](https://github.com/DobbyVPN/DobbyVPN/releases)
 include native Debug builds with a `-debug` filename suffix: Linux DEB,
-Windows MSI, macOS PKGs for Intel and Apple silicon, an Android APK, and an
+Windows MSI, a universal macOS PKG for Intel and Apple silicon, an Android APK, and an
 unsigned iOS Xcode archive. These builds retain symbols and disable Go
 optimization and inlining for debugging. Prebuilt third-party libraries retain
 their upstream build settings.
@@ -116,11 +167,25 @@ Subscriptions use TOML. The CLI also accepts TOML files and inline configuration
 HTTP URLs are rejected, redirects must remain HTTPS, and downloaded or inline
 configuration is limited to 1 MiB. Add each connection variant in an ordered
 `[[Outline]]`, `[[Xray]]`, or `[[TrustTunnel]]` section. The optional root
-`[ExcludeIPs]` section bypasses the VPN for the destinations in its `IPs` list.
-Any other root section or key rejects the whole configuration. TrustTunnel
+`[ExcludeIPs]` section bypasses the VPN for connections you open to destinations in its `IPs` list.
+Listing a peer leaves the policy for incoming connections from that peer unchanged.
+An optional `logs_endpoint` root setting enables provider log uploads. Place it before the first table, including when piping the subscription to `dobby-cli configure -`. Other root sections or keys are rejected. TrustTunnel
 certificate verification is required, so keep `skip_verification = false`
 (or omit it). This setting is valid only inside `[TrustTunnel.endpoint]`; a
-profile-level `skip_verification` key is rejected.
+profile-level `skip_verification` key is rejected. In `[[Xray]]`, the first
+outbound carries all traffic and must not be `freedom`. Only `outbounds`, `dns`,
+`policy` and `log` (`loglevel`, `dnsLog`, `maskAddress`) are passed to Xray;
+other Xray settings are ignored. A subscription is never rejected because of
+the addresses listed in `ExcludeIPs`; malformed TOML or unknown keys in that
+section are still format errors. An invalid address or network and an entry with
+prefix `/0` (`0.0.0.0/0`, `::/0`, `::ffff:0.0.0.0/96`) are dropped. If the IPv4
+entries together cover half of IPv4 or more, all IPv4 entries, single addresses
+included, are dropped; the same applies to IPv6 entries when they cover half of
+`2000::/3` or more. Unique local and link-local IPv6 entries are kept. A host
+name that cannot be resolved at connection time is ignored. Dropped traffic
+stays in the VPN, and the service log gets a warning with counts only.
+
+If a subscription is rejected, the error names the profile (its position in the file, counted from 1) and the field. A response that is not a DobbyVPN subscription (HTML, JSON, YAML, a base64 list or a single share link such as `vless://`) is reported as such; it is not converted. Unknown `[[Outline]]` fields, a non-string `DisguisePrefix`, and a `WebSocketPath` without `WebSocket = true` do not reject the subscription; they are written to the service log as warnings.
 
 **Connection variants** (automatic first-working selection and failover)
 ```toml
@@ -166,12 +231,29 @@ tunnel becomes ready. Selecting a profile explicitly uses only that profile,
 including during recovery. On desktop,
 `dobby-cli configure <file-or-https-url>` accepts a TOML file or HTTPS
 subscription URL and returns the ordered backend profile inventory as JSON.
-It also accepts a raw TOML value as its source argument; quote that argument
-using your shell's syntax and begin it with a `[[Outline]]`, `[[Xray]]`, or
-`[[TrustTunnel]]` profile table. All three forms are parsed and validated by Go.
+It also accepts a complete TOML subscription as a single argument quoted for
+your shell. Root settings can precede the first profile table in the inline subscription.
+`dobby-cli configure -` reads the HTTPS subscription URL (or a TOML profile)
+from standard input instead, so the URL does not appear in the process list or
+shell history: `printf '%s\n' "$SUBSCRIPTION_URL" | dobby-cli configure -`.
+Stdin accepts a URL or TOML only, never a file path; to configure from a file
+whose name is `-`, write `./-`.
 `dobby-cli start --profile <index> --session-id <id> --config-digest <digest>`
 starts one accepted profile; `stop --session-id <id> --generation <number>`
 ends that generation. Session commands always emit JSON.
+
+`dobby-cli` exits with one of these codes, so scripts can tell the cases apart:
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Success. |
+| 2 | Wrong command line or options, or a rejected configuration source. |
+| 3 | The Dobby VPN service is unavailable: it is stopped, not installed, or access to it was denied. The message names the check to run, and JSON commands print the failure code `SERVICE_UNAVAILABLE`. |
+| 4 | The operation failed, including timeouts and failures reported by the service. |
+| 8 | Conflict: the accepted configuration or the session generation changed; take a new `snapshot` and retry. |
+
+The command line is checked before anything is written or connected, so a typo
+exits with 2 even when the service is down.
 
 After an automatically selected connection becomes unhealthy, DobbyVPN allows
 up to three automatic recovery attempts. If another health failure occurs
@@ -183,10 +265,10 @@ recovery allowance. The same ordered `[[Outline]]`, `[[Xray]]`, and
 
 `[ExcludeIPs]` intentionally bypasses the VPN for the destinations in `IPs`. The
 traffic still enters the tunnel on some platforms before the runtime routes it
-outside the proxy; platform routing details differ. Protection is tied to the
-running VPN service or provider. Process termination, OS shutdown and reboot
-have platform-specific behavior; DobbyVPN does not promise persistent lockdown
-on every platform. Android's optional system lockdown is controlled in Android
+outside the proxy. On Linux and Windows, base firewall protection can remain
+active after the VPN service exits unexpectedly. On restart, the service
+reconciles that policy. Use Stop to release the protection. Behavior after
+shutdown or reboot depends on the platform. Android's optional system lockdown is controlled in Android
 settings.
 
 **Clean ShadowSocks** (best performance)
@@ -261,6 +343,10 @@ Ideas, bugs fixes, features - are welcome as well prepared Pull Requests and nic
 
 Remote telemetry has been removed. `[Telemetry]` configuration blocks are not
 supported.
+
+## macOS package signing
+
+From 1.5.17, the distributed Release and Debug installers use Developer ID signing and Apple notarization. The Debug package includes symbols. For live debugger attachment, use a development-signed build with the debugging entitlement.
 
 ## References:
 * 1. [Connection Prefix Disguises](https://developers.google.com/outline/docs/guides/service-providers/prefixing)

@@ -70,9 +70,14 @@ func NewForDesktop(manager *sessionapi.Manager) *Binding {
 	return &Binding{manager: manager}
 }
 
-// StopAndWait is reserved for OS lifecycle callbacks; CallJSON deliberately
-// exposes only the four existing desktop methods.
+// NetworkEvent forwards a wake or network-path change to the owning session.
+func (b *Binding) NetworkEvent(ctx context.Context, sessionID, reason string) error {
+	return b.manager.NetworkEvent(ctx, sessionID, reason)
+}
+
+// StopAndWait is reserved for OS lifecycle callbacks.
 func (b *Binding) StopAndWait(ctx context.Context) error {
+	defer func() { _ = log.Flush() }()
 	owner, ok := b.manager.(interface{ StopAndWait(context.Context) error })
 	if !ok {
 		return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "shutdown owner is unavailable"}
@@ -83,6 +88,7 @@ func (b *Binding) StopAndWait(ctx context.Context) error {
 // StopAndWaitWithOperation records one iOS provider lifecycle operation without
 // altering the owner or its cleanup error.
 func (b *Binding) StopAndWaitWithOperation(ctx context.Context, operationID string) error {
+	defer func() { _ = log.Flush() }()
 	fields := map[string]any{"operation_id": operationID, "method": "StopAndWait"}
 	started := time.Now()
 	log.Info("SESSION", "mobile operation entered", fields)
@@ -118,6 +124,21 @@ func (b *Binding) Restore(onlyPreviouslyEnabled bool) string {
 		return failed(err)
 	}
 	return success(wire.Generation{Generation: result.Generation, Sequence: result.Sequence})
+}
+
+// PrepareServiceRestore is used only by the desktop service at startup. It
+// fixes the user-intent epoch now and returns the bounded-retry restore to run
+// once the control channel is serving.
+func (b *Binding) PrepareServiceRestore() func(context.Context) error {
+	owner, ok := b.manager.(interface {
+		PrepareRestoreAtServiceStart() func(context.Context) error
+	})
+	if !ok {
+		return func(context.Context) error {
+			return &sessionapi.Error{Code: sessionapi.FailureUnsupported, Message: "automatic startup owner is unavailable"}
+		}
+	}
+	return owner.PrepareRestoreAtServiceStart()
 }
 
 func (b *Binding) AttachSourceStore() {
@@ -179,6 +200,15 @@ func (b *Binding) ConfigureContext(ctx context.Context, sessionID string, expect
 		return failed(err)
 	}
 	return success(wire.ConfigurationFrom(result))
+}
+
+// ParseImportLink exposes pure import interpretation without requiring a session.
+func ParseImportLink(value string) string {
+	result, err := sessionapi.ParseImportLink(value)
+	if err != nil {
+		return failed(err)
+	}
+	return success(result)
 }
 
 // Start starts an attempt only if the inspected snapshot is still current.
@@ -325,6 +355,7 @@ func (b *Binding) CallJSONWithConfiguration(
 ) string {
 	var value struct {
 		SessionID        string  `json:"session_id"`
+		Link             string  `json:"link"`
 		ExpectedSequence int64   `json:"expected_sequence"`
 		Generation       int64   `json:"generation"`
 		Source           *string `json:"source"`
@@ -342,6 +373,13 @@ func (b *Binding) CallJSONWithConfiguration(
 		}
 	}
 	switch method {
+	case "ParseImportLink":
+		return ParseImportLink(value.Link)
+	case "FlushDiagnostics":
+		if err := log.Flush(); err != nil {
+			return failed(&sessionapi.Error{Code: sessionapi.FailureInternal, Message: "could not flush diagnostics", Cause: err})
+		}
+		return success(struct{}{})
 	case "PrepareLogUpload":
 		result, err := b.manager.PrepareLogUpload(ctx, value.SessionID, value.Digest)
 		if err != nil {
@@ -372,7 +410,7 @@ func (b *Binding) CallJSONWithConfiguration(
 	case "Stop":
 		return b.StopContext(ctx, value.SessionID, value.Generation)
 	case "NetworkEvent":
-		if err := b.manager.NetworkEvent(ctx, value.SessionID, value.Reason); err != nil {
+		if err := b.NetworkEvent(ctx, value.SessionID, value.Reason); err != nil {
 			return failed(err)
 		}
 		return success(struct{}{})

@@ -4,14 +4,10 @@ on:
   workflow_call:
     inputs:
       build_packages:
-        description: Exact readiness-selected Build artifacts, when overlapping Build.
+        description: Exact artifact selections from the referenced Build.
         type: string
         required: false
         default: ''
-      single_build:
-        description: Build one immutable APK without claiming reproducibility.
-        type: boolean
-        default: false
       reference_build_run_id:
         description: Build run whose original APK is independently checked by this Test job.
         type: string
@@ -108,7 +104,7 @@ jobs:
       # build the pinned Go 1.26.10 toolchain from source. It never compiles the
       # application; the version and binary used for that are verified below.
       - name: Set up bootstrap Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: '1.24.6'
           # This Go only bootstraps make.bash; there is no root go.mod to cache.
@@ -177,7 +173,7 @@ jobs:
           done
 
       - name: Set up pinned JDK (Temurin)
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           java-version: ${{ steps.pins.outputs.java_major }}
           distribution: 'temurin'
@@ -212,29 +208,8 @@ jobs:
           # HEAD^{tree} before it creates any build output.
           rsync -a --delete "$GITHUB_WORKSPACE/" "$ANDROID_REPRO_SOURCE_ROOT/"
 
-      - name: Build and verify isolated unsigned APKs through the public driver
-        if: ${{ !inputs.single_build && inputs.reference_build_run_id == '' }}
-        working-directory: /home/vagrant/build/com.dobby.vpn
-        env:
-          DOBBYVPN_ANDROID_GO_CACHE: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-cache
-          DOBBYVPN_ANDROID_GO_TMPDIR: ${{ runner.temp }}/dobbyvpn-android-repro/first/go-tmp
-        run: |
-          set -euo pipefail
-          version="${APP_MAJOR_VERSION}.${APP_MINOR_VERSION}.${APP_MAINTENANCE_VERSION}"
-          "$GITHUB_WORKSPACE/.github/scripts/android/android_build_driver.sh" \
-            --source-root "$ANDROID_REPRO_SOURCE_ROOT" \
-            --source-sha "$APP_SOURCE_SHA" \
-            --output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-unsign.apk" \
-            --manifest "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-build-driver-manifest.json" \
-            --first-output "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-repro-first.apk" \
-            --reproducibility "$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v${version}-android-reproducibility.json" \
-            --gradle-archive "$GRADLE_ARCHIVE" \
-            --gradle-root "$GRADLE_ROOT" \
-            --go-binary "$GOROOT/bin/go" \
-            --source-repository "$APP_SOURCE_REPOSITORY"
-
       - name: Build the immutable unsigned APK once
-        if: ${{ inputs.single_build && inputs.reference_build_run_id == '' }}
+        if: ${{ inputs.reference_build_run_id == '' }}
         working-directory: /home/vagrant/build/com.dobby.vpn
         env:
           DOBBYVPN_ANDROID_GO_CACHE: ${{ runner.temp }}/dobbyvpn-android-build/single/go-cache
@@ -292,33 +267,6 @@ jobs:
             --source-repository "$APP_SOURCE_REPOSITORY" \
             --version-name "$version" --version-code "$ANDROID_VERSION_CODE"
 
-      - name: Create Android source and digest provenance
-        if: ${{ !inputs.single_build && inputs.reference_build_run_id == '' }}
-        env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          VERSION_NAME: ${{ inputs.app_major_version }}.${{ inputs.app_minor_version }}.${{ inputs.app_maintenance_version }}
-          VERSION_CODE: ${{ inputs.android_version_code }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-
-          unsigned="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-unsign.apk"
-          reproducibility="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-reproducibility.json"
-          driver_manifest="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-build-driver-manifest.json"
-          manifest="$ANDROID_REPRO_SOURCE_ROOT/runtime/android-release/DobbyVPN-v$VERSION_NAME-android-provenance.json"
-          test -f "$unsigned"
-          source_tree="$(git -C "$ANDROID_REPRO_SOURCE_ROOT" rev-parse --verify 'HEAD^{tree}')"
-          python3 .github/scripts/android/android_apk_signing.py create-provenance \
-            --output "$manifest" \
-            --unsigned-apk "$unsigned" \
-            --build-driver-manifest "$driver_manifest" \
-            --reproducibility "$reproducibility" \
-            --source-sha "$SOURCE_SHA" \
-            --source-tree "$source_tree" \
-            --source-repository "$APP_SOURCE_REPOSITORY" \
-            --version-name "$VERSION_NAME" \
-            --version-code "$VERSION_CODE"
-
       - name: Upload unsigned APK
         if: ${{ inputs.reference_build_run_id == '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -329,7 +277,7 @@ jobs:
           retention-days: ${{ inputs.retention_days }}
 
       - name: Upload Android Build metadata
-        if: ${{ inputs.single_build && inputs.reference_build_run_id == '' }}
+        if: ${{ inputs.reference_build_run_id == '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dobbyvpn-android-build-metadata${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
@@ -340,7 +288,7 @@ jobs:
           retention-days: ${{ inputs.retention_days }}
 
       - name: Upload Android provenance
-        if: ${{ inputs.reference_build_run_id != '' || !inputs.single_build }}
+        if: ${{ inputs.reference_build_run_id != '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dobbyvpn-android-provenance${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
@@ -348,8 +296,7 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ inputs.retention_days }}
 
-  # Package readiness watches android_build above. Debug remains an independent
-  # required Build job, so its compilation cannot hold back Android consumers.
+  # Build produces Debug alongside the unsigned release APK. Test rebuilds only the release APK.
   android_debug:
     if: ${{ inputs.reference_build_run_id == '' }}
     runs-on: ubuntu-24.04
@@ -380,7 +327,7 @@ jobs:
         with:
           gradle: 'true'
           pinned-tools: 'true'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .go-version
           cache: false
@@ -389,7 +336,7 @@ jobs:
           set -euo pipefail
           test "$(go env GOVERSION)" = "go$(tr -d '[:space:]' < .go-version)"
           echo "GOROOT=$(go env GOROOT)" >> "$GITHUB_ENV"
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: ${{ steps.pins.outputs.java_major }}

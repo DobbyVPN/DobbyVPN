@@ -4,7 +4,7 @@ set -euo pipefail
 APP_BUNDLE="Dobby VPN.app"
 
 mkdir -p "bin/amd64"
-mkdir -p "bin/aarch64"
+mkdir -p "bin/aarch64" "bin/universal"
 
 APP_VERSION="$APP_MAJOR_VERSION.$APP_MINOR_VERSION.$APP_MAINTENANCE_VERSION"
 
@@ -19,6 +19,9 @@ install_service() {
   for architecture in $actual_arches; do
     if [[ "$architecture" == "$expected_arch" ]]; then found=true; fi
   done
+  if [[ "$expected_arch" == universal ]]; then
+    [[ "$actual_arches" == "arm64 x86_64" || "$actual_arches" == "x86_64 arm64" ]] && found=true
+  fi
   if [[ "$found" != true ]]; then
     echo "[!] Refusing to package $service: expected $expected_arch, found $actual_arches" >&2
     exit 1
@@ -50,26 +53,44 @@ build_package() {
 
     mkdir Scripts
     cp ../../postinstall.sh Scripts/postinstall
-    chmod +x Scripts/postinstall
+    sed -e "s/@PACKAGE_ARCH@/$service_arch/" -e "s/@PACKAGE_VERSION@/$APP_VERSION/" \
+      ../../preinstall.sh > Scripts/preinstall
+    chmod +x Scripts/postinstall Scripts/preinstall
     cp ../../vpnservice.plist "$APP_BUNDLE/Contents/Resources/"
     install_service \
       "$service_path" \
       "$service_arch" \
       "$APP_BUNDLE/Contents/Resources/dobbyvpn-backend"
 
-    if [[ "$payload_arch" == "amd64" ]]; then
-      [[ -x "$APP_BUNDLE/Contents/Resources/dobby-cli" ]] || {
-        echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
-        exit 1
-      }
+    [[ -x "$APP_BUNDLE/Contents/Resources/dobby-cli" ]] || {
+      echo "[!] Native dobby-cli is missing from the macOS bundle" >&2
+      exit 1
+    }
+    if [[ "$payload_arch" == "amd64" || "$payload_arch" == "universal" ]]; then
       ln -s ../Resources/dobby-cli "$APP_BUNDLE/Contents/MacOS/dobby-cli"
     fi
 
-    mkdir -p Payload/Applications Payload/usr/local/libexec
+    mkdir -p Payload/Applications Payload/usr/local/libexec Payload/usr/local/bin
     cp -R "$APP_BUNDLE" Payload/Applications/
+    # Same path on Intel and Apple silicon: put dobby-cli on the default PATH.
+    ln -s "/Applications/$APP_BUNDLE/Contents/Resources/dobby-cli" Payload/usr/local/bin/dobby-cli
     cp ../../uninstall.sh Payload/usr/local/libexec/dobbyvpn-uninstall
     chmod 755 Payload/usr/local/libexec/dobbyvpn-uninstall
+    chmod 755 Scripts Scripts/preinstall Scripts/postinstall
     write_fixed_payload_component_plist
+    # Release CI sets this after preparing Developer ID signing; local builds stay unsigned.
+    if [[ -n "${MACOS_SIGNING_SCRIPT:-}" ]]; then
+      /bin/bash "$MACOS_SIGNING_SCRIPT" sign-app "Payload/Applications/$APP_BUNDLE"
+    fi
+    # A signing tool may replace the app and create signature resources under
+    # the builder's private umask. Set the public modes on the exact payload
+    # pkgbuild will install, leaving private signing inputs alone.
+    # On macOS, restrictive symlink permissions prevent ordinary users from
+    # reading the sealed target during signature verification.
+    find Payload -type l ! -perm -004 -exec chmod -h 755 {} +
+    find Payload -type d -exec chmod 755 {} +
+    find Payload -type f -perm -100 -exec chmod 755 {} +
+    find Payload -type f ! -perm -100 -exec chmod 644 {} +
     pkgbuild --root Payload \
              --component-plist component.plist \
              --scripts Scripts \
@@ -83,6 +104,9 @@ build_package() {
 }
 
 case "${1:-all}" in
+  universal)
+    build_package universal universal ../../services/universal/dobbyvpn-backend
+    ;;
   all)
     build_package aarch64 arm64 ../../services/arm64/dobbyvpn-backend
     build_package amd64 x86_64 ../../services/amd64/dobbyvpn-backend

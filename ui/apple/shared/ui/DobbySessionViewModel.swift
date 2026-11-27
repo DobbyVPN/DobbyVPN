@@ -49,11 +49,10 @@ public enum DobbyProfileStatus: String {
 public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var snapshot = DobbySessionSnapshot.empty
     @Published public private(set) var busy = false
-    @Published public private(set) var onDemandEnabled = false
-    @Published public private(set) var onDemandBusy = false
-    private var onDemandRefreshPending = false
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
+    /// An import link waits here until the user confirms that it may replace the saved subscription.
+    @Published public private(set) var pendingImport: String?
     @Published var logEntries: [DobbyLogEntry] = []
     private var lastLoggedLogSize: String?
     #if os(macOS)
@@ -83,7 +82,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private let loadWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.configuration")
     private var loadInFlight = false
     private var loadRevision = 0
-    private var pendingLoad: String?
+    private var pendingLoad: (source: String, automaticOwner: String?)?
     private let debounceScheduler: any DobbySessionDebounceScheduling
     private var debounce: (any DobbySessionScheduledWork)?
     private var restoredLoad = ""
@@ -101,10 +100,12 @@ public final class DobbySessionViewModel: ObservableObject {
     private var logsClearInFlight = false
     private var logsRevision = 0
     private let logViewCache = LogViewCache()
+    @Published private var disconnectFailure = ""
     private var lastFailure = ""
     private var errorOrigin: DobbySessionErrorOrigin?
     private var lastSourceErrorIdentity: DobbySourceErrorIdentity?
     private var snapshotFailureMessage: String?
+    @Published private var vpnSetup = DobbyVPNSetupFlow()
     private var diagnosticWriteError = ""
     private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
 
@@ -135,7 +136,6 @@ public final class DobbySessionViewModel: ObservableObject {
         recordLogViewSize(logEntries)
         if !uploadError.isEmpty { recordError(uploadError) }
         refreshSnapshot()
-        refreshOnDemandPreference()
         if automaticallyPoll {
             timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.refreshForTimerTick() }
@@ -166,7 +166,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public var inventoryReady: Bool {
-        snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && loadError.isEmpty
+        snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && (loadError.isEmpty || snapshot.sourceURL == sourceText)
     }
 
     private var protectedRetryState: Bool {
@@ -196,8 +196,8 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func actionTitle(_ index: Int? = nil) -> String {
-        if isStopTarget(index) { return snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Disconnect" : "Stop" }
-        return index == nil ? "Auto connect" : "Connect"
+        if isStopTarget(index) { return snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Connected" : "Stop" }
+        return index == nil ? "Auto connect" : snapshot.state == "CONNECTED" && snapshot.pendingTarget == nil ? "Switch" : "Connect"
     }
 
     public func canAct(_ index: Int? = nil) -> Bool {
@@ -217,31 +217,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func sourceChanged(_ value: String, immediate: Bool = false) {
-        if !immediate && value == sourceText { return }
-        sourceText = value
-        sourceIsDirty = true
-        importError = ""
-        setError("", origin: .other)
-        loadError = ""
-        // Typing only forgets the closed failures it cleared; a persistent one must not reopen on every keystroke.
-        pruneClosedFailures()
-        loadRevision += 1
-        pendingLoad = nil
-        debounce?.cancel()
-        debounce = nil
-        let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard validSubscription(source) else { return }
-        let enqueueLoad: @MainActor () -> Void = { [weak self] in
-            guard let self else { return }
-            self.debounce = nil
-            self.pendingLoad = source
-            self.loadNext()
-        }
-        if immediate {
-            enqueueLoad()
-        } else {
-            debounce = debounceScheduler.schedule(afterNanoseconds: 400_000_000, action: enqueueLoad)
-        }
+        scheduleSourceLoad(value, immediate: immediate, automaticOwner: nil)
     }
 
     public func paste(_ value: String) {
@@ -269,18 +245,35 @@ public final class DobbySessionViewModel: ObservableObject {
         paste(first)
     }
 
+    private var importRevision: UInt64 = 0
+    private(set) var parsingImport = false
+
     public func importLink(_ url: URL) {
-        do {
-            let source = try subscriptionFromLink(url.absoluteString)
-            guard let source else { return }
-            if !importError.isEmpty {
-                if error == importError { setError("", origin: .other) }
-                importError = ""
+        importRevision &+= 1
+        let revision = importRevision
+        parsingImport = true
+        let link = url.absoluteString
+        worker.async { [weak self, client] in
+            let result = Result {
+                try DobbyResponse.result(from: client.call("ParseImportLink", parameters: ["link": link]),
+                                         as: DobbyImportLink.self)
             }
-            paste(source)
-        } catch {
-            importError = error.localizedDescription
-            setError(error.localizedDescription, origin: .other)
+            Task { @MainActor [weak self] in
+                guard let self, self.importRevision == revision else { return }
+                self.parsingImport = false
+                switch result {
+                case let .success(parsed):
+                    guard parsed.kind == "import", let source = parsed.source else { return }
+                    if !self.importError.isEmpty {
+                        if self.error == self.importError { self.setError("", origin: .other) }
+                        self.importError = ""
+                    }
+                    self.pendingImport = source
+                case let .failure(failure):
+                    self.importError = failure.localizedDescription
+                    self.setError(failure.localizedDescription, origin: .other)
+                }
+            }
         }
     }
 
@@ -290,15 +283,19 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func loadNext() {
-        guard !loadInFlight, let source = pendingLoad, !snapshot.sessionID.isEmpty else { return }
+        guard !loadInFlight, let (source, automaticOwner) = pendingLoad, !snapshot.sessionID.isEmpty else { return }
         pendingLoad = nil
         loadInFlight = true
         loading = true
         let revision = loadRevision
         let client = client
         loadWorker.async { [weak self, client] in
-            let result = Result {
+            let result = Result { () -> Int64? in
                 let current = try DobbyResponse.result(from: client.call("Snapshot", parameters: ["session_id": ""]), as: DobbySessionSnapshot.self)
+                if let automaticOwner, current.sessionID != automaticOwner || current.serviceRestorePending || current.configured {
+                    // Recheck the live owner before loading its saved source. Configure supersedes its restore.
+                    return nil
+                }
                 let response = client.call("Configure", parameters: [
                     "session_id": current.sessionID, "expected_sequence": current.sequence, "source": source,
                 ])
@@ -310,8 +307,21 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.loading = false
                 if revision == self.loadRevision {
                     switch result {
-                    case let .success(sequence): self.acceptedSequence = sequence; self.markSourceAccepted(source)
-                    case let .failure(failure): self.loadError = failure.localizedDescription
+                    case let .success(sequence?):
+                        self.acceptedSequence = sequence
+                        self.markSourceAccepted(source)
+                    case .success(nil):
+                        self.sourceIsDirty = false
+                    case let .failure(failure) where DobbyVPNSetupFlow.report(failure, client: client) != nil:
+                        // The VPN profile is gone; keep the subscription until setup succeeds.
+                        if self.pendingLoad == nil { self.pendingLoad = (source, automaticOwner) }
+                    case let .failure(failure):
+                        let accepted = self.snapshot.sourceURL
+                        let sameSource = self.snapshot.configured && !accepted.isEmpty && accepted == source
+                        if sameSource { self.sourceIsDirty = false }
+                        let owner = self.snapshot.configured && !sameSource && !accepted.isEmpty
+                            ? " Showing profiles from \(accepted)." : ""
+                        self.loadError = "Could not load \(source): \(failure.localizedDescription).\(owner)"
                     }
                 }
                 self.refreshSnapshot()
@@ -326,20 +336,40 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     public func refreshSnapshot() {
+        refreshSnapshot(retryingVPNSetup: false)
+    }
+
+    private func refreshSnapshot(retryingVPNSetup: Bool) {
         guard !snapshotInFlight else { return }
         snapshotInFlight = true
+        if retryingVPNSetup { updateVPNSetup { $0.retryRunning = true } }
         let currentID = snapshot.sessionID
         let recoveringFromSnapshotFailure = currentID.isEmpty && snapshotFailureMessage != nil
         let client = client
         worker.async { [weak self, client] in
-            let decoded = readSnapshot(client: client, sessionID: currentID)
+            let observer = client as? DobbyDisconnectObserving
+            let ticket = observer?.beginSnapshotObservation()
+            let decoded = readSnapshot(client: client, sessionID: currentID, retryingVPNSetup: retryingVPNSetup)
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.snapshotInFlight = false
+                let retryPending = self.updateVPNSetup { $0.finishSnapshot(retrying: retryingVPNSetup) }
+                self.disconnectFailure = observer?.disconnectFailure ?? ""
                 switch decoded {
                 case let .success((value, reattached)):
                     if value.sessionID == self.snapshot.sessionID && value.sequence < max(self.snapshot.sequence, self.acceptedSequence) { return }
+                    self.updateVPNSetup { $0.ready() }
+                    if let observer, let ticket {
+                        observer.observedSnapshot(value, ticket: ticket)
+                        self.disconnectFailure = observer.disconnectFailure
+                    }
                     let sameSession = value.sessionID == self.snapshot.sessionID
+                    if value.serviceRestorePending && (!sameSession || !self.snapshot.serviceRestorePending) {
+                        self.recordDiagnostic(
+                            "Waiting for the service to restore its saved VPN session. session_id=\(value.sessionID)",
+                            event: "subscription.restore-pending", level: "INFO"
+                        )
+                    }
                     if !sameSession {
                         self.acceptedSequence = 0
                         self.clearError(from: .sourceSnapshot)
@@ -348,6 +378,7 @@ public final class DobbySessionViewModel: ObservableObject {
                     if sameSession && self.sourceIsDirty {
                         displayedValue.configured = self.snapshot.configured
                         displayedValue.sourceURL = self.snapshot.sourceURL
+                        displayedValue.offlineAcceptedAt = self.snapshot.offlineAcceptedAt
                         displayedValue.digest = self.snapshot.digest
                         displayedValue.profiles = self.snapshot.profiles
                     }
@@ -368,19 +399,21 @@ public final class DobbySessionViewModel: ObservableObject {
                         }
                     }
                     let restoreKey = value.sessionID + "|" + self.sourceText
-                    if !value.configured && !self.sourceIsDirty && !self.sourceText.isEmpty && self.restoredLoad != restoreKey {
+                    if !value.configured && !value.serviceRestorePending && !self.sourceIsDirty &&
+                        !self.sourceText.isEmpty && self.restoredLoad != restoreKey {
                         self.restoredLoad = restoreKey
-                        self.sourceChanged(self.sourceText, immediate: true)
+                        self.scheduleSourceLoad(self.sourceText, immediate: true, automaticOwner: value.sessionID)
                     }
                     self.loadNext()
                     if reattached || recoveringFromSnapshotFailure { self.clearSnapshotFailure() }
                     self.observeSourceError(value.sourceError, sessionID: value.sessionID)
                 case let .failure(failure):
-                    self.snapshot = .empty
-                    self.snapshotFailureMessage = failure.localizedDescription
-                    self.setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
+                    self.observeSnapshotFailure(failure)
                 }
                 self.pruneClosedFailures()
+                if retryPending, case .failure = decoded {
+                    self.refreshSnapshot(retryingVPNSetup: true)
+                }
             }
         }
     }
@@ -435,12 +468,11 @@ public final class DobbySessionViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.busy = false
-                if case let .failure(failure) = outcome {
+                if case let .failure(failure) = outcome, DobbyVPNSetupFlow.report(failure, client: client) == nil {
                     let message = failure.localizedDescription
                     self.dismissedFailures.remove(message)
                     self.setError(message, origin: .other)
                 }
-                if stopping { self.refreshOnDemandPreference() }
                 self.refreshSnapshot()
             }
         }
@@ -500,58 +532,6 @@ public final class DobbySessionViewModel: ObservableObject {
         if visible { refreshLogs() }
     }
 
-    private func recordAppStarted() {
-        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
-        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
-        recordDiagnostic(line, event: "app.started", level: "INFO")
-    }
-
-    private func recordError(_ message: String) {
-        recordDiagnostic(message)
-    }
-
-    /// Ties a UI hang to the log length: one DEBUG record per distinct size.
-    /// Each write re-triggers a log parse, so unchanged sizes stay silent.
-    private func recordLogViewSize(_ entries: [DobbyLogEntry]) {
-        let characters = entries.reduce(0) { $0 + $1.message.utf16.count }
-        let message = "entries=\(entries.count) characters=\(characters)"
-        guard message != lastLoggedLogSize else { return }
-        recordDiagnostic(message, event: "ui.log_view_size", level: "DEBUG")
-        lastLoggedLogSize = message
-    }
-
-    private func recordDiagnostic(
-        _ message: String,
-        event: String = "ui.failure",
-        level: String = "ERROR"
-    ) {
-        let path = client.uiDiagnosticPath
-        let excludedPaths = client.diagnosticPaths
-        logWorker.async { [weak self] in
-            do {
-                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
-                Task { @MainActor [weak self] in
-                    guard let self, self.logsVisible else { return }
-                    self.refreshLogs()
-                }
-            } catch {
-                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
-                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
-                    failure += "\nStderr write failed: \(String(reflecting: error))"
-                }
-                Task { @MainActor [weak self] in
-                    self?.diagnosticWriteError = failure
-                    self?.logsError = failure
-                }
-            }
-        }
-    }
-
-    func recordLogsShare(kind: String, phase: String, context: String = "") {
-        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
-                         event: "ui.logs_share", level: "INFO")
-    }
-
     public func refreshLogs() {
         guard !logsInFlight else { logsRefreshPending = true; return }
         logsInFlight = true
@@ -603,6 +583,92 @@ public final class DobbySessionViewModel: ObservableObject {
                 self.refreshLogs()
             }
         }
+    }
+}
+
+private extension DobbySessionViewModel {
+    func scheduleSourceLoad(_ value: String, immediate: Bool, automaticOwner: String?) {
+        if !immediate && value == sourceText { return }
+        sourceText = value
+        sourceIsDirty = true
+        importError = ""
+        setError("", origin: .other)
+        loadError = ""
+        // Typing only forgets the closed failures it cleared; a persistent one must not reopen on every keystroke.
+        pruneClosedFailures()
+        loadRevision += 1
+        pendingLoad = nil
+        debounce?.cancel()
+        debounce = nil
+        let source = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard validSubscription(source) else { return }
+        let enqueueLoad: @MainActor () -> Void = { [weak self] in
+            guard let self else { return }
+            self.debounce = nil
+            self.pendingLoad = (source, automaticOwner)
+            // A subscription entered before setup is the user action that starts it.
+            self.requestVPNSetup()
+            self.loadNext()
+        }
+        if immediate {
+            enqueueLoad()
+        } else {
+            debounce = debounceScheduler.schedule(afterNanoseconds: 400_000_000, action: enqueueLoad)
+        }
+    }
+}
+
+extension DobbySessionViewModel {
+    private func recordAppStarted() {
+        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
+        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
+        recordDiagnostic(line, event: "app.started", level: "INFO")
+    }
+
+    private func recordError(_ message: String) {
+        recordDiagnostic(message)
+    }
+
+    /// Ties a UI hang to the log length: one DEBUG record per distinct size.
+    /// Each write re-triggers a log parse, so unchanged sizes stay silent.
+    private func recordLogViewSize(_ entries: [DobbyLogEntry]) {
+        let characters = entries.reduce(0) { $0 + $1.message.utf16.count }
+        let message = "entries=\(entries.count) characters=\(characters)"
+        guard message != lastLoggedLogSize else { return }
+        recordDiagnostic(message, event: "ui.log_view_size", level: "DEBUG")
+        lastLoggedLogSize = message
+    }
+
+    private func recordDiagnostic(
+        _ message: String,
+        event: String = "ui.failure",
+        level: String = "ERROR"
+    ) {
+        let path = client.uiDiagnosticPath
+        let excludedPaths = client.diagnosticPaths
+        logWorker.async { [weak self] in
+            do {
+                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
+                Task { @MainActor [weak self] in
+                    guard let self, self.logsVisible else { return }
+                    self.refreshLogs()
+                }
+            } catch {
+                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
+                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
+                    failure += "\nStderr write failed: \(String(reflecting: error))"
+                }
+                Task { @MainActor [weak self] in
+                    self?.diagnosticWriteError = failure
+                    self?.logsError = failure
+                }
+            }
+        }
+    }
+
+    func recordLogsShare(kind: String, phase: String, context: String = "") {
+        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
+                         event: "ui.logs_share", level: "INFO")
     }
 }
 
@@ -679,10 +745,8 @@ extension DobbySessionViewModel {
         logWorker.async { [weak self, client] in
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("DobbyVPN-logs-\(UUID().uuidString).gz")
-            let header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\n" +
-                "Platform: \(ProcessInfo.processInfo.operatingSystemVersionString)\nCaptured: \(ISO8601DateFormatter().string(from: Date()))\n\n"
             do {
-                let issues = try exportDiagnostics(paths: client.diagnosticPaths, to: url, header: header + writeError)
+                let issues = try exportLocalDiagnostics(client: client, to: url, writeError: writeError)
                 Task { @MainActor [weak self] in
                     self?.exportingLogs = false
                     self?.logsError = issues
@@ -698,53 +762,6 @@ extension DobbySessionViewModel {
         }
     }
 
-}
-
-extension DobbySessionViewModel {
-    public var supportsOnDemand: Bool {
-        client is any DobbyOnDemandClient
-    }
-
-    public func refreshOnDemandPreference() {
-        guard let onDemandClient = client as? any DobbyOnDemandClient else { return }
-        guard !onDemandBusy else {
-            onDemandRefreshPending = true
-            return
-        }
-        onDemandBusy = true
-        Task { @MainActor [weak self, onDemandClient] in
-            guard let self else { return }
-            defer { self.finishOnDemandOperation() }
-            do {
-                self.onDemandEnabled = try await onDemandClient.onDemandEnabled()
-            } catch {
-                self.setError("Could not read Connect on demand preference: \(error.localizedDescription)", origin: .other)
-            }
-        }
-    }
-
-    public func setOnDemandEnabled(_ enabled: Bool) {
-        guard !onDemandBusy, let onDemandClient = client as? any DobbyOnDemandClient else { return }
-        onDemandBusy = true
-        Task { @MainActor [weak self, onDemandClient] in
-            guard let self else { return }
-            defer { self.finishOnDemandOperation() }
-            do {
-                try await onDemandClient.setOnDemandEnabled(enabled)
-                self.onDemandEnabled = try await onDemandClient.onDemandEnabled()
-            } catch {
-                self.setError("Could not update Connect on demand preference: \(error.localizedDescription)", origin: .other)
-            }
-        }
-    }
-
-    private func finishOnDemandOperation() {
-        onDemandBusy = false
-        if onDemandRefreshPending {
-            onDemandRefreshPending = false
-            refreshOnDemandPreference()
-        }
-    }
 }
 
 extension DobbySessionViewModel {
@@ -801,7 +818,7 @@ extension DobbySessionViewModel {
 
     private var failures: [String] {
         var seen = Set<String>()
-        return [importError, loadError, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
+        return [importError, loadError, disconnectFailure, error, snapshot.lastFailure.map { "\($0.message) (\($0.code))" } ?? "", logsError]
             .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
@@ -819,7 +836,10 @@ extension DobbySessionViewModel {
         recordDiagnostic("phase=requested branch=\(branch) scalar_count=\(scalarCount) visible_before=\(!shown.isEmpty)",
                          event: "ui.error_close", level: "DEBUG")
         if !shown.isEmpty {
-            if shown == importError {
+            if shown == disconnectFailure, let observer = client as? DobbyDisconnectObserving {
+                observer.acknowledgeDisconnect(shown)
+                disconnectFailure = observer.disconnectFailure
+            } else if shown == importError {
                 dismissError()
             } else {
                 dismissedFailures.insert(shown)
@@ -850,20 +870,62 @@ extension DobbySessionViewModel {
     /// Closes the error the popup shows first: import guidance, then the last command error.
 }
 
-private func readSnapshot(
-    client: DobbySessionClient,
-    sessionID: String
-) -> Result<(DobbySessionSnapshot, reattached: Bool), Error> {
-    let response = client.call("Snapshot", parameters: ["session_id": sessionID])
-    do {
-        return .success((try DobbyResponse.result(from: response, as: DobbySessionSnapshot.self), false))
-    } catch DobbyClientError.command(let code, _) where code == "NOT_FOUND" && !sessionID.isEmpty {
-        let replacement = client.call("Snapshot", parameters: ["session_id": ""])
-        return Result {
-            (try DobbyResponse.result(from: replacement, as: DobbySessionSnapshot.self), true)
+extension DobbySessionViewModel {
+    public var vpnNotSetUp: Bool { vpnSetup.notSetUp }
+    public var vpnSetupExplanationVisible: Bool { vpnSetup.explanationVisible }
+    /// The denied (or timed-out) setup shown inline; its detail is only behind Copy.
+    public var vpnPermissionNeeded: Bool { snapshot.sessionID.isEmpty && vpnSetup.failure != nil }
+    public var vpnSetupFailureDetail: String { vpnSetup.failure ?? "" }
+    public var canRetryVPNSetup: Bool { snapshot.sessionID.isEmpty && vpnSetup.canRetry }
+
+    /// "Allow VPN": after a refusal only this tap saves again.
+    public func retryVPNSetup() {
+        guard canRetryVPNSetup else { return }
+        recordDiagnostic("VPN setup retried by the user", event: "vpn.setup", level: "INFO")
+        startVPNSetup()
+    }
+
+    /// "Continue" on the explanation: the save that shows the iOS permission prompt.
+    public func continueVPNSetup() {
+        guard updateVPNSetup({ $0.dismissExplanation() }) else { return }
+        recordDiagnostic("VPN setup continued after the explanation", event: "vpn.setup", level: "INFO")
+        startVPNSetup()
+    }
+
+    func requestVPNSetup() {
+        if updateVPNSetup({ $0.request() }) { recordDiagnostic("VPN setup explanation shown", event: "vpn.setup", level: "INFO") }
+    }
+
+    private func startVPNSetup() {
+        resetClosedFailures()
+        if snapshotInFlight {
+            updateVPNSetup { $0.retryPending = true }
+        } else {
+            refreshSnapshot(retryingVPNSetup: true)
         }
-    } catch {
-        return .failure(error)
+    }
+
+    /// Publishes only real changes, so polling does not redraw the window.
+    @discardableResult
+    private func updateVPNSetup<T>(_ change: (inout DobbyVPNSetupFlow) -> T) -> T {
+        var value = vpnSetup
+        let result = change(&value)
+        if value != vpnSetup { vpnSetup = value }
+        return result
+    }
+
+    private func observeSnapshotFailure(_ failure: Error) {
+        snapshot = .empty
+        guard let report = DobbyVPNSetupFlow.report(failure, client: client) else {
+            updateVPNSetup { $0.ready() }
+            snapshotFailureMessage = failure.localizedDescription
+            setError(failure.localizedDescription, origin: .other, preservingSnapshotFailure: true)
+            return
+        }
+        if let newFailure = updateVPNSetup({ $0.observe(report) }) { recordError("VPN setup failed: \(newFailure)") }
+        // An earlier transport error no longer describes this state.
+        clearSnapshotFailure()
+        if report == .notSetUp && pendingLoad != nil { requestVPNSetup() }
     }
 }
 
@@ -872,17 +934,21 @@ func validSubscription(_ value: String) -> Bool {
     return url.scheme?.lowercased() == "https" && !(url.host ?? "").isEmpty
 }
 
-func subscriptionFromLink(_ value: String) throws -> String? {
-    func invalid() -> DobbyClientError { .command(code: "INVALID_ARGUMENT", message: "Use dobbyvpn://import?url= followed by an encoded HTTPS subscription URL") }
-    guard value.range(of: "%(?![0-9a-fA-F]{2})", options: .regularExpression) == nil,
-          let link = URLComponents(string: value), link.scheme?.lowercased() == "dobbyvpn",
-          link.user == nil, link.password == nil, link.port == nil, link.fragment == nil else { throw invalid() }
-    if (link.host ?? "").isEmpty && link.path.isEmpty && link.query == nil { return nil }
-    guard link.host == "import", link.path.isEmpty,
-          let parameters = link.queryItems, parameters.count == 1,
-          parameters[0].name == "url", let source = parameters[0].value,
-          validSubscription(source) else { throw invalid() }
-    return source
+private struct DobbyImportLink: Decodable {
+    let kind: String
+    let source: String?
+}
+
+extension DobbySessionViewModel {
+    public func confirmImport() {
+        importRevision &+= 1
+        parsingImport = false
+        guard let source = pendingImport else { return }
+        pendingImport = nil
+        paste(source)
+    }
+
+    public func cancelImport() { importRevision &+= 1; parsingImport = false; pendingImport = nil }
 }
 
 extension DobbySessionViewModel {
@@ -930,6 +996,14 @@ extension DobbySessionViewModel {
             "viewport_size=\(observation.viewportSize) content_size=\(observation.contentSize)",
             event: "logs.frozen-position-restored", level: "DEBUG"
         )
+    }
+}
+#endif
+
+#if os(iOS)
+extension DobbySessionViewModel {
+    func recordLogMenuGesture(_ observation: String) {
+        recordDiagnostic(observation, event: "ui.logs_menu_gesture", level: "DEBUG")
     }
 }
 #endif

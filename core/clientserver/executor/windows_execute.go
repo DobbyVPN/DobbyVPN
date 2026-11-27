@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -12,26 +13,29 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"core/clientserver/controljson"
 	"core/clientserver/controlplane"
 	"core/sessionapi"
 	"core/tunnel/platform_engine"
 
-	"core/diagnostics"
 	"core/log"
 
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 )
 
-type managerService struct{}
+type managerService struct{ initLog func() error }
 
 func prepareDesktopControl() (net.Listener, error) {
 	return prepareDesktopControlWith(
 		controlplane.ListenDesktopControlPipe,
-		recoverInterruptedState,
+		func() error {
+			startupFailure = prepareServiceProtection()
+			if startupFailure != nil {
+				return nil
+			} // Open the pipe so the operator sees the retained policy failure.
+			return recoverInterruptedState()
+		},
 		platform_engine.RecoverStaleWindowsIPv6FirewallRules,
 	)
 }
@@ -62,10 +66,12 @@ func closePipeAfterStartupFailure(listener net.Listener, startupErr error) error
 }
 
 func serveDesktopControl(listener net.Listener) (func() error, <-chan error) {
+	startRestore := prepareDesktopRestore(desktopProcessBinding(), releaseUnadoptedKillSwitch)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, nil)
 	}()
+	startRestore()
 	return listener.Close, serveDone
 }
 
@@ -123,13 +129,25 @@ func prepareLocalLogPath() (string, error) {
 
 func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (svcSpecificEC bool, exitCode uint32) {
 	changes <- svc.Status{State: svc.StartPending}
+	if err := service.initLog(); err != nil {
+		reportStartupFailure("initialize local logging", err, true)
+		return true, 1
+	}
+	defer func() { _ = log.Flush() }()
+	log.Infof(desktopLogCategory, "Windows service dispatcher connected, preparing desktop control")
 	listener, err := prepareDesktopControl()
 	if err != nil {
 		log.Errorf(desktopLogCategory, "failed to prepare desktop control: %v", err)
 		return true, 1
 	}
 	stopControl, serveDone := serveDesktopControl(listener)
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown}
+	emit := newNetworkEvents()
+	if stopWatching, err := watchNetworkChanges(emit); err != nil {
+		log.Errorf(desktopLogCategory, "network change watcher unavailable: %v", err)
+	} else {
+		defer stopWatching()
+	}
+	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptPreShutdown | svc.AcceptPowerEvent}
 	var serveErr error
 running:
 	for {
@@ -143,6 +161,9 @@ running:
 			if request.Cmd == svc.Interrogate {
 				changes <- request.CurrentStatus
 			}
+			if request.Cmd == svc.PowerEvent {
+				powerEvent(request.EventType, emit)
+			}
 		}
 	}
 	changes <- svc.Status{State: svc.StopPending, WaitHint: uint32(sessionapi.CleanupTimeout / time.Millisecond)}
@@ -154,35 +175,7 @@ running:
 }
 
 func runService() error {
-	if err := configureServiceShutdownBudget(); err != nil {
-		return err
-	}
-	return svc.Run("DobbyVPN Go backend", &managerService{})
-}
-
-// Ordinary shutdown notification can force termination before the Go owner's
-// cleanup deadline. Request the same bounded interval in SCM's preshutdown phase.
-func configureServiceShutdownBudget() (resultErr error) {
-	manager, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
-	if err != nil {
-		return fmt.Errorf("open service manager for shutdown budget: %w", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, windows.CloseServiceHandle(manager)) }()
-	name, err := windows.UTF16PtrFromString("DobbyVPN Go backend")
-	if err != nil {
-		return err
-	}
-	service, err := windows.OpenService(manager, name, windows.SERVICE_CHANGE_CONFIG)
-	if err != nil {
-		return fmt.Errorf("open backend service for shutdown budget: %w", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, windows.CloseServiceHandle(service)) }()
-	// SERVICE_PRESHUTDOWN_INFO contains one DWORD timeout in milliseconds.
-	budget := uint32(sessionapi.CleanupTimeout / time.Millisecond)
-	if err := windows.ChangeServiceConfig2(service, windows.SERVICE_CONFIG_PRESHUTDOWN_INFO, (*byte)(unsafe.Pointer(&budget))); err != nil {
-		return fmt.Errorf("configure backend preshutdown budget: %w", err)
-	}
-	return nil
+	return svc.Run("DobbyVPN Go backend", &managerService{initLog: initExplicitLocalLog})
 }
 
 func run() {
@@ -206,20 +199,40 @@ func run() {
 }
 
 func (c *Executor) Execute(mode string) {
-	if err := initExplicitLocalLog(); err != nil {
-		_, _ = fmt.Fprintf(diagnostics.Stderr, "failed to initialize local logging: %v\n", err)
-		return
+	code := executeWith(mode, initExplicitLocalLog, run, runService)
+	_ = log.Flush()
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+// executeWith returns the process exit code. Only failures before or outside
+// the SCM handler are non-zero.
+func executeWith(mode string, initLog func() error, runNormal func(), runServiceMode func() error) int {
+	if mode == "service" {
+		// SCM waits for the dispatcher while starting automatic services.
+		// Configuration belongs to the installer, logging to the registered handler.
+		if err := runServiceMode(); err != nil {
+			return reportStartupFailure("run service dispatcher", err, true)
+		}
+		return 0
+	}
+	if err := initLog(); err != nil {
+		return reportStartupFailure("initialize local logging", err, false)
 	}
 	log.Debugf(desktopLogCategory, "Executing with mode: %v", mode)
 
 	switch mode {
-	case "normal":
-		run()
-	case "service":
-		if err := runService(); err != nil {
-			log.Errorf(desktopLogCategory, "Go backend service failed: %v", err)
+	case "release-protection":
+		if err := removeDesktopInstallationState(context.Background(), controlplane.WindowsInstallationSourceStore); err != nil {
+			log.Errorf(desktopLogCategory, "failed to release installed VPN state: %v", err)
+			return reportStartupFailure("release installed VPN state", err, true)
 		}
+	case "normal":
+		runNormal()
 	default:
 		log.Errorf(desktopLogCategory, "Invalid run mode")
+		return reportStartupFailure("select run mode", fmt.Errorf("invalid run mode %q", mode), false)
 	}
+	return 0
 }

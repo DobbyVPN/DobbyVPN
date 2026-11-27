@@ -8,80 +8,75 @@ import (
 	"sync"
 )
 
-type NetworkConfig struct {
-	TunGateway string // 10.X.Y.1
-	TunDevice  string // 10.X.Y.2
-}
-
 var (
-	cfg  *NetworkConfig
-	once sync.Once
+	tunAddressMu sync.Mutex
+	tunAddress   string
 )
 
-func GetNetworkConfig() *NetworkConfig {
-	once.Do(func() {
-		cfg = generateConfig()
-	})
-
-	return cfg
+// TUNDeviceIPv4 returns the process's first successfully selected device address.
+func TUNDeviceIPv4() (string, error) {
+	tunAddressMu.Lock()
+	defer tunAddressMu.Unlock()
+	if tunAddress != "" {
+		return tunAddress, nil
+	}
+	address, err := selectTUNDeviceIPv4(localIPv4Addresses(), randomPrivateOctet)
+	if err == nil {
+		tunAddress = address
+	}
+	return address, err
 }
 
-func generateConfig() *NetworkConfig {
+func selectTUNDeviceIPv4(assigned map[string]bool, nextOctet func() (int64, error)) (string, error) {
 	for i := 0; i < 20; i++ {
-		x, err := randomPrivateOctet()
+		x, err := nextOctet()
 		if err != nil {
 			break
 		}
-		y, err := randomPrivateOctet()
+		y, err := nextOctet()
 		if err != nil {
 			break
 		}
 
-		gateway := fmt.Sprintf("10.%d.%d.1", x, y)
-		device := fmt.Sprintf("10.%d.%d.2", x, y)
-
-		if isIPFree(gateway) && isIPFree(device) {
-			return &NetworkConfig{
-				TunGateway: gateway,
-				TunDevice:  device,
-			}
+		address := fmt.Sprintf("10.%d.%d.2", x, y)
+		if !assigned[address] {
+			return address, nil
 		}
 	}
 
-	return &NetworkConfig{
-		TunGateway: "10.255.255.1",
-		TunDevice:  "10.255.255.2",
+	const fallback = "10.255.255.2"
+	if assigned[fallback] {
+		return "", fmt.Errorf("cannot select a free TUN address: fallback %s is already assigned", fallback)
 	}
+	return fallback, nil
 }
 
 func randomPrivateOctet() (int64, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(254))
 	if err != nil {
-		return 0, fmt.Errorf("failed to generate private network octet: %w", err)
+		return 0, err
 	}
 	return n.Int64() + 1, nil
 }
 
-func isIPFree(target string) bool {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return true
-	}
-
-	for _, ifc := range ifaces {
-		addrs, _ := ifc.Addrs()
-
-		for _, addr := range addrs {
-			ip, _, err := net.ParseCIDR(addr.String())
-			if err != nil {
-				continue
+// Keep addresses from readable interfaces if another adapter disappears mid-scan.
+func localIPv4Addresses() map[string]bool {
+	assigned := make(map[string]bool)
+	interfaces, _ := net.Interfaces()
+	for _, iface := range interfaces {
+		addresses, _ := iface.Addrs()
+		for _, address := range addresses {
+			var ip net.IP
+			switch addr := address.(type) {
+			case *net.IPNet:
+				ip = addr.IP
+			case *net.IPAddr:
+				ip = addr.IP
 			}
-
-			if ip.String() == target {
-				return false
+			if ipv4 := ip.To4(); ipv4 != nil {
+				assigned[ipv4.String()] = true
 			}
 		}
 	}
-
-	return true
+	return assigned
 }

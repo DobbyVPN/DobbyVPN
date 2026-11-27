@@ -39,6 +39,22 @@ APP_BUNDLE="/Applications/Dobby VPN.app"
 CONTROL_SOCKET="/var/run/dobbyvpn/control.sock"
 CONTROL_DIRECTORY="/var/run/dobbyvpn"
 UNINSTALLER="/usr/local/libexec/dobbyvpn-uninstall"
+CLI_LINK="/usr/local/bin/dobby-cli"
+extensions="$APP_BUNDLE/Contents/Library/SystemExtensions"
+
+# A partially removed service can still have active Network Extension
+# preferences. Keep its signed removal tool until the installer's account
+# has removed those preferences. Never infer that account from the console.
+owner_uid=""
+if [ -f "$PLIST_DEST" ]; then
+    owner_uid="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:DOBBYVPN_CONTROL_PEER_UID' "$PLIST_DEST")"
+elif [ -d "$extensions" ]; then
+    owner_uid="${DOBBYVPN_CONTROL_PEER_UID:-}"
+fi
+if [[ -f "$PLIST_DEST" || -d "$extensions" ]] && ! [[ "$owner_uid" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Cannot identify the installed DobbyVPN owner. For a missing service plist, supply the installing account's numeric DOBBYVPN_CONTROL_PEER_UID to uninstall." >&2
+    exit 1
+fi
 
 capture_command launchctl-print launchctl print system/com.dobby.vpnservice
 service_state="$CAPTURE_OUTPUT"
@@ -78,6 +94,36 @@ else
     esac
 fi
 
+# The daemon is stopped. Its migration cleanup verifies the saved token and
+# current pf reference before releasing the legacy installation's anchor.
+if [[ -e "$CONTROL_DIRECTORY/pf.token" || -L "$CONTROL_DIRECTORY/pf.token" ]]; then
+    "$APP_BUNDLE/Contents/Resources/dobbyvpn-backend" -mode release-legacy-protection
+fi
+
+if [ -n "$owner_uid" ]; then
+    if [ -d "$extensions" ]; then
+        echo "Removing DobbyVPN Network Extension preferences and registrations" >&2
+        /bin/launchctl asuser "$owner_uid" /usr/bin/sudo -n -H -u "#$owner_uid" \
+            "$APP_BUNDLE/Contents/MacOS/DobbyVPNMacApp" --network-extension uninstall
+        protection="/Library/Application Support/DobbyVPN/Protection"
+        if [ -d "$protection" ] && [ ! -L "$protection" ]; then
+            rm -f "$protection/tunnel.lock"
+            /usr/bin/find "$protection" -maxdepth 1 -type s -name '*.sock' -delete
+            rmdir "$protection"
+        fi
+    fi
+    capture_command remove-configuration /usr/bin/sudo -n -H -u "#$owner_uid" /bin/sh -eu -c '
+        cd -P -- "$HOME"
+        for part in .dobbyvpn configs; do
+            if [ -L "$part" ]; then echo "Saved configuration directory is a symlink" >&2; exit 1; fi
+            if [ ! -e "$part" ]; then exit 0; fi
+            cd -P -- "$part"
+        done
+        /bin/rm -f -- connection-url.txt.activation.json connection-url.txt accepted-configuration.v1.json
+    '
+    if [ "$CAPTURE_STATUS" -ne 0 ]; then exit "$CAPTURE_STATUS"; fi
+fi
+
 # Remove only the product's launchd registration and runtime endpoint.  Do not
 # follow symlinks or sweep the parent runtime directory if another owner uses
 # it; an empty product directory is removed as a cosmetic final step.
@@ -102,6 +148,11 @@ if [ "$pkgutil_status" -ne 0 ]; then
         *"No receipt"*|*"not found"*|*"No such file"*) ;;
         *) printf 'Package receipt removal failed (status %s)\n' "$pkgutil_status" >&2; exit "$pkgutil_status" ;;
     esac
+fi
+# Remove the PATH link only while it still points at this application; a link
+# that another tool re-pointed is not ours to delete.
+if [ -L "$CLI_LINK" ] && [ "$(readlink "$CLI_LINK")" = "$APP_BUNDLE/Contents/Resources/dobby-cli" ]; then
+    rm -f "$CLI_LINK"
 fi
 rm -rf "$APP_BUNDLE"
 rm -f "$UNINSTALLER"

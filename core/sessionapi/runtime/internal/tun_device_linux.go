@@ -1,172 +1,87 @@
 //go:build linux && !(android || ios)
-// +build linux,!android,!ios
 
 package internal
 
 import (
-	"core/tunnel/protected_dialer"
 	"errors"
 	"fmt"
-	"os"
-
-	"github.com/songgao/water"
-	"github.com/vishvananda/netlink"
-	"golang.getoutline.org/sdk/network"
-	"golang.org/x/sys/unix"
+	"net/netip"
 
 	"core/log"
+
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
+	"gvisor.dev/gvisor/pkg/tcpip/link/tun"
 )
 
-type tunDevice struct {
-	*water.Interface
-	link netlink.Link
-}
-
-var _ network.IPDevice = (*tunDevice)(nil)
-
-func newTunDevice(name, ip string) (d network.IPDevice, err error) {
-	log.Debugf(Category, "[TUN][Init] Creating TUN device name=%s ip=%s", name, ip)
-
-	if name == "" {
-		err = errors.New("name is required for TUN/TAP device")
-		log.Errorf(Category, "[TUN][Init] %v", err)
-		return nil, err
+// A nonnegative descriptor belongs to the caller, including on partial setup.
+func (app *App) openLinuxTUN() (int, error) {
+	config := app.RoutingConfig
+	if config.TunDeviceName == "" {
+		return -1, errors.New("name is required for TUN/TAP device")
 	}
-	if ip == "" {
-		err = errors.New("ip is required for TUN/TAP device")
-		log.Errorf(Category, "[TUN][Init] %v", err)
-		return nil, err
+	ifr, err := unix.NewIfreq(config.TunDeviceName)
+	if err != nil {
+		return -1, fmt.Errorf("invalid TUN name %q: %w", config.TunDeviceName, err)
+	}
+	ip, err := netip.ParseAddr(config.TunDeviceIP)
+	if err != nil {
+		return -1, fmt.Errorf("parse TUN %s IPv4 address %q: %w", config.TunDeviceName, config.TunDeviceIP, err)
+	}
+	if !ip.Is4() {
+		return -1, fmt.Errorf("TUN %s requires an IPv4 address, got %s", config.TunDeviceName, ip)
 	}
 
-	log.Debugf(Category, "[TUN][Create] Calling water.New()...")
-	tun, err := water.New(water.Config{
-		DeviceType: water.TUN,
-		PlatformSpecificParams: water.PlatformSpecificParams{
-			Name:    name,
-			Persist: false,
-		},
+	log.Debugf(Category, "[TUN][Create] name=%s ip=%s mtu=%d", config.TunDeviceName, config.TunDeviceIP, config.TunDeviceMTU)
+	fd, err := tun.Open(config.TunDeviceName)
+	if err != nil {
+		return -1, fmt.Errorf("create TUN %s: %w", config.TunDeviceName, err)
+	}
+	// An existing persistent TUN can be reopened under the configured name.
+	if persistErr := unix.IoctlSetInt(fd, unix.TUNSETPERSIST, 0); persistErr != nil {
+		return fd, fmt.Errorf("clear persistence on TUN %s: %w", config.TunDeviceName, persistErr)
+	}
+	if nameErr := unix.IoctlIfreq(fd, unix.TUNGETIFF, ifr); nameErr != nil {
+		return fd, fmt.Errorf("read assigned name for TUN %s: %w", config.TunDeviceName, nameErr)
+	}
+	name := ifr.Name()
+	log.Debugf(Category, "[TUN][Netlink] resolving interface=%s fd=%d", name, fd)
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		return fd, fmt.Errorf("resolve new TUN %s: %w", name, err)
+	}
+	log.Debugf(Category, "[TUN][Config] interface=%s index=%d mtu=%d requested_mtu=%d", name, link.Attrs().Index, link.Attrs().MTU, config.TunDeviceMTU)
+	if mtuErr := netlink.LinkSetMTU(link, config.TunDeviceMTU); mtuErr != nil {
+		return fd, fmt.Errorf("set MTU %d on TUN %s: %w", config.TunDeviceMTU, name, mtuErr)
+	}
+
+	ipv4 := &netlink.Addr{IPNet: netlink.NewIPNet(ip.AsSlice())}
+	log.Debugf(Category, "[TUN][IP] adding %s to %s", ipv4, name)
+	if addressErr := netlink.AddrAdd(link, ipv4); addressErr != nil {
+		return fd, fmt.Errorf("add IPv4 %s to TUN %s: %w", ipv4, name, addressErr)
+	}
+	ipv6, err := netlink.ParseAddr("fd00:dbb::1/128")
+	if err != nil {
+		return fd, fmt.Errorf("parse TUN %s IPv6 address: %w", name, err)
+	}
+	ipv6.Flags = unix.IFA_F_NODAD
+	log.Debugf(Category, "[TUN][IP] adding %s to %s", ipv6, name)
+	if addressErr := netlink.AddrAdd(link, ipv6); addressErr != nil {
+		return fd, fmt.Errorf("add IPv6 %s to TUN %s: %w", ipv6, name, addressErr)
+	}
+	log.Debugf(Category, "[TUN][Link] bringing up %s", name)
+	if upErr := netlink.LinkSetUp(link); upErr != nil {
+		return fd, fmt.Errorf("bring up TUN %s: %w", name, upErr)
+	}
+	app.retainDesktopTunnelPolicy(map[string]any{
+		"interface":                        name,
+		"interface_index":                  link.Attrs().Index,
+		"ipv4_prefix":                      ipv4.IPNet.String(),
+		"ipv6_prefix":                      ipv6.IPNet.String(),
+		"mtu":                              config.TunDeviceMTU,
+		"requested_routing_table_id":       config.RoutingTableID,
+		"requested_routing_table_priority": config.RoutingTablePriority,
+		"requested_dns_servers":            config.DNSServers,
 	})
-	if err != nil {
-		err = fmt.Errorf("failed to create TUN/TAP device: %w", err)
-		log.Errorf(Category, "[TUN][Create] %v", err)
-		return nil, err
-	}
-	log.Debugf(Category, "[TUN][Create][OK] Interface created: %s", tun.Name())
-
-	tunDev := &tunDevice{Interface: tun}
-	d = tunDev // Transfer partial acquisition to the one App cleanup owner.
-
-	log.Debugf(Category, "[TUN][Netlink] Resolving link by name: %s", name)
-	tunLink, err := netlink.LinkByName(name)
-	if err != nil {
-		err = fmt.Errorf("newly created TUN/TAP device '%s' not found: %w", name, err)
-		log.Errorf(Category, "[TUN][Netlink] %v", err)
-		return d, err
-	}
-	log.Debugf(Category, "[TUN][Netlink][OK] Link found: index=%d mtu=%d",
-		tunLink.Attrs().Index,
-		tunLink.Attrs().MTU,
-	)
-
-	tunDev.link = tunLink
-
-	log.Debugf(Category, "[TUN][Config] Configuring IP/subnet...")
-	if err = tunDev.configureSubnet(ip); err != nil {
-		err = fmt.Errorf("failed to configure TUN/TAP device subnet: %w", err)
-		log.Errorf(Category, "[TUN][Config] %v", err)
-		return d, err
-	}
-	address, err := netlink.ParseAddr("fd00:dbb::1/128")
-	if err != nil {
-		return d, err
-	}
-	address.Flags = unix.IFA_F_NODAD
-	if err = netlink.AddrAdd(tunLink, address); err != nil {
-		return d, fmt.Errorf("configure TUN IPv6: %w", err)
-	}
-	log.Debugf(Category, "[TUN][Config][OK] IP configured")
-
-	log.Debugf(Category, "[TUN][Link] Bringing interface UP...")
-	if err = tunDev.bringUp(); err != nil {
-		err = fmt.Errorf("failed to bring up TUN/TAP device: %w", err)
-		log.Errorf(Category, "[TUN][Link] %v", err)
-		return d, err
-	}
-	log.Debugf(Category, "[TUN][Link][OK] Interface is UP")
-
-	log.Debugf(Category, "[TUN][Init][SUCCESS] TUN ready: name=%s", name)
-
-	return tunDev, nil
-}
-
-func (d *tunDevice) MTU() int {
-	return 1500
-}
-
-func (d *tunDevice) configureSubnet(ip string) error {
-	subnet := ip + "/32"
-	log.Debugf(Category, "[TUN][IP] Adding subnet %s to %s", subnet, d.Name())
-
-	addr, err := netlink.ParseAddr(subnet)
-	if err != nil {
-		return fmt.Errorf("subnet address '%s' is not valid: %w", subnet, err)
-	}
-
-	if err = netlink.AddrAdd(d.link, addr); err != nil {
-		return fmt.Errorf("failed to add subnet to TUN/TAP device '%s': %w", d.Name(), err)
-	}
-
-	log.Debugf(Category, "[TUN][IP][OK] Subnet added: %s", subnet)
-	return nil
-}
-
-func (d *tunDevice) bringUp() error {
-	log.Debugf(Category, "[TUN][Link] Setting interface UP: %s", d.Name())
-
-	if err := netlink.LinkSetUp(d.link); err != nil {
-		return fmt.Errorf("failed to bring TUN/TAP device '%s' up: %w", d.Name(), err)
-	}
-
-	log.Debugf(Category, "[TUN][Link][OK] Interface %s is UP", d.Name())
-	return nil
-}
-
-func (d *tunDevice) GetFd() int {
-	log.Debugf(Category, "[TUN][FD] Extracting file descriptor...")
-
-	if d.Interface == nil {
-		log.Errorf(Category, "[TUN][FD] Interface is nil")
-		return -1
-	}
-	if d.ReadWriteCloser == nil {
-		log.Errorf(Category, "[TUN][FD] ReadWriteCloser is nil")
-		return -1
-	}
-
-	if f, ok := d.ReadWriteCloser.(*os.File); ok {
-		fd, err := protected_dialer.UintptrToInt(f.Fd())
-		if err != nil {
-			log.Errorf(Category, "[TUN][FD] Failed to get FD: %v", err)
-			return -1
-		}
-		log.Debugf(Category, "[TUN][FD][OK] Got fd via *os.File: %d", fd)
-		return fd
-	}
-
-	type fder interface {
-		Fd() uintptr
-	}
-
-	if f, ok := d.ReadWriteCloser.(fder); ok {
-		fd, err := protected_dialer.UintptrToInt(f.Fd())
-		if err != nil {
-			log.Errorf(Category, "[TUN][FD] Failed to get FD: %v", err)
-			return -1
-		}
-		log.Debugf(Category, "[TUN][FD][OK] Got fd via Fd(): %d", fd)
-		return fd
-	}
-
-	log.Errorf(Category, "[TUN][FD] Unable to extract fd (unknown type: %T)", d.ReadWriteCloser)
-	return -1
+	return fd, nil
 }

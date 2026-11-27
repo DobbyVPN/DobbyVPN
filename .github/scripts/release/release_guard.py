@@ -20,14 +20,20 @@ TEST_WORKFLOW_PATH = ".github/workflows/test.yml"
 TEST_WORKFLOW_FILE = "test.yml"
 TESTS_REPOSITORY = "DobbyVPN/Torturer"
 SCHEMA = 1
+PUBLIC_SCHEMA = 2
 PAGE_SIZE = 100
+# Offset pagination can shift while other jobs create deployments, so a record
+# may appear on two pages. Only the deployment list is re-read for that.
+PAGINATION_READ_ATTEMPTS = 3
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
-CANDIDATE_KEYS = frozenset({
+PUBLIC_CANDIDATE_KEYS = frozenset({
     "schema", "build_run_id", "build_manifest_sha256", "product_sha",
-    "tests_repository", "tests_sha", "tests_tree_sha256",
 })
+CANDIDATE_KEYS = PUBLIC_CANDIDATE_KEYS | {
+    "tests_repository", "tests_sha", "tests_tree_sha256",
+}
 STATES = frozenset({"queued", "pending", "in_progress", "success", "failure", "error", "inactive"})
 NON_SUCCESS_CONCLUSIONS = frozenset({
     "failure", "cancelled", "timed_out", "action_required", "stale", "neutral", "skipped",
@@ -46,6 +52,10 @@ class GitHubHTTPError(ReleaseGuardError):
     def __init__(self, status: int):
         super().__init__(f"GitHub API returned HTTP {status}")
         self.status = status
+
+
+class PaginationShiftError(ReleaseGuardError):
+    """One record was listed twice, which means the list moved while it was read."""
 
 
 class GitHubAPI:
@@ -166,17 +176,23 @@ def _positive_int(value: Any, label: str) -> int:
 
 
 def validate_candidate(candidate: Any) -> dict[str, Any]:
-    if not isinstance(candidate, dict) or set(candidate) != CANDIDATE_KEYS:
+    if not isinstance(candidate, dict) or type(candidate.get("schema")) is not int:
+        raise ReleaseGuardError("candidate has an invalid schema")
+    schema = candidate["schema"]
+    if schema not in {SCHEMA, PUBLIC_SCHEMA}:
+        raise ReleaseGuardError("candidate has an invalid schema")
+    expected = PUBLIC_CANDIDATE_KEYS if schema == PUBLIC_SCHEMA else CANDIDATE_KEYS
+    if set(candidate) != expected:
         raise ReleaseGuardError("candidate has unexpected or missing identity fields")
-    if type(candidate.get("schema")) is not int or candidate["schema"] != SCHEMA:
-        raise ReleaseGuardError(f"candidate schema must be {SCHEMA}")
     checked = dict(candidate)
     checked["build_run_id"] = _positive_int(candidate.get("build_run_id"), "build_run_id")
     if not isinstance(candidate.get("build_manifest_sha256"), str) or not SHA256_RE.fullmatch(candidate["build_manifest_sha256"]):
         raise ReleaseGuardError("build_manifest_sha256 must be 64 lowercase hexadecimal characters")
-    for key in ("product_sha", "tests_sha"):
+    for key in (("product_sha",) if schema == PUBLIC_SCHEMA else ("product_sha", "tests_sha")):
         if not isinstance(candidate.get(key), str) or not SHA_RE.fullmatch(candidate[key]):
             raise ReleaseGuardError(f"{key} must be 40 lowercase hexadecimal characters")
+    if schema == PUBLIC_SCHEMA:
+        return checked
     if not isinstance(candidate.get("tests_tree_sha256"), str) or not SHA256_RE.fullmatch(candidate["tests_tree_sha256"]):
         raise ReleaseGuardError("tests_tree_sha256 must be 64 lowercase hexadecimal characters")
     if candidate.get("tests_repository") != TESTS_REPOSITORY:
@@ -203,13 +219,26 @@ def _paged(api: Any, endpoint: str, **filters: str) -> list[Any]:
             if not isinstance(item, dict):
                 raise ReleaseGuardError("GitHub API returned a malformed list item")
             identifier = item.get("id")
-            if type(identifier) is not int or identifier <= 0 or identifier in seen_ids:
+            if type(identifier) is int and identifier > 0 and identifier in seen_ids:
+                raise PaginationShiftError(f"GitHub API returned a missing or duplicate record ID: endpoint={endpoint} page={page} id={identifier!r}")
+            if type(identifier) is not int or identifier <= 0:
                 raise ReleaseGuardError(f"GitHub API returned a missing or duplicate record ID: endpoint={endpoint} page={page} id={identifier!r}")
             seen_ids.add(identifier)
             records.append(item)
         if len(response) < PAGE_SIZE:
             return records
         page += 1
+
+
+def _paged_deployments(api: Any, repository: str, **filters: str) -> list[Any]:
+    """Read the deployment list again from page one if it shifted while being read."""
+    for attempt in range(1, PAGINATION_READ_ATTEMPTS):
+        try:
+            return _paged(api, f"repos/{repository}/deployments", **filters)
+        except PaginationShiftError as error:
+            print(f"[release-guard] {error}; re-reading list, attempt {attempt + 1}/{PAGINATION_READ_ATTEMPTS}",
+                  file=sys.stderr, flush=True)
+    return _paged(api, f"repos/{repository}/deployments", **filters)
 
 
 def _deployment_url(repository: str, deployment_id: int) -> str:
@@ -257,7 +286,7 @@ def _all_deployments(api: Any, repository: str) -> list[dict[str, Any]]:
     # these records, while malformed task/environment combinations still fail.
     target: dict[int, dict[str, Any]] = {}
     for filters in ({"task": TASK}, {"environment": ENVIRONMENT}):
-        for item in _paged(api, f"repos/{repository}/deployments", **filters):
+        for item in _paged_deployments(api, repository, **filters):
             checked = _checked_deployment(item)
             prior = target.get(checked["id"])
             if prior is not None and (prior["_candidate"] != checked["_candidate"]
@@ -756,7 +785,7 @@ def finalize(
         if run.get("status") == "completed" and run.get("conclusion") != "success":
             raise ReleaseGuardError("cannot finalize Test success for a non-successful workflow run")
         identity = dict(result_identity) if isinstance(result_identity, Mapping) else {}
-        identity_candidate = {key: identity.get(key) for key in CANDIDATE_KEYS}
+        identity_candidate = {key: identity.get(key) for key in candidate}
         if (
             result_identity is None or validate_candidate(identity_candidate) != candidate
             or identity.get("test_run_id") != test_run_id

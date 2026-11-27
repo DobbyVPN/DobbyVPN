@@ -15,11 +15,12 @@ on:
         options:
           - ci
           - debug-packages
+          - apple-packages
           - fdroid-preflight
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'push' && 'main-development' || format('run-{0}', github.run_id)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 permissions:
   contents: read
@@ -122,14 +123,12 @@ jobs:
           - name: Windows
             runner: windows-2022
             python: python
-          - name: macOS
-            runner: macos-15
-            python: python3
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Restore dependency archives
@@ -137,7 +136,7 @@ jobs:
         with:
           pinned-tools: 'true'
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: .go-version
           cache: false
@@ -154,6 +153,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Restore dependency archives
@@ -171,7 +171,7 @@ jobs:
             echo "$pin=$value" >> "$GITHUB_OUTPUT"
           done
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: ${{ steps.pins.outputs.java_major }}
@@ -185,17 +185,17 @@ jobs:
             build-tools;${{ steps.pins.outputs.android_build_tools }}
             ndk;${{ steps.pins.outputs.android_ndk }}
 
-      - name: Run Android lint and dependency scan
+      - name: Run Android lint
         run: |
           export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
-          python3 .github/scripts/source_checks.py lint-android --output-dir "$RUNNER_TEMP/android-security"
+          python3 .github/scripts/source_checks.py lint-android --output-dir "$RUNNER_TEMP/android-lint"
 
-      - name: Retain Android dependency inventories and scan
+      - name: Retain Android lint reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-security-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/android-security
+          name: android-lint-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-lint
           if-no-files-found: warn
           retention-days: 1
 
@@ -208,6 +208,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Restore dependency archives
@@ -218,31 +219,8 @@ jobs:
       - name: Run Go source analysis
         run: python3 .github/scripts/source_checks.py lint-go
 
-  lint_swift:
-    name: Swift source analysis
-    needs: ci_scope
-    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && (needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'apple') }}
-    runs-on: macos-15
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Restore dependency archives
-        uses: ./.github/actions/dependency-cache
-        with:
-          go-modules: 'false'
-          pinned-tools: 'true'
-
-      - name: Select Xcode 26.3
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
-
-      - name: Run Swift source analysis
-        run: python3 .github/scripts/source_checks.py lint-swift
-
   security:
-    name: Dependency and credential scans
+    name: Git history secret scan
     needs: ci_scope
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' }}
     runs-on: ubuntu-24.04
@@ -250,6 +228,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -259,6 +238,7 @@ jobs:
           set -euo pipefail
           ruby -I publishing/fastlane/test -e 'Dir["publishing/fastlane/test/*_test.rb"].sort.each { |file| require_relative file }'
           python3 -m compileall -q .github/scripts/release
+          ruby -c .github/scripts/release/internal_testflight.rb
           PYTHONPATH=.github/scripts:.github/scripts/release python3 - <<'PY'
           import artifact_attempts
           import build_manifest
@@ -277,7 +257,7 @@ jobs:
           go-modules: 'false'
           pinned-tools: 'true'
 
-      - name: Scan dependencies and Git history
+      - name: Scan Git history for secrets
         run: python3 .github/scripts/source_checks.py security
 
   actionlint:
@@ -289,6 +269,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Restore dependency archives
@@ -309,27 +290,69 @@ jobs:
       actions: read
     uses: ./.github/workflows/ci_android.yml
     with:
-      source_sha: ${{ github.sha }}
+      source_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 
-  ios_production:
-    name: iOS production analysis and archive
+  apple_checks:
+    name: Apple development checks
     needs: ci_scope
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && (needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'apple') }}
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 85
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Restore dependency archives
         uses: ./.github/actions/dependency-cache
+        with:
+          pinned-tools: 'true'
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: .go-version
+          cache: false
 
       - name: Select Xcode 26.3
         run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
+      - name: Build Go product packages (macOS)
+        id: go
+        if: ${{ !cancelled() && needs.ci_scope.outputs.scope == 'full' }}
+        continue-on-error: true
+        run: python3 .github/scripts/source_checks.py go-build
+
+      - name: Run Swift source analysis
+        id: swift
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: python3 .github/scripts/source_checks.py lint-swift
+
       - name: Check production iOS source
-        run: python3 .github/scripts/ios/ios_production_check.py --source-sha "$GITHUB_SHA" --output-dir "$RUNNER_TEMP/ios-production"
+        id: ios
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 .github/scripts/ios/ios_production_check.py --source-sha "$SOURCE_SHA" --output-dir "$RUNNER_TEMP/ios-production"
+
+      - name: Require selected Apple checks
+        if: ${{ always() }}
+        env:
+          CI_SCOPE: ${{ needs.ci_scope.outputs.scope }}
+          GO_OUTCOME: ${{ steps.go.outcome }}
+          SWIFT_OUTCOME: ${{ steps.swift.outcome }}
+          IOS_OUTCOME: ${{ steps.ios.outcome }}
+        run: |
+          set -euo pipefail
+          test "$SWIFT_OUTCOME" = success
+          test "$IOS_OUTCOME" = success
+          case "$CI_SCOPE" in
+            full) test "$GO_OUTCOME" = success ;;
+            apple) test "$GO_OUTCOME" = skipped ;;
+            *) exit 1 ;;
+          esac
 
   ci_selected_version:
     name: Read selected build version
@@ -344,6 +367,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Read VERSION
         id: version
@@ -369,7 +393,7 @@ jobs:
   selected_package_result:
     name: Require selected package check success
     if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.platform != 'ci' }}
-    needs: [ci_selected_version, fdroid_preflight, debug_packages, android_build]
+    needs: [ci_selected_version, fdroid_preflight, debug_packages, apple_packages, android_build]
     runs-on: ubuntu-24.04
     steps:
       - name: Check selected package result
@@ -377,6 +401,7 @@ jobs:
           PLATFORM: ${{ inputs.platform }}
           VERSION_RESULT: ${{ needs.ci_selected_version.result }}
           FDROID_RESULT: ${{ needs.fdroid_preflight.result }}
+          APPLE_PACKAGE_RESULT: ${{ needs.apple_packages.result }}
           DEBUG_RESULT: ${{ needs.debug_packages.result }}
           ANDROID_RESULT: ${{ needs.android_build.result }}
         run: |
@@ -389,8 +414,13 @@ jobs:
               ;;
             debug-packages)
               test "$VERSION_RESULT" = success
+              test "$APPLE_PACKAGE_RESULT" = success
               test "$DEBUG_RESULT" = success
               test "$ANDROID_RESULT" = success
+              ;;
+            apple-packages)
+              test "$VERSION_RESULT" = success
+              test "$APPLE_PACKAGE_RESULT" = success
               ;;
             *) echo "unsupported package check: $PLATFORM" >&2; exit 1 ;;
           esac
@@ -404,11 +434,10 @@ jobs:
       - go_build
       - android_lint
       - lint_go
-      - lint_swift
+      - apple_checks
       - security
       - actionlint
       - android_build
-      - ios_production
     runs-on: ubuntu-24.04
     steps:
       - name: Require every selected CI job
@@ -420,11 +449,10 @@ jobs:
           GO_BUILD_RESULT: ${{ needs.go_build.result }}
           ANDROID_LINT_RESULT: ${{ needs.android_lint.result }}
           LINT_GO_RESULT: ${{ needs.lint_go.result }}
-          LINT_SWIFT_RESULT: ${{ needs.lint_swift.result }}
+          APPLE_RESULT: ${{ needs.apple_checks.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
           ACTIONLINT_RESULT: ${{ needs.actionlint.result }}
           ANDROID_BUILD_RESULT: ${{ needs.android_build.result }}
-          IOS_PRODUCTION_RESULT: ${{ needs.ios_production.result }}
         run: |
           set -euo pipefail
           echo "CI scope: $CI_SCOPE ($CI_SCOPE_REASON)"
@@ -442,16 +470,15 @@ jobs:
             fi
           }
           require_common() {
-            require_result 'Dependency and credential scans' success "$SECURITY_RESULT"
+            require_result 'Git history secret scan' success "$SECURITY_RESULT"
             require_result 'GitHub workflow validation' success "$ACTIONLINT_RESULT"
           }
           require_unselected_platform_jobs() {
             require_result 'Go source build' skipped "$GO_BUILD_RESULT"
             require_result 'Android lint' skipped "$ANDROID_LINT_RESULT"
             require_result 'Go source analysis' skipped "$LINT_GO_RESULT"
-            require_result 'Swift source analysis' skipped "$LINT_SWIFT_RESULT"
+            require_result 'Apple development checks' skipped "$APPLE_RESULT"
             require_result 'Android product build' skipped "$ANDROID_BUILD_RESULT"
-            require_result 'iOS production analysis and archive' skipped "$IOS_PRODUCTION_RESULT"
           }
           case "$CI_SCOPE" in
             full)
@@ -459,9 +486,8 @@ jobs:
               require_result 'Go source build' success "$GO_BUILD_RESULT"
               require_result 'Android lint' success "$ANDROID_LINT_RESULT"
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
-              require_result 'Swift source analysis' success "$LINT_SWIFT_RESULT"
+              require_result 'Apple development checks' success "$APPLE_RESULT"
               require_result 'Android product build' success "$ANDROID_BUILD_RESULT"
-              require_result 'iOS production analysis and archive' success "$IOS_PRODUCTION_RESULT"
               echo "Full CI passed; every qualification job succeeded."
               ;;
             release)
@@ -475,15 +501,13 @@ jobs:
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
               require_result 'Android product build' success "$ANDROID_BUILD_RESULT"
               require_result 'Go source build' skipped "$GO_BUILD_RESULT"
-              require_result 'Swift source analysis' skipped "$LINT_SWIFT_RESULT"
-              require_result 'iOS production analysis and archive' skipped "$IOS_PRODUCTION_RESULT"
+              require_result 'Apple development checks' skipped "$APPLE_RESULT"
               echo "Reduced CI passed: Android build, Android lint, Go analysis, security, and actionlint."
               ;;
             apple)
               require_common
               require_result 'Go source analysis' success "$LINT_GO_RESULT"
-              require_result 'Swift source analysis' success "$LINT_SWIFT_RESULT"
-              require_result 'iOS production analysis and archive' success "$IOS_PRODUCTION_RESULT"
+              require_result 'Apple development checks' success "$APPLE_RESULT"
               require_result 'Go source build' skipped "$GO_BUILD_RESULT"
               require_result 'Android lint' skipped "$ANDROID_LINT_RESULT"
               require_result 'Android product build' skipped "$ANDROID_BUILD_RESULT"
@@ -510,7 +534,13 @@ jobs:
     with:
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.ci_selected_version.outputs.version_name }}
-      major: ${{ needs.ci_selected_version.outputs.major }}
-      minor: ${{ needs.ci_selected_version.outputs.minor }}
-      maintenance: ${{ needs.ci_selected_version.outputs.maintenance }}
-      build_number: ${{ needs.ci_selected_version.outputs.android_version_code }}
+
+  apple_packages:
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.platform == 'debug-packages' || inputs.platform == 'apple-packages') }}
+    needs: ci_selected_version
+    uses: ./.github/workflows/apple_packages.yml
+    with:
+      release: ${{ inputs.platform == 'apple-packages' }}
+      source_sha: ${{ github.sha }}
+      version_name: ${{ needs.ci_selected_version.outputs.version_name }}
+      apple_build_number: ${{ needs.ci_selected_version.outputs.android_version_code }}

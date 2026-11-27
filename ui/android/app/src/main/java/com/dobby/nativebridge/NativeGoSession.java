@@ -80,7 +80,11 @@ public final class NativeGoSession {
 
     static native String appendServiceDiagnostic(String path, String record);
 
+    static native String flushDiagnostics();
+
     private static native String attachNative(Context context, String sourcePath);
+
+    public static native String parseImportLink(String value);
 
     public static native String configure(String sessionId, long expectedSequence, byte[] rawConfig);
 

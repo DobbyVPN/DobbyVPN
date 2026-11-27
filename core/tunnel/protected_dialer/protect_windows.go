@@ -27,6 +27,12 @@ func (w *windowsProtector) Protect(fd uintptr, network, address string) error {
 	return w.ProtectDestinations(fd, network, []string{address})
 }
 
+// BindWindowsPhysicalSocket applies the same per-destination interface selection
+// to a service-owned subscription connection during recovery.
+func BindWindowsPhysicalSocket(fd uintptr, network, address string) error {
+	return (&windowsProtector{}).Protect(fd, network, address)
+}
+
 func (w *windowsProtector) ProtectDestinations(fd uintptr, network string, addresses []string) error {
 	level, option, ipv4, err := windowsInterfaceOption(network)
 	if err != nil {

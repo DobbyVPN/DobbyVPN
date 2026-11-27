@@ -13,13 +13,23 @@ import subprocess
 import sys
 from typing import Any
 
-from artifact_attempts import ArtifactAttemptError, select_artifacts
+from artifact_attempts import ArtifactAttemptError, parse_artifact_name, select_artifacts
+from require_ci import find_reusable_ci_run
 
 BUILD_WORKFLOW_PATH = ".github/workflows/build.yml"
 MANIFEST_ARTIFACT = "build-manifest"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 VERSION_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+APPLE_PRODUCER = "build_apple / packages"
+APPLE_ARTIFACTS = (
+    "DobbyVPNRuntime.xcframework",
+    "DobbyVPNRuntime-debug.xcframework",
+    "DobbyVPN.xcarchive.tar.gz",
+    "DobbyVPN.xcarchive-debug.tar.gz",
+    "dobbyVPN-macos-universal.pkg",
+    "dobbyVPN-macos-universal-debug.pkg",
+)
 
 
 class BuildManifestError(ValueError):
@@ -27,7 +37,9 @@ class BuildManifestError(ValueError):
 
 
 def required_artifacts(version: str) -> tuple[str, ...]:
-    return tuple(sorted((
+    from version_metadata import macos_package_names
+
+    names = (
         "DobbyVPNRuntime.xcframework",
         "DobbyVPNRuntime-debug.xcframework",
         "DobbyVPN.xcarchive.tar.gz",
@@ -39,15 +51,20 @@ def required_artifacts(version: str) -> tuple[str, ...]:
         "dobbyVPN-linux-debug.deb",
         "dobbyVPN-windows-amd64.msi",
         "dobbyVPN-windows-amd64-debug.msi",
-        "dobbyVPN-macos-aarch64.pkg",
-        "dobbyVPN-macos-aarch64-debug.pkg",
-        "dobbyVPN-macos-amd64.pkg",
-        "dobbyVPN-macos-amd64-debug.pkg",
-    )))
+        *macos_package_names(version),
+    )
+    return tuple(sorted(names))
 
 
 def _workflow_path_matches(value: Any, expected: str) -> bool:
     return isinstance(value, str) and (value == expected or value.startswith(expected + "@"))
+
+
+def verify_apple_artifact_attempt(inventory: dict[str, dict[str, Any]], attempt: int) -> None:
+    for name in APPLE_ARTIFACTS:
+        artifact = inventory.get(name)
+        if artifact is None or parse_artifact_name(artifact["name"])[1] != attempt:
+            raise BuildManifestError(f"{name} must come from successful Apple producer attempt {attempt}")
 
 
 def _json_command(command: list[str]) -> Any:
@@ -123,7 +140,7 @@ def _verify_prior_attempts(repository: str, run: dict[str, Any]) -> None:
             raise BuildManifestError(f"Build prior attempt {prior_attempt} has an unsupported conclusion")
 
 
-def _run(repository: str, run_id: int, *, require_main: bool = False, allow_active: bool = False) -> dict[str, Any]:
+def _run(repository: str, run_id: int, *, require_main: bool = False) -> dict[str, Any]:
     run = _json_command([
         "gh", "api", f"repos/{repository}/actions/runs/{run_id}",
     ])
@@ -138,10 +155,9 @@ def _run(repository: str, run_id: int, *, require_main: bool = False, allow_acti
         raise BuildManifestError("selected run is not a manually dispatched Build workflow")
     if (
         type(run.get("run_attempt")) is not int or run["run_attempt"] < 1
-        or not ((run.get("status") == "completed" and run.get("conclusion") == "success")
-                or (allow_active and run.get("status") in {"queued", "in_progress"}))
+        or run.get("status") != "completed" or run.get("conclusion") != "success"
     ):
-        raise BuildManifestError("selected Build must be successful and completed or explicitly allowed active")
+        raise BuildManifestError("selected Build must be successful and completed")
     if require_main and run.get("head_branch") != "main":
         raise BuildManifestError("production Release can only select a Build from main")
     if not isinstance(run.get("head_sha"), str) or not SHA_RE.fullmatch(run["head_sha"]):
@@ -173,7 +189,7 @@ def _current_build_run(repository: str, run_id: int, run_number: int, source_sha
 def create_manifest(
     *, repository: str, run_id: int, run_number: int, source_sha: str,
     source_tree: str, version: str, android_version_code: int,
-    apple_build_number: int,
+    apple_build_number: int, apple_producer_attempt: int | None = None,
 ) -> dict[str, Any]:
     if not SHA_RE.fullmatch(source_sha) or not SHA_RE.fullmatch(source_tree):
         raise BuildManifestError("source commit and tree must be full lowercase Git identities")
@@ -184,6 +200,10 @@ def create_manifest(
     current_run = _current_build_run(repository, run_id, run_number, source_sha)
     run_attempt = current_run["run_attempt"]
     inventory = _artifact_inventory(repository, run_id, run_attempt, required_artifacts(version))
+    if apple_producer_attempt is not None:
+        if type(apple_producer_attempt) is not int or not 1 <= apple_producer_attempt <= run_attempt:
+            raise BuildManifestError("invalid successful Apple producer attempt")
+        verify_apple_artifact_attempt(inventory, apple_producer_attempt)
     artifacts: list[dict[str, Any]] = []
     for name in required_artifacts(version):
         item = inventory.get(name)
@@ -213,6 +233,13 @@ def create_manifest(
 
 
 def resolve_build(repository: str, run_id: int, destination: Path, *, require_main: bool = False) -> dict[str, Any]:
+    manifest, _ = resolve_build_with_inventory(repository, run_id, destination, require_main=require_main)
+    return manifest
+
+
+def resolve_build_with_inventory(
+    repository: str, run_id: int, destination: Path, *, require_main: bool = False,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     run = _run(repository, run_id, require_main=require_main)
     destination.mkdir(mode=0o700, parents=True, exist_ok=False)
     subprocess.run([
@@ -287,7 +314,7 @@ def resolve_build(repository: str, run_id: int, destination: Path, *, require_ma
     if names != expected_names:
         raise BuildManifestError("Build manifest does not list the complete package set")
     manifest["manifest_sha256"] = hashlib.sha256(files[0].read_bytes()).hexdigest()
-    return manifest
+    return manifest, current
 
 
 def _write_output(path: Path, manifest: dict[str, Any]) -> None:
@@ -307,6 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--version", required=True)
     create.add_argument("--android-version-code", type=int, required=True)
     create.add_argument("--apple-build-number", type=int, required=True)
+    create.add_argument("--apple-producer-attempt", type=int, required=True)
     create.add_argument("--output", type=Path, required=True)
     resolve = sub.add_parser("resolve")
     resolve.add_argument("--repository", required=True)
@@ -326,13 +354,23 @@ def main(argv: list[str] | None = None) -> int:
                 repository=args.repository, run_id=args.run_id, run_number=args.run_number,
                 source_sha=args.source_sha, source_tree=args.source_tree, version=args.version,
                 android_version_code=args.android_version_code, apple_build_number=args.apple_build_number,
+                apple_producer_attempt=args.apple_producer_attempt,
             )
             _write_output(args.output, manifest)
         elif args.command == "resolve":
             manifest = resolve_build(args.repository, args.run_id, args.download_dir, require_main=args.require_main)
             _write_output(args.output, manifest)
         else:
-            _current_build_run(args.repository, args.run_id, args.run_number, args.source_sha)
+            run = _current_build_run(args.repository, args.run_id, args.run_number, args.source_sha)
+            if run.get("head_branch") != "main" or run.get("head_repository", {}).get("full_name") != args.repository:
+                raise BuildManifestError("Build requires the main branch of the selected repository")
+            token = os.environ.get("GH_TOKEN")
+            if not token:
+                raise BuildManifestError("GH_TOKEN is required to verify full CI")
+            ci_id, reason = find_reusable_ci_run(args.repository, args.source_sha, token)
+            if ci_id is None:
+                raise BuildManifestError(f"full CI unavailable for {args.source_sha}: {reason}")
+            print(f"Complete CI run {ci_id} passed for {args.source_sha}")
     except (BuildManifestError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"Build manifest error: {error}", file=sys.stderr)
         return 1

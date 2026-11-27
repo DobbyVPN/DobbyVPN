@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import plistlib
@@ -19,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SERVICES = ROOT / "runtime" / "services"
 LOGO = ROOT / "publishing" / "assets" / "logo.png"
 MACOS_ICON = ROOT / "ui" / "apple" / "macos" / "AppIcon.icns"
+MACOS_PRIVACY_MANIFEST = ROOT / "ui" / "apple" / "macos" / "PrivacyInfo.xcprivacy"
 LINUX_INSTALLER = ROOT / "ui" / "linux" / "installer"
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 ZIP_DATE = (1980, 1, 1, 0, 0, 0)
@@ -63,6 +65,14 @@ def copy_license_documents(destination: Path) -> None:
     for name in ("LICENSE", "THIRD_PARTY_NOTICES"):
         copy_file(ROOT / name, destination / name)
     copy_directory(ROOT / "LICENSES", destination / "LICENSES")
+
+
+def normalize_macos_payload_permissions(bundle: Path) -> None:
+    """Public app data is readable and directories/executables traversable by users."""
+    for path in (bundle, *sorted(bundle.rglob("*"))):
+        if path.is_symlink():
+            fail(f"unexpected symbolic link in unsigned macOS payload: {path}")
+        path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
 
 
 def write_zip(root: Path, output: Path) -> None:
@@ -119,7 +129,15 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
         copy_file(source / "DobbyVPNMacApp", executable, executable=True)
         copy_file(source / "dobbyvpn-backend", resources / "dobbyvpn-backend", executable=True)
         copy_file(source / "dobby-cli", resources / "dobby-cli", executable=True)
+        from macos_extensions import stage
+        # sysextd keeps the existing executable when both version strings
+        # match. Give each package build, including Debug, its own identity.
+        built = datetime.now(timezone.utc)
+        seconds = built.hour * 3600 + built.minute * 60 + built.second
+        build_version = f"{built.year}.{built.timetuple().tm_yday}.{seconds * 2 + int(not debug)}"
+        stage(contents, source, version, build_version)
         copy_file(MACOS_ICON, resources / "AppIcon.icns")
+        copy_file(MACOS_PRIVACY_MANIFEST, resources / "PrivacyInfo.xcprivacy")
         copy_license_documents(resources / "licenses")
         if debug:
             copy_directory(source / "DebugSymbols", resources / "DebugSymbols")
@@ -132,12 +150,13 @@ def package_macos(version: str, output: Path, *, arch: str, source: Path, debug:
             "CFBundleURLTypes": [{"CFBundleURLName": "DobbyVPN", "CFBundleURLSchemes": ["dobbyvpn"]}],
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version,
-            "CFBundleVersion": version,
+            "CFBundleVersion": build_version,
             "DobbySourceCommit": os.environ.get("GITHUB_SHA", "N/A"),
             "LSMinimumSystemVersion": "12.0",
         }
         with (contents / "Info.plist").open("wb") as handle:
             plistlib.dump(info, handle, sort_keys=True)
+        normalize_macos_payload_permissions(bundle)
         write_zip(root, output / f"dobby-vpn-{version}-mac-{arch}.zip")
 
 
@@ -147,7 +166,7 @@ def write_linux_control(debian: Path, version: str) -> None:
         required(LINUX_INSTALLER / "control").read_text(encoding="utf-8").replace("@VERSION@", version),
         encoding="utf-8",
     )
-    for name in ("postinst", "prerm", "postrm"):
+    for name in ("preinst", "postinst", "prerm", "postrm"):
         copy_file(LINUX_INSTALLER / name, debian / name, executable=True)
 
 
@@ -204,7 +223,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--arch",
-        choices=("amd64", "arm64", "aarch64", "x86_64"),
+        choices=("amd64", "arm64", "aarch64", "x86_64", "universal"),
         help="One macOS architecture when --platform=macos.",
     )
     return parser.parse_args()
@@ -234,7 +253,9 @@ def main() -> None:
     elif args.platform == "macos":
         if args.arch is None:
             fail("--arch is required with --platform=macos")
-        if args.arch in {"arm64", "aarch64"}:
+        if args.arch == "universal":
+            package_macos(args.version, output, arch="universal", source=staging / "macos-universal", debug=args.debug)
+        elif args.arch in {"arm64", "aarch64"}:
             package_macos(args.version, output, arch="aarch64", source=staging / "macos-arm64", debug=args.debug)
         else:
             package_macos(args.version, output, arch="amd64", source=staging / "macos-amd64", debug=args.debug)

@@ -28,7 +28,7 @@ permissions:
 jobs:
   package:
     name: ${{ inputs.platform }} / ${{ inputs.architecture }} package
-    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || inputs.platform == 'windows' && 'windows-2022' || inputs.architecture == 'arm64' && 'macos-15' || 'macos-15-intel' }}
+    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-24.04' || 'windows-2022' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,10 +36,31 @@ jobs:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
+      - name: Verify checked-out package source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PRODUCTION_BUILD: ${{ github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          if [[ "$PRODUCTION_BUILD" == true ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            test "$SOURCE_SHA" = "$GITHUB_SHA"
+          fi
+
       - name: Restore Go modules and verified tool archives
         uses: ./.github/actions/dependency-cache
         with:
           pinned-tools: ${{ inputs.platform == 'linux' || inputs.platform == 'windows' }}
+
+      - name: Install pinned .NET SDK
+        if: runner.os == 'Windows'
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
 
       - name: Build package with the local platform command
         id: build
@@ -63,8 +84,6 @@ jobs:
           case "$PLATFORM:$ARCHITECTURE" in
             linux:amd64) package=dobbyVPN-linux.deb ;;
             windows:amd64) package=dobbyVPN-windows-amd64.msi ;;
-            macos:arm64) package=dobbyVPN-macos-aarch64.pkg ;;
-            macos:amd64) package=dobbyVPN-macos-amd64.pkg ;;
             *) exit 1 ;;
           esac
           if [[ "$DEBUG" == true ]]; then package="${package%.*}-debug.${package##*.}"; fi

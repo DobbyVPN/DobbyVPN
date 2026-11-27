@@ -1,0 +1,232 @@
+name: Apple packages
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      version_name:
+        required: true
+        type: string
+      apple_build_number:
+        required: true
+        type: string
+      release:
+        type: boolean
+        default: false
+      retention_days:
+        type: number
+        default: 1
+    outputs:
+      producer_attempt:
+        value: ${{ jobs.packages.outputs.producer_attempt }}
+    secrets:
+      MACOS_DEVELOPER_ID_APP_P12:
+        required: false
+      MACOS_HOST_PROFILE:
+        required: false
+      MACOS_TUNNEL_PROFILE:
+        required: false
+      MACOS_FILTER_PROFILE:
+        required: false
+      MACOS_DEVELOPER_ID_INSTALLER_P12:
+        required: false
+      MACOS_DEVELOPER_ID_P12_PASSWORD:
+        required: false
+      APP_STORE_API_KEY:
+        required: false
+      APP_STORE_KEY_ID:
+        required: false
+      APP_STORE_ISSUER_ID:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      producer_attempt: ${{ steps.completed.outputs.attempt }}
+    env:
+      GOTOOLCHAIN: local
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SOURCE_COMMIT: ${{ inputs.source_sha }}
+      VERSION_NAME: ${{ inputs.version_name }}
+      APP_BUILD: ${{ inputs.apple_build_number }}
+      ARTIFACT_SUFFIX: ${{ github.run_attempt > 1 && format('-attempt-{0}', github.run_attempt) || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Restore Go module download archives
+        uses: ./.github/actions/dependency-cache
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(uname -m)" = arm64
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          test "$(xcodebuild -version | tee /dev/stderr | tr '\n' ' ')" = "Xcode 26.3 Build version 17C529 "
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: .go-version
+          cache: false
+
+      - name: Download Go modules
+        working-directory: core
+        run: python3 ../.github/scripts/dependency_fetch.py retry -- go mod download
+
+      - name: Install pinned Go mobile runtime tools
+        working-directory: core
+        run: python3 ../.github/scripts/ios/mobile_tools.py install
+
+      - name: Build Debug iOS framework and unsigned archive
+        run: |
+          set -euo pipefail
+          .github/scripts/ios/build_apple_ios_package.sh Debug "$RUNNER_TEMP/apple-packages"
+
+      - name: Upload DobbyVPNRuntime-debug.xcframework
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: DobbyVPNRuntime-debug.xcframework${{ env.ARTIFACT_SUFFIX }}
+          path: ${{ runner.temp }}/apple-packages/Debug/DobbyVPNRuntime.xcframework
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload DobbyVPN.xcarchive-debug.tar.gz
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: DobbyVPN.xcarchive-debug.tar.gz${{ env.ARTIFACT_SUFFIX }}
+          path: ${{ runner.temp }}/apple-packages/DobbyVPN.xcarchive-debug.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Build Release iOS framework and unsigned archive
+        if: inputs.release
+        run: |
+          set -euo pipefail
+          .github/scripts/ios/build_apple_ios_package.sh Release "$RUNNER_TEMP/apple-packages"
+
+      - name: Upload DobbyVPNRuntime.xcframework
+        if: inputs.release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: DobbyVPNRuntime.xcframework${{ env.ARTIFACT_SUFFIX }}
+          path: ${{ runner.temp }}/apple-packages/Release/DobbyVPNRuntime.xcframework
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload DobbyVPN.xcarchive.tar.gz
+        if: inputs.release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: DobbyVPN.xcarchive.tar.gz${{ env.ARTIFACT_SUFFIX }}
+          path: ${{ runner.temp }}/apple-packages/DobbyVPN.xcarchive.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      # Both distributed packages use Developer ID. Debug retains its symbols,
+      # and the local development identity provides debugger entitlement.
+      - name: Prepare macOS Developer ID signing
+        id: macos_signing
+        if: ${{ inputs.release && github.repository == 'DobbyVPN/DobbyVPN' && github.workflow_ref == 'DobbyVPN/DobbyVPN/.github/workflows/build.yml@refs/heads/main' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.source_sha == github.sha }}
+        env:
+          MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
+          MACOS_HOST_PROFILE: ${{ secrets.MACOS_HOST_PROFILE }}
+          MACOS_TUNNEL_PROFILE: ${{ secrets.MACOS_TUNNEL_PROFILE }}
+          MACOS_FILTER_PROFILE: ${{ secrets.MACOS_FILTER_PROFILE }}
+          MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+          REPOSITORY_IS_FORK: ${{ github.event.repository.fork }}
+        run: bash .github/scripts/desktop/macos_signing.sh prepare
+
+      - name: Build universal Debug macOS installer
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/desktop/desktop_package.py build --debug \
+            --platform macos --arch universal --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
+            --output-dir "$RUNNER_TEMP/apple-packages"
+
+      - name: Sign, notarize and verify Debug macOS package
+        if: ${{ steps.macos_signing.outputs.enabled == 'true' }}
+        env:
+          PACKAGE: ${{ runner.temp }}/apple-packages/dobbyVPN-macos-universal-debug.pkg
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
+
+      - name: Verify the packaged Debug macOS binaries and symbols
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/desktop/desktop_package.py describe --debug --platform macos --arch universal \
+            --package "$RUNNER_TEMP/apple-packages/dobbyVPN-macos-universal-debug.pkg" \
+            --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
+            --output "$RUNNER_TEMP/macos-debug-package.json"
+
+      - name: Upload dobbyVPN-macos-universal-debug.pkg
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyVPN-macos-universal-debug.pkg${{ env.ARTIFACT_SUFFIX }}
+          path: ${{ runner.temp }}/apple-packages/dobbyVPN-macos-universal-debug.pkg
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Build universal Release macOS installer
+        if: inputs.release
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/desktop/desktop_package.py build \
+            --platform macos --arch universal --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
+            --output-dir "$RUNNER_TEMP/apple-packages"
+
+      - name: Sign, notarize and verify Release macOS package
+        if: ${{ steps.macos_signing.outputs.enabled == 'true' }}
+        env:
+          PACKAGE: ${{ runner.temp }}/apple-packages/dobbyVPN-macos-universal.pkg
+          APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+          APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+          APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
+        run: bash .github/scripts/desktop/macos_signing.sh sign-package "$PACKAGE"
+
+      - name: Remove macOS signing keychain
+        if: ${{ always() && (steps.macos_signing.outcome == 'success' || steps.macos_signing.outcome == 'failure') }}
+        run: bash .github/scripts/desktop/macos_signing.sh cleanup
+
+      - name: Smoke-test the Release installer on ARM
+        if: inputs.release
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/desktop/desktop_package.py smoke-macos \
+            --package "$RUNNER_TEMP/apple-packages/dobbyVPN-macos-universal.pkg" \
+            --version "$VERSION_NAME" --source-sha "$SOURCE_SHA" \
+            --run-dir "$RUNNER_TEMP/macos-package-smoke"
+
+      - name: Upload dobbyVPN-macos-universal.pkg
+        if: inputs.release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyVPN-macos-universal.pkg${{ env.ARTIFACT_SUFFIX }}
+          path: ${{ runner.temp }}/apple-packages/dobbyVPN-macos-universal.pkg
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Record the successful Apple producer attempt
+        id: completed
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"

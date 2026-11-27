@@ -11,6 +11,13 @@ public partial class App : Application
         UnhandledException += (_, args) => NativeDiagnostics.Current.Record(args.Exception.ToString(), "app.unhandled");
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
             NativeDiagnostics.Current.Record(args.ExceptionObject.ToString() ?? "Unknown unhandled failure", "process.unhandled");
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            // Runs on the finalizer thread; the log write can wait on a lock, so do it elsewhere.
+            // Formatting can throw too (an inner ToString override), so it stays in the worker.
+            var exception = args.Exception;
+            _ = Task.Run(() => { try { NativeDiagnostics.Current.Record(exception.ToString(), "task.unobserved"); } catch { } });
+        };
         try
         {
             InitializeComponent();

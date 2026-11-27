@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -39,9 +41,10 @@ const (
 )
 
 type LoadedConfig struct {
-	Raw       []byte
-	Kind      ConfigSourceKind
-	SourceURL string
+	OfflineAcceptedAt string
+	Raw               []byte
+	Kind              ConfigSourceKind
+	SourceURL         string
 }
 
 // ConfigLoader is injectable so parser tests remain deterministic and do not
@@ -99,28 +102,8 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 		transport = http.DefaultTransport
 	}
 	client.Transport = &configTraceTransport{base: transport, trace: trace}
-	callerCheckRedirect := client.CheckRedirect
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		trace.record("redirect", map[string]any{configLogHost: req.URL.Host, configLogURL: req.URL.String(), "status": req.Response.StatusCode, "redirect_count": len(via)})
-		if !strings.EqualFold(req.URL.Scheme, configHTTPScheme) {
-			return errors.New("configuration redirect must use HTTPS")
-		}
-		if len(via) >= 10 {
-			return errors.New("configuration URL stopped after 10 redirects")
-		}
-		if callerCheckRedirect != nil {
-			redirectErr := callerCheckRedirect(req, via)
-			if redirectErr != nil {
-				return redirectErr
-			}
-			// The caller's policy callback receives the mutable redirect request.
-			// Recheck afterward so it cannot turn an HTTPS redirect into HTTP.
-			if req.URL == nil || !strings.EqualFold(req.URL.Scheme, configHTTPScheme) {
-				return errors.New("configuration redirect must use HTTPS")
-			}
-		}
-		return nil
-	}
+	sameOrigin := true
+	setConfigRedirectPolicy(client, request, trace, &sameOrigin)
 	version := l.Version
 	if strings.TrimSpace(version) == "" {
 		version = buildinfo.Version
@@ -129,6 +112,9 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 	response, err := client.Do(request)
 	if err != nil {
 		trace.record("request failed", map[string]any{configLogError: err.Error(), configLogContextError: errorText(requestCtx.Err())})
+		if sameOrigin && ctx.Err() == nil && cacheEligibleDialFailure(err) {
+			err = errors.Join(errSourceUnreachable, err)
+		}
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL could not be fetched", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
@@ -158,12 +144,81 @@ func (l DefaultConfigLoader) loadURL(ctx context.Context, source string) (Loaded
 		)
 	}
 	if readErr != nil {
+		if sameOrigin && ctx.Err() == nil && errors.Is(readErr, context.DeadlineExceeded) && closeErr == nil {
+			readErr = errors.Join(errSourceUnreachable, readErr)
+		}
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be read", errors.Join(readErr, closeErr))
 	}
 	if closeErr != nil {
 		return LoadedConfig{}, failureWithCause(FailureInvalidArgument, "configuration URL response could not be closed", closeErr)
 	}
 	return LoadedConfig{Raw: body, Kind: ConfigSourceURL, SourceURL: source}, nil
+}
+
+func setConfigRedirectPolicy(client *http.Client, request *http.Request, trace *configFetchTrace, sameOrigin *bool) {
+	callerCheckRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		trace.record("redirect", map[string]any{configLogHost: req.URL.Host, configLogURL: req.URL.String(), "status": req.Response.StatusCode, "redirect_count": len(via)})
+		if !strings.EqualFold(req.URL.Scheme, configHTTPScheme) {
+			return errors.New("configuration redirect must use HTTPS")
+		}
+		if len(via) >= 10 {
+			return errors.New("configuration URL stopped after 10 redirects")
+		}
+		if callerCheckRedirect != nil {
+			redirectErr := callerCheckRedirect(req, via)
+			if redirectErr != nil {
+				return redirectErr
+			}
+			// The caller's policy callback receives the mutable redirect request.
+			// Recheck afterward so it cannot turn an HTTPS redirect into HTTP.
+			if req.URL == nil || !strings.EqualFold(req.URL.Scheme, configHTTPScheme) {
+				return errors.New("configuration redirect must use HTTPS")
+			}
+		}
+		if !strings.EqualFold(req.URL.Host, request.URL.Host) {
+			*sameOrigin = false
+		}
+		return nil
+	}
+}
+
+var errSourceUnreachable = errors.New("subscription origin unreachable")
+
+// A failed local socket policy or cleanup must never authorize the cache.
+// A dial may aggregate errors from several addresses. Every cause must agree.
+func cacheEligibleDialFailure(err error) bool {
+	var cleanup *CleanupFailure
+	if errors.As(err, &cleanup) {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		for _, nested := range causes {
+			if !cacheEligibleDialFailure(nested) {
+				return false
+			}
+		}
+		return len(causes) != 0
+	}
+	if nested := errors.Unwrap(err); nested != nil {
+		return cacheEligibleDialFailure(nested)
+	}
+	// net/http's TLS handshake timeout implements net.Error but does not
+	// wrap context.DeadlineExceeded or a socket errno.
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return true
+	}
+	var dns *net.DNSError
+	var errno syscall.Errno
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &dns) ||
+		errors.As(err, &errno) && offlineSocketErrors[errno]
+}
+
+var offlineSocketErrors = map[syscall.Errno]bool{
+	syscall.ENETDOWN: true, syscall.ENETUNREACH: true, syscall.EHOSTUNREACH: true,
+	syscall.ECONNREFUSED: true, syscall.ETIMEDOUT: true,
 }
 
 func versionOrDev(version string) string {

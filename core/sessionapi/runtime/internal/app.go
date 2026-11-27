@@ -19,6 +19,7 @@ package internal
 import (
 	"context"
 	"core/dnscache"
+	"core/iprange"
 	"core/log"
 	"core/sessionapi"
 	"core/tunnel"
@@ -39,8 +40,11 @@ type App struct {
 	Engine          *tunnel.Engine
 	UplinkInterface string
 	DNSCache        *dnscache.Cache
-	BypassPolicy    *tunnel.BypassPolicy
-	RoutingConfig   *RoutingConfig
+	// Guard receives the shared configuration and per-attempt resolved hosts.
+	Guard interface {
+		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
+	}
+	RoutingConfig *RoutingConfig
 }
 
 // retainedNetworkReadyFields identifies the owner independently of whichever
@@ -55,11 +59,18 @@ func retainedNetworkReadyFields(ref sessionapi.SessionRef, name string) map[stri
 	return fields
 }
 
+func (app *App) retainDesktopTunnelPolicy(fields map[string]any) {
+	fields["session_id"] = app.NetworkRef.SessionID
+	fields["network_generation"] = app.NetworkRef.Generation
+	if err := log.SetPolicyDetail(log.DesktopTunnelPolicyKey, fields); err != nil {
+		log.Errorf(Category, "retain desktop tunnel policy: %v", err)
+	}
+}
+
 type RoutingConfig struct {
 	TunDeviceName        string
 	TunDeviceIP          string
 	TunDeviceMTU         int
-	TunGatewayCIDR       string
 	RoutingTableID       int
 	RoutingTablePriority int
 	DNSServers           []string

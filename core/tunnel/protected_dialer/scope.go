@@ -31,6 +31,20 @@ func SetDestinationPermissions(owner DestinationPermissions) {
 
 type scopeKey struct{}
 
+type applicationBypassKey struct{}
+
+// WithApplicationBypass marks, and IsApplicationBypass reports, a dial that
+// carries application traffic outside the tunnel (ExcludeIPs) rather than the
+// VPN transport. Platform filters may grant such dials less, e.g. no DNS port.
+func WithApplicationBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, applicationBypassKey{}, true)
+}
+
+func IsApplicationBypass(ctx context.Context) bool {
+	bypass, _ := ctx.Value(applicationBypassKey{}).(bool)
+	return bypass
+}
+
 type SocketScope struct {
 	mu          sync.Mutex
 	ctx         context.Context

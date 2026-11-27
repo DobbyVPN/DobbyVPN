@@ -4,14 +4,11 @@ import (
 	"context"
 	"core/log"
 	"fmt"
-	"net/url"
+	"sync/atomic"
 	"time"
 
-	"github.com/xjasonlyu/tun2socks/v2/core"
 	stackAdapter "github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/core/device"
-	"github.com/xjasonlyu/tun2socks/v2/proxy"
-	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
@@ -19,15 +16,18 @@ import (
 const TunnelMTU = 1280
 
 type EngineConfig struct {
-	Dialer           proxy.Proxy
-	ProxyAddr        string
-	FD               int    // Linux / Mobile
-	UplinkIface      string // Windows
-	TransportHandler stackAdapter.TransportHandler
+	FD                int    // Linux / Mobile
+	UplinkIface       string // Windows
+	NetworkSession    string
+	NetworkGeneration uint64
+	PacketFlow        *PacketFlowDevice
 }
 
-func StartPlatformEngine(cfg EngineConfig) (bool, error) {
-	return startPlatformEngine(cfg)
+func StartPlatformEngine(cfg EngineConfig, handler stackAdapter.TransportHandler) (bool, error) {
+	if handler == nil {
+		return false, fmt.Errorf("packet stack requires a transport handler")
+	}
+	return startPlatformEngine(cfg, handler)
 }
 
 // EngineStop lets each platform preserve its required teardown order around
@@ -39,26 +39,18 @@ func EngineStop(ctx context.Context) error {
 func InterfaceName() string { return platformInterfaceName() }
 
 // Access is serialized by tunnel.Engine, the existing process-wide owner.
-// Only the public device, SOCKS, and stack APIs are used: no engine command
+// Only the public device and stack APIs are used: no engine command
 // hooks, global logger replacement, REST listener, or fatal-exit path.
 var ownedDevice device.Device
 var ownedStack *stack.Stack
 
-func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, error) {
+// ownedTCPAdmission is read without the owner's serialization by
+// TCPAdmissionDiagnostics and CancelPendingTCPAdmissions.
+var ownedTCPAdmission atomic.Pointer[tcpAdmission]
+
+func startStack(handler stackAdapter.TransportHandler, open func() (device.Device, error)) (bool, error) {
 	if ownedDevice != nil || ownedStack != nil {
 		return false, fmt.Errorf("network stack is still owned")
-	}
-	outbound := cfg.Dialer
-	if outbound == nil {
-		endpoint, err := url.Parse("socks5://" + cfg.ProxyAddr)
-		if err != nil {
-			return false, fmt.Errorf("parse local SOCKS endpoint: %w", err)
-		}
-		password, _ := endpoint.User.Password()
-		outbound, err = proxy.NewSocks5(endpoint.Host, endpoint.User.Username(), password)
-		if err != nil {
-			return false, fmt.Errorf("open local SOCKS proxy: %w", err)
-		}
 	}
 	dev, err := open()
 	if dev != nil {
@@ -70,12 +62,12 @@ func startStack(cfg EngineConfig, open func() (device.Device, error)) (bool, err
 	if dev.MTU() < TunnelMTU {
 		return true, fmt.Errorf("tunnel MTU %d is below IPv6 minimum %d", dev.MTU(), TunnelMTU)
 	}
-	tunnel.T().SetDialer(outbound)
-	handler := cfg.TransportHandler
-	if handler == nil {
-		handler = tunnel.T()
+	var admission *tcpAdmission
+	if len(tcpStackOptions) != 0 {
+		admission = newTCPAdmission(iosActiveTCPLimit, iosPendingTCPLimit, iosTCPWait)
+		ownedTCPAdmission.Store(admission)
 	}
-	ownedStack, err = core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: handler})
+	ownedStack, err = createStack(dev, handler, admission)
 	if err == nil {
 		log.Infof(Category, "packet stack ready interface=%s mtu=%d ipv4=true ipv6=true", dev.Name(), dev.MTU())
 	}
@@ -140,6 +132,10 @@ func drainStack(ctx context.Context) error {
 }
 
 func stopStack(ctx context.Context) error {
+	if admission := ownedTCPAdmission.Swap(nil); admission != nil {
+		waited, refused := admission.seal()
+		log.Infof(Category, "TCP admission totals waited=%d refused=%d", waited, refused)
+	}
 	if ownedDevice != nil {
 		if err := stopPhaseCtx(ctx, "device-close", ownedDevice.Close); err != nil {
 			return err
@@ -153,4 +149,30 @@ func stopStack(ctx context.Context) error {
 	}
 	clear(stopPhases)
 	return nil
+}
+
+// CancelPendingTCPAdmissions refuses the connections waiting for a TCP slot,
+// as Stop does, while the stack keeps running. A profile switch calls it so a
+// connection opened for the previous profile is not admitted to the next one.
+func CancelPendingTCPAdmissions() {
+	if admission := ownedTCPAdmission.Load(); admission != nil {
+		admission.cancelPending()
+	}
+}
+
+func SetTCPAdmissionPaused(paused bool) {
+	if admission := ownedTCPAdmission.Load(); admission != nil {
+		admission.setPaused(paused)
+	}
+}
+
+// TCPAdmissionDiagnostics reports the TCP admission counters. ok is false when
+// the running stack has no admission limit (all platforms except iOS).
+func TCPAdmissionDiagnostics() (active, pending int, waited, refused uint64, ok bool) {
+	admission := ownedTCPAdmission.Load()
+	if admission == nil {
+		return 0, 0, 0, 0, false
+	}
+	active, pending, waited, refused = admission.stats()
+	return active, pending, waited, refused, true
 }

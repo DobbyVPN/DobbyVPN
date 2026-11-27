@@ -192,7 +192,15 @@ func (d *OutlineDevice) track(conn net.Conn) (net.Conn, error) {
 // Submit implements the upstream SOCKS worker pool. Each child is registered
 // while its parent is still owned, so Close waits for relays as well as accept.
 func (d *OutlineDevice) Submit(work func()) error {
+	// Close sets closing under d.mu before it waits, so an Add that passes this
+	// check cannot overlap the drain.
+	d.mu.Lock()
+	if d.closing {
+		d.mu.Unlock()
+		return net.ErrClosed
+	}
 	d.workers.Add(1)
+	d.mu.Unlock()
 	d.activeWorkers.Add(1)
 	go func() {
 		defer func() {

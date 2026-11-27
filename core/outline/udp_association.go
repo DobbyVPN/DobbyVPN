@@ -1,11 +1,13 @@
 package outline
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 
 	"github.com/things-go/go-socks5"
@@ -17,6 +19,11 @@ import (
 // A datagram cannot exceed the largest UDP payload, so one buffer of that size
 // always holds a complete one.
 const maxDatagramSize = 64 * 1024
+const maxSOCKSDatagramHeader = 4 + 1 + 255 + 2
+
+var datagramBuffers = sync.Pool{
+	New: func() any { return new([maxDatagramSize + maxSOCKSDatagramHeader]byte) },
+}
 
 // udpAssociation relays datagrams for one client until its control connection
 // ends, which is when RFC 1928 says the association terminates.
@@ -106,9 +113,10 @@ func (d *OutlineDevice) handleAssociate(ctx context.Context, writer io.Writer, r
 }
 
 func (a *udpAssociation) relayFromClient() {
-	buffer := make([]byte, maxDatagramSize)
+	buffer := datagramBuffers.Get().(*[maxDatagramSize + maxSOCKSDatagramHeader]byte)
+	defer datagramBuffers.Put(buffer)
 	for {
-		read, client, err := a.relay.ReadFromUDP(buffer)
+		read, client, err := a.relay.ReadFromUDP(buffer[:maxDatagramSize])
 		if err != nil {
 			return // The association closed this relay.
 		}
@@ -124,8 +132,11 @@ func (a *udpAssociation) relayFromClient() {
 			continue
 		}
 		destination := packet.DstAddr.String()
+		if runtime.GOOS == "windows" && packet.DstAddr.Port == 53 && a.relayDNS(packet, destination, client) {
+			continue
+		}
 		key := client.String() + "|" + destination
-		upstream := a.upstreamFor(key, destination, client, packet.Header())
+		upstream := a.upstreamFor(key, destination, client, buffer[:read-len(packet.Data)])
 		if upstream == nil {
 			continue // Only this datagram is lost; the association stays open.
 		}
@@ -168,6 +179,8 @@ func (a *udpAssociation) upstreamFor(key, destination string, client *net.UDPAdd
 	a.workers.Add(1)
 	a.mu.Unlock()
 
+	// The receive buffer belongs to relayFromClient and is reused by its next read.
+	header = bytes.Clone(header)
 	if err := a.device.Submit(func() { defer a.workers.Done(); a.relayToClient(key, upstream, client, header) }); err != nil {
 		a.workers.Done()
 		log.Debugf(Category, "[SOCKS5 UDP] submit reply worker for %s failed: %v", destination, err)
@@ -179,16 +192,16 @@ func (a *udpAssociation) upstreamFor(key, destination string, client *net.UDPAdd
 
 func (a *udpAssociation) relayToClient(key string, upstream net.Conn, client *net.UDPAddr, header []byte) {
 	defer a.dropUpstream(key, upstream)
-	buffer := make([]byte, maxDatagramSize)
-	reply := make([]byte, 0, maxDatagramSize+len(header))
+	buffer := datagramBuffers.Get().(*[maxDatagramSize + maxSOCKSDatagramHeader]byte)
+	defer datagramBuffers.Put(buffer)
+	payloadOffset := copy(buffer[:], header)
 	for {
-		read, err := upstream.Read(buffer)
+		read, err := upstream.Read(buffer[payloadOffset : payloadOffset+maxDatagramSize])
 		if err != nil {
 			logUDPFailure("read from "+key, err)
 			return
 		}
-		reply = append(append(reply[:0], header...), buffer[:read]...)
-		if _, err := a.relay.WriteToUDP(reply, client); err != nil {
+		if _, err := a.relay.WriteToUDP(buffer[:payloadOffset+read], client); err != nil {
 			logUDPFailure("write to client", err)
 			return
 		}

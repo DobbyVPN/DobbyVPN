@@ -117,3 +117,50 @@ func (p *platformAdapter) SaveActivation(ctx context.Context, raw []byte) error 
 	}
 	return nil
 }
+
+type acceptedCallbacks interface {
+	LoadAcceptedRecord() (string, error)
+	SaveAcceptedRecord(string) error
+	ClearAcceptedRecord() error
+}
+
+func (p *platformAdapter) acceptedStorage(ctx context.Context) (acceptedCallbacks, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	store, ok := p.callbacks.(acceptedCallbacks)
+	if !ok {
+		return nil, errors.New("native accepted configuration storage is unavailable")
+	}
+	return store, nil
+}
+
+func (p *platformAdapter) LoadAccepted(ctx context.Context) ([]byte, error) {
+	store, err := p.acceptedStorage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := store.LoadAcceptedRecord()
+	if err != nil || raw == "" {
+		return nil, err
+	}
+	return []byte(raw), nil
+}
+
+func (p *platformAdapter) SaveAccepted(ctx context.Context, raw []byte) error {
+	store, err := p.acceptedStorage(ctx)
+	if err != nil {
+		return err
+	}
+	return store.SaveAcceptedRecord(string(raw))
+}
+
+func (p *platformAdapter) ClearAccepted(ctx context.Context) error {
+	store, err := p.acceptedStorage(ctx)
+	if err != nil {
+		return err
+	}
+	return store.ClearAcceptedRecord()
+}

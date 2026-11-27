@@ -1,0 +1,96 @@
+name: Product dependency vulnerabilities
+
+on:
+  pull_request:
+    branches: [main]
+    paths: &scan_inputs
+      - core/go.mod
+      - core/go.sum
+      - .go-version
+      - 'ui/android/**/*.gradle'
+      - 'ui/android/**/*.gradle.kts'
+      - 'ui/android/**/gradle.lockfile'
+      - 'ui/android/**/libs.versions.toml'
+      - ui/android/gradle.properties
+      - 'ui/android/gradle/wrapper/*'
+      - ui/android/gradle/verification-metadata.xml
+      - .github/scripts/requirements-native-ui.txt
+      - .github/scripts/android/requirements-fdroid.txt
+      - .github/scripts/source_checks.py
+      - .github/scripts/bounded_process.py
+      - .github/scripts/dependency_fetch.py
+      - .github/scripts/desktop/desktop_build.py
+      - .github/scripts/android/android_dependency_provenance.py
+      - .github/scripts/android/android_security_inventory.py
+      - .github/scripts/android/resolve_dependencies.gradle
+      - .github/scripts/android/dependency-spec.json
+      - .github/actions/dependency-cache/action.yml
+      - .github/workflows/dependency_scan.yml
+  push:
+    branches: [main]
+    paths: *scan_inputs
+  schedule:
+    - cron: '37 4 * * *'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan public Product dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Restore dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          gradle: 'true'
+          pinned-tools: 'true'
+
+      - name: Read Android dependency versions
+        id: pins
+        run: |
+          set -euo pipefail
+          for pin in java_major android_sdk_platform android_build_tools android_ndk; do
+            value="$(python3 .github/scripts/android/android_dependency_provenance.py --print-pin "$pin")"
+            echo "$pin=$value" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: ${{ steps.pins.outputs.java_major }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          cmdline-tools-version: '15859902'
+          packages: >
+            platforms;${{ steps.pins.outputs.android_sdk_platform }}
+            build-tools;${{ steps.pins.outputs.android_build_tools }}
+            ndk;${{ steps.pins.outputs.android_ndk }}
+
+      - name: Check candidate revision and scan fresh advisory data
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/ndk/${{ steps.pins.outputs.android_ndk }}"
+          python3 .github/scripts/source_checks.py trivy --output-dir "$RUNNER_TEMP/android-security"
+
+      - name: Retain public Android dependency inventories and scan
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/android-security
+          if-no-files-found: warn
+          retention-days: ${{ github.workflow == 'Test' && 7 || 1 }}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	"core/sessionapi/mobilebinding"
+	"core/tunnel"
 
 	"golang.org/x/sys/unix"
 )
@@ -33,6 +34,9 @@ type PlatformCallbacks interface {
 	LoadSourceURL() string
 	SaveSourceURL(value string) bool
 	ClearSourceURL() bool
+	LoadAcceptedRecord() (string, error)
+	SaveAcceptedRecord(string) error
+	ClearAcceptedRecord() error
 	LoadActivation() string
 	SaveActivation(string) bool
 }
@@ -55,6 +59,23 @@ func CallSessionJSON(operationID, method string, params []byte, rawConfiguration
 	return mobileSessions.CallJSONWithOperation(
 		context.Background(), operationID, method, json.RawMessage(params), rawConfiguration, hasConfiguration,
 	)
+}
+
+// ResourceDiagnostics reports process-local Go memory and tunnel flow counts.
+func ResourceDiagnostics() string { return tunnel.ResourceDiagnostics() }
+
+func SetFlowPressure(sessionID string, generation int64, level int) bool {
+	return generation > 0 && level >= 0 && level <= int(tunnel.FlowPressureCritical) &&
+		tunnel.SetFlowPressure(sessionID, uint64(generation), tunnel.FlowPressure(level))
+}
+
+func ActiveFlowGeneration() int64 {
+	return int64(tunnel.ActiveFlowGeneration())
+}
+
+func CloseFlowsForPath(sessionID string, generation, attempt, revision int64) bool {
+	return generation > 0 && attempt > 0 && revision > 0 &&
+		tunnel.CloseFlowsForPath(sessionID, uint64(generation), uint64(attempt), uint64(revision))
 }
 
 func GetTunnelFileDescriptor() int {
@@ -92,3 +113,6 @@ func StopSessionAndWait(operationID string) string {
 // RestoreSession starts the saved Go selection for an OS/On Demand launch and
 // returns after its network owner has acquired protection (or startup fails).
 func RestoreSession() string { return mobileSessions.Restore(false) }
+
+// ParseImportLink interprets activation in the containing app without starting its provider.
+func ParseImportLink(value string) string { return mobilebinding.ParseImportLink(value) }

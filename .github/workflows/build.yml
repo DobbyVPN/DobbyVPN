@@ -57,36 +57,17 @@ jobs:
           echo "apple_build_number=$apple_build_number" >> "$GITHUB_OUTPUT"
           echo "Marketing version $version_name; Android versionCode $android_version_code; Apple build $apple_build_number"
 
-  ios_libraries_build:
-    needs: prepare_version
-    uses: ./.github/workflows/ios_runtime_framework.yml
-    with:
-      source_sha: ${{ github.sha }}
-      retention_days: 7
-
   android_build:
     needs: prepare_version
     uses: ./.github/workflows/android_build.yml
     with:
       source_sha: ${{ github.sha }}
-      single_build: true
       retention_days: 7
       app_major_version: ${{ needs.prepare_version.outputs.major }}
       app_minor_version: ${{ needs.prepare_version.outputs.minor }}
       app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
       android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
 
-  ios_build:
-    needs: [prepare_version, ios_libraries_build]
-    uses: ./.github/workflows/ios_build.yml
-    with:
-      source_sha: ${{ github.sha }}
-      app_major_version: ${{ needs.prepare_version.outputs.major }}
-      app_minor_version: ${{ needs.prepare_version.outputs.minor }}
-      app_maintenance_version: ${{ needs.prepare_version.outputs.maintenance }}
-      android_version_code: ${{ needs.prepare_version.outputs.android_version_code }}
-      apple_build_number: ${{ needs.prepare_version.outputs.apple_build_number }}
-      retention_days: 7
   build_linux:
     needs: prepare_version
     uses: ./.github/workflows/desktop_package.yml
@@ -107,25 +88,25 @@ jobs:
       version_name: ${{ needs.prepare_version.outputs.version_name }}
       retention_days: 7
 
-  build_macos_arm:
+  build_apple:
     needs: prepare_version
-    uses: ./.github/workflows/desktop_package.yml
+    uses: ./.github/workflows/apple_packages.yml
     with:
-      platform: macos
-      architecture: arm64
+      release: true
+      apple_build_number: ${{ needs.prepare_version.outputs.apple_build_number }}
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.prepare_version.outputs.version_name }}
       retention_days: 7
-
-  build_macos_intel:
-    needs: prepare_version
-    uses: ./.github/workflows/desktop_package.yml
-    with:
-      platform: macos
-      architecture: amd64
-      source_sha: ${{ github.sha }}
-      version_name: ${{ needs.prepare_version.outputs.version_name }}
-      retention_days: 7
+    secrets:
+      MACOS_DEVELOPER_ID_APP_P12: ${{ secrets.MACOS_DEVELOPER_ID_APP_P12 }}
+      MACOS_HOST_PROFILE: ${{ secrets.MACOS_HOST_PROFILE }}
+      MACOS_TUNNEL_PROFILE: ${{ secrets.MACOS_TUNNEL_PROFILE }}
+      MACOS_FILTER_PROFILE: ${{ secrets.MACOS_FILTER_PROFILE }}
+      MACOS_DEVELOPER_ID_INSTALLER_P12: ${{ secrets.MACOS_DEVELOPER_ID_INSTALLER_P12 }}
+      MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+      APP_STORE_API_KEY: ${{ secrets.APP_STORE_API_KEY }}
+      APP_STORE_KEY_ID: ${{ secrets.APP_STORE_KEY_ID }}
+      APP_STORE_ISSUER_ID: ${{ secrets.APP_STORE_ISSUER_ID }}
 
   debug_packages:
     needs: prepare_version
@@ -133,16 +114,11 @@ jobs:
     with:
       source_sha: ${{ github.sha }}
       version_name: ${{ needs.prepare_version.outputs.version_name }}
-      major: ${{ needs.prepare_version.outputs.major }}
-      minor: ${{ needs.prepare_version.outputs.minor }}
-      maintenance: ${{ needs.prepare_version.outputs.maintenance }}
-      build_number: ${{ needs.prepare_version.outputs.android_version_code }}
-      apple_build_number: ${{ needs.prepare_version.outputs.apple_build_number }}
       retention_days: 7
 
   build_manifest:
     name: Record selected Build artifacts
-    needs: [prepare_version, ios_libraries_build, android_build, ios_build, build_linux, build_windows, build_macos_arm, build_macos_intel, debug_packages]
+    needs: [prepare_version, android_build, build_linux, build_windows, build_apple, debug_packages]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -155,6 +131,7 @@ jobs:
       - name: Create Build artifact inventory
         env:
           GH_TOKEN: ${{ github.token }}
+          APPLE_PRODUCER_ATTEMPT: ${{ needs.build_apple.outputs.producer_attempt }}
         run: |
           set -euo pipefail
           version="$(python3 .github/scripts/release/version_metadata.py --version-file VERSION --field version_name)"
@@ -166,7 +143,7 @@ jobs:
             --run-number "$GITHUB_RUN_NUMBER" --source-sha "$GITHUB_SHA" \
             --source-tree "$source_tree" --version "$version" \
             --android-version-code "$android_code" --apple-build-number "$apple_build_number" \
-            --output "$RUNNER_TEMP/build.json"
+            --apple-producer-attempt "$APPLE_PRODUCER_ATTEMPT" --output "$RUNNER_TEMP/build.json"
       - name: Upload Build manifest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

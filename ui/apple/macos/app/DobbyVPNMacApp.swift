@@ -3,16 +3,23 @@ import DobbyNativeUI
 import SwiftUI
 
 @main
+enum MacEntry {
+    @MainActor static func main() {
+        let args = CommandLine.arguments
+        if args.dropFirst().first == "--network-extension" {
+            MacNetworkExtension.run(Array(args.dropFirst(2)))
+        }
+        DobbyVPNMacApp.main()
+    }
+}
+
 struct DobbyVPNMacApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @StateObject private var model: DobbySessionViewModel
-    private let systemEvents: MacSystemEventMonitor
 
     init() {
         let client = MacDesktopSessionClient()
         _model = StateObject(wrappedValue: DobbySessionViewModel(client: client))
-        systemEvents = MacSystemEventMonitor(client: client)
-        systemEvents.start()
     }
 
     var body: some Scene {

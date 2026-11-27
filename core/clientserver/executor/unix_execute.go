@@ -3,6 +3,7 @@
 package executor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -137,25 +138,36 @@ func run() {
 	if err := initExplicitLocalLog(); err != nil {
 		panic(fmt.Sprintf("failed to initialize local logging: %v", err))
 	}
+	defer func() { _ = log.Flush() }()
 	// Convert logrus.Fatal (os.Exit) into a panic so goroutines can recover from it
 	// instead of crashing the entire desktop control process.
 	logrus.StandardLogger().ExitFunc = func(code int) {
 		panic(fmt.Sprintf("fatal error (exit code %d)", code))
 	}
-	if err := recoverInterruptedState(); err != nil {
-		panic(fmt.Sprintf("failed to recover interrupted product state: %v", err))
+	controlPath, pathErr := controlplane.ControlSocketPath()
+	if pathErr != nil {
+		panic(fmt.Sprintf("failed to listen for desktop control: %v", pathErr))
 	}
 	listener, err := controlplane.ListenControlSocket()
 	if err != nil {
 		panic(fmt.Sprintf("failed to listen for desktop control: %v", err))
 	}
+	// A failed recovery must not stop the service: the control socket opens,
+	// clients see the error, and every Connect retries the recovery.
+	startupFailure = prepareServiceProtection()
+	if startupFailure == nil {
+		startupFailure = recoverInterruptedState()
+	}
+	startRestore := prepareDesktopRestore(desktopProcessBinding(), releaseUnadoptedKillSwitch)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- controljson.Serve(listener, controljson.Handler{Binding: desktopProcessBinding()}, controlplane.AuthenticateLocalPeer)
 	}()
-	log.Debugf(desktopLogCategory, "desktop JSON control socket ready")
+	log.Debugf(desktopLogCategory, "desktop JSON control socket ready at %s", controlPath)
+	startRestore()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	go watchNetworkChanges(newNetworkEvents())
 	var serveErr error
 	select {
 	case <-signals:
@@ -173,6 +185,14 @@ func run() {
 
 func (c *Executor) Execute(mode string) {
 	switch mode {
+	case "release-legacy-protection":
+		if err := releaseLegacyInstallationGuard(context.Background()); err != nil {
+			exitWithShutdownError(err)
+		}
+	case "release-protection":
+		if err := removeDesktopInstallationState(context.Background(), connectionSourceStore); err != nil {
+			exitWithShutdownError(err)
+		}
 	case "normal":
 		run()
 	default:

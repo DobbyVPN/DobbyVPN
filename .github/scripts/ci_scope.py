@@ -215,8 +215,6 @@ def _path_scope(path: str) -> str:
         or path.endswith("_ios.go")
     ):
         return "apple"
-    if _allowed_markdown(path):
-        return "docs"
     return "shared"
 
 

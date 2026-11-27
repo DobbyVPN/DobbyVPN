@@ -9,6 +9,7 @@ import (
 	"net"
 	"time"
 
+	"core/common"
 	"core/dnscache"
 	"core/log"
 	"core/routing"
@@ -16,12 +17,12 @@ import (
 	"core/tunnel/platform_engine"
 	"core/tunnel/protected_dialer"
 
-	"golang.getoutline.org/sdk/network"
+	"golang.org/x/sys/unix"
 )
 
 func (app *App) validateRunInputs() error {
-	if app.RoutingConfig == nil || app.DNSCache == nil || app.BypassPolicy == nil {
-		return errors.New("network routing, resolver and bypass inputs are required")
+	if app.RoutingConfig == nil || app.DNSCache == nil {
+		return errors.New("network routing and resolver inputs are required")
 	}
 	return nil
 }
@@ -33,6 +34,13 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 		return fail(err)
 	}
 	config := app.RoutingConfig
+	if config.TunDeviceIP == "" {
+		address, err := common.TUNDeviceIPv4()
+		if err != nil {
+			return fail(err)
+		}
+		config.TunDeviceIP = address
+	}
 	// Retire precisely tagged state from an interrupted older process. The new
 	// policy leaves physical routes untouched, so it needs no route restoration.
 	if err := routing.RecoverLinuxNetworkRules(config.RoutingTableID, config.RoutingTablePriority, config.TunDeviceName); err != nil {
@@ -56,41 +64,39 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 
 	plan := routing.NewPlan(config.TunDeviceName)
 	var engine *tunnel.Engine
-	var tun network.IPDevice
+	tunFD := -1
 	app.setCleanup(func(cleanup context.Context) error {
 		if engine != nil {
 			return engine.Stop(cleanup)
 		}
 		return nil
 	}, plan.Close, func(context.Context) error {
-		if tun != nil {
-			if closeErr := tun.Close(); closeErr != nil {
-				return closeErr
+		if tunFD >= 0 {
+			closeErr := unix.Close(tunFD)
+			tunFD = -1 // Linux releases the descriptor even when close reports an error.
+			if closeErr != nil {
+				return fmt.Errorf("close Linux TUN: %w", closeErr)
 			}
 		}
 		protected_dialer.SetLinuxSocketMark(0)
 		return nil
 	})
-	guard, err := plan.AcquireLinuxOutputGuard(ctx, config.TunDeviceName, config.RoutingTableID)
+	_, err = plan.AcquireLinuxOutputGuard(ctx, config.TunDeviceName, config.RoutingTableID)
 	if err != nil {
 		return fail(err)
 	}
 	capture := func(queryCtx context.Context) (string, dnscache.Resolver, error) {
-		return captureLinuxResolver(queryCtx, config.TunDeviceName, guard)
+		return captureLinuxResolver(queryCtx, config.TunDeviceName, config.RoutingTableID)
 	}
 	if _, _, captureErr := capture(ctx); captureErr != nil {
 		return fail(captureErr)
 	}
 	app.DNSCache.SetResolverSource(capture)
-	tun, err = newTunDevice(config.TunDeviceName, config.TunDeviceIP)
+	tunFD, err = app.openLinuxTUN()
 	if err != nil {
 		return fail(err)
 	}
-	descriptor, ok := tun.(interface{ GetFd() int })
-	if !ok || descriptor.GetFd() < 0 {
-		return fail(errors.New("owned TUN descriptor is unavailable"))
-	}
-	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: descriptor.GetFd()}, app.DNSCache, app.BypassPolicy)
+	engine, err = tunnel.StartOwnedFDEngine(platform_engine.EngineConfig{FD: tunFD})
 	app.Engine = engine
 	if err != nil {
 		return fail(err)
@@ -113,19 +119,12 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	return maintainLinuxResolver(ctx, capture)
 }
 
-func captureLinuxResolver(ctx context.Context, tunName string, guard *routing.LinuxOutputGuard) (string, dnscache.Resolver, error) {
+func captureLinuxResolver(ctx context.Context, tunName string, mark int) (string, dnscache.Resolver, error) {
 	index, err := routing.LinuxPhysicalInterface(tunName)
 	if err != nil {
-		return "", nil, errors.Join(err, guard.UpdateBootstrap(ctx, "unavailable", nil))
-	}
-	identity, servers, err := dnscache.CaptureLinuxLink(ctx, index)
-	if err != nil {
 		return "", nil, err
 	}
-	if err := guard.UpdateBootstrap(ctx, identity, servers); err != nil {
-		return "", nil, err
-	}
-	return identity, dnscache.LinuxLinkResolver(index), nil
+	return dnscache.CaptureLinuxBootstrap(ctx, index, mark, routing.OpenLinuxResolverQuery)
 }
 
 func maintainLinuxResolver(ctx context.Context, capture func(context.Context) (string, dnscache.Resolver, error)) error {

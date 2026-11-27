@@ -16,7 +16,9 @@ public final class IOSSessionShell: NSObject {
     /// Sends the frontend's method and parameters through the provider as JSON.
     /// Source bytes stay in a request-scoped Keychain mailbox because the
     /// NetworkExtension message is a control transport, not a secret channel.
-    public func call(method: String, parameters: [String: Any]) -> String {
+    /// `setUpVPN` is set only for the Snapshot a user setup action sends; it
+    /// may create the VPN profile and so show the iOS permission prompt.
+    public func call(method: String, parameters: [String: Any], setUpVPN: Bool = false) -> String {
         let hasStartSource = method == "Start" && parameters["source"] is String
         let usesMailbox = method == "Configure" || hasStartSource
         let providerMethod = hasStartSource ? "StartWithSource" : method
@@ -62,7 +64,7 @@ public final class IOSSessionShell: NSObject {
             return failure("INVALID_ARGUMENT", message: "command parameters are invalid")
         }
 
-        let result = executeResult(method: providerMethod, requestID: requestID, params: params)
+        let result = executeResult(method: providerMethod, requestID: requestID, params: params, setUpVPN: setUpVPN)
         if hasConfigurationMailbox,
            result.isGoResult,
            let response = result.response.data(using: .utf8),
@@ -77,12 +79,13 @@ public final class IOSSessionShell: NSObject {
     private func executeResult(
         method: String,
         requestID: String,
-        params: Data
+        params: Data,
+        setUpVPN: Bool
     ) -> (response: String, isGoResult: Bool) {
         IOSSessionExchange.execute(
             method: method, requestID: requestID, params: params,
             trace: diagnosticSampler.shouldTrace(method: method),
-            send: { manager.sendProviderMessage($0) },
+            send: { manager.sendProviderMessage($0, setUpVPN: setUpVPN) },
             failure: { self.failure($0, message: $1) },
             log: { level, message in _ = self.logs.writeLog(level: level, log: message) }
         )

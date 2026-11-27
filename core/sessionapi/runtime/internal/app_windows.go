@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/dnscache"
+	"core/iprange"
 	"core/log"
 	"core/routing"
 	"core/tunnel"
@@ -59,17 +60,23 @@ func (app *App) Run(ctx context.Context, initResult chan<- error) (runErr error)
 	}
 	app.UplinkInterface = physical.Name
 	protected_dialer.SetPhysicalInterfaces(ipv4, ipv6)
-	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{FD: -1, UplinkIface: physical.Name}, app.DNSCache, app.BypassPolicy)
+	ownedEngine, err = tunnel.StartOwnedEngine(platform_engine.EngineConfig{FD: -1, UplinkIface: physical.Name})
 	app.Engine = ownedEngine
 	if err != nil {
 		signalInit(initResult, err)
 		return err
 	}
+	app.retainDesktopTunnelPolicy(platform_engine.WindowsTunnelPolicy())
 	guard := platform_engine.WindowsNetworkProtection()
 	if guard == nil {
 		err = errors.New("Windows network protection owner missing")
 		signalInit(initResult, err)
 		return err
+	}
+	if excluded, ok := guard.(interface {
+		SetExcluded(context.Context, *iprange.Set, *iprange.Set) error
+	}); ok {
+		app.Guard = excluded
 	}
 
 	var preferred4, preferred6 atomic.Uint64

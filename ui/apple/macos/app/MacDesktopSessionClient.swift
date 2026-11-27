@@ -34,12 +34,30 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
         URL(fileURLWithPath: uiLogPath)
     }
 
+    func appendDiagnostic(_ message: String, event: String, level: String, source: String = "native-ui",
+                          fields: [String: Any]) throws {
+        try DiagnosticFiles.append(message, event: event, level: level, source: source, to: uiDiagnosticPath,
+                                   fields: fields, legacyDesktop: true, legacyExcludedPaths: [backendLogPath])
+    }
+
     var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
     }
 
     var sourceCommit: String {
         Bundle.main.infoDictionary?["DobbySourceCommit"] as? String ?? "N/A"
+    }
+
+    func flushDiagnostics() throws {
+        let request = Data("{\"method\":\"FlushDiagnostics\",\"params\":{}}\n".utf8)
+        do {
+            let response = try UnixControlSocket(path: socketPath, requestTimeout: 1).exchange(request)
+            try DobbyResponse.check(response)
+        } catch let error as POSIXError where error.code == .ENOENT || error.code == .ECONNREFUSED {
+            // A stopped service has no pending diagnostics.
+        } catch DobbyClientError.command(code: "INVALID_ARGUMENT", message: "unknown command") {
+            // An older service writes diagnostics without batching.
+        }
     }
 
     private func sample(_ method: String) -> Bool {
@@ -52,6 +70,20 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
     }
 
     func call(_ method: String, parameters: [String: Any]) -> String {
+        if method == "ParseImportLink" {
+            let snapshot = call("Snapshot", parameters: ["session_id": ""])
+            do {
+                _ = try DobbyResponse.result(from: snapshot, as: DobbySessionSnapshot.self)
+            } catch DobbyClientError.protocolMismatch {
+                let failure: [String: Any] = ["ok": false, "error": ["code": "CONFLICT",
+                    "message": DobbyClientError.protocolMismatch.localizedDescription]]
+                if let data = try? JSONSerialization.data(withJSONObject: failure),
+                   let response = String(data: data, encoding: .utf8) { return response }
+                return snapshot
+            } catch {
+                return snapshot
+            }
+        }
         let requestID = UUID().uuidString.lowercased()
         let sampled = sample(method)
         let started = clock()
@@ -64,9 +96,7 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
                                          "elapsed_ms": (clock() - started) * 1000]
             if let error { fields["error"] = error }
             do {
-                try DiagnosticFiles.append(message, event: event, level: level, source: "native-ui",
-                                           to: uiDiagnosticPath, fields: fields, legacyDesktop: true,
-                                           legacyExcludedPaths: [backendLogPath])
+                try appendDiagnostic(message, event: event, level: level, fields: fields)
             } catch {
                 FileHandle.standardError.write(Data("UI control diagnostic write failed: \(String(reflecting: error))\n".utf8))
             }
@@ -86,15 +116,17 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
                   let response = String(data: data, encoding: .utf8) else {
                 return #"{"ok":false,"error":{"code":"PLATFORM_FAILED","message":"Platform operation failed"}}"#
             }
-            self.recordConfigureResponse(method, parameters: parameters, response: response, responseReceived: false)
+            recordConfigureResponse(method, parameters: parameters, succeeded: false)
             return response
         }
+        var succeeded = false
         do {
             guard let data = response.data(using: .utf8),
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let ok = object["ok"] as? Bool else {
                 throw NSError(domain: "DobbyDesktopControl", code: 1, userInfo: [NSLocalizedDescriptionKey: "Desktop control response envelope is invalid"])
             }
+            succeeded = ok
             if !ok {
                 record("control.command.failure", "ERROR", "Desktop control command failed", error: response)
             } else if sampled {
@@ -103,34 +135,24 @@ final class MacDesktopSessionClient: DobbySessionClient, @unchecked Sendable {
         } catch {
             record("control.command.failure", "ERROR", "Desktop control response inspection failed", error: String(reflecting: error))
         }
-        recordConfigureResponse(method, parameters: parameters, response: response, responseReceived: true)
+        recordConfigureResponse(method, parameters: parameters, succeeded: succeeded)
         return response
     }
 
     private func recordConfigureResponse(
-        _ method: String, parameters: [String: Any], response: String, responseReceived: Bool
+        _ method: String, parameters: [String: Any], succeeded: Bool
     ) {
         guard method == "Configure", let source = parameters["source"] as? String else { return }
-        let responseIsSuccessful: Bool
-        if responseReceived, let data = response.data(using: .utf8),
-           let rawEnvelope = try? JSONSerialization.jsonObject(with: data),
-           let envelope = rawEnvelope as? [String: Any] {
-            responseIsSuccessful = envelope["ok"] as? Bool == true
-        } else {
-            responseIsSuccessful = false
-        }
         do {
-            try DiagnosticFiles.append(
+            try appendDiagnostic(
                 "Read the Configure response from the Go backend",
                 event: "subscription.configure-pipe-response-read",
                 level: "INFO",
-                source: "native-ui",
-                to: uiDiagnosticPath,
                 fields: [
                     "parameters": ["source": source],
-                    "succeeded": responseReceived && responseIsSuccessful,
+                    "succeeded": succeeded,
                     "response_read_monotonic_uptime": ProcessInfo.processInfo.systemUptime,
-                ], legacyDesktop: true, legacyExcludedPaths: [backendLogPath]
+                ]
             )
         } catch {
             FileHandle.standardError.write(Data(

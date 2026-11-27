@@ -110,7 +110,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1
+      - uses: ruby/setup-ruby@f9c4492e86def3e644ab32a0ef185eda5b0c20d0 # v1
         with:
           ruby-version: '3.3'
           bundler-cache: false
@@ -120,24 +120,14 @@ jobs:
         env:
           VERSION_NAME: ${{ needs.resolve_publish.outputs.version_name }}
           APPLE_BUILD_NUMBER: ${{ needs.resolve_publish.outputs.apple_build_number }}
-          SOURCE_SHA: ${{ needs.resolve_publish.outputs.source_sha }}
           RELEASE_NOTES_B64: ${{ needs.resolve_publish.outputs.ios_release_notes_b64 }}
         run: |
           set -euo pipefail
-          IFS='.' read -r version_major version_minor version_maintenance <<< "$VERSION_NAME"
           notes_file="$RUNNER_TEMP/release-notes.md"
           printf '%s' "$RELEASE_NOTES_B64" | base64 --decode > "$notes_file"
           {
             echo "APP_STORE_VERSION=$VERSION_NAME"
             echo "APP_STORE_BUILD_NUMBER=$APPLE_BUILD_NUMBER"
-            echo "APP_MAJOR_VERSION=$version_major"
-            echo "APP_MINOR_VERSION=$version_minor"
-            echo "APP_MAINTENANCE_VERSION=$version_maintenance"
-            echo "ANDROID_VERSION_CODE=${{ needs.resolve_publish.outputs.android_version_code }}"
-            echo "APP_SOURCE_SHA=$SOURCE_SHA"
-            echo "SOURCE_COMMIT=$SOURCE_SHA"
-            echo "VERSION_NAME=$VERSION_NAME"
-            echo "APP_BUILD=$APPLE_BUILD_NUMBER"
             echo "APP_STORE_RELEASE_NOTES_FILE=$notes_file"
           } >> "$GITHUB_ENV"
       - name: Submit exact build to App Review
@@ -156,7 +146,7 @@ jobs:
       deployments: read
       pages: write
       id-token: write
-    uses: DobbyVPN/fdroid-repo/.github/workflows/publish.yml@1954cf1eea1d2bc6c58f3ff8d3b808da174762a9
+    uses: DobbyVPN/fdroid-repo/.github/workflows/publish.yml@8a4a5afd02456dcb1b96f1701731dc59514fd72a
     secrets:
       FDROID_REPO_KEYSTORE: ${{ secrets.FDROID_REPO_KEYSTORE }}
       FDROID_KEYSTORE_PASSWORD: ${{ secrets.FDROID_KEYSTORE_PASSWORD }}
