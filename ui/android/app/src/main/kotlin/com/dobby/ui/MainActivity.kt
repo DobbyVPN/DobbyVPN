@@ -638,6 +638,16 @@ private data class PendingPermissionAction(
     val fence: PermissionTarget,
     val retry: Boolean = false,
 )
+internal data class PublicIPMeasurement(val state: String = "", val value: String = "")
+
+/// How a public-address observation is shown in the connection controls.
+internal fun displayPublicIP(measurement: PublicIPMeasurement): String = when (measurement.state) {
+    "observed" -> measurement.value
+    "measuring" -> "Measuring…"
+    "unavailable" -> "Unavailable"
+    else -> "—"
+}
+
 internal data class SessionData(
     val sessionId: String = "",
     val sequence: Long = 0,
@@ -664,6 +674,9 @@ internal data class SessionData(
     val failure: String = "",
     val sourceError: String = "",
     val offlineAcceptedAt: String = "",
+    val publicIPPresent: Boolean = false,
+    val publicIPBefore: PublicIPMeasurement = PublicIPMeasurement(),
+    val publicIPAfter: PublicIPMeasurement = PublicIPMeasurement(),
 ) {
     val protectedFailure: Boolean
         get() = state == "FAILED" && vpnActive && canRetry && primaryAction == "RETRY" && !cleanupComplete
@@ -991,6 +1004,12 @@ internal class SessionController(
             else -> "Disconnected"
         }
     }
+
+    /// The before/after public-address rows; null while no attempt record exists.
+    val publicIPBeforeDisplay: String?
+        get() = if (state.session.publicIPPresent) displayPublicIP(state.session.publicIPBefore) else null
+    val publicIPAfterDisplay: String?
+        get() = if (state.session.publicIPPresent) displayPublicIP(state.session.publicIPAfter) else null
 
     private val connected get() = state.session.primaryAction == "STOP"
 

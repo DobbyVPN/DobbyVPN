@@ -33,6 +33,7 @@ internal sealed class Snapshot : IJsonOnDeserialized
     [JsonRequired, JsonPropertyName("active_index")] public int ActiveIndex { get; init; }
     [JsonPropertyName("pending_target")] public Selection? PendingTarget { get; init; }
     [JsonRequired, JsonPropertyName("can_switch")] public bool CanSwitch { get; init; }
+    [JsonPropertyName("public_ip")] public PublicIP? PublicIP { get; init; }
 
     void IJsonOnDeserialized.OnDeserialized()
     {
@@ -70,4 +71,16 @@ internal sealed class Failure
 {
     [JsonRequired, JsonPropertyName("code")] public string Code { get; init; } = "";
     [JsonRequired, JsonPropertyName("message")] public string Message { get; init; } = "";
+}
+
+internal sealed class PublicIP
+{
+    [JsonPropertyName("before")] public PublicIPMeasurement Before { get; init; } = new();
+    [JsonPropertyName("after")] public PublicIPMeasurement After { get; init; } = new();
+}
+
+internal sealed class PublicIPMeasurement
+{
+    [JsonPropertyName("state")] public string State { get; init; } = "";
+    [JsonPropertyName("value")] public string Value { get; init; } = "";
 }

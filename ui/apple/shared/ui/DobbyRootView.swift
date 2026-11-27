@@ -113,6 +113,7 @@ public struct DobbyRootView: View {
                     }
                     if model.vpnPermissionNeeded { vpnPermission }
                     mainButton
+                    publicIPRows
                     reconnectLine(identifier: "connection.reconnect")
                     connections
                         .frame(minHeight: pt(72), maxHeight: trayHeight(geometry.size.height))
@@ -613,6 +614,37 @@ extension DobbyRootView {
                 .accessibilityIdentifier("error.dialog.scroll")
               }
             }
+        }
+    }
+
+    /// The public address observed before this connection and through the VPN,
+    /// shown while a connection attempt is live.
+    @ViewBuilder
+    private var publicIPRows: some View {
+        if let publicIP = model.snapshot.publicIP {
+            VStack(spacing: pt(4)) {
+                publicIPRow(label: "Before connection", measurement: publicIP.before, identifier: "connection.ip.before")
+                publicIPRow(label: "With VPN", measurement: publicIP.after, identifier: "connection.ip.after")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("connection.ip")
+        }
+    }
+
+    private func publicIPRow(label: String, measurement: DobbyPublicIPMeasurement, identifier: String) -> some View {
+        let display = publicIPDisplay(measurement)
+        return HStack(spacing: pt(6)) {
+            Text(label)
+                .dobbyFont(13)
+                .foregroundColor(.muted)
+                .accessibilityHidden(true)
+            Spacer(minLength: pt(8))
+            Text(display)
+                .dobbyFont(13, design: .monospaced)
+                .foregroundColor(.ink)
+                .lineLimit(1)
+                .accessibilityIdentifier(identifier)
         }
     }
 

@@ -575,6 +575,14 @@ public sealed partial class MainWindow : Window
         ConnectionButton.BorderBrush = Palette(outlined ? "Ink" : "Rule");
         ConnectionButton.BorderThickness = new Thickness(filled ? 0 : outlined ? 2 : 1.5);
 
+        var publicIP = _snapshot?.PublicIP;
+        PublicIPPanel.Visibility = publicIP is null ? Visibility.Collapsed : Visibility.Visible;
+        if (publicIP is not null)
+        {
+            PublicIPBeforeText.Text = $"Before connection: {PublicIPDisplay(publicIP.Before)}";
+            PublicIPAfterText.Text = $"With VPN: {PublicIPDisplay(publicIP.After)}";
+        }
+
         ActiveFailurePanel.Visibility = ShowActiveFailure ? Visibility.Visible : Visibility.Collapsed;
         ActiveFailureText.Text = _snapshot?.LastFailure is { } failure
             ? $"{failure.Message} ({failure.Code})"
@@ -605,6 +613,14 @@ public sealed partial class MainWindow : Window
             FrameworkElementAutomationPeer.FromElement(ConnectionButton)?.RaiseNotificationEvent(
                 AutomationNotificationKind.ActionCompleted, AutomationNotificationProcessing.MostRecent, status, "connection.status");
     }
+
+    private static string PublicIPDisplay(PublicIPMeasurement measurement) => measurement.State switch
+    {
+        "observed" => measurement.Value,
+        "measuring" => "Measuring…",
+        "unavailable" => "Unavailable",
+        _ => "—",
+    };
 
     private void RenderTray()
     {
