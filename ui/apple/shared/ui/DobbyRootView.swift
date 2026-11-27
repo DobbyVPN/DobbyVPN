@@ -261,21 +261,46 @@ public struct DobbyRootView: View {
         Binding(get: { model.sourceText }, set: { model.sourceChanged($0) })
     }
 
+    @ViewBuilder
     private var mainButton: some View {
+        if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
+            // Retry and Stop share one row, 2:1 as Android's weights 1 and 0.5. A hidden
+            // copy of the Retry title sets the row height, so larger text grows the row;
+            // both titles stay on one line, so the copy's width does not change the height.
+            Text(model.mainActionTitle)
+                .dobbyFont(20, .semibold)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: pt(60))
+                .hidden()
+                .overlay(GeometryReader { row in
+                    HStack(spacing: pt(8)) {
+                        primaryButton(fillHeight: true).frame(width: max(0, row.size.width - pt(8)) * 2 / 3)
+                        stopButton
+                    }
+                })
+        } else {
+            primaryButton()
+        }
+    }
+
+    /// `fillHeight` lets the button match a taller neighbour in the Retry and Stop row.
+    private func primaryButton(fillHeight: Bool = false) -> some View {
         let title = model.mainActionTitle
         let enabled = model.mainActionEnabled
         let idle = title == "Auto connect"
         let filled = enabled && idle
         let outlined = enabled || !idle
-        return VStack(spacing: pt(8)) {
-        Button {
+        return Button {
             sourceFocused = false
             model.mainAction()
         } label: {
             Text(title)
                 .dobbyFont(20, .semibold)
+                // In the row the title keeps one line and shrinks rather than wrapping past its height.
+                .lineLimit(fillHeight ? 1 : nil)
+                .minimumScaleFactor(fillHeight ? 0.5 : 1)
                 .foregroundColor(filled ? .surface : outlined ? .ink : .muted)
-                .frame(maxWidth: .infinity, minHeight: pt(60))
+                .frame(maxWidth: .infinity, minHeight: pt(60), maxHeight: fillHeight ? .infinity : nil)
                 .background(filled ? Color.ink : .clear, in: buttonShape)
                 .overlay(buttonShape.stroke(outlined ? Color.ink : .rule, lineWidth: filled ? 0 : outlined ? 2 : 1.5))
                 .contentShape(buttonShape)
@@ -285,12 +310,25 @@ public struct DobbyRootView: View {
         .accessibilityIdentifier("VPN connection action")
         .accessibilityValue(model.status)
         .keyboardShortcut(.return, modifiers: .command)
-        if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
-            Button("Stop", action: model.stop)
-                .disabled(!model.canStop)
-                .accessibilityIdentifier("connection.stop")
+    }
+
+    private var stopButton: some View {
+        let enabled = model.canStop
+        return Button(action: model.stop) {
+            Text("Stop")
+                .dobbyFont(18, .semibold)
+                // The third of the row stays narrow; large text shrinks instead of clipping.
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .foregroundColor(enabled ? .ink : .muted)
+                .padding(.horizontal, pt(4))
+                .frame(maxWidth: .infinity, minHeight: pt(60), maxHeight: .infinity)
+                .overlay(buttonShape.stroke(enabled ? Color.ink : .rule, lineWidth: enabled ? 2 : 1.5))
+                .contentShape(buttonShape)
         }
-        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityIdentifier("connection.stop")
     }
 
     /// A refused or timed-out VPN setup: plain text on the main screen, one
