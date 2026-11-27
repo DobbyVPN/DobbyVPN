@@ -20,10 +20,12 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -38,8 +40,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
@@ -63,6 +63,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -83,10 +84,16 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -438,38 +445,7 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
                 },
             )
             menuAt?.let { position ->
-                Box(Modifier.offset { position }) {
-                    DropdownMenu(
-                        expanded = true,
-                        onDismissRequest = { menuAt = null },
-                        modifier = Modifier.semantics { testTagsAsResourceId = true },
-                    ) {
-                        if (state.session.logsUploadAvailable) {
-                            DropdownMenuItem(
-                                text = { Text(if (state.uploadingLogs) "Uploading logs…" else "Upload logs", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = { menuAt = null; controller.uploadLogs() },
-                                enabled = !state.uploadingLogs,
-                                modifier = Modifier.testTag("logs.upload"),
-                            )
-                        }
-                        Row(Modifier.fillMaxWidth()) {
-                            TextButton(onClick = { menuAt = null; controller.clearLogs() }, modifier = Modifier.weight(1f).testTag("logs.clear")) { Text("Clear") }
-                            TextButton(onClick = { menuAt = null; controller.exportLogs() }, enabled = !state.exportingLogs, modifier = Modifier.weight(1f).testTag("logs.export")) { Text("Send logs") }
-                        }
-                        if (state.uploadingLogs) {
-                            DropdownMenuItem(text = { Text("Cancel upload", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = { menuAt = null; controller.cancelUpload() }, modifier = Modifier.testTag("logs.upload.cancel"))
-                        }
-                        if (state.uploadedReference.isNotEmpty()) {
-                            DropdownMenuItem(text = { Text("${state.uploadedReference}\n${state.uploadedProvider}\n${state.uploadedTime}", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = {}, modifier = Modifier.testTag("logs.upload.reference"))
-                            DropdownMenuItem(text = { Text("Copy reference", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = { menuAt = null; controller.copyUploadReference() }, modifier = Modifier.testTag("logs.upload.copy"))
-                            DropdownMenuItem(text = { Text("Share reference", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
-                                onClick = { menuAt = null; controller.shareUploadReference() }, modifier = Modifier.testTag("logs.upload.share"))
-                        }
-                    }
-                }
+                LogsMenu(controller, position, close = { menuAt = null })
             }
         }
         if (state.uploadingLogs) {
@@ -479,6 +455,105 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
             }
         }
         Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
+    }
+}
+
+// The logs menu opens at the double-tap point as one panel in the app's button style:
+// optional upload rows on top, then Clear and Send logs edge to edge.
+@Composable
+private fun LogsMenu(controller: SessionController, position: IntOffset, close: () -> Unit) {
+    val state = controller.state
+    val shape = RoundedCornerShape(14.dp)
+    val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
+    // A large font, a long reference or a short window can make the menu taller than the window.
+    val maxHeight = (LocalConfiguration.current.screenHeightDp - 24).coerceAtLeast(120).dp
+    Popup(
+        popupPositionProvider = remember(position, margin) { TapPositionProvider(position, margin) },
+        onDismissRequest = close,
+        properties = PopupProperties(focusable = true),
+    ) {
+        Column(
+            Modifier.semantics { testTagsAsResourceId = true }
+                .width(260.dp)
+                .heightIn(max = maxHeight)
+                .clip(shape)
+                .background(Surface)
+                .border(1.5.dp, Ink, shape)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            if (state.session.logsUploadAvailable) {
+                MenuRow(if (state.uploadingLogs) "Uploading logs…" else "Upload logs", "logs.upload", enabled = !state.uploadingLogs) { close(); controller.uploadLogs() }
+                MenuDivider()
+            }
+            if (state.uploadingLogs) {
+                MenuRow("Cancel upload", "logs.upload.cancel") { close(); controller.cancelUpload() }
+                MenuDivider()
+            }
+            if (state.uploadedReference.isNotEmpty()) {
+                Text(
+                    "${state.uploadedReference}\n${state.uploadedProvider}\n${state.uploadedTime}",
+                    Modifier.fillMaxWidth().testTag("logs.upload.reference").padding(horizontal = 12.dp, vertical = 10.dp),
+                    color = Muted, fontSize = 13.sp, lineHeight = 17.sp, textAlign = TextAlign.Center,
+                )
+                MenuDivider()
+                MenuRow("Copy reference", "logs.upload.copy") { close(); controller.copyUploadReference() }
+                MenuDivider()
+                MenuRow("Share reference", "logs.upload.share") { close(); controller.shareUploadReference() }
+                MenuDivider()
+            }
+            Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).height(IntrinsicSize.Min)) {
+                MenuHalf("Clear", "logs.clear", filled = false, Modifier.weight(1f)) { close(); controller.clearLogs() }
+                MenuHalf("Send logs", "logs.export", filled = true, Modifier.weight(1f), enabled = !state.exportingLogs) { close(); controller.exportLogs() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuRow(title: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(tag)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(title, color = if (enabled) Ink else Muted, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+private fun MenuDivider() = Box(Modifier.fillMaxWidth().height(1.5.dp).background(Ink))
+
+@Composable
+private fun MenuHalf(title: String, tag: String, filled: Boolean, modifier: Modifier, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(
+        modifier.fillMaxHeight().testTag(tag)
+            .then(if (filled) Modifier.background(Ink) else Modifier)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        // Disabled text stays readable on both fills (about 6:1 on Ink) while looking dimmed.
+        val color = when {
+            filled && !enabled -> Surface.copy(alpha = 0.55f)
+            filled -> Surface
+            !enabled -> Muted
+            else -> Ink
+        }
+        Text(title, color = color, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+    }
+}
+
+// Places the menu at the tap point like a dropdown: below it when it fits, otherwise above,
+// kept inside the window with a small margin.
+private class TapPositionProvider(private val tap: IntOffset, private val margin: Int) : PopupPositionProvider {
+    override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+        val left = anchorBounds.left + tap.x
+        val top = anchorBounds.top + tap.y
+        val x = left.coerceAtMost(windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin)
+        val below = top + popupContentSize.height <= windowSize.height - margin
+        val y = (if (below) top else top - popupContentSize.height).coerceAtLeast(margin)
+        return IntOffset(x, y)
     }
 }
 
