@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import uuid
 from typing import Any
@@ -41,6 +42,12 @@ WINDOWS_DEBUG_UPGRADE_CODE = "{5C16B3D0-831C-4024-AB10-A76DA27D14FB}"
 # Must equal the REINSTALLMODE property of Package.wxs.
 WINDOWS_REINSTALL_MODE = "amus"
 WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS = 30
+# launchd reports the service running before the backend has created its
+# control socket, so the smoke test waits for the socket before first contact.
+MACOS_CONTROL_SOCKET = Path("/var/run/dobbyvpn/control.sock")
+MACOS_CONTROL_SOCKET_TIMEOUT_SECONDS = 30.0
+MACOS_CONTROL_SOCKET_POLL_SECONDS = 0.2
+MACOS_SERVICE_LABEL = "system/com.dobby.vpnservice"
 WINDOWS_TEMP_PATH_BUFFER_CAPACITY = 32768
 WIX_VERSION = "6.0.0"
 
@@ -1206,6 +1213,71 @@ def _uninstall(args: argparse.Namespace) -> int:
     return 0
 
 
+def _macos_service_state() -> str:
+    """Summarize launchd's view of the service for a readiness failure."""
+    result = _run(
+        "read macOS service state",
+        ["launchctl", "print", MACOS_SERVICE_LABEL],
+        check=False,
+        capture=True,
+        timeout_seconds=10,
+    )
+    if result.returncode != 0:
+        return f"launchctl print {MACOS_SERVICE_LABEL} exited {result.returncode}"
+    fields = {}
+    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+        key, separator, value = line.strip().partition(" = ")
+        if separator and key in ("state", "pid", "last exit code", "runs") and key not in fields:
+            fields[key] = value
+    return ", ".join(f"{key} = {value}" for key, value in fields.items()) or "no state reported"
+
+
+def _wait_for_macos_control_socket(
+    path: Path = MACOS_CONTROL_SOCKET,
+    *,
+    timeout_seconds: float = MACOS_CONTROL_SOCKET_TIMEOUT_SECONDS,
+    poll_seconds: float = MACOS_CONTROL_SOCKET_POLL_SECONDS,
+    clock: Any = time.monotonic,
+    sleep: Any = time.sleep,
+    service_state: Any = _macos_service_state,
+) -> None:
+    """Wait until the installed backend has created its control socket.
+
+    Only the socket's presence is awaited: whatever the first command then
+    reports is the smoke test's result, so other failures are not retried.
+    """
+    try:
+        remaining = command_deadline_remaining(None)
+    except CommandDeadlineError as error:
+        raise DesktopPlatformError(f"wait for macOS control socket: {error}") from error
+    if remaining is not None:
+        timeout_seconds = min(timeout_seconds, remaining)
+    started = clock()
+    last_error = "not created yet"
+    while True:
+        try:
+            mode = path.stat().st_mode
+            if stat.S_ISSOCK(mode):
+                _log(f"macOS control socket {path} appeared after {clock() - started:.1f} s")
+                return
+            last_error = f"exists but is not a socket (mode {stat.filemode(mode)})"
+        except (FileNotFoundError, PermissionError) as error:
+            # The backend creates its directory owner-only and opens it to
+            # clients only after the socket is ready.
+            last_error = f"{type(error).__name__}: {error.strerror}"
+        if clock() - started >= timeout_seconds:
+            break
+        sleep(poll_seconds)
+    try:
+        launchd = service_state()
+    except Exception as error:  # keep the socket diagnostic if launchd cannot be read
+        launchd = f"unavailable ({error})"
+    _fail(
+        f"macOS control socket {path} was not ready {timeout_seconds:g} s after package installation "
+        f"({last_error}); launchd {MACOS_SERVICE_LABEL}: {launchd}"
+    )
+
+
 def _smoke_macos(args: argparse.Namespace) -> int:
     if _host() != ("macos", "arm64"):
         _fail("the universal package smoke test requires a native ARM macOS runner")
@@ -1225,6 +1297,7 @@ def _smoke_macos(args: argparse.Namespace) -> int:
         _install(argparse.Namespace(
             build_descriptor=build, run_dir=args.run_dir, output=installed, control_pipe_sid=None,
         ))
+        _wait_for_macos_control_socket()
         ui = subprocess.Popen(["arch", "-arm64", str(executable)], stdin=subprocess.DEVNULL)
         cli = executable.parent.parent / "Resources/dobby-cli"
         _run("native ARM CLI and backend Snapshot", ["arch", "-arm64", str(cli), "snapshot"], timeout_seconds=30)
