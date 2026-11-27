@@ -199,6 +199,9 @@ final class DobbyUploadDirectory {
 
 // The session view model's UI-diagnostic writers live here with the rest of the
 // shared diagnostics code so the view model file stays within its length limit.
+private let logSizeEntryBucket = 50
+private let logSizeCharacterBucket = 16_384
+
 extension DobbySessionViewModel {
     func recordAppStarted() {
         let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
@@ -210,20 +213,26 @@ extension DobbySessionViewModel {
         recordDiagnostic(message)
     }
 
-    /// Ties a UI hang to the log length: one DEBUG record per distinct size.
-    /// Each write re-triggers a log parse, so unchanged sizes stay silent.
+    /// Ties a UI hang to the rendered log load: one DEBUG record at launch and at
+    /// each bucket change of the rendered size. The record is DEBUG, so the log
+    /// view's own filter keeps it out of the measured set, and it never refreshes
+    /// the view. One write displaces about two records from the 131 072-byte
+    /// window, far less than one bucket, so an emission cannot change the size it
+    /// reports or start the next write — not on a refresh and not on the timer.
     func recordLogViewSize(_ entries: [DobbyLogEntry]) {
         let characters = entries.reduce(0) { $0 + $1.message.utf16.count }
-        let message = "entries=\(entries.count) characters=\(characters)"
-        guard message != lastLoggedLogSize else { return }
-        recordDiagnostic(message, event: "ui.log_view_size", level: "DEBUG")
-        lastLoggedLogSize = message
+        let buckets = "\(entries.count / logSizeEntryBucket) \(characters / logSizeCharacterBucket)"
+        guard buckets != lastLoggedLogSizeBuckets else { return }
+        lastLoggedLogSizeBuckets = buckets
+        recordDiagnostic("entries=\(entries.count) characters=\(characters)",
+                         event: "ui.log_view_size", level: "DEBUG", refresh: false)
     }
 
     func recordDiagnostic(
         _ message: String,
         event: String = "ui.failure",
-        level: String = "ERROR"
+        level: String = "ERROR",
+        refresh: Bool = true
     ) {
         let path = client.uiDiagnosticPath
         let excludedPaths = client.diagnosticPaths
@@ -231,7 +240,7 @@ extension DobbySessionViewModel {
             do {
                 try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
                 Task { @MainActor [weak self] in
-                    guard let self, self.logsVisible else { return }
+                    guard let self, refresh, self.logsVisible else { return }
                     self.refreshLogs()
                 }
             } catch {

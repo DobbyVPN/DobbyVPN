@@ -54,7 +54,7 @@ public final class DobbySessionViewModel: ObservableObject {
     /// An import link waits here until the user confirms that it may replace the saved subscription.
     @Published public private(set) var pendingImport: String?
     @Published var logEntries: [DobbyLogEntry] = []
-    var lastLoggedLogSize: String?
+    var lastLoggedLogSizeBuckets: String?
     #if os(macOS)
     private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
     var macLogCaptureDiagnosticNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -548,7 +548,7 @@ public final class DobbySessionViewModel: ObservableObject {
                 if revision == self.logsRevision && !self.logsClearInFlight {
                     // Publish only real changes so an idle log view is not redrawn.
                     if self.logEntries != result.entries { self.logEntries = result.entries }
-                    self.recordLogViewSize(result.entries)
+                    self.recordLogViewSize(logDisplayEntries(result.entries))
                     let logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
                     if self.logsError != logsError { self.logsError = logsError }
                 } else {
