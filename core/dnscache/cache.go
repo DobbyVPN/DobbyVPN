@@ -115,6 +115,9 @@ type staleAnswer struct {
 func (c *Cache) NetworkChanged() {
 	c.mu.Lock()
 	c.revision++
+	if c.source != nil {
+		c.resolver = nil
+	}
 	c.lastGood = nil
 	c.cancelRefreshesLocked()
 	c.mu.Unlock()
@@ -155,6 +158,10 @@ func (c *Cache) SetResolverSource(source ResolverSource) {
 func (c *Cache) SetResolver(identity string, resolver Resolver) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setResolverLocked(identity, resolver)
+}
+
+func (c *Cache) setResolverLocked(identity string, resolver Resolver) {
 	if c.identity == identity && c.resolver != nil {
 		return
 	}
@@ -181,7 +188,6 @@ func (c *Cache) ResolveServerAddresses(ctx context.Context, host string) ([]net.
 }
 
 func (c *Cache) resolve(ctx context.Context, host string, server bool) ([]net.IPAddr, error) {
-	parent := ctx
 	if c == nil {
 		return nil, errors.New("underlying resolver is required")
 	}
@@ -198,29 +204,69 @@ func (c *Cache) resolve(ctx context.Context, host string, server bool) ([]net.IP
 	ctx, cancel := context.WithTimeout(ctx, ServerResolveTimeout)
 	defer cancel()
 	c.mu.RLock()
-	source := c.source
+	source, revision := c.source, c.revision
 	c.mu.RUnlock()
+	addresses, err := c.resolveOnNetwork(ctx, source, revision, host, server)
+	if !server || source == nil || !errors.Is(err, errNetworkChanged) || ctx.Err() != nil || c.life.Err() != nil {
+		return addresses, err
+	}
+	// The platform invalidated a lookup while its dial was still live. Capture
+	// the current physical network once, within the original lookup deadline.
+	c.mu.RLock()
+	source, revision = c.source, c.revision
+	c.mu.RUnlock()
+	if source == nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(c.life, cancel)
+	defer stop()
+	addresses, err = c.resolveOnNetwork(ctx, source, revision, host, server)
+	log.Infof(Category, "endpoint lookup after network change host=%s addresses=%d err=%v", host, len(addresses), err)
+	return addresses, err
+}
+
+func (c *Cache) resolveOnNetwork(ctx context.Context, source ResolverSource, revision uint64, host string, server bool) ([]net.IPAddr, error) {
+	var identity string
+	var resolve Resolver
 	if source != nil {
-		identity, resolver, err := source(ctx)
+		captured, resolver, err := source(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("capture underlying resolver: %w", err)
 		}
-		c.SetResolver(identity, resolver)
+		resolve, revision = c.acceptCapture(captured, resolver, revision)
+		if revision == 0 {
+			return nil, fmt.Errorf("resolve endpoint %s: %w", host, errNetworkChanged)
+		}
+		identity = captured
+	} else {
+		c.mu.RLock()
+		resolve, revision, identity = c.resolver, c.revision, c.identity
+		c.mu.RUnlock()
 	}
-	c.mu.RLock()
-	resolve, revision, identity := c.resolver, c.revision, c.identity
-	c.mu.RUnlock()
 	if resolve == nil {
 		return nil, errors.New("underlying network resolver is unavailable")
 	}
 	if server && c.hasStaleAnswer(host, revision) {
-		return c.resolveWithStaleAnswer(parent, source, resolve, identity, host, revision)
+		return c.resolveWithStaleAnswer(ctx, source, resolve, identity, host, revision)
 	}
 	addresses, _, err := c.lookup(ctx, resolve, identity, host, revision, server)
 	if err != nil {
 		return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
 	}
 	return addresses, nil
+}
+
+// acceptCapture never reinstalls a resolver captured before invalidation.
+// Concurrent captures of the same live link can use its current resolver.
+func (c *Cache) acceptCapture(identity string, resolver Resolver, revision uint64) (Resolver, uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.revision == revision {
+		c.setResolverLocked(identity, resolver)
+	} else if c.resolver == nil || c.identity != identity {
+		return nil, 0
+	}
+	return c.resolver, c.revision
 }
 
 // lookup runs one query. A successful server answer is remembered and a
@@ -314,7 +360,13 @@ func (c *Cache) resolveWithStaleAnswer(parent context.Context, source ResolverSo
 				continue
 			default:
 			}
-			return nil, fmt.Errorf("resolve endpoint %s: %w", host, r.ctx.Err())
+			err := r.ctx.Err()
+			c.mu.RLock()
+			if c.revision != revision {
+				err = errors.Join(err, errNetworkChanged)
+			}
+			c.mu.RUnlock()
+			return nil, fmt.Errorf("resolve endpoint %s: %w", host, err)
 		case <-parent.Done():
 			return nil, fmt.Errorf("resolve endpoint %s: %w", host, parent.Err())
 		}
@@ -430,7 +482,9 @@ func (c *Cache) recapture(ctx context.Context, source ResolverSource, revision u
 	if err != nil {
 		return 0 // no current network: nothing may be served
 	}
-	c.SetResolver(identity, resolver)
+	if _, current := c.acceptCapture(identity, resolver, revision); current != revision {
+		return 0
+	}
 	return revision
 }
 

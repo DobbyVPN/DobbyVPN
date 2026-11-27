@@ -383,6 +383,103 @@ func TestNetworkChangeWhileWaitingDropsRememberedAnswer(t *testing.T) {
 	}
 }
 
+// Two networks may report the same interface and DNS identity. The resolver
+// from the new capture must supply the answer even while the old one is stuck.
+func TestLiveEndpointLookupRecapturesNetworkAfterChange(t *testing.T) {
+	for _, stop := range []string{"network change", "caller canceled", "session closed"} {
+		t.Run(stop, func(t *testing.T) {
+			cache := New()
+			defer cache.Close()
+			old := newBlockingResolver(false)
+			var deadlines []time.Time
+			cache.SetResolverSource(func(ctx context.Context) (string, Resolver, error) {
+				deadline, _ := ctx.Deadline()
+				deadlines = append(deadlines, deadline)
+				if len(deadlines) <= 2 {
+					return "network-a", old.resolve, nil
+				}
+				return "network-a", scriptedResolver([]string{"192.0.2.2"}), nil
+			})
+			if got := addressesOf(t, cache); got != "192.0.2.1" {
+				t.Fatalf("initial endpoint = %s", got)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			result := resolveAsync(ctx, cache)
+			<-old.started
+			cache.mu.RLock()
+			pending := cache.refreshing["endpoint.example"]
+			cache.mu.RUnlock()
+			defer func() {
+				old.next <- func() ([]net.IPAddr, error) {
+					return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
+				}
+				<-pending.done
+			}()
+			switch stop {
+			case "caller canceled":
+				cancel()
+			case "session closed":
+				cache.Close()
+			}
+			cache.NetworkChanged()
+			got := <-result
+			if stop != "network change" {
+				if got.err == nil || got.addresses != "" || len(deadlines) != 2 {
+					t.Fatalf("%s: got %+v after %d captures", stop, got, len(deadlines))
+				}
+				return
+			}
+			if got.err != nil || got.addresses != "192.0.2.2" {
+				t.Fatalf("live endpoint lookup got %q, %v; want the new network's answer", got.addresses, got.err)
+			}
+			if len(deadlines) != 3 || deadlines[1].IsZero() || !deadlines[2].Equal(deadlines[1]) {
+				t.Fatalf("fresh capture must share the original lookup deadline: %v", deadlines)
+			}
+		})
+	}
+}
+
+func TestEndpointLookupStopsAfterSecondNetworkChange(t *testing.T) {
+	cache := New()
+	defer cache.Close()
+	captures := 0
+	cache.SetResolverSource(func(context.Context) (string, Resolver, error) {
+		captures++
+		if captures > 2 {
+			return "", nil, errors.New("unexpected third capture")
+		}
+		return "physical-link", func(context.Context, string) ([]net.IPAddr, error) {
+			cache.NetworkChanged()
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.1")}}, nil
+		}, nil
+	})
+	addresses, err := cache.ResolveServerAddresses(context.Background(), "endpoint.example")
+	if !errors.Is(err, errNetworkChanged) || len(addresses) != 0 || captures != 2 {
+		t.Fatalf("got %v, %v after %d captures", addresses, err, captures)
+	}
+}
+
+func TestEndpointLookupDiscardsInvalidatedCapture(t *testing.T) {
+	cache := New()
+	defer cache.Close()
+	captures := 0
+	cache.SetResolverSource(func(context.Context) (string, Resolver, error) {
+		captures++
+		if captures == 1 {
+			cache.NetworkChanged()
+			return "same-interface", func(context.Context, string) ([]net.IPAddr, error) {
+				t.Fatal("used resolver captured before network change")
+				return nil, nil
+			}, nil
+		}
+		return "same-interface", scriptedResolver([]string{"192.0.2.2"}), nil
+	})
+	if got := addressesOf(t, cache); got != "192.0.2.2" || captures != 2 {
+		t.Fatalf("endpoint = %s, captures = %d", got, captures)
+	}
+}
+
 // Stopping the network session ends the background query and the wait.
 func TestCloseEndsBackgroundQuery(t *testing.T) {
 	useClock(t)
@@ -476,7 +573,7 @@ func TestTimerConfirmsNetworkBeforeServing(t *testing.T) {
 	var captures atomic.Int32
 	cache.SetResolverSource(func(context.Context) (string, Resolver, error) {
 		if captures.Add(1) >= 3 { // the capture when the timer fires
-			return "network-b", resolver.resolve, nil
+			return "network-b", scriptedResolver(nil), nil
 		}
 		return "network-a", resolver.resolve, nil
 	})
