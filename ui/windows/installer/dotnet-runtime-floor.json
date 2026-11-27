@@ -1,0 +1,6 @@
+{
+  "file": "coreclr.dll",
+  "version": "10.0.1526.53008",
+  "shipped_in": "v1.5.13",
+  "note": "The newest .NET runtime a release MSI has bundled. A candidate MSI must not bundle an older one (see windows_runtime_guard.py); raise this value when a release ships a newer runtime."
+}

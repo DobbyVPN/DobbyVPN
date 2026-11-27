@@ -38,11 +38,15 @@ WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS = 180
 # its own identity so it never replaces the release build.
 WINDOWS_RELEASE_UPGRADE_CODE = "{AC1AE299-9E08-57FF-A64E-70B0AC9ADB9B}"
 WINDOWS_DEBUG_UPGRADE_CODE = "{5C16B3D0-831C-4024-AB10-A76DA27D14FB}"
+# Must equal the REINSTALLMODE property of Package.wxs.
+WINDOWS_REINSTALL_MODE = "amus"
 WINDOWS_TEMP_PREFLIGHT_TIMEOUT_SECONDS = 30
 WINDOWS_TEMP_PATH_BUFFER_CAPACITY = 32768
 WIX_VERSION = "6.0.0"
 
 sys.path.insert(0, str(SCRIPT_DIR.parent))
+sys.path.insert(0, str(SCRIPT_DIR))
+import windows_runtime_guard
 from bounded_process import (
     COMMAND_DEADLINE_ENV,
     CommandDeadlineError,
@@ -836,6 +840,10 @@ if ($upgradeCode -ne $env:DOBBYVPN_EXPECTED_UPGRADE_CODE) { throw "MSI UpgradeCo
 $productName = Get-MsiProperty "ProductName"
 Write-Output "MSI ProductName=$productName"
 if ($productName -ne $env:DOBBYVPN_EXPECTED_PRODUCT_NAME) { throw "MSI ProductName mismatch: expected $env:DOBBYVPN_EXPECTED_PRODUCT_NAME" }
+# 'a' copies every file regardless of version, so an older bundled runtime is not skipped by a major upgrade (see Package.wxs).
+$reinstallMode = Get-MsiProperty "REINSTALLMODE"
+Write-Output "MSI REINSTALLMODE=$reinstallMode"
+if ($reinstallMode -cne $env:DOBBYVPN_EXPECTED_REINSTALLMODE) { throw "MSI REINSTALLMODE mismatch: expected $env:DOBBYVPN_EXPECTED_REINSTALLMODE" }
 $view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, 'SELECT `FileName` FROM `File`')
 $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
 $files = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -853,6 +861,7 @@ foreach ($required in @("dobbyvpn-backend.exe", "dobby_bridge.dll", "wintun.dll"
     verify_env["DOBBYVPN_PACKAGE"] = str(package)
     verify_env["DOBBYVPN_EXPECTED_VERSION"] = version
     verify_env["DOBBYVPN_EXPECTED_UPGRADE_CODE"] = WINDOWS_DEBUG_UPGRADE_CODE if debug else WINDOWS_RELEASE_UPGRADE_CODE
+    verify_env["DOBBYVPN_EXPECTED_REINSTALLMODE"] = WINDOWS_REINSTALL_MODE
     verify_env["DOBBYVPN_EXPECTED_PRODUCT_NAME"] = "DobbyVPN Debug" if debug else "DobbyVPN"
     _run(
         "Windows MSI content and version check",
@@ -860,6 +869,50 @@ foreach ($required in @("dobbyvpn-backend.exe", "dobby_bridge.dll", "wintun.dll"
         env=verify_env,
         timeout_seconds=WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS,
     )
+    _check_msi_runtime(package, env)
+
+
+def _msi_runtime_version(package: Path, env: dict[str, str]) -> str:
+    """Read the version of the bundled coreclr.dll from the MSI File table."""
+    script = r'''
+$ErrorActionPreference = "Stop"
+$msi = (Resolve-Path $env:DOBBYVPN_PACKAGE).Path
+$installer = New-Object -ComObject WindowsInstaller.Installer
+$database = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @($msi, 0))
+$view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, 'SELECT `FileName`, `Version` FROM `File`')
+$view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
+while ($true) {
+  $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+  if ($null -eq $record) { break }
+  $name = $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+  if ((($name -split '\|')[-1]) -ieq 'coreclr.dll') {
+    Write-Output ("RUNTIME_VERSION=" + $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 2))
+  }
+}
+'''
+    run_env = env.copy()
+    run_env["DOBBYVPN_PACKAGE"] = str(package)
+    completed = _run(
+        f"read the bundled runtime of {package.name}",
+        ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        env=run_env, capture=True, timeout_seconds=WINDOWS_MSI_VERIFY_TIMEOUT_SECONDS,
+    )
+    found = re.findall(r"^RUNTIME_VERSION=(\S+)\s*$", (completed.stdout or b"").decode("utf-8", errors="replace"), re.MULTILINE)
+    if len(found) != 1:
+        _fail(f"{package.name} must contain exactly one coreclr.dll, found {len(found)}")
+    return found[0]
+
+
+def _check_msi_runtime(package: Path, env: dict[str, str]) -> None:
+    """The bundled .NET runtime must not be older than the shipped floor or the previous release's."""
+    candidate = _msi_runtime_version(package, env)
+    previous_msi = env.get("DOBBYVPN_PREVIOUS_RELEASE_MSI")
+    previous = _msi_runtime_version(Path(previous_msi), env) if previous_msi else None
+    _log(f"bundled runtime: {candidate}; previous release: {previous or 'not available'}")
+    try:
+        windows_runtime_guard.check_runtime(candidate, floor=windows_runtime_guard.load_floor(), previous=previous)
+    except windows_runtime_guard.RuntimeGuardError as error:
+        _fail(str(error))
 
 
 def _build_macos_pkg(

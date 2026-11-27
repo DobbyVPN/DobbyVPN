@@ -28,7 +28,15 @@
 		<Property Id="ARPNOMODIFY" Value="yes" />
 		<Property Id="DISABLEADVTSHORTCUTS" Value="yes" />
 		<Property Id="MSIDISABLERMRESTART" Value="1" />
+
 		<Property Id="MSIRMSHUTDOWN" Value="1" />
+		<!-- Copy every file regardless of the version already installed. Windows Installer applies the reinstall mode to a normal install too
+		     (https://learn.microsoft.com/en-us/windows/win32/msi/reinstallmode), and a major upgrade installs the new package while the old one is
+		     still costed, so "omus" (the default: copy only if missing or older) skipped runtime files older than the installed ones. "a" forces
+		     all files; m, u and s keep the default registry and shortcut rules. Costs: a repair or reinstall copies all files again, and validating the built MSI with
+		     "wix msi validate" or Orca reports ICE40 (REINSTALLMODE in the Property table); "wix build" does not validate, and this build has no
+		     validation step. -->
+		<Property Id="REINSTALLMODE" Value="amus" />
 		<Property Id="DOBBYVPN_CONTROL_PIPE_SID" Secure="yes" />
 		<SetProperty
 			Id="DOBBYVPN_CONTROL_PIPE_SID"
@@ -39,7 +47,11 @@
 
 		<MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-		<!-- Remove v1.5.0 before installing components with changed key files. -->
+		<!-- Remove the old product before installing components with changed key files: v1.5.0 and the current MSI
+		     put dobby_bridge.dll and wintun.dll at the same path in components with different ids, so afterInstallExecute
+		     or afterInstallFinalize would delete the new copies. Costing always runs before these positions, and it skips a
+		     bundled file that is older than the installed one; the removal of the old product then deletes it (v1.5.15 over
+		     v1.5.11 lost 186 runtime files). REINSTALLMODE below makes the file copy independent of versions. -->
 		<MajorUpgrade
 			AllowDowngrades="no"
 			AllowSameVersionUpgrades="yes"
