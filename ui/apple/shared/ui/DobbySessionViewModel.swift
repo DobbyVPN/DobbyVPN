@@ -47,7 +47,8 @@ public enum DobbyProfileStatus: String {
 
 @MainActor
 public final class DobbySessionViewModel: ObservableObject {
-    @Published public private(set) var snapshot = DobbySessionSnapshot.empty
+    @Published public private(set) var snapshot = DobbySessionSnapshot.empty { didSet { reconnect.observe(snapshot, busy: busy) } }
+    var reconnect = ReconnectStatus() // read by reconnectText(now:) in DobbySessionClient.swift
     @Published public private(set) var busy = false
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
@@ -167,7 +168,7 @@ public final class DobbySessionViewModel: ObservableObject {
         snapshot.configured && snapshot.sequence >= acceptedSequence && !sourceIsDirty && !loading && (loadError.isEmpty || snapshot.sourceURL == sourceText)
     }
 
-    private var protectedRetryState: Bool {
+    var protectedRetryState: Bool {
         snapshot.state == "FAILED" && snapshot.vpnActive && snapshot.canRetry && snapshot.primaryAction == "RETRY"
     }
 
@@ -434,6 +435,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func performCommand(index: Int?, stopping: Bool, retrying: Bool = false) {
+        reconnect.userActed()
         if stopping { acknowledgeDisplayedTransportFailure() } else { resetClosedFailures() }
         busy = true
         setError("", origin: .other)
