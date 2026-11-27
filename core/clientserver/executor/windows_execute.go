@@ -24,7 +24,11 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-type managerService struct{ initLog func() error }
+type managerService struct {
+	initLog func() error
+	// prepareControl opens the desktop control pipe; nil selects prepareDesktopControl.
+	prepareControl func() (net.Listener, error)
+}
 
 func prepareDesktopControl() (net.Listener, error) {
 	return prepareDesktopControlWith(
@@ -135,9 +139,15 @@ func (service *managerService) Execute(_ []string, requests <-chan svc.ChangeReq
 	}
 	defer func() { _ = log.Flush() }()
 	log.Infof(desktopLogCategory, "Windows service dispatcher connected, preparing desktop control")
-	listener, err := prepareDesktopControl()
+	prepare := service.prepareControl
+	if prepare == nil {
+		prepare = prepareDesktopControl
+	}
+	listener, err := prepare()
 	if err != nil {
 		log.Errorf(desktopLogCategory, "failed to prepare desktop control: %v", err)
+		// The SCM only reports "Incorrect function" (MSI: Error 1920); the Application log keeps the reason.
+		reportStartupFailure("prepare desktop control", err, true)
 		return true, 1
 	}
 	stopControl, serveDone := serveDesktopControl(listener)

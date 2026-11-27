@@ -856,6 +856,17 @@ while ($true) {
 foreach ($required in @("dobbyvpn-backend.exe", "dobby_bridge.dll", "wintun.dll")) {
   if (-not $files.Contains($required)) { throw "MSI is missing $required" }
 }
+# An install under SYSTEM without DOBBYVPN_CONTROL_PIPE_SID must stop before anything is installed (see AppComponents.wxs).
+$view = $database.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $database, 'SELECT `Condition` FROM `LaunchCondition`')
+$view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null)
+$systemGuard = 0
+while ($true) {
+  $record = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
+  if ($null -eq $record) { break }
+  $condition = $record.GetType().InvokeMember("StringData", "GetProperty", $null, $record, 1)
+  if ($condition.Contains("DOBBYVPN_CONTROL_PIPE_SID") -and $condition.Contains("S-1-5-18") -and $condition.Contains("UserSID") -and $condition.Contains("REMOVE")) { $systemGuard++ }
+}
+if ($systemGuard -ne 1) { throw "MSI must contain exactly one SYSTEM install launch condition, found $systemGuard" }
 '''
     verify_env = env.copy()
     verify_env["DOBBYVPN_PACKAGE"] = str(package)
