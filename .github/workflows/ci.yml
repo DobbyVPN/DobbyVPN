@@ -280,7 +280,7 @@ jobs:
           name: duplicate-code-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/duplicate-code
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 1
 
   security:
     name: Git history secret scan

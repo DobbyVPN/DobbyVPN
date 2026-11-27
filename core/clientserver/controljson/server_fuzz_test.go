@@ -83,6 +83,7 @@ func FuzzRequestEnvelope(f *testing.F) {
 		[]byte(`{"method":"","params":{}}`),
 		[]byte(`{"method":"Start","params":{"generation":5},"request_id":"abc-123","diagnostic_sampled":true}`),
 		[]byte(`{"request_id":"` + strings.Repeat("a", 65) + `"}`),
+		[]byte(`{"request_id":"backend-` + strings.Repeat("a", 57) + `"}`),
 		[]byte(`{"request_id":"has spaces"}`),
 		[]byte(`{"method":5,"params":[]}`),
 		[]byte(`{"method":"X","params":{"session_id":123,"generation":"5"}}`),
@@ -112,7 +113,7 @@ func checkRequestIdentity(t *testing.T, id string) {
 	if id == "" {
 		t.Fatalf("request identity is empty")
 	}
-	if len(id) > 64 && !strings.HasPrefix(id, "backend-") {
+	if len(id) > 64 {
 		t.Fatalf("request identity %q is longer than 64 bytes", id)
 	}
 	for _, character := range id {

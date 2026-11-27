@@ -1251,7 +1251,7 @@ def _wait_for_macos_control_socket(
     except CommandDeadlineError as error:
         raise DesktopPlatformError(f"wait for macOS control socket: {error}") from error
     if remaining is not None:
-        timeout_seconds = min(timeout_seconds, remaining)
+        timeout_seconds = remaining
     started = clock()
     last_error = "not created yet"
     while True:
@@ -1265,9 +1265,10 @@ def _wait_for_macos_control_socket(
             # The backend creates its directory owner-only and opens it to
             # clients only after the socket is ready.
             last_error = f"{type(error).__name__}: {error.strerror}"
-        if clock() - started >= timeout_seconds:
+        left = timeout_seconds - (clock() - started)
+        if left <= 0:
             break
-        sleep(poll_seconds)
+        sleep(min(poll_seconds, left))
     try:
         launchd = service_state()
     except Exception as error:  # keep the socket diagnostic if launchd cannot be read
