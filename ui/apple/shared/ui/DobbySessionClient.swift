@@ -347,3 +347,39 @@ public enum DobbyClientError: LocalizedError {
         }
     }
 }
+
+/// Remembers whether the current failure came with an automatic attempt the
+/// service scheduled. A Retry the user presses looks the same in the snapshot,
+/// so only this marks an attempt as automatic.
+struct ReconnectStatus {
+    private(set) var automatic = false
+
+    mutating func observe(_ snapshot: DobbySessionSnapshot, busy userCommandRunning: Bool) {
+        if snapshot.state == "FAILED" {
+            // A poll that still shows the failure while the user's command runs does not restart the chain.
+            automatic = !userCommandRunning && snapshot.vpnActive && snapshot.nextRetryAt != nil
+        } else if snapshot.state == "CONNECTED" || !snapshot.vpnActive || snapshot.lastFailure == nil {
+            automatic = false
+        }
+    }
+
+    /// The user's own Retry, Start or Stop is not an automatic attempt.
+    mutating func userActed() { automatic = false }
+}
+
+extension DobbySessionViewModel {
+    /// The line next to Retry and Stop while the service reconnects a FAILED
+    /// connection: a countdown to its next automatic attempt, then
+    /// "Reconnecting…" while that automatic attempt runs. A Retry or Start the
+    /// user pressed shows no line.
+    public func reconnectText(now: Date) -> String? {
+        if protectedRetryState, !busy, let next = snapshot.nextRetryAt {
+            let seconds = Int(next.timeIntervalSince(now).rounded(.up))
+            return seconds > 0 ? "Reconnecting in \(seconds) s…" : "Reconnecting…"
+        }
+        if reconnect.automatic, snapshot.vpnActive, snapshot.state == "PROBING" || snapshot.state == "PREPARING" {
+            return "Reconnecting…"
+        }
+        return nil
+    }
+}
