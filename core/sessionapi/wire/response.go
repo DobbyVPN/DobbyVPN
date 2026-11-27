@@ -76,6 +76,9 @@ type Snapshot struct {
 	PrimaryAction       string     `json:"primary_action"`
 
 	ServiceRestorePending bool `json:"service_restore_pending,omitempty"`
+	// NextRetryAtUnixMs is when a FAILED session retries by itself, in Unix
+	// milliseconds; absent when no automatic retry is scheduled.
+	NextRetryAtUnixMs int64 `json:"next_retry_at_unix_ms,omitempty"`
 }
 
 func profileResultDTO(in sessionapi.ProfileSummary) Profile {
@@ -116,6 +119,9 @@ func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 		PrimaryAction:   in.PrimaryAction,
 
 		ServiceRestorePending: in.ServiceRestorePending, OfflineAcceptedAt: in.OfflineAcceptedAt,
+	}
+	if !in.NextRetryAt.IsZero() {
+		out.NextRetryAtUnixMs = in.NextRetryAt.UnixMilli()
 	}
 	if in.PendingTarget != nil {
 		out.PendingTarget = &Selection{Digest: in.PendingTarget.Digest, Mode: string(in.PendingTarget.Mode), Index: in.PendingTarget.Index}

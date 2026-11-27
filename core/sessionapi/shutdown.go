@@ -59,6 +59,7 @@ func (m *Manager) StopAndWait(ctx context.Context) error {
 	s := m.session
 	s.mu.Lock()
 	s.closing, s.stopRequested = true, true
+	m.resetAutoRetryLocked(s)
 	if setup := s.protectionSetup; setup != nil {
 		setup.cancel()
 	}

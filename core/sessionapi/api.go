@@ -208,6 +208,9 @@ type SnapshotResult struct {
 	PrimaryAction       string
 
 	ServiceRestorePending bool
+	// NextRetryAt is when a FAILED session with its tunnel kept retries by
+	// itself; zero when no automatic retry is scheduled.
+	NextRetryAt time.Time
 }
 
 // SessionRef is passed to every platform/runtime operation.  It prevents a
@@ -309,6 +312,7 @@ type Manager struct {
 	loader        ConfigLoader
 	sourceStore   SourceStore
 	now           func() time.Time
+	afterFunc     func(time.Duration, func()) func() bool
 	initErr       error
 	session       *session
 }
@@ -375,6 +379,13 @@ type session struct {
 
 	probeGeneration uint64
 	prober          ProbingLease
+
+	autoRetryCount      int
+	autoRetryToken      uint64
+	autoRetryAt         time.Time
+	stopAutoRetry       func() bool
+	autoRetryOrigin     uint64 // first generation of the current retry chain
+	autoRetryGeneration uint64 // generation started by the last automatic retry
 }
 
 // NewManager never starts a real core.  Its default runtime fails with the
@@ -423,7 +434,8 @@ func NewManager(options ManagerOptions) *Manager {
 	}
 	return &Manager{
 		runtime: r, platform: p, loader: loader, sourceStore: options.SourceStore, now: now, initErr: initErr,
-		session: initial, protection: options.Protection, restoreLoader: options.RestoreLoader,
+		afterFunc: autoRetryAfterFunc,
+		session:   initial, protection: options.Protection, restoreLoader: options.RestoreLoader,
 	}
 }
 
@@ -590,6 +602,12 @@ func (m *Manager) acceptConfigurationLocked(ctx context.Context, s *session, loa
 	s.restorePrepared = restoring
 	s.offlineRefreshPending = loaded.OfflineAcceptedAt != ""
 	s.loaded = profileInventory{profiles: parsed.profiles, digest: parsed.digest, sourceKind: loaded.Kind, sourceURL: loaded.SourceURL}
+	if s.activeInventory.digest != "" && parsed.digest != s.activeInventory.digest {
+		// A changed subscription replaces what a scheduled or running
+		// automatic retry would connect.
+		m.cancelAutoRetryAttemptLocked(s)
+		m.resetAutoRetryLocked(s)
+	}
 	s.logsEndpoint = parsed.logsEndpoint
 	s.sourceError = ""
 	resetConfiguredSessionLocked(s)
@@ -786,6 +804,7 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	s.recovering, s.recoveryOriginGeneration, s.recoveryCount = false, 0, 0
 	s.lastConnectedAt = time.Time{}
 	s.hasConnectedAt = false
+	m.resetAutoRetryLocked(s)
 	s.state = StateProbing
 	m.appendLocked(s)
 	result = StartResult{Generation: generation, Sequence: s.sequence}
@@ -824,11 +843,19 @@ func (m *Manager) retryLocked(requestCtx context.Context, s *session, target Sta
 	if err := m.saveActivationLocked(requestCtx, s.activeInventory, s.activeTarget); err != nil {
 		return StartResult{}, err
 	}
+	m.resetAutoRetryLocked(s)
+	generation := m.restartFailedLocked(s)
+	return StartResult{Generation: generation, Sequence: s.sequence}, nil
+}
+
+// restartFailedLocked starts a new attempt for the saved selection on the
+// kept network. Retry and the automatic retry both use it.
+func (m *Manager) restartFailedLocked(s *session) uint64 {
 	s.recoveryCount, s.recoveryOriginGeneration = 0, 0
 	ctx, generation := m.beginAttemptLocked(s, s.activeTarget)
 	s.startOriginGeneration = generation
-	go m.runStart(ctx, s, generation, target)
-	return StartResult{Generation: generation, Sequence: s.sequence}, nil
+	go m.runStart(ctx, s, generation, s.activeTarget)
+	return generation
 }
 
 func (m *Manager) replaceLocked(ctx context.Context, s *session, target StartTarget) (StartResult, error) {
@@ -853,7 +880,8 @@ func retryableCleanup(s *session) bool {
 
 func acceptsStop(s *session, generation uint64) bool {
 	return generation != 0 && (generation == s.generation ||
-		s.recovering && generation == s.recoveryOriginGeneration || generation == s.switchOriginGeneration || generation == s.startOriginGeneration)
+		s.recovering && generation == s.recoveryOriginGeneration || generation == s.switchOriginGeneration || generation == s.startOriginGeneration ||
+		autoRetryStopAccepted(s, generation))
 }
 
 func (m *Manager) acknowledgeStoppedLocked(s *session, generation uint64) (StopResult, error) {
@@ -887,6 +915,7 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 		return StopResult{}, failure(FailureStaleGeneration, "generation is no longer active")
 	}
 	s.restoreEpoch++
+	m.resetAutoRetryLocked(s)
 	s.cancelProtectedFetchLocked()
 	s.offlineRefreshPending = false
 	s.configureRequest++
@@ -1175,8 +1204,10 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		if err == nil && ctx.Err() == nil {
 			if m.advanceConnected(s, generation, &profile.Summary, lease) {
 				m.waitForAttemptEnd(ctx, s, generation, lease)
+				m.finish(s, generation, nil)
+				return
 			}
-			m.finish(s, generation, nil)
+			m.finish(s, generation, canceledStart(ctx))
 			return
 		}
 		candidateError := errors.Join(err, ctx.Err())
@@ -1202,6 +1233,16 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		}
 	}
 	m.finish(s, generation, failureWithCause(FailureProbe, "no configured profile became ready", errors.Join(candidateErrors...)))
+}
+
+// canceledStart is the cause for a ready attempt whose connection was not
+// published because it was canceled after its last check, for example by a
+// subscription change. Nil when the attempt was not canceled.
+func canceledStart(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return failureWithCause(FailureCanceled, "start was canceled", err)
+	}
+	return nil
 }
 
 func prepareCandidate(ctx context.Context, s *session, index int, generation uint64) (attemptContext context.Context, attemptGeneration uint64, err error) {
@@ -1258,7 +1299,8 @@ func (m *Manager) advanceConnected(s *session, generation uint64, profile *Profi
 
 func (m *Manager) advanceWithLease(s *session, generation uint64, state State, profile *ProfileSummary, lease RuntimeLease) bool {
 	s.mu.Lock()
-	if s.generation != generation || s.state == StateStopping || s.stopRequested {
+	if s.generation != generation || s.state == StateStopping || s.stopRequested ||
+		s.attemptCtx != nil && s.attemptCtx.Err() != nil {
 		s.mu.Unlock()
 		return false
 	}
@@ -1273,6 +1315,7 @@ func (m *Manager) advanceWithLease(s *session, generation uint64, state State, p
 		s.startOriginGeneration = 0
 		s.lastConnectedAt = m.now()
 		s.hasConnectedAt = true
+		m.connectedForAutoRetryLocked(s)
 		s.rollbackFirstStart = false
 		s.lastFailure, s.lastFailureMessage = "", ""
 		s.recovering = false
@@ -1391,6 +1434,7 @@ func (m *Manager) finishProtectedFailureLocked(s *session, cause error) {
 	s.state, s.active, s.lastFailure, s.lastFailureMessage = StateFailed, nil, code, message
 	s.recovering, s.recoveryOriginGeneration = false, 0
 	s.failureAfterCleanup, s.failureMessageAfterCleanup = "", ""
+	m.scheduleAutoRetryLocked(s, cause)
 	m.appendLocked(s)
 }
 
@@ -1485,6 +1529,7 @@ func snapshotLocked(s *session) SnapshotResult {
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,
 		Recovering: s.recovering, PrimaryAction: primaryActionLocked(s),
 		ServiceRestorePending: s.serviceRestorePending, OfflineAcceptedAt: s.offlineAcceptedAt,
+		NextRetryAt: s.autoRetryAt,
 	}
 }
 
