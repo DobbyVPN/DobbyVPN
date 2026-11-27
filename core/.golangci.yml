@@ -38,6 +38,10 @@ linters:
     - noctx
     - exhaustive
   settings:
+    # Not in "enable": only the report-only duplicate-code job runs dupl
+    # (source_checks.py duplicates), so its findings never fail CI.
+    dupl:
+      threshold: 150
     govet:
       enable-all: true
       disable:

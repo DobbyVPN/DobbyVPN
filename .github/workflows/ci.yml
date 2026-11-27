@@ -251,6 +251,37 @@ jobs:
       - name: Run Go source analysis
         run: python3 .github/scripts/source_checks.py lint-go
 
+  # Report only: not a part of Complete CI, and neither findings nor a failure of this job fail the run.
+  duplicate_report:
+    name: Duplicate code report
+    needs: ci_scope
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ci') && needs.ci_scope.outputs.scope != 'reused' && (needs.ci_scope.outputs.scope == 'full' || needs.ci_scope.outputs.scope == 'android' || needs.ci_scope.outputs.scope == 'apple') }}
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Restore dependency archives
+        uses: ./.github/actions/dependency-cache
+        with:
+          pinned-tools: 'true'
+
+      - name: Report duplicated Go, Swift, Kotlin and C# code
+        run: python3 .github/scripts/source_checks.py duplicates --output-dir "$RUNNER_TEMP/duplicate-code"
+
+      - name: Retain duplicate code reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: duplicate-code-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/duplicate-code
+          if-no-files-found: warn
+          retention-days: 7
+
   security:
     name: Git history secret scan
     needs: ci_scope
