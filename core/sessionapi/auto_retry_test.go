@@ -533,3 +533,22 @@ func TestChangedSubscriptionCancelsAnAutoRetryOnItsSecondProfile(t *testing.T) {
 		t.Fatal("the replaced configuration connected")
 	}
 }
+
+// An attempt canceled after its runtime became ready, for example by a
+// subscription change, must not publish CONNECTED for the replaced
+// configuration, and ends as a canceled start.
+func TestACanceledAttemptDoesNotPublishItsConnection(t *testing.T) {
+	m := NewManager(ManagerOptions{Now: func() time.Time { return retryTestNow }})
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &session{generation: 3, state: StateProbing, attemptCtx: ctx, changed: make(chan struct{})}
+	cancel()
+	if m.advanceConnected(s, 3, &ProfileSummary{}, noopRuntimeLease{}) {
+		t.Fatal("a canceled attempt published its connection")
+	}
+	if s.state != StateProbing {
+		t.Fatalf("state after a canceled completion = %s", s.state)
+	}
+	if CodeOf(canceledStart(ctx)) != FailureCanceled || canceledStart(context.Background()) != nil {
+		t.Fatal("a canceled completion is not reported as a canceled start")
+	}
+}

@@ -1199,8 +1199,10 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		if err == nil && ctx.Err() == nil {
 			if m.advanceConnected(s, generation, &profile.Summary, lease) {
 				m.waitForAttemptEnd(ctx, s, generation, lease)
+				m.finish(s, generation, nil)
+				return
 			}
-			m.finish(s, generation, nil)
+			m.finish(s, generation, canceledStart(ctx))
 			return
 		}
 		candidateError := errors.Join(err, ctx.Err())
@@ -1226,6 +1228,16 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		}
 	}
 	m.finish(s, generation, failureWithCause(FailureProbe, "no configured profile became ready", errors.Join(candidateErrors...)))
+}
+
+// canceledStart is the cause for a ready attempt whose connection was not
+// published because it was canceled after its last check, for example by a
+// subscription change. Nil when the attempt was not canceled.
+func canceledStart(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return failureWithCause(FailureCanceled, "start was canceled", err)
+	}
+	return nil
 }
 
 func prepareCandidate(ctx context.Context, s *session, index int, generation uint64) (attemptContext context.Context, attemptGeneration uint64, err error) {
@@ -1282,7 +1294,8 @@ func (m *Manager) advanceConnected(s *session, generation uint64, profile *Profi
 
 func (m *Manager) advanceWithLease(s *session, generation uint64, state State, profile *ProfileSummary, lease RuntimeLease) bool {
 	s.mu.Lock()
-	if s.generation != generation || s.state == StateStopping || s.stopRequested {
+	if s.generation != generation || s.state == StateStopping || s.stopRequested ||
+		s.attemptCtx != nil && s.attemptCtx.Err() != nil {
 		s.mu.Unlock()
 		return false
 	}
