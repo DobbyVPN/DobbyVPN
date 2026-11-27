@@ -1,0 +1,853 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.DobbyDiagnosticFiles-x86_64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/sources",
+      "importPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/diagnostics/DiagnosticFiles.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/swift-version-46F51B62106F86E2.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "DobbyDiagnosticFiles",
+      "moduleOutputPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyDiagnosticFiles.swiftmodule",
+      "objects" : [
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/DiagnosticFiles.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-apple-macosx12.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j4",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/include/DobbyDiagnosticFiles-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "apple"
+      ],
+      "outputFileMapPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/DiagnosticFiles.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyDiagnosticFiles.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/diagnostics/DiagnosticFiles.swift"
+      ],
+      "tempsPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.DobbyNativeUI-x86_64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/sources",
+      "importPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyDiagnostics.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyProfileList.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyRootView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbySessionClient.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbySessionViewModel.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyShareSheet.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/IOSLogAccessibility.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/LogRecordRanges.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/MacLogAccessibility.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/swift-version-46F51B62106F86E2.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyDiagnosticFiles.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "DobbyNativeUI",
+      "moduleOutputPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyNativeUI.swiftmodule",
+      "objects" : [
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyDiagnostics.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyProfileList.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyRootView.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbySessionClient.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbySessionViewModel.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyShareSheet.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/IOSLogAccessibility.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/LogRecordRanges.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/MacLogAccessibility.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-apple-macosx12.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j4",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/include/DobbyNativeUI-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "apple"
+      ],
+      "outputFileMapPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyDiagnostics.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyProfileList.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyRootView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbySessionClient.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbySessionViewModel.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyShareSheet.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/IOSLogAccessibility.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/LogRecordRanges.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/MacLogAccessibility.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyNativeUI.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyDiagnostics.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyProfileList.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyRootView.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbySessionClient.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbySessionViewModel.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyShareSheet.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/IOSLogAccessibility.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/LogRecordRanges.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/MacLogAccessibility.swift"
+      ],
+      "tempsPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.DobbyVPNMacApp-x86_64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/sources",
+      "importPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/DobbyVPNMacApp.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/MacDesktopSessionClient.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/MacNetworkExtension.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/UnixControlSocket.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/swift-version-46F51B62106F86E2.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyNativeUI.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyDiagnosticFiles.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "DobbyVPNMacApp",
+      "moduleOutputPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyVPNMacApp.swiftmodule",
+      "objects" : [
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/DobbyVPNMacApp.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/MacDesktopSessionClient.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/MacNetworkExtension.swift.o",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/UnixControlSocket.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "x86_64-apple-macosx12.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j4",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "DobbyVPNMacApp_main",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "apple"
+      ],
+      "outputFileMapPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/DobbyVPNMacApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/MacDesktopSessionClient.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/MacNetworkExtension.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/UnixControlSocket.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules/DobbyVPNMacApp.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/DobbyVPNMacApp.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/MacDesktopSessionClient.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/MacNetworkExtension.swift",
+        "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/UnixControlSocket.swift"
+      ],
+      "tempsPath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "DobbyDiagnosticFiles" : [
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "DobbyDiagnosticFiles",
+      "-package-name",
+      "apple",
+      "-c",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/diagnostics/DiagnosticFiles.swift",
+      "-I",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules",
+      "-target",
+      "x86_64-apple-macosx12.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j4",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/include/DobbyDiagnosticFiles-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "apple",
+      "-driver-use-frontend-path",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "DobbyNativeUI" : [
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "DobbyNativeUI",
+      "-package-name",
+      "apple",
+      "-c",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyDiagnostics.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyProfileList.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyRootView.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbySessionClient.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbySessionViewModel.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyShareSheet.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/IOSLogAccessibility.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/LogRecordRanges.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/MacLogAccessibility.swift",
+      "-I",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules",
+      "-target",
+      "x86_64-apple-macosx12.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j4",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/include/DobbyNativeUI-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "apple",
+      "-driver-use-frontend-path",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "DobbyVPNMacApp" : [
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "DobbyVPNMacApp",
+      "-package-name",
+      "apple",
+      "-c",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/DobbyVPNMacApp.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/MacDesktopSessionClient.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/MacNetworkExtension.swift",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/UnixControlSocket.swift",
+      "-I",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/Modules",
+      "-target",
+      "x86_64-apple-macosx12.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j4",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "DobbyVPNMacApp_main",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "apple",
+      "-driver-use-frontend-path",
+      "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "DobbyDiagnosticFiles" : [
+
+    ],
+    "DobbyNativeUI" : [
+      "DobbyDiagnosticFiles"
+    ],
+    "DobbyVPNMacApp" : [
+      "DobbyNativeUI",
+      "DobbyDiagnosticFiles"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/diagnostics/DiagnosticFiles.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/sources"
+    },
+    "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyDiagnostics.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyProfileList.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyRootView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbySessionClient.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbySessionViewModel.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/DobbyShareSheet.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/IOSLogAccessibility.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/LogRecordRanges.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/ui/MacLogAccessibility.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/sources"
+    },
+    "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp-entitlement.plist"
+    },
+    "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/DobbyVPNMacApp.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/MacDesktopSessionClient.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/MacNetworkExtension.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/macos/app/UnixControlSocket.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/sources"
+    },
+    "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/DiagnosticFiles.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyDiagnostics.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyProfileList.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyRootView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbySessionClient.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbySessionViewModel.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/DobbyShareSheet.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/IOSLogAccessibility.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/LogRecordRanges.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyNativeUI.build/MacLogAccessibility.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/DobbyVPNMacApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/MacDesktopSessionClient.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/MacNetworkExtension.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.build/UnixControlSocket.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyVPNMacApp.product/Objects.LinkFileList"
+    },
+    "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/swift-version-46F51B62106F86E2.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/alex/do-local-torturer/tools/Xcode-26.3.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/swift-version-46F51B62106F86E2.txt"
+    }
+  }
+}

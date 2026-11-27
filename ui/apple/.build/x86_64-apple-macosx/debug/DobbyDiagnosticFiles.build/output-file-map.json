@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/master.swiftdeps"
+  },
+  "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/shared/diagnostics/DiagnosticFiles.swift": {
+    "dependencies": "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/DiagnosticFiles.d",
+    "object": "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/DiagnosticFiles.swift.o",
+    "swiftmodule": "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/DiagnosticFiles~partial.swiftmodule",
+    "swift-dependencies": "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/DiagnosticFiles.swiftdeps",
+    "diagnostics": "/Users/alex/do-local-torturer/runs/pr429-critic-fix/DobbyVPN/ui/apple/.build/x86_64-apple-macosx/debug/DobbyDiagnosticFiles.build/DiagnosticFiles.dia"
+  }
+}

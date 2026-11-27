@@ -196,3 +196,56 @@ final class DobbyUploadDirectory {
         try Self.withGate { try FileManager.default.removeItem(at: url) }
     }
 }
+
+// The session view model's UI-diagnostic writers live here with the rest of the
+// shared diagnostics code so the view model file stays within its length limit.
+extension DobbySessionViewModel {
+    func recordAppStarted() {
+        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
+        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
+        recordDiagnostic(line, event: "app.started", level: "INFO")
+    }
+
+    func recordError(_ message: String) {
+        recordDiagnostic(message)
+    }
+
+    /// Ties a UI hang to the log length: one DEBUG record per distinct size.
+    /// Each write re-triggers a log parse, so unchanged sizes stay silent.
+    func recordLogViewSize(_ entries: [DobbyLogEntry]) {
+        let characters = entries.reduce(0) { $0 + $1.message.utf16.count }
+        let message = "entries=\(entries.count) characters=\(characters)"
+        guard message != lastLoggedLogSize else { return }
+        recordDiagnostic(message, event: "ui.log_view_size", level: "DEBUG")
+        lastLoggedLogSize = message
+    }
+
+    func recordDiagnostic(
+        _ message: String,
+        event: String = "ui.failure",
+        level: String = "ERROR"
+    ) {
+        let path = client.uiDiagnosticPath
+        let excludedPaths = client.diagnosticPaths
+        logWorker.async { [weak self] in
+            do {
+                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
+                Task { @MainActor [weak self] in
+                    guard let self, self.logsVisible else { return }
+                    self.refreshLogs()
+                }
+            } catch {
+                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
+                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
+                    failure += "\nStderr write failed: \(String(reflecting: error))"
+                }
+                Task { @MainActor [weak self] in self?.reportUIDiagnosticFailure(failure) }
+            }
+        }
+    }
+
+    func recordLogsShare(kind: String, phase: String, context: String = "") {
+        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
+                         event: "ui.logs_share", level: "INFO")
+    }
+}
