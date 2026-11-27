@@ -47,7 +47,13 @@ public enum DobbyProfileStatus: String {
 
 @MainActor
 public final class DobbySessionViewModel: ObservableObject {
-    @Published public private(set) var snapshot = DobbySessionSnapshot.empty
+    @Published public private(set) var snapshot = DobbySessionSnapshot.empty {
+        didSet { updateAutomaticReconnect() }
+    }
+    /// The service scheduled an automatic attempt for the current failure and
+    /// the user has not acted since. A Retry the user pressed looks the same in
+    /// the snapshot, so only this marks an attempt as automatic.
+    private var automaticReconnect = false
     @Published public private(set) var busy = false
     @Published public private(set) var error = ""
     @Published public private(set) var importError = ""
@@ -173,18 +179,26 @@ public final class DobbySessionViewModel: ObservableObject {
 
     /// The line next to Retry and Stop while the service reconnects a FAILED
     /// connection: a countdown to its next automatic attempt, then
-    /// "Reconnecting…" while an attempt after the failure runs. A Retry or the
-    /// automatic attempt keeps the failure until it connects; a fresh Start
-    /// clears it, so that case shows no line.
+    /// "Reconnecting…" while that automatic attempt runs. A Retry or Start the
+    /// user pressed shows no line.
     public func reconnectText(now: Date) -> String? {
         if protectedRetryState, !busy, let next = snapshot.nextRetryAt {
             let seconds = Int(next.timeIntervalSince(now).rounded(.up))
             return seconds > 0 ? "Reconnecting in \(seconds) s…" : "Reconnecting…"
         }
-        if snapshot.vpnActive, snapshot.lastFailure != nil, snapshot.state == "PROBING" || snapshot.state == "PREPARING" {
+        if automaticReconnect, snapshot.vpnActive, snapshot.state == "PROBING" || snapshot.state == "PREPARING" {
             return "Reconnecting…"
         }
         return nil
+    }
+
+    private func updateAutomaticReconnect() {
+        if snapshot.state == "FAILED" {
+            // A poll that still shows the failure while the user's command runs does not restart the chain.
+            automaticReconnect = !busy && snapshot.vpnActive && snapshot.nextRetryAt != nil
+        } else if snapshot.state == "CONNECTED" || !snapshot.vpnActive || snapshot.lastFailure == nil {
+            automaticReconnect = false
+        }
     }
 
     public var canRetryActiveSelection: Bool {
@@ -450,6 +464,7 @@ public final class DobbySessionViewModel: ObservableObject {
     }
 
     private func performCommand(index: Int?, stopping: Bool, retrying: Bool = false) {
+        automaticReconnect = false // the user's own Retry, Start or Stop is not an automatic attempt
         if stopping { acknowledgeDisplayedTransportFailure() } else { resetClosedFailures() }
         busy = true
         setError("", origin: .other)
