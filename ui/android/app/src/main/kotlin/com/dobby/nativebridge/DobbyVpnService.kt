@@ -3,11 +3,15 @@ package com.dobby.nativebridge
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.dobby.presentation.PartialTunnelCleanup
+import com.dobby.vpn.R
+import com.dobby.ui.decodeSessionSnapshot
+import java.util.concurrent.Executors
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -15,6 +19,8 @@ import org.json.JSONObject
 class DobbyVpnService : VpnService() {
     companion object {
         const val ACTION_PREPARE = "com.dobby.vpn.action.PREPARE"
+        private const val ACTION_RETRY = "com.dobby.vpn.action.RETRY"
+        private const val ACTION_DISCONNECT = "com.dobby.vpn.action.DISCONNECT"
         private const val CHANNEL = "dobby_vpn"
         private const val NOTIFICATION_ID = 101
         private const val TAG = "DobbyVpnService"
@@ -28,6 +34,12 @@ class DobbyVpnService : VpnService() {
     private var goStopConfirmed = false
     @Volatile private var restorationRunning = false
     private var operationFailure: Throwable? = null
+    // The notification follows Go's state changes. Snapshot reads and the
+    // notification actions run here, off the service lock and Go's callback.
+    private val notifier = Executors.newSingleThreadExecutor()
+    @Volatile private var shownState = "CONNECTING"
+    @Volatile private var shownRetryAt = 0L
+    @Volatile private var shownCanRetry = false
 
     private fun recordFailure(event: String, failure: Throwable) {
         operationFailure = failure
@@ -89,6 +101,11 @@ class DobbyVpnService : VpnService() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_RETRY || intent?.action == ACTION_DISCONNECT) {
+            val action = intent.action
+            onNotifier { runNotificationAction(action == ACTION_RETRY) }
+            return START_STICKY
         }
         // PREPARE belongs to an app command; Go already has that selection.
         // Android's always-on start has the VpnService action. A null intent
@@ -316,6 +333,7 @@ class DobbyVpnService : VpnService() {
             } catch (failure: Throwable) {
                 recordFailure("vpn.service.foreground_failed", failure)
             }
+            onNotifier(::refreshNotification)
         } else if (state == "IDLE" || state == "FAILED") {
             goStopConfirmed = released && underlyingNetwork == null
             // Explicit Stop releases the network, not this reusable Android
@@ -334,6 +352,7 @@ class DobbyVpnService : VpnService() {
 
     override fun onDestroy() {
         shutdownOwner()
+        notifier.shutdown()
         super.onDestroy()
     }
 
@@ -403,12 +422,92 @@ class DobbyVpnService : VpnService() {
     private fun ensureForeground() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "Dobby VPN", NotificationManager.IMPORTANCE_LOW))
-        val notification = Notification.Builder(this, CHANNEL)
+        startForeground(NOTIFICATION_ID, buildNotification())
+    }
+
+    // Go may still publish after onDestroy until it releases the network; the
+    // notification is gone by then, so a closed executor just drops the task.
+    private fun onNotifier(task: () -> Unit) {
+        try {
+            notifier.execute(task)
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+        }
+    }
+
+    internal fun redrawNotification() {
+        if (vpnInterface != null) onNotifier(::refreshNotification)
+    }
+
+    // Reads the state Go has just published, with the time of a scheduled
+    // automatic retry, and redraws the notification once per state change.
+    private fun refreshNotification() {
+        val snapshot = try {
+            JSONObject(NativeGoSession.snapshot(""))
+        } catch (failure: Throwable) {
+            recordFailure("vpn.service.notification_failed", failure)
+            return
+        }
+        val session = runCatching { decodeSessionSnapshot(snapshot, "Snapshot") }.getOrNull() ?: return
+        shownState = session.state
+        shownCanRetry = session.protectedFailure
+        shownRetryAt = snapshot.getJSONObject("result").optLong("next_retry_at_unix_ms")
+        synchronized(this) {
+            if (vpnInterface == null || retiring) return
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+        }
+    }
+
+    // Retry repeats the failed selection, as the app's Retry does; Disconnect
+    // stops the session. Both act on the current snapshot.
+    private fun runNotificationAction(retry: Boolean) {
+        val outcome = runCatching {
+            val session = decodeSessionSnapshot(JSONObject(NativeGoSession.snapshot("")), "Snapshot")
+            when {
+                retry && session.protectedFailure && prepare(this) == null -> NativeGoSession.startSelection(
+                    session.sessionId, session.sequence, session.activeMode, session.activeIndex, session.activeDigest, false,
+                )
+                retry -> "retry skipped: state=${session.state} can_retry=${session.protectedFailure}"
+                else -> NativeGoSession.stop(session.sessionId, session.generation)
+            }
+        }
+        NativeVpnBridge.recordServiceDiagnostic(this, "vpn.service.notification_action",
+            "action=${if (retry) "retry" else "disconnect"} reply=${outcome.getOrNull()}", outcome.exceptionOrNull())
+    }
+
+    private fun buildNotification(): Notification {
+        val state = if (vpnInterface == null) "CONNECTING" else shownState
+        val retryAt = if (state == "FAILED") shownRetryAt else 0L
+        val title = when (state) {
+            "CONNECTED" -> getString(R.string.vpn_notification_connected)
+            "FAILED" -> getString(R.string.vpn_notification_no_connection)
+            "STOPPING" -> getString(R.string.vpn_notification_disconnecting)
+            else -> getString(R.string.vpn_notification_connecting)
+        }
+        val builder = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_warning)
-            .setContentTitle("Dobby VPN")
-            .setContentText(if (vpnInterface != null) "VPN protection is active" else "Starting VPN")
+            .setContentTitle(title)
             .setOngoing(true)
-            .build()
-        startForeground(NOTIFICATION_ID, notification)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(packageManager.getLaunchIntentForPackage(packageName)?.let {
+                PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE)
+            })
+        if (state == "FAILED") {
+            builder.setContentText(getString(if (retryAt > 0) R.string.vpn_notification_retrying else R.string.vpn_notification_retry_hint))
+        }
+        // The system draws the countdown; nothing redraws the notification every second.
+        if (retryAt > System.currentTimeMillis()) {
+            builder.setWhen(retryAt).setShowWhen(true).setUsesChronometer(true).setChronometerCountDown(true)
+        } else {
+            builder.setShowWhen(false)
+        }
+        if (state == "FAILED" && shownCanRetry) builder.addAction(notificationAction(getString(R.string.vpn_notification_retry), ACTION_RETRY, 1))
+        if (state != "STOPPING") builder.addAction(notificationAction(getString(R.string.vpn_notification_disconnect), ACTION_DISCONNECT, 2))
+        return builder.build()
+    }
+
+    private fun notificationAction(title: String, action: String, requestCode: Int): Notification.Action {
+        val intent = Intent(this, DobbyVpnService::class.java).setAction(action)
+        val pending = PendingIntent.getService(this, requestCode, intent, PendingIntent.FLAG_IMMUTABLE)
+        return Notification.Action.Builder(null, title, pending).build()
     }
 }
