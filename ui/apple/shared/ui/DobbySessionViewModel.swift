@@ -124,9 +124,7 @@ public final class DobbySessionViewModel: ObservableObject {
     ) {
         self.client = client
         self.debounceScheduler = debounceScheduler
-        if let data = UserDefaults.standard.data(forKey: uploadReferenceKey) {
-            latestUpload = try? JSONDecoder().decode(DobbyUploadReference.self, from: data)
-        }
+        latestUpload = DobbyLatestUploadFile.load(forLog: client.uiDiagnosticPath, defaultsKey: uploadReferenceKey)
         if !Self.cleanedUploadDirectories {
             Self.cleanedUploadDirectories = true
             do { try DobbyUploadDirectory.removeAbandoned() }
@@ -712,7 +710,9 @@ extension DobbySessionViewModel {
                 try await uploadDiagnostics(preparation, file: file)
                 let result = DobbyUploadReference(reference: preparation.reference, completed: Date(), provider: preparation.provider)
                 self.latestUpload = result
-                UserDefaults.standard.set(try JSONEncoder().encode(result), forKey: self.uploadReferenceKey)
+                // The upload already succeeded; failing to save the reference must not be reported as a failed upload.
+                do { try DobbyLatestUploadFile.save(result, forLog: client.uiDiagnosticPath, defaultsKey: self.uploadReferenceKey) }
+                catch { self.recordError("Could not save latest upload reference: \(String(reflecting: error))") }
             } catch is CancellationError {
                 self.uploadError = "Log upload cancelled"
             } catch {
