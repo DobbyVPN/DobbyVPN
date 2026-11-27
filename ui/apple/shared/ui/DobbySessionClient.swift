@@ -144,6 +144,9 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
     public let logsUploadAvailable: Bool
     /// When the service retries a FAILED connection by itself; nil when no attempt is scheduled.
     public let nextRetryAt: Date?
+    /// This attempt's before/after public-address observations; nil while no
+    /// connection attempt record exists.
+    public let publicIP: DobbyPublicIP?
 
     /// Snapshot schema version this app understands; the Go service sends its own.
     public static let expectedProtocolVersion = 1
@@ -179,6 +182,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         case canSwitch = "can_switch"
         case logsUploadAvailable = "logs_upload_available"
         case nextRetryAtUnixMs = "next_retry_at_unix_ms"
+        case publicIP = "public_ip"
     }
 
     public init(from decoder: Decoder) throws {
@@ -219,6 +223,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         // Older services do not send it; a missing or non-positive value means no scheduled attempt.
         let nextRetryMs = try values.decodeIfPresent(Int64.self, forKey: .nextRetryAtUnixMs) ?? 0
         nextRetryAt = nextRetryMs > 0 ? Date(timeIntervalSince1970: TimeInterval(nextRetryMs) / 1000) : nil
+        publicIP = try values.decodeIfPresent(DobbyPublicIP.self, forKey: .publicIP)
     }
 
     public init(
@@ -226,7 +231,7 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         configured: Bool, sourceURL: String, sourceError: String,
         activeProfile: DobbyProfile?, lastFailure: DobbyFailure?, recovering: Bool,
         networkGeneration: UInt64 = 0, vpnActive: Bool = false, canRetry: Bool = false,
-        nextRetryAt: Date? = nil
+        nextRetryAt: Date? = nil, publicIP: DobbyPublicIP? = nil
     ) {
         self.sessionID = sessionID
         self.sequence = sequence
@@ -252,6 +257,41 @@ public struct DobbySessionSnapshot: Decodable, Sendable {
         canSwitch = false
         logsUploadAvailable = false
         self.nextRetryAt = nextRetryAt
+        self.publicIP = publicIP
+    }
+}
+
+public struct DobbyPublicIPMeasurement: Decodable, Sendable, Equatable {
+    public let state: String
+    public let value: String
+
+    public init(state: String, value: String) {
+        self.state = state
+        self.value = value
+    }
+
+    private enum CodingKeys: String, CodingKey { case state, value }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
+        value = try values.decodeIfPresent(String.self, forKey: .value) ?? ""
+    }
+}
+
+/// The public-address observations of one connection attempt.
+public struct DobbyPublicIP: Decodable, Sendable, Equatable {
+    public let before: DobbyPublicIPMeasurement
+    public let after: DobbyPublicIPMeasurement
+}
+
+/// How a public-address observation is shown in the connection controls.
+public func publicIPDisplay(_ measurement: DobbyPublicIPMeasurement) -> String {
+    switch measurement.state {
+    case "observed": return measurement.value
+    case "measuring": return "Measuring…"
+    case "unavailable": return "Unavailable"
+    default: return "—"
     }
 }
 

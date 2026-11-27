@@ -146,6 +146,7 @@ internal fun DobbyApp(controller: SessionController) {
                         Text("Enter a subscription URL to connect.", color = Muted, fontSize = 13.sp)
                     }
                     MainActions(controller)
+                    PublicIPRows(controller)
                     Connections(controller, Modifier.padding(top = 8.dp).height(trayHeight))
                 }
                 Logs(controller, Modifier.weight(1f))
@@ -225,6 +226,31 @@ private fun MainActions(controller: SessionController) {
         }
     } else {
         MainButton(controller)
+    }
+}
+
+@Composable
+private fun PublicIPRows(controller: SessionController) {
+    val before = controller.publicIPBeforeDisplay ?: return
+    val after = controller.publicIPAfterDisplay ?: return
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        PublicIPRow("Before connection", before, "connection.ip.before")
+        PublicIPRow("With VPN", after, "connection.ip.after")
+    }
+}
+
+@Composable
+private fun PublicIPRow(label: String, display: String, tag: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Muted, fontSize = 13.sp)
+        Spacer(Modifier.weight(1f))
+        Text(
+            display,
+            color = Ink,
+            fontSize = 13.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.testTag(tag),
+        )
     }
 }
 

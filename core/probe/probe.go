@@ -138,14 +138,16 @@ func MeasureTunnelProbeAverageLatencyMillisWithContext(ctx context.Context, time
 	if timeout <= 0 {
 		return 0, fmt.Errorf("tunnel probe timeout must be positive: %dms", timeoutMillis)
 	}
-	dialContext, err := socks5DialContext(proxyAddr, timeout)
+	dialContext, err := NewSOCKS5DialContext(proxyAddr, timeout)
 	if err != nil {
 		return 0, fmt.Errorf("tunnel probe local SOCKS endpoint is unavailable: %w", err)
 	}
 	return measureTunnelProbe(ctx, timeout, dialContext)
 }
 
-func socks5DialContext(proxyAddr string, timeout time.Duration) (func(context.Context, string, string) (net.Conn, error), error) {
+// NewSOCKS5DialContext returns a dialer for the authenticated local SOCKS
+// endpoint of a connected tunnel. The address is "user:password@host:port".
+func NewSOCKS5DialContext(proxyAddr string, timeout time.Duration) (func(context.Context, string, string) (net.Conn, error), error) {
 	if proxyAddr == "" {
 		return nil, errors.New("empty SOCKS endpoint")
 	}

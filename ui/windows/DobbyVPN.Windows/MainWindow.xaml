@@ -130,6 +130,14 @@
           <Button.KeyboardAccelerators><KeyboardAccelerator Key="Enter" Modifiers="Control" /></Button.KeyboardAccelerators>
         </Button>
 
+        <StackPanel x:Name="PublicIPPanel" Spacing="2" Visibility="Collapsed"
+                    AutomationProperties.AutomationId="connection.ip">
+          <TextBlock x:Name="PublicIPBeforeText" FontSize="11.9" TextWrapping="Wrap"
+                     Foreground="{StaticResource Muted}" AutomationProperties.AutomationId="connection.ip.before" />
+          <TextBlock x:Name="PublicIPAfterText" FontSize="11.9" TextWrapping="Wrap"
+                     Foreground="{StaticResource Muted}" AutomationProperties.AutomationId="connection.ip.after" />
+        </StackPanel>
+
         <StackPanel x:Name="ActiveFailurePanel" Spacing="6" Visibility="Collapsed"
                     AutomationProperties.AutomationId="connection.active-failure">
           <TextBlock x:Name="ActiveFailureText" FontSize="11.9" TextWrapping="Wrap"

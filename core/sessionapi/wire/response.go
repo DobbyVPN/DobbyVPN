@@ -79,6 +79,23 @@ type Snapshot struct {
 	// NextRetryAtUnixMs is when a FAILED session retries by itself, in Unix
 	// milliseconds; absent when no automatic retry is scheduled.
 	NextRetryAtUnixMs int64 `json:"next_retry_at_unix_ms,omitempty"`
+	// PublicIP carries the current attempt's before/after public-address
+	// observations; absent when no attempt record exists.
+	PublicIP *PublicIP `json:"public_ip,omitempty"`
+}
+
+// PublicIPMeasurement is one public-address observation. State is "measuring",
+// "observed", "unavailable", or "" (not measured yet); Value is present only
+// when State is "observed".
+type PublicIPMeasurement struct {
+	State string `json:"state"`
+	Value string `json:"value,omitempty"`
+}
+
+// PublicIP is the public-address observation pair of one connection attempt.
+type PublicIP struct {
+	Before PublicIPMeasurement `json:"before"`
+	After  PublicIPMeasurement `json:"after"`
 }
 
 func profileResultDTO(in sessionapi.ProfileSummary) Profile {
@@ -128,6 +145,12 @@ func SnapshotFrom(in sessionapi.SnapshotResult) Snapshot {
 	}
 	if in.LastFailure != "" {
 		out.LastFailure = &Failure{Code: string(in.LastFailure), Message: in.LastFailureMessage}
+	}
+	if in.PublicIP != nil {
+		out.PublicIP = &PublicIP{
+			Before: PublicIPMeasurement{State: in.PublicIP.Before.State, Value: in.PublicIP.Before.Value},
+			After:  PublicIPMeasurement{State: in.PublicIP.After.State, Value: in.PublicIP.After.Value},
+		}
 	}
 	return out
 }

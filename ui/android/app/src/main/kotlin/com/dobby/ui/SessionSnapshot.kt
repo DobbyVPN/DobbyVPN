@@ -101,5 +101,14 @@ internal fun decodeSessionSnapshot(response: JSONObject, envelope: String): Sess
             val code = it.field<String>("code")
             if (message.isBlank()) code else "$message ($code)"
         }.orEmpty(),
+        publicIPPresent = snapshot.has("public_ip"),
+        publicIPBefore = decodePublicIPMeasurement(snapshot.optionalObject("public_ip")?.optionalObject("before")),
+        publicIPAfter = decodePublicIPMeasurement(snapshot.optionalObject("public_ip")?.optionalObject("after")),
     )
 }
+
+private fun decodePublicIPMeasurement(measurement: JSONObject?): PublicIPMeasurement =
+    PublicIPMeasurement(
+        state = measurement?.optionalText("state").orEmpty(),
+        value = measurement?.optionalText("value").orEmpty(),
+    )
