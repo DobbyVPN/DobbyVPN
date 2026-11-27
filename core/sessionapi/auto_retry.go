@@ -84,36 +84,41 @@ func (m *Manager) cancelAutoRetryLocked(s *session) {
 	s.autoRetryAt = time.Time{}
 }
 
-// resetAutoRetryLocked also restarts the pause schedule. It runs when the user
-// starts, retries or stops, and when the subscription changes.
+// resetAutoRetryLocked also restarts the pause schedule and ends the retry
+// chain. It runs when the user starts, retries or stops, and when the
+// subscription changes.
 func (m *Manager) resetAutoRetryLocked(s *session) {
 	m.cancelAutoRetryLocked(s)
 	s.autoRetryCount = 0
-	s.autoRetryOrigin = 0
+	s.autoRetryOrigin, s.autoRetryGeneration = 0, 0
 }
 
 // autoRetryStopAccepted lets a Stop for any generation of the current retry
 // chain stop the session: a client may still hold the FAILED generation it
-// saw before a retry started, and the user's Stop must win over a retry.
+// saw before a retry started, or even connected, and the user's Stop must win
+// over a retry. The chain lasts until the user acts.
 func autoRetryStopAccepted(s *session, generation uint64) bool {
 	return s.autoRetryOrigin != 0 && generation >= s.autoRetryOrigin && generation <= s.generation
 }
 
 // cancelAutoRetryAttemptLocked ends an automatic attempt that is still
 // connecting, for example when its subscription was replaced. It finishes as
-// a canceled start, which is not retried.
+// a canceled start, which is not retried. AUTO_SELECT moves to a new
+// generation for each further profile of the same attempt.
 func (m *Manager) cancelAutoRetryAttemptLocked(s *session) {
-	if s.autoRetryGeneration != 0 && s.autoRetryGeneration == s.generation &&
+	if s.autoRetryGeneration != 0 && s.generation >= s.autoRetryGeneration &&
 		(s.state == StateProbing || s.state == StatePreparing) && s.cancel != nil {
 		s.cancel()
 	}
 }
 
-// connectedForAutoRetryLocked ends the retry chain when an attempt connects
-// and resets the pause schedule only once the connection proved healthy.
+// connectedForAutoRetryLocked marks the automatic attempt finished when it
+// connects and resets the pause schedule only once the connection proved
+// healthy. The chain's origin stays, so a Stop sent for the FAILED generation
+// still stops the connected session.
 func (m *Manager) connectedForAutoRetryLocked(s *session) {
 	m.cancelAutoRetryLocked(s)
-	s.autoRetryOrigin, s.autoRetryGeneration = 0, 0
+	s.autoRetryGeneration = 0
 	if s.autoRetryCount == 0 {
 		return
 	}

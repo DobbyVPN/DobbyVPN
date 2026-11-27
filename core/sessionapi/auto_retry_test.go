@@ -443,3 +443,84 @@ func TestAutoRetryPausesKeepGrowingWhenAConnectionDoesNotLast(t *testing.T) {
 		t.Fatalf("pause after a short connection = %s, want the schedule to continue at 60s", delay)
 	}
 }
+
+// The client saw FAILED and sent Stop, but the automatic retry connected
+// before the Stop arrived. The Stop for the FAILED generation still wins.
+func TestStopByTheFailedGenerationAfterAnAutoRetryConnected(t *testing.T) {
+	runtime := &switchRuntime{err: errors.New("readiness probe failed")}
+	m, timers, id := newRetryManager(t, runtime)
+	startForRetry(t, m, id, StartTarget{Mode: AutoSelect})
+	failed := waitForSnapshot(t, m, id, failedWithRetry)
+	runtime.set(nil)
+	_, fire, _ := timers.last()
+	fire()
+	waitForSnapshot(t, m, id, func(s SnapshotResult) bool { return s.State == StateConnected && s.Generation > failed.Generation })
+	if _, err := m.Stop(context.Background(), id, failed.Generation); err != nil {
+		t.Fatalf("Stop with the FAILED generation after the automatic retry connected: %v", err)
+	}
+	stopped := waitForSnapshot(t, m, id, func(s SnapshotResult) bool { return s.State == StateIdle })
+	if stopped.VPNActive || !stopped.NextRetryAt.IsZero() {
+		t.Fatalf("snapshot after Stop = %+v", stopped)
+	}
+}
+
+// secondProfileRuntime fails the first profile at once and holds the second
+// until released or canceled, so an AUTO_SELECT attempt is on its second
+// profile, a later generation than the attempt began with.
+type secondProfileRuntime struct {
+	mu      sync.Mutex
+	failAll bool
+	release chan struct{}
+	second  chan struct{}
+}
+
+func (r *secondProfileRuntime) Start(ctx context.Context, _ SessionRef, profile RuntimeProfile) (RuntimeLease, error) {
+	r.mu.Lock()
+	failAll := r.failAll
+	r.mu.Unlock()
+	if failAll || profile.Summary.Index == 0 {
+		return nil, errors.New("readiness probe failed")
+	}
+	select {
+	case r.second <- struct{}{}:
+	default:
+	}
+	select {
+	case <-r.release:
+		return noopRuntimeLease{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func TestChangedSubscriptionCancelsAnAutoRetryOnItsSecondProfile(t *testing.T) {
+	runtime := &secondProfileRuntime{failAll: true, release: make(chan struct{}), second: make(chan struct{}, 1)}
+	m, timers, id := newRetryManager(t, runtime)
+	twoProfiles := retryTestConfig + "[[Outline]]\nServer = 'second.invalid'\nPort = 443\nPassword = 'synthetic'\n\n"
+	configured, _ := m.Snapshot(context.Background(), id)
+	if _, err := m.Configure(context.Background(), id, configured.Sequence, []byte(twoProfiles)); err != nil {
+		t.Fatal(err)
+	}
+	startForRetry(t, m, id, StartTarget{Mode: AutoSelect})
+	waitForSnapshot(t, m, id, failedWithRetry)
+	runtime.mu.Lock()
+	runtime.failAll = false
+	runtime.mu.Unlock()
+	_, fire, _ := timers.last()
+	fire()
+	<-runtime.second
+	probing := waitForSnapshot(t, m, id, func(s SnapshotResult) bool { return s.State == StateProbing })
+	changed := twoProfiles + "[[Outline]]\nServer = 'other.invalid'\nPort = 443\nPassword = 'synthetic'\n\n"
+	if _, err := m.Configure(context.Background(), id, probing.Sequence, []byte(changed)); err != nil {
+		t.Fatal(err)
+	}
+	canceled := waitForSnapshot(t, m, id, func(s SnapshotResult) bool { return s.State == StateFailed })
+	if canceled.LastFailure != FailureCanceled || !canceled.NextRetryAt.IsZero() || !canceled.VPNActive {
+		t.Fatalf("snapshot after the subscription change = %+v", canceled)
+	}
+	close(runtime.release)
+	time.Sleep(20 * time.Millisecond)
+	if after, _ := m.Snapshot(context.Background(), id); after.State == StateConnected {
+		t.Fatal("the replaced configuration connected")
+	}
+}
