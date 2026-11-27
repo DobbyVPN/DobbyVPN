@@ -288,7 +288,8 @@ public struct DobbyRootView: View {
     private func primaryButton(fillHeight: Bool = false) -> some View {
         let title = model.mainActionTitle
         let enabled = model.mainActionEnabled
-        let idle = title == "Auto connect"
+        // After a refused VPN setup the main button is the filled "Allow VPN".
+        let idle = title == "Auto connect" || title == "Allow VPN"
         let filled = enabled && idle
         let outlined = enabled || !idle
         return Button {
@@ -332,21 +333,15 @@ public struct DobbyRootView: View {
         .accessibilityIdentifier("connection.stop")
     }
 
-    /// A refused or timed-out VPN setup: plain text on the main screen, one
-    /// button that retries the save, and the technical detail only behind Copy.
+    /// A refused or timed-out VPN setup: one sentence above the main button, which
+    /// reads "Allow VPN" and retries the save; the technical detail only behind Copy.
     private var vpnPermission: some View {
-        VStack(alignment: .leading, spacing: pt(10)) {
+        VStack(alignment: .leading, spacing: pt(6)) {
             Text("DobbyVPN needs VPN permission to connect.")
                 .dobbyFont(15)
                 .foregroundColor(.ink)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("vpn.permission.message")
-            DialogButton(title: "Allow VPN", filled: true) {
-                sourceFocused = false
-                model.retryVPNSetup()
-            }
-            .disabled(!model.canRetryVPNSetup)
-            .accessibilityIdentifier("vpn.permission.allow")
             Button { copyError(model.vpnSetupFailureDetail, onObservation: model.recordErrorCopy) } label: {
                 Text("Copy").underline().dobbyFont(12, .semibold).foregroundColor(.ink)
             }
@@ -354,10 +349,7 @@ public struct DobbyRootView: View {
             .accessibilityLabel("Copy VPN setup details")
             .accessibilityIdentifier("vpn.permission.copy")
         }
-        .padding(pt(12))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.surface, in: buttonShape)
-        .overlay(buttonShape.stroke(Color.ink, lineWidth: 1.5))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("vpn.permission")
     }
