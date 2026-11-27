@@ -57,10 +57,9 @@ func diagnosticPaths() ([]string, error) {
 		}
 	}
 	paths := make([]string, 0, 3)
-	paths = append(paths, backend)
 	// Raw backend stderr is retained beside the structured log where the
 	// capturing producer has not folded it into the log itself.
-	paths = append(paths, backend+".stderr")
+	paths = append(paths, backend, backend+".stderr")
 	cli, err := cliLogPath()
 	if err != nil {
 		return nil, err

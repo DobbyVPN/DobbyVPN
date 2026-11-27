@@ -290,6 +290,7 @@ type session struct {
 	id           string
 	state        State
 	generation   uint64
+	attemptID    string
 	configured   bool
 	logsEndpoint string
 	digest       string
@@ -581,6 +582,9 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	s.generation++
 	generation := s.generation
 	s.startOriginGeneration = generation
+	attempt := diagnostics.NewAttemptID()
+	s.attemptID = attempt
+	diagnostics.SetAttemptID(attempt)
 	// Accepted work outlives the request and is canceled by Stop or recovery.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(requestCtx))
 	s.cleanupBudget = &cleanupBudget{}
@@ -594,7 +598,7 @@ func (m *Manager) Start(requestCtx context.Context, sessionID string, expectedSe
 	m.appendLocked(s)
 	result = StartResult{Generation: generation, Sequence: s.sequence}
 	s.mu.Unlock()
-	go m.runStart(ctx, s, generation, target) // #nosec G118 -- generation work intentionally outlives the initiating request and owns its cancel function.
+	go m.runStart(ctx, s, attempt, generation, target) // #nosec G118 -- generation work intentionally outlives the initiating request and owns its cancel function.
 	return result, nil
 }
 
@@ -618,9 +622,9 @@ func (m *Manager) retryLocked(s *session, target StartTarget, suppliedSource boo
 		return StartResult{}, failure(FailureConflict, "retry requires the saved active selection")
 	}
 	s.recoveryCount, s.recoveryOriginGeneration = 0, 0
-	ctx, generation := m.beginAttemptLocked(s, s.activeTarget)
+	ctx, generation, attempt := m.beginAttemptLocked(s, s.activeTarget)
 	s.startOriginGeneration = generation
-	go m.runStart(ctx, s, generation, target)
+	go m.runStart(ctx, s, attempt, generation, target)
 	return StartResult{Generation: generation, Sequence: s.sequence}, nil
 }
 
@@ -676,7 +680,7 @@ func (m *Manager) Stop(ctx context.Context, sessionID string, generation uint64)
 	if !acceptsStop(s, generation) {
 		return StopResult{}, failure(FailureStaleGeneration, "generation is not active for this session")
 	}
-	log.StageMark("cancel", "stop-requested", "", "")
+	log.StageMark("cancel", "stop-requested", s.attemptID, "")
 	// A persistence failure is reported, but cannot prevent the requested
 	// release of app-owned protection. OS teardown does not call this path.
 	persistErr := m.stopActivationLocked(ctx)
@@ -881,9 +885,7 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 }
 
 // runStart owns acquisition and cleanup, including canceled late callbacks.
-func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
-	attempt := diagnostics.NewAttemptID()
-	diagnostics.SetAttemptID(attempt)
+func (m *Manager) runStart(ctx context.Context, s *session, attempt string, generation uint64, target StartTarget) {
 	ended := log.StageBegin("connect", "connect", attempt)
 	defer func() { ended(connectOutcome(s, generation)) }()
 	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
@@ -1099,8 +1101,8 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 			s.recoveryCount = 0
 			retainPolicy(s.activeDigest, s.activeProfiles)
 		}
-		ctx, next := m.beginAttemptLocked(s, target)
-		go m.runStart(ctx, s, next, target)
+		ctx, next, attempt := m.beginAttemptLocked(s, target)
+		go m.runStart(ctx, s, attempt, next, target)
 		return
 	}
 	m.finishProtectedFailureLocked(s, cause)
@@ -1167,9 +1169,11 @@ func stageResult(err error) string {
 	return "ok"
 }
 
-func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptContext context.Context, generation uint64) {
+func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptContext context.Context, generation uint64, attempt string) {
 	s.generation++
-	diagnostics.SetAttemptID(diagnostics.NewAttemptID())
+	attempt = diagnostics.NewAttemptID()
+	s.attemptID = attempt
+	diagnostics.SetAttemptID(attempt)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cleanupBudget = &cleanupBudget{}
 	s.cancel, s.ledger = cancel, &ledger{}
@@ -1179,7 +1183,7 @@ func (m *Manager) beginAttemptLocked(s *session, target StartTarget) (attemptCon
 	s.failureMessageAfterCleanup = ""
 	s.state = StateProbing
 	m.appendLocked(s)
-	return ctx, s.generation
+	return ctx, s.generation, attempt
 }
 
 func retainPolicy(digest string, profiles []RuntimeProfile) {
