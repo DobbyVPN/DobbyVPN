@@ -42,6 +42,12 @@ func (t *manualTimers) last() (time.Duration, func(), bool) {
 	return t.delays[n-1], t.fires[n-1], t.stopped[n-1]
 }
 
+func (t *manualTimers) stoppedAt(index int) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopped[index]
+}
+
 func (t *manualTimers) count() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -255,8 +261,11 @@ func TestAutoRetryIsCanceledByAUserStart(t *testing.T) {
 	m, timers, id := newRetryManager(t, runtime)
 	startForRetry(t, m, id, StartTarget{Mode: AutoSelect})
 	waitForSnapshot(t, m, id, failedWithRetry)
+	scheduled := timers.count() - 1
 	startForRetry(t, m, id, StartTarget{Mode: AutoSelect}) // the user presses Retry
-	if _, _, stopped := timers.last(); !stopped {
+	// The Retry may fail and schedule a new timer before this check, so the
+	// original timer is checked by its index.
+	if !timers.stoppedAt(scheduled) {
 		t.Fatal("a user Retry did not cancel the scheduled retry")
 	}
 	waitForSnapshot(t, m, id, func(s SnapshotResult) bool { return failedWithRetry(s) && timers.count() == 2 })
