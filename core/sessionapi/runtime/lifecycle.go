@@ -591,6 +591,10 @@ func (l *lease) ProbeNow(reason string) {
 	}
 }
 
+// ProxyAddr implements sessionapi.ProxyLease. It exposes the connected
+// tunnel's authenticated local SOCKS endpoint to the manager.
+func (l *lease) ProxyAddr() string { return l.proxyAddr }
+
 func (l *lease) startHealthMonitor(parent context.Context, ref sessionapi.SessionRef, proxyAddr string, check ConnectedHealthFunc, interval time.Duration, threshold int) {
 	ctx, cancel := context.WithCancel(parent)
 	l.healthCancel = cancel

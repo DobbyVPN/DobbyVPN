@@ -207,10 +207,35 @@ type SnapshotResult struct {
 	Recovering          bool
 	PrimaryAction       string
 
+	// PublicIP carries this attempt's before/after public-address observations;
+	// nil when no attempt record exists.
+	PublicIP *PublicIP
+
 	ServiceRestorePending bool
 	// NextRetryAt is when a FAILED session with its tunnel kept retries by
 	// itself; zero when no automatic retry is scheduled.
 	NextRetryAt time.Time
+}
+
+// PublicIP observation states. A measurement starts in PublicIPMeasuring and
+// settles to PublicIPObserved or PublicIPUnavailable; "" means not measured yet.
+const (
+	PublicIPMeasuring   = "measuring"
+	PublicIPObserved    = "observed"
+	PublicIPUnavailable = "unavailable"
+)
+
+// PublicIPMeasurement is one observation of the public address. Value is set
+// only when State is PublicIPObserved.
+type PublicIPMeasurement struct {
+	State string
+	Value string
+}
+
+// PublicIP holds the before/after observations of one connection attempt.
+type PublicIP struct {
+	Before PublicIPMeasurement
+	After  PublicIPMeasurement
 }
 
 // SessionRef is passed to every platform/runtime operation.  It prevents a
@@ -264,6 +289,15 @@ type ProbingLease interface {
 	ProbeNow(reason string)
 }
 
+// ProxyLease is implemented by runtimes whose lease exposes the connected
+// tunnel's authenticated local SOCKS endpoint. The manager observes the public
+// address through that endpoint, so the value is the VPN egress on every
+// platform, including iOS where the provider's own sockets bypass its tunnel.
+type ProxyLease interface {
+	RuntimeLease
+	ProxyAddr() string
+}
+
 // PlatformAdapter owns platform permission and callback registration for one
 // network generation. PrepareTunnel is called once per VPN activation.
 // ProtectSocket is exposed here so implementations can make failure fatal for
@@ -305,16 +339,17 @@ type ManagerOptions struct {
 }
 
 type Manager struct {
-	restoreLoader ConfigLoader
-	protection    DesktopProtection
-	runtime       Runtime
-	platform      PlatformAdapter
-	loader        ConfigLoader
-	sourceStore   SourceStore
-	now           func() time.Time
-	afterFunc     func(time.Duration, func()) func() bool
-	initErr       error
-	session       *session
+	restoreLoader  ConfigLoader
+	protection     DesktopProtection
+	runtime        Runtime
+	platform       PlatformAdapter
+	loader         ConfigLoader
+	sourceStore    SourceStore
+	now            func() time.Time
+	afterFunc      func(time.Duration, func()) func() bool
+	lookupPublicIP publicIPLookup
+	initErr        error
+	session        *session
 }
 
 const (
@@ -379,6 +414,7 @@ type session struct {
 
 	probeGeneration uint64
 	prober          ProbingLease
+	publicIP        *PublicIP
 
 	autoRetryCount      int
 	autoRetryToken      uint64
@@ -805,6 +841,8 @@ func (m *Manager) start(requestCtx context.Context, sessionID string, expectedSe
 	s.lastConnectedAt = time.Time{}
 	s.hasConnectedAt = false
 	m.resetAutoRetryLocked(s)
+	// A fresh observation record per user action; automatic continuations keep theirs.
+	s.publicIP = &PublicIP{Before: PublicIPMeasurement{State: PublicIPMeasuring}}
 	s.state = StateProbing
 	m.appendLocked(s)
 	result = StartResult{Generation: generation, Sequence: s.sequence}
@@ -844,6 +882,9 @@ func (m *Manager) retryLocked(requestCtx context.Context, s *session, target Sta
 		return StartResult{}, err
 	}
 	m.resetAutoRetryLocked(s)
+	// A user Retry starts a fresh record; the automatic retry below keeps the
+	// record of the connection it continues.
+	s.publicIP = &PublicIP{Before: PublicIPMeasurement{State: PublicIPMeasuring}}
 	generation := m.restartFailedLocked(s)
 	return StartResult{Generation: generation, Sequence: s.sequence}, nil
 }
@@ -1166,6 +1207,9 @@ func (m *Manager) prepareNetwork(ctx context.Context, s *session) error {
 // runStart owns acquisition and cleanup, including canceled late callbacks.
 func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, target StartTarget) {
 	ctx = context.WithValue(ctx, cleanupBudgetKey{}, s.cleanupBudget)
+	// Measure before the tunnel takes over routing, so the "before" value can
+	// never be observed through the VPN egress.
+	m.measurePublicIPBefore(ctx, s)
 	if err := m.prepareNetwork(ctx, s); err != nil {
 		m.finish(s, generation, err)
 		return
@@ -1203,6 +1247,7 @@ func (m *Manager) runStart(ctx context.Context, s *session, generation uint64, t
 		}
 		if err == nil && ctx.Err() == nil {
 			if m.advanceConnected(s, generation, &profile.Summary, lease) {
+				m.startPublicIPAfter(ctx, s, lease)
 				m.waitForAttemptEnd(ctx, s, generation, lease)
 				m.finish(s, generation, nil)
 				return
@@ -1364,6 +1409,7 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 		s.state, s.active, s.lastFailure = StateFailed, nil, FailureCleanup
 		s.lastFailureMessage = errorMessage(errors.Join(cause, cleanupErr))
 		s.cleanupDone = false
+		s.publicIP = nil
 		m.appendLocked(s)
 		return
 	}
@@ -1384,6 +1430,7 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 		s.pending = nil
 		s.recovering, s.restartAfterCleanup = false, false
 		s.recoveryOriginGeneration, s.startOriginGeneration = 0, 0
+		s.publicIP = nil
 		m.appendLocked(s)
 		return
 	}
@@ -1395,6 +1442,9 @@ func (m *Manager) finish(s *session, generation uint64, cause error) {
 			s.pending = nil
 			s.recoveryCount = 0
 			s.activeInventory.retainPolicy(log.DesktopTunnelPolicyKey)
+			// A user switch is a new user action: it starts a fresh record. A
+			// health-recovery restart keeps the current connection's record.
+			s.publicIP = &PublicIP{Before: PublicIPMeasurement{State: PublicIPMeasuring}}
 		}
 		ctx, next := m.beginAttemptLocked(s, target)
 		go m.runStart(ctx, s, next, target)
@@ -1435,6 +1485,11 @@ func (m *Manager) finishProtectedFailureLocked(s *session, cause error) {
 	s.recovering, s.recoveryOriginGeneration = false, 0
 	s.failureAfterCleanup, s.failureMessageAfterCleanup = "", ""
 	m.scheduleAutoRetryLocked(s, cause)
+	if s.autoRetryAt.IsZero() {
+		// No continuation is scheduled, so the attempt is over and its
+		// observations must not present as the current connection's values.
+		s.publicIP = nil
+	}
 	m.appendLocked(s)
 }
 
@@ -1529,7 +1584,7 @@ func snapshotLocked(s *session) SnapshotResult {
 		LastFailureMessage: s.lastFailureMessage, CleanupComplete: s.cleanupDone,
 		Recovering: s.recovering, PrimaryAction: primaryActionLocked(s),
 		ServiceRestorePending: s.serviceRestorePending, OfflineAcceptedAt: s.offlineAcceptedAt,
-		NextRetryAt: s.autoRetryAt,
+		NextRetryAt: s.autoRetryAt, PublicIP: snapshotPublicIP(s),
 	}
 }
 

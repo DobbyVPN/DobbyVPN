@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +23,7 @@ import (
 	"core/clientserver/controljson"
 	"core/diagnostics"
 	applicationlog "core/log"
+	"core/publicip"
 	"core/sessionapi"
 )
 
@@ -691,44 +691,14 @@ func isWindowsPath(source string) bool {
 }
 
 func externalIP() int {
-	const maxResponseBytes = 64
 	client := &http.Client{Timeout: 10 * time.Second}
-	var failures []error
-	for _, endpoint := range []string{"https://api.ipify.org", "https://ifconfig.me/ip"} {
-		request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, endpoint, http.NoBody)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("create external IP request: %w", err))
-			continue
-		}
-		response, err := client.Do(request)
-		if err != nil {
-			failures = append(failures, fmt.Errorf("external IP request failed: %w", err))
-			continue
-		}
-		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
-		closeErr := response.Body.Close()
-		if closeErr != nil {
-			failures = append(failures, fmt.Errorf("close external IP response: %w", closeErr))
-			continue
-		}
-		if readErr != nil {
-			failures = append(failures, fmt.Errorf("read external IP response: %w", readErr))
-			continue
-		}
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			failures = append(failures, fmt.Errorf("external IP response status=%d body=%q", response.StatusCode, body))
-			continue
-		}
-		// IPv4 and IPv6 text plus the usual trailing newline fit within 64 bytes.
-		address, parseErr := netip.ParseAddr(strings.TrimSpace(string(body)))
-		if len(body) <= maxResponseBytes && parseErr == nil && address.Zone() == "" {
-			fmt.Println(address)
-			return exitOK
-		}
-		failures = append(failures, errors.New("external IP response is not a single IP address"))
+	value, err := publicip.Lookup(context.Background(), client, publicip.DefaultEndpoints)
+	if err != nil {
+		reportCLIError("external IP lookup failed", err)
+		return exitRuntime
 	}
-	reportCLIError("external IP lookup failed", errors.Join(failures...))
-	return exitRuntime
+	fmt.Println(value)
+	return exitOK
 }
 
 func reportFailure(err error) int {
