@@ -54,6 +54,7 @@ public final class DobbySessionViewModel: ObservableObject {
     /// An import link waits here until the user confirms that it may replace the saved subscription.
     @Published public private(set) var pendingImport: String?
     @Published var logEntries: [DobbyLogEntry] = []
+    var lastLoggedLogSizeBuckets: String?
     #if os(macOS)
     private var lastMacLogCaptureDiagnosticUptime: TimeInterval?
     var macLogCaptureDiagnosticNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -93,7 +94,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private var snapshotInFlight = false
     private var sourceIsDirty = false
     private var acceptedSource = ""
-    private var logsVisible = false
+    var logsVisible = false
     private var logsInFlight = false
     private var logsRefreshPending = false
     private var logsClearInFlight = false
@@ -106,7 +107,7 @@ public final class DobbySessionViewModel: ObservableObject {
     private var snapshotFailureMessage: String?
     @Published private var vpnSetup = DobbyVPNSetupFlow()
     private var diagnosticWriteError = ""
-    private let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
+    let logWorker = DispatchQueue(label: "com.dobbyvpn.native-ui.diagnostics")
 
     public convenience init(client: DobbySessionClient) {
         self.init(client: client, debounceScheduler: SystemSessionDebounceScheduler(), automaticallyPoll: true)
@@ -132,6 +133,7 @@ public final class DobbySessionViewModel: ObservableObject {
             catch { uploadError = "Could not clean abandoned uploads: \(String(reflecting: error))" }
         }
         recordAppStarted()
+        recordLogViewSize(logEntries)
         if !uploadError.isEmpty { recordError(uploadError) }
         refreshSnapshot()
         if automaticallyPoll {
@@ -546,6 +548,7 @@ public final class DobbySessionViewModel: ObservableObject {
                 if revision == self.logsRevision && !self.logsClearInFlight {
                     // Publish only real changes so an idle log view is not redrawn.
                     if self.logEntries != result.entries { self.logEntries = result.entries }
+                    self.recordLogViewSize(logDisplayEntries(result.entries))
                     let logsError = [result.error, self.diagnosticWriteError].filter { !$0.isEmpty }.joined(separator: "\n")
                     if self.logsError != logsError { self.logsError = logsError }
                 } else {
@@ -616,46 +619,10 @@ private extension DobbySessionViewModel {
 }
 
 extension DobbySessionViewModel {
-    private func recordAppStarted() {
-        let commit = client.sourceCommit == "N/A" ? "" : String(client.sourceCommit.prefix(8))
-        let line = ["app started", "doBBYVPN \(client.version)", commit].filter { !$0.isEmpty }.joined(separator: " · ")
-        recordDiagnostic(line, event: "app.started", level: "INFO")
-    }
-
-    private func recordError(_ message: String) {
-        recordDiagnostic(message)
-    }
-
-    private func recordDiagnostic(
-        _ message: String,
-        event: String = "ui.failure",
-        level: String = "ERROR"
-    ) {
-        let path = client.uiDiagnosticPath
-        let excludedPaths = client.diagnosticPaths
-        logWorker.async { [weak self] in
-            do {
-                try appendUIDiagnostic(message, to: path, event: event, level: level, excludedPaths: excludedPaths)
-                Task { @MainActor [weak self] in
-                    guard let self, self.logsVisible else { return }
-                    self.refreshLogs()
-                }
-            } catch {
-                var failure = "UI diagnostic write failed: \(String(reflecting: error))\nOriginal diagnostic: \(message)"
-                do { try FileHandle.standardError.write(contentsOf: Data((failure + "\n").utf8)) } catch {
-                    failure += "\nStderr write failed: \(String(reflecting: error))"
-                }
-                Task { @MainActor [weak self] in
-                    self?.diagnosticWriteError = failure
-                    self?.logsError = failure
-                }
-            }
-        }
-    }
-
-    func recordLogsShare(kind: String, phase: String, context: String = "") {
-        recordDiagnostic("kind=\(kind) phase=\(phase)\(context.isEmpty ? "" : " " + context)",
-                         event: "ui.logs_share", level: "INFO")
+    /// A failed UI-log append is surfaced beside the other log-view failures.
+    func reportUIDiagnosticFailure(_ failure: String) {
+        diagnosticWriteError = failure
+        logsError = failure
     }
 }
 
@@ -748,7 +715,6 @@ extension DobbySessionViewModel {
             }
         }
     }
-
 }
 
 extension DobbySessionViewModel {

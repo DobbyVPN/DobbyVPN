@@ -121,25 +121,39 @@ func configureErrorDetailTextView(_ view: DobbyErrorTextView) {
 final class DobbyErrorTextView: UITextView {
     private var elementsByID: [String: IOSErrorDetailElement] = [:]
 
-    override var accessibilityElements: [Any]? {
-        get {
-            var visible: [String: IOSErrorDetailElement] = [:]
-            let elements = visibleIOSErrorDetailFragments(in: self).map { fragment in
-                let id = "error.detail.fragment.\(fragment.range.location).\(fragment.range.length)" +
-                    (fragment.isFullyVisible ? "" : ".partial")
-                let element = elementsByID[id] ?? IOSErrorDetailElement(accessibilityContainer: self)
-                element.detailView = self
-                element.accessibilityIdentifier = id
-                element.accessibilityLabel = fragment.text
-                element.accessibilityTraits = .staticText
-                element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(fragment.frame, in: self)
-                visible[id] = element
-                return element
-            }
-            elementsByID = visible
-            return elements
+    private func errorDetailAccessibilityElements() -> [IOSErrorDetailElement] {
+        var visible: [String: IOSErrorDetailElement] = [:]
+        let elements = visibleIOSErrorDetailFragments(in: self).map { fragment in
+            let id = "error.detail.fragment.\(fragment.range.location).\(fragment.range.length)" +
+                (fragment.isFullyVisible ? "" : ".partial")
+            let element = elementsByID[id] ?? IOSErrorDetailElement(accessibilityContainer: self)
+            element.detailView = self
+            element.accessibilityIdentifier = id
+            element.accessibilityLabel = fragment.text
+            element.accessibilityTraits = .staticText
+            element.accessibilityFrame = UIAccessibility.convertToScreenCoordinates(fragment.frame, in: self)
+            visible[id] = element
+            return element
         }
+        elementsByID = visible
+        return elements
+    }
+
+    // Same container contract as the log view: no UIKit paragraph elements.
+    override var accessibilityElements: [Any]? {
+        get { errorDetailAccessibilityElements() }
         set { super.accessibilityElements = newValue }
+    }
+
+    override func accessibilityElementCount() -> Int { errorDetailAccessibilityElements().count }
+
+    override func accessibilityElement(at index: Int) -> Any? {
+        let elements = errorDetailAccessibilityElements()
+        return index >= 0 && index < elements.count ? elements[index] : nil
+    }
+
+    override func index(ofAccessibilityElement element: Any) -> Int {
+        errorDetailAccessibilityElements().firstIndex { $0 === element as AnyObject } ?? NSNotFound
     }
 
     override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
