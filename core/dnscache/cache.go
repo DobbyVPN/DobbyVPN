@@ -258,7 +258,7 @@ func (c *Cache) resolveOnNetwork(ctx context.Context, source ResolverSource, rev
 
 // acceptCapture never reinstalls a resolver captured before invalidation.
 // Concurrent captures of the same live link can use its current resolver.
-func (c *Cache) acceptCapture(identity string, resolver Resolver, revision uint64) (Resolver, uint64) {
+func (c *Cache) acceptCapture(identity string, resolver Resolver, revision uint64) (current Resolver, currentRevision uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.revision == revision {
