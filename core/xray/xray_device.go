@@ -158,7 +158,8 @@ func (d *XrayDevice) Close() error {
 
 func (d *XrayDevice) CloseContext(ctx context.Context) error {
 	if d == nil {
-		return errors.New("xray device is not initialized")
+		// A device that was never created holds nothing; Stop must not fail on it.
+		return nil
 	}
 	if d.cancel != nil {
 		d.cancel()
