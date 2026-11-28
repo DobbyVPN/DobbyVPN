@@ -39,6 +39,7 @@ import com.dobby.presentation.PermissionSnapshot
 import com.dobby.presentation.PermissionTarget
 import com.dobby.presentation.PermissionTargetFence
 import com.dobby.presentation.SubscriptionLoadCoordinator
+import com.dobby.presentation.SubscriptionLoadError
 import com.dobby.presentation.CallbackLifetime
 import com.dobby.presentation.SelectionAdmission
 import com.dobby.presentation.SubscriptionRequest
@@ -893,10 +894,17 @@ internal class SessionController(
                         else {
                             val accepted = state.session.sourceUrl
                             val sameSource = state.session.configured && accepted.isNotEmpty() && accepted == request.source
-                            val owner = if (state.session.configured && !sameSource && accepted.isNotEmpty())
-                                " Showing profiles from $accepted." else ""
                             val detail = failure?.message ?: "Subscription could not be loaded"
-                            state.copy(sourceDirty = !sameSource, loadError = "Could not load ${request.source}: $detail.$owner")
+                            state.copy(
+                                sourceDirty = !sameSource,
+                                loadError = SubscriptionLoadError.compose(
+                                    source = request.source,
+                                    accepted = accepted,
+                                    configured = state.session.configured,
+                                    sameSource = sameSource,
+                                    detail = detail,
+                                ),
+                            )
                         }
                     }
                     worker.execute { refreshSnapshot() }

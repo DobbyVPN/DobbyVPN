@@ -317,9 +317,12 @@ public final class DobbySessionViewModel: ObservableObject {
                         let accepted = self.snapshot.sourceURL
                         let sameSource = self.snapshot.configured && !accepted.isEmpty && accepted == source
                         if sameSource { self.sourceIsDirty = false }
-                        let owner = self.snapshot.configured && !sameSource && !accepted.isEmpty
-                            ? " Showing profiles from \(accepted)." : ""
-                        self.loadError = "Could not load \(source): \(failure.localizedDescription).\(owner)"
+                        self.loadError = subscriptionLoadFailureMessage(
+                            source: source,
+                            accepted: accepted,
+                            configured: self.snapshot.configured,
+                            sameSource: sameSource,
+                            detail: failure.localizedDescription)
                     }
                 }
                 self.refreshSnapshot()
