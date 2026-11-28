@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	socks5 "github.com/things-go/go-socks5"
@@ -20,6 +19,7 @@ import (
 	"golang.getoutline.org/sdk/transport"
 
 	"core/auth"
+	"core/common"
 	"core/dnscache"
 	"core/log"
 	"core/tunnel/protected_dialer"
@@ -55,6 +55,7 @@ type OutlineDevice struct {
 	hasUDPPath    bool
 	ipv6          ipv6Capability
 	dnsRequests   chan struct{}
+	legNotice     *common.NoticeBudget
 }
 
 func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dnscache.Cache) (*OutlineDevice, error) {
@@ -97,6 +98,7 @@ func NewOutlineDevice(ctx context.Context, transportConfig string, dnsCache *dns
 		hasTCPPath:   hasTCPPath,
 		hasUDPPath:   hasUDPPath,
 		dnsRequests:  make(chan struct{}, 64),
+		legNotice:    common.NewNoticeBudget(proxyLegNoticeLimit),
 	}
 
 	username, password := auth.GenerateRandomAuth(), auth.GenerateRandomAuth()
@@ -141,14 +143,6 @@ type socksLogger struct {
 	device *OutlineDevice
 }
 
-func endsConnectionRoutinely(err error) bool {
-	if errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
-		return true
-	}
-	message := err.Error()
-	return strings.Contains(message, "wsarecv: An existing connection was forcibly closed by the remote host.") || strings.Contains(message, "wsasend: An established connection was aborted by the software in your host machine.")
-}
-
 func (l socksLogger) Errorf(format string, args ...interface{}) {
 	// The upstream logger has only Errorf and also uses it for normal UDP
 	// association creation. Classify at this adapter, retaining the exact text.
@@ -169,7 +163,7 @@ func (l socksLogger) Errorf(format string, args ...interface{}) {
 		return
 	}
 	for _, arg := range args {
-		if err, ok := arg.(error); ok && endsConnectionRoutinely(err) {
+		if err, ok := arg.(error); ok && routineStreamEnd(err) {
 			log.Debugf(Category, "[SOCKS5 internal] "+format, args...)
 			return
 		}
@@ -216,7 +210,7 @@ func (d *OutlineDevice) handleDial(ctx context.Context, network, addr string) (n
 			return nil, fmt.Errorf("StreamDialer failed for %s: %w", addr, err)
 		}
 
-		return d.track(conn)
+		return d.track(&proxyLegConn{Conn: conn, dst: addr, noticed: d.legNotice})
 
 	case "udp":
 		// Some platform resolvers did not receive replies through otherwise

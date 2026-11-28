@@ -238,7 +238,7 @@ func (a *udpAssociation) closeUpstreams() {
 }
 
 func logUDPFailure(operation string, err error) {
-	if errors.Is(err, io.EOF) || endsConnectionRoutinely(err) {
+	if errors.Is(err, io.EOF) || routineUDPFailure(err) {
 		log.Debugf(Category, "[SOCKS5 UDP] %s ended: %v", operation, err)
 	} else {
 		log.Warnf(Category, "[SOCKS5 UDP] %s failed: %v", operation, err)

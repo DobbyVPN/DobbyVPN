@@ -62,11 +62,21 @@ func (p *socksTCPProxy) DialContext(ctx context.Context, metadata *M.Metadata) (
 	return conn, err
 }
 
+// socksDialError names the stage a local SOCKS hop failed in so the dial
+// record can classify it.
+type socksDialError struct {
+	stage string // "dial" or "handshake"
+	err   error
+}
+
+func (e *socksDialError) Error() string { return e.err.Error() }
+func (e *socksDialError) Unwrap() error { return e.err }
+
 func (p *socksTCPProxy) negotiate(ctx context.Context, command socks5.Command, target socks5.Addr) (net.Conn, socks5.Addr, error) {
 	started := time.Now()
 	conn, err := dialer.DialContext(ctx, "tcp", p.address)
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect to local SOCKS proxy: %w", err)
+		return nil, nil, &socksDialError{stage: "dial", err: fmt.Errorf("connect to local SOCKS proxy: %w", err)}
 	}
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		if err := tcp.SetKeepAlive(true); err != nil {
@@ -94,7 +104,7 @@ func (p *socksTCPProxy) negotiate(ctx context.Context, command socks5.Command, t
 		closeErr := lease.Close()
 		err := errors.Join(ctx.Err(), handshakeErr, cancellationCloseErr, closeErr)
 		log.Debugf(Category, "[Router] local SOCKS handshake ended address=%s dest=%s elapsed=%s ctxErr=%v err=%v", p.address, target.String(), time.Since(started), ctx.Err(), err)
-		return nil, nil, err
+		return nil, nil, &socksDialError{stage: "handshake", err: err}
 	}
 	return conn, bound, nil
 }
