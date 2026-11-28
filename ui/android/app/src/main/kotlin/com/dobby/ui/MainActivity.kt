@@ -127,6 +127,7 @@ class MainActivity : ComponentActivity() {
     }
     // A notification posted before the grant stays hidden, so it is redrawn.
     private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        NativeVpnBridge.recordDiagnostic(this, "vpn.permission.notification_result", "granted=$granted")
         if (granted) NativeVpnBridge.redrawNotification()
     }
 
@@ -139,6 +140,7 @@ class MainActivity : ComponentActivity() {
         val asked = getSharedPreferences("notification-permission", MODE_PRIVATE)
         if (asked.getBoolean("asked", false)) return
         asked.edit().putBoolean("asked", true).apply()
+        NativeVpnBridge.recordDiagnostic(this, "vpn.permission.notification_requested", "Requesting optional notification permission")
         notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 
