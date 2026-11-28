@@ -4,11 +4,10 @@ import UIKit
 
 struct DobbyShareSheet: UIViewControllerRepresentable {
     let url: URL?
-    var text: String? = nil
     var onControllerCreated: () -> Void = {}
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: text.map { [$0] } ?? url.map { [$0] } ?? [], applicationActivities: nil)
+        let controller = UIActivityViewController(activityItems: url.map { [$0] } ?? [], applicationActivities: nil)
         onControllerCreated()
         return controller
     }
@@ -37,19 +36,6 @@ final class DobbyMacSharePresenter: NSObject, @preconcurrency NSSharingServicePi
         self.reportError = reportError
         super.init()
         Self.live[ObjectIdentifier(self)] = self
-    }
-
-    init(text: String, reportError: @escaping (String) -> Void) {
-        self.url = nil
-        self.item = text
-        self.reportError = reportError
-        super.init()
-        Self.live[ObjectIdentifier(self)] = self
-    }
-
-    static func present(text: String, reportError: @escaping (String) -> Void) {
-        let presenter = DobbyMacSharePresenter(text: text, reportError: reportError)
-        presenter.present(in: (NSApp.keyWindow ?? NSApp.mainWindow)?.contentView)
     }
 
     static func present(url: URL, reportError: @escaping (String) -> Void) {
@@ -483,9 +469,6 @@ struct DobbyLogView: NSViewRepresentable {
     let interactive: Bool
     let onSendLogs: () -> Void
     var onUploadLogs: (() -> Void)? = nil
-    /// The last upload for "Copy last reference (…)", and what copying it does.
-    var lastUpload: DobbyUploadReference? = nil
-    var onCopyLastReference: (String) -> Void = { _ in }
     let onClear: () -> Void
     var onReadingPositionRestored: (MacLogRestoreObservation) -> Void = { _ in }
     var onReadingPositionCaptured: (MacLogReadingAnchor) -> Void = { _ in }
@@ -557,8 +540,6 @@ struct DobbyLogView: NSViewRepresentable {
         let coordinator = context.coordinator
         view.onSendLogs = onSendLogs
         view.onUploadLogs = onUploadLogs
-        view.lastUpload = lastUpload
-        view.onCopyLastReference = onCopyLastReference
         view.onAccessibilityObservation = onAccessibilityObservation
         view.onClear = { [weak coordinator] in
             coordinator?.resetForClear()

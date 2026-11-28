@@ -413,12 +413,12 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
         AlertDialog(
             onDismissRequest = { controller.dismissUploadSuccess() },
             title = { Text("Logs uploaded") },
-            text = { Text(state.uploadedReference, Modifier.testTag("logs.upload.success")) },
-            confirmButton = { TextButton(onClick = { controller.copyUploadReference() }, modifier = Modifier.testTag("logs.upload.success.copy")) { Text("Copy") } },
-            dismissButton = { Row {
-                TextButton(onClick = { controller.shareUploadReference() }, modifier = Modifier.testTag("logs.upload.success.share")) { Text("Share") }
-                TextButton(onClick = { controller.dismissUploadSuccess() }) { Text("Close") }
+            text = { Column {
+                Text("Send this number to support")
+                Text(state.uploadedReference, Modifier.padding(top = 8.dp).testTag("logs.upload.success"), fontFamily = FontFamily.Monospace)
             } },
+            confirmButton = { TextButton(onClick = { controller.copyUploadReference() }, modifier = Modifier.testTag("logs.upload.success.copy")) { Text("Copy") } },
+            dismissButton = { TextButton(onClick = { controller.dismissUploadSuccess() }, modifier = Modifier.testTag("logs.upload.success.close")) { Text("Close") } },
         )
     }
     Column(modifier.fillMaxWidth().background(Surface)) {
@@ -449,17 +449,14 @@ private fun Logs(controller: SessionController, modifier: Modifier) {
             }
         }
         if (state.uploadingLogs) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(state.uploadPhase, Modifier.weight(1f).testTag("logs.upload.progress"))
-                TextButton(onClick = { controller.cancelUpload() }, modifier = Modifier.testTag("logs.upload.cancel.persistent")) { Text("Cancel") }
-            }
+            Text("Uploading logs…", Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("logs.upload.progress"))
         }
         Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
     }
 }
 
 // The logs menu opens at the double-tap point as one panel in the app's button style:
-// optional upload rows on top, then Clear and Send logs edge to edge.
+// the optional Upload logs row on top, then Clear and Send logs edge to edge.
 @Composable
 private fun LogsMenu(controller: SessionController, position: IntOffset, close: () -> Unit) {
     val state = controller.state
@@ -483,22 +480,6 @@ private fun LogsMenu(controller: SessionController, position: IntOffset, close: 
         ) {
             if (state.session.logsUploadAvailable) {
                 MenuRow(if (state.uploadingLogs) "Uploading logs…" else "Upload logs", "logs.upload", enabled = !state.uploadingLogs) { close(); controller.uploadLogs() }
-                MenuDivider()
-            }
-            if (state.uploadingLogs) {
-                MenuRow("Cancel upload", "logs.upload.cancel") { close(); controller.cancelUpload() }
-                MenuDivider()
-            }
-            if (state.uploadedReference.isNotEmpty()) {
-                Text(
-                    "${state.uploadedReference}\n${state.uploadedProvider}\n${state.uploadedTime}",
-                    Modifier.fillMaxWidth().testTag("logs.upload.reference").padding(horizontal = 12.dp, vertical = 10.dp),
-                    color = Muted, fontSize = 13.sp, lineHeight = 17.sp, textAlign = TextAlign.Center,
-                )
-                MenuDivider()
-                MenuRow("Copy reference", "logs.upload.copy") { close(); controller.copyUploadReference() }
-                MenuDivider()
-                MenuRow("Share reference", "logs.upload.share") { close(); controller.shareUploadReference() }
                 MenuDivider()
             }
             Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).height(IntrinsicSize.Min)) {

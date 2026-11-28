@@ -74,7 +74,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
         _logs = new LogViewport(LogsScroll, LogEntries, LogsMenu, Root.Resources, _diagnostics);
-        RestoreLogUpload();
+        CleanupLogUploads();
         SizeWindow();
         FocusSink.LostFocus += (_, _) => FocusSink.IsTabStop = false;
         Root.Loaded += (_, _) =>
@@ -1399,14 +1399,16 @@ public sealed partial class MainWindow : Window
         [JsonPropertyName("max_bytes")] public long MaxBytes { get; init; }
     }
 
-    // Same file and JSON as dobby-cli (`<ui log>.upload`), so an upload made in either place is visible in both.
+    // Same file and JSON as dobby-cli (`<ui log>.upload`), so `dobby-cli logs` shows an upload made in the window.
     private sealed record LastLogUpload(
         [property: JsonPropertyName("reference"), JsonRequired] string Reference,
         [property: JsonPropertyName("provider"), JsonRequired] string Provider,
         [property: JsonPropertyName("time"), JsonRequired] DateTimeOffset Time);
     private static string LatestUploadPath => NativeDiagnostics.Current.UiPath + ".upload";
     private static string LogUploadDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DobbyVPN", "LogUploads");
-    private void RestoreLogUpload()
+    // Removes upload directories a closed window left behind. The number of an
+    // upload is shown once, right after it; nothing is restored at startup.
+    private void CleanupLogUploads()
     {
         try
         {
@@ -1434,60 +1436,12 @@ public sealed partial class MainWindow : Window
                 }
             }
             finally { if (acquired) cleanupGate.ReleaseMutex(); }
-            var metadata = LatestUploadPath;
-            if (!File.Exists(metadata)) return;
-            var latest = JsonSerializer.Deserialize<LastLogUpload>(File.ReadAllText(metadata));
-            if (latest is null || string.IsNullOrEmpty(latest.Reference) || latest.Provider is null) return;
-            _lastLogReference = latest.Reference;
-            UploadStatusText.Text = $"Uploaded: {latest.Reference} · {latest.Time.LocalDateTime:g} · {latest.Provider}";
-            UploadStatusPanel.Visibility = Visibility.Visible;
-            UploadProgress.Visibility = Visibility.Collapsed;
-            UploadCancelButton.Visibility = Visibility.Collapsed;
-            UploadCopyButton.Visibility = Visibility.Visible;
-            UploadShareButton.Visibility = Visibility.Visible;
-            UploadDismissButton.Visibility = Visibility.Visible;
-            CopyUploadItem.Text = $"Copy upload {latest.Reference} ({latest.Time.LocalDateTime:g})";
-            CopyUploadItem.Visibility = Visibility.Visible;
-            ShareUploadItem.Visibility = Visibility.Visible;
         }
         catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.restore"); }
     }
 
     private void UploadLogs_Click(object sender, RoutedEventArgs e) => StartWindowWork(UploadLogsAsync);
-    private void CancelUpload_Click(object sender, RoutedEventArgs e) => _logUploadCancellation?.Cancel();
     private void DismissUpload_Click(object sender, RoutedEventArgs e) => UploadStatusPanel.Visibility = Visibility.Collapsed;
-    [ComImport, Guid("3A3DCD6C-3EAB-43DC-BCDE-45671CE800C8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IDataTransferManagerInterop
-    {
-        IntPtr GetForWindow(IntPtr window, ref Guid iid);
-        void ShowShareUIForWindow(IntPtr window);
-    }
-
-    private DataTransferManager? _shareManager;
-    private void ShareUpload_Click(object sender, RoutedEventArgs e)
-    {
-        if (_lastLogReference.Length == 0) return;
-        try
-        {
-            var window = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            var interop = DataTransferManager.As<IDataTransferManagerInterop>();
-            if (_shareManager is null)
-            {
-                var iid = new Guid("a5caee9b-8708-49d1-8d36-67d25a8da00c");
-                var pointer = interop.GetForWindow(window, ref iid);
-                try { _shareManager = WinRT.MarshalInterface<DataTransferManager>.FromAbi(pointer); }
-                finally { Marshal.Release(pointer); }
-                _shareManager.DataRequested += (_, args) =>
-                {
-                    args.Request.Data.Properties.Title = "DobbyVPN logs";
-                    args.Request.Data.SetText("DobbyVPN logs: " + _lastLogReference);
-                };
-            }
-            interop.ShowShareUIForWindow(window);
-        }
-        catch (Exception error) { _diagnostics.Record(error.ToString(), "logs.upload.share"); }
-    }
-
     private void CopyUpload_Click(object sender, RoutedEventArgs e)
     {
         if (_lastLogReference.Length == 0) return;
@@ -1502,14 +1456,10 @@ public sealed partial class MainWindow : Window
         using var upload = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _logUploadCancellation = upload;
         UploadLogsItem.IsEnabled = false;
-        CancelUploadItem.Visibility = Visibility.Visible;
         UploadLogsItem.Text = "Uploading logs…";
-        UploadStatusText.Text = "Preparing logs…";
+        UploadStatusText.Text = "Uploading logs…";
         UploadStatusPanel.Visibility = Visibility.Visible;
-        UploadProgress.Visibility = Visibility.Visible;
-        UploadCancelButton.Visibility = Visibility.Visible;
         UploadCopyButton.Visibility = Visibility.Collapsed;
-        UploadShareButton.Visibility = Visibility.Collapsed;
         UploadDismissButton.Visibility = Visibility.Collapsed;
         string? temporary = null;
         string? privateDirectory = null;
@@ -1535,21 +1485,14 @@ public sealed partial class MainWindow : Window
             await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
                 await _diagnostics.ExportAsync(output, ExportHeader, upload.Token, requireComplete: true);
             upload.Token.ThrowIfCancellationRequested();
-            UploadStatusText.Text = "Uploading logs…";
             await LogUpload.PutAsync(temporary, prepared.Destination, prepared.Authorization, prepared.MaxBytes, upload.Token);
             confirmed = true;
             _lastLogReference = prepared.Reference;
             UploadStatusText.Text = "Uploaded: " + prepared.Reference;
-            UploadProgress.Visibility = Visibility.Collapsed;
-            UploadCancelButton.Visibility = Visibility.Collapsed;
             UploadCopyButton.Visibility = Visibility.Visible;
-            UploadShareButton.Visibility = Visibility.Visible;
             UploadDismissButton.Visibility = Visibility.Visible;
+            // dobby-cli shows the latest upload from this file; the window does not read it back.
             var latest = new LastLogUpload(prepared.Reference, prepared.Provider, DateTimeOffset.UtcNow);
-            UploadStatusText.Text = $"Uploaded: {latest.Reference} · {latest.Time.LocalDateTime:g} · {latest.Provider}";
-            CopyUploadItem.Text = $"Copy upload {latest.Reference} ({latest.Time.LocalDateTime:g})";
-            CopyUploadItem.Visibility = Visibility.Visible;
-            ShareUploadItem.Visibility = Visibility.Visible;
             var metadata = LatestUploadPath;
             Directory.CreateDirectory(Path.GetDirectoryName(metadata)!);
             // A unique name per write: several windows (or dobby-cli) may save at the same time.
@@ -1584,7 +1527,6 @@ public sealed partial class MainWindow : Window
             _logUploadCancellation = null;
             if (!_lifetime.IsClosing)
             {
-                CancelUploadItem.Visibility = Visibility.Collapsed;
                 UploadLogsItem.Text = "Upload logs";
                 UploadLogsItem.IsEnabled = true;
             }

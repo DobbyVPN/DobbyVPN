@@ -177,9 +177,6 @@
               </Style>
             </MenuFlyout.MenuFlyoutPresenterStyle>
             <MenuFlyoutItem x:Name="UploadLogsItem" Text="Upload logs" Visibility="Collapsed" Click="UploadLogs_Click" AutomationProperties.AutomationId="logs.upload" />
-            <MenuFlyoutItem x:Name="CancelUploadItem" Text="Cancel upload" Visibility="Collapsed" Click="CancelUpload_Click" AutomationProperties.AutomationId="logs.upload.cancel" />
-            <MenuFlyoutItem x:Name="CopyUploadItem" Text="Copy last upload reference" Visibility="Collapsed" Click="CopyUpload_Click" AutomationProperties.AutomationId="logs.upload.copy" />
-            <MenuFlyoutItem x:Name="ShareUploadItem" Text="Share last upload reference" Visibility="Collapsed" Click="ShareUpload_Click" AutomationProperties.AutomationId="logs.upload.share" />
             <MenuFlyoutItem x:Name="SendLogsItem" Text="Send logs" HorizontalContentAlignment="Center" Click="SendLogs_Click" AutomationProperties.AutomationId="logs.export" />
             <MenuFlyoutItem Text="Clear" HorizontalContentAlignment="Center" Click="ClearLogs_Click" AutomationProperties.AutomationId="logs.clear" />
           </MenuFlyout>
@@ -190,10 +187,7 @@
         <StackPanel Spacing="4">
           <TextBlock x:Name="UploadStatusText" TextWrapping="Wrap" AutomationProperties.AutomationId="logs.upload.status" />
           <StackPanel Orientation="Horizontal" Spacing="8">
-            <ProgressRing x:Name="UploadProgress" Width="18" Height="18" IsActive="True" />
-            <Button x:Name="UploadCancelButton" Content="Cancel" Click="CancelUpload_Click" AutomationProperties.AutomationId="logs.upload.progress.cancel" />
             <Button x:Name="UploadCopyButton" Content="Copy" Click="CopyUpload_Click" Visibility="Collapsed" AutomationProperties.AutomationId="logs.upload.result.copy" />
-            <Button x:Name="UploadShareButton" Content="Share" Click="ShareUpload_Click" Visibility="Collapsed" AutomationProperties.AutomationId="logs.upload.result.share" />
             <Button x:Name="UploadDismissButton" Content="Close" Click="DismissUpload_Click" Visibility="Collapsed" AutomationProperties.AutomationId="logs.upload.result.close" />
           </StackPanel>
         </StackPanel>

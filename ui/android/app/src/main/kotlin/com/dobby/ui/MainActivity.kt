@@ -700,10 +700,7 @@ internal data class ScreenState(
     val uploadError: String = "",
     val exportingLogs: Boolean = false,
     val uploadingLogs: Boolean = false,
-    val uploadPhase: String = "",
     val uploadedReference: String = "",
-    val uploadedProvider: String = "",
-    val uploadedTime: String = "",
     val showUploadSuccess: Boolean = false,
     // An import link waits here until the user confirms that it may replace the saved subscription.
     val pendingImport: String? = null,
@@ -731,9 +728,6 @@ internal class SessionController(
     var state by mutableStateOf(ScreenState(
         source = restoredSourceEditorState?.getString(SOURCE_TEXT).orEmpty(),
         sourceDirty = restoredSourceEditorState?.getBoolean(SOURCE_DIRTY) == true,
-        uploadedReference = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("reference", "").orEmpty(),
-        uploadedProvider = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("provider", "").orEmpty(),
-        uploadedTime = activity.getSharedPreferences("log-upload", android.content.Context.MODE_PRIVATE).getString("time", "").orEmpty(),
         loadError = restoredSourceEditorState?.getString(SOURCE_LOAD_ERROR).orEmpty(),
     ))
         private set
@@ -1451,11 +1445,9 @@ internal class SessionController(
         }
         if (state.uploadingLogs || !latest.logsUploadAvailable) return
         val selected = latest
-        val attempt = LogUploader(activity.applicationContext, phase = { phase ->
-            post { if (state.uploadingLogs) state = state.copy(uploadPhase = phase) }
-        })
+        val attempt = LogUploader(activity.applicationContext)
         uploader = attempt
-        state = state.copy(uploadingLogs = true, uploadPhase = "Preparing logs…", uploadError = "")
+        state = state.copy(uploadingLogs = true, uploadError = "")
         uploadWorker.execute {
             val outcome = runCatching { attempt.upload(selected.sessionId, selected.digest) }
             NativeVpnBridge.recordDiagnostic(activity.applicationContext, "logs.upload_completed",
@@ -1464,24 +1456,18 @@ internal class SessionController(
             post {
                 if (uploader === attempt) {
                     uploader = null
+                    // The number is shown once, right after the upload; it is not kept.
                     state = state.copy(uploadingLogs = false,
-                        uploadedReference = outcome.getOrNull()?.reference ?: state.uploadedReference,
-                        uploadedProvider = outcome.getOrNull()?.provider ?: state.uploadedProvider,
-                        uploadedTime = outcome.getOrNull()?.time ?: state.uploadedTime,
+                        uploadedReference = outcome.getOrNull()?.reference.orEmpty(),
                         showUploadSuccess = outcome.isSuccess,
-                        uploadError = outcome.exceptionOrNull()?.message ?: outcome.getOrNull()?.persistenceError.orEmpty())
+                        uploadError = outcome.exceptionOrNull()?.message.orEmpty())
                 }
             }
         }
     }
 
-    fun cancelUpload() { uploader?.cancel() }
-    fun dismissUploadSuccess() { state = state.copy(showUploadSuccess = false) }
+    fun dismissUploadSuccess() { state = state.copy(showUploadSuccess = false, uploadedReference = "") }
     fun copyUploadReference() { clipboard.setPrimaryClip(ClipData.newPlainText("DobbyVPN logs", state.uploadedReference)) }
-    fun shareUploadReference() {
-        activity.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-            .putExtra(Intent.EXTRA_TEXT, "DobbyVPN logs: ${state.uploadedReference}"), "Share log reference"))
-    }
 
     fun close() {
         selectionAdmission.close {

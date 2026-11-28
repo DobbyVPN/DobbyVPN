@@ -64,11 +64,8 @@ public final class DobbySessionViewModel: ObservableObject {
     @Published public private(set) var exportingLogs = false
     @Published var uploadStatus = ""
     @Published var uploadError = ""
-    @Published var latestUpload: DobbyUploadReference?
     @Published var uploadResult: DobbyUploadReference?
     private var uploadTask: Task<Void, Never>?
-    private var uploadCancellation: DobbyUploadCancellation?
-    private let uploadReferenceKey = "DobbyVPN.latestLogUpload"
     private static var cleanedUploadDirectories = false
 
     @Published public var sourceText = "" {
@@ -125,7 +122,6 @@ public final class DobbySessionViewModel: ObservableObject {
     ) {
         self.client = client
         self.debounceScheduler = debounceScheduler
-        latestUpload = DobbyLatestUploadFile.load(forLog: client.uiDiagnosticPath, defaultsKey: uploadReferenceKey)
         if !Self.cleanedUploadDirectories {
             Self.cleanedUploadDirectories = true
             do { try DobbyUploadDirectory.removeAbandoned() }
@@ -656,8 +652,6 @@ extension DobbySessionViewModel {
 }
 
 extension DobbySessionViewModel {
-    func cancelLogsUpload() { uploadCancellation?.cancel(); uploadTask?.cancel() }
-
     func startLogsUpload() {
         guard uploadTask == nil, snapshot.logsUploadAvailable else { return }
         let client = client
@@ -665,9 +659,7 @@ extension DobbySessionViewModel {
         let digest = snapshot.digest
         let writeError = diagnosticWriteError
         uploadError = ""
-        uploadStatus = "Preparing logs…"
-        let cancellation = DobbyUploadCancellation()
-        uploadCancellation = cancellation
+        uploadStatus = "Uploading logs…"
         uploadTask = Task { [weak self] in
             guard let self else { return }
             var directory: DobbyUploadDirectory?
@@ -681,43 +673,32 @@ extension DobbySessionViewModel {
                     }
                 }
                 self.uploadTask = nil
-                self.uploadCancellation = nil
                 self.uploadStatus = ""
             }
             do {
                 let preparation = try await Task.detached {
                     try DobbyResponse.result(from: client.call("PrepareLogUpload", parameters: ["session_id": sessionID, "digest": digest]), as: DobbyUploadPreparation.self)
                 }.value
-                try Task.checkCancellation()
                 let dir = try DobbyUploadDirectory()
                 directory = dir
                 let file = dir.url.appendingPathComponent(preparation.reference + ".gz")
                 let header = "DobbyVPN \(client.version)\nSource commit: \(client.sourceCommit)\nCaptured: \(ISO8601DateFormatter().string(from: Date()))\n\n" + writeError
-                let issues = try await withTaskCancellationHandler {
-                    try await Task.detached {
-                        try exportDiagnostics(paths: client.diagnosticPaths, to: file, header: header, checkCancellation: cancellation.check)
-                    }.value
-                } onCancel: {
-                    cancellation.cancel()
-                }
+                let issues = try await Task.detached {
+                    try exportDiagnostics(paths: client.diagnosticPaths, to: file, header: header)
+                }.value
                 guard issues.isEmpty else { throw DobbyClientError.diagnostics(issues) }
-                try Task.checkCancellation()
-                self.uploadStatus = "Uploading logs…"
                 try await uploadDiagnostics(preparation, file: file)
                 let result = DobbyUploadReference(reference: preparation.reference, completed: Date(), provider: preparation.provider)
                 self.finishUpload(result)
-                // The upload already succeeded; failing to save the reference must not be reported as a failed upload.
-                do { try DobbyLatestUploadFile.save(result, forLog: client.uiDiagnosticPath, defaultsKey: self.uploadReferenceKey) }
+                #if os(macOS)
+                // dobby-cli shows the latest upload from this file. The upload already
+                // succeeded; failing to save the reference must not be reported as a failed upload.
+                do { try DobbyLatestUploadFile.write(result, forLog: client.uiDiagnosticPath) }
                 catch { self.recordError("Could not save latest upload reference: \(String(reflecting: error))") }
-            } catch is CancellationError {
-                self.uploadError = "Log upload cancelled"
+                #endif
             } catch {
-                if Task.isCancelled {
-                    self.uploadError = "Log upload cancelled"
-                } else {
-                    self.uploadError = "Log upload failed: \(error.localizedDescription)"
-                    self.recordError(self.uploadError)
-                }
+                self.uploadError = "Log upload failed: \(error.localizedDescription)"
+                self.recordError(self.uploadError)
             }
         }
     }
