@@ -21,6 +21,7 @@ TEST_WORKFLOW_FILE = "test.yml"
 TESTS_REPOSITORY = "DobbyVPN/Torturer"
 SCHEMA = 1
 PUBLIC_SCHEMA = 2
+HOSTED_TEST_SCHEMA = 5
 PAGE_SIZE = 100
 # Offset pagination can shift while other jobs create deployments, so a record
 # may appear on two pages. Only the deployment list is re-read for that.

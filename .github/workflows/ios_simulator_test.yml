@@ -1,0 +1,252 @@
+name: iOS Simulator app contract
+
+on:
+  workflow_call:
+    secrets:
+      TORTURER_READ_KEY:
+        required: true
+    inputs:
+      source_sha:
+        description: Exact public product revision selected by Test.
+        type: string
+        required: true
+      torturer_sha:
+        description: Exact private Torturer revision selected by Test.
+        type: string
+        required: true
+      torturer_tree_sha256:
+        description: Fingerprint of the exact selected private test tree.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  ios_simulator_build:
+    name: Build reusable iOS Simulator test products
+    environment: release-tests
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
+      DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
+      DOBBY_TEST_SHA: ${{ inputs.torturer_sha }}
+      DOBBY_TEST_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+    outputs:
+      manifest_sha256: ${{ steps.build_inputs.outputs.manifest_sha256 }}
+      producer_attempt: ${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: DobbyVPN/DobbyVPN
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Check out exact private tests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+      - name: Require exact selected source and test trees
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C torturer rev-parse HEAD)" = "$TORTURER_SHA"
+          python3 - <<'PY'
+          import runpy
+          from pathlib import Path
+          check = runpy.run_path(".github/scripts/release/release_guard.py")
+          if check["tests_tree_sha256"](Path("torturer")) != "${{ inputs.torturer_tree_sha256 }}":
+              raise SystemExit("private test tree differs from selected fingerprint")
+          PY
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: false
+      - name: Restore dependency archives
+        uses: ./.github/actions/dependency-cache
+      - name: Build TrustTunnel-enabled Go runtime for iOS Simulator
+        working-directory: core
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 ../.github/scripts/ios/ios_production_check.py --simulator-architecture arm64 \
+            --source-sha "$SOURCE_SHA" --output-dir "$RUNNER_TEMP/ios-simulator-runtime"
+          runtime_binary="$(find DobbyVPNRuntime.xcframework -type f -path '*/DobbyVPNRuntime.framework/DobbyVPNRuntime' -print -quit)"
+          test -n "$runtime_binary"
+          runtime_arches="$(xcrun lipo -archs "$runtime_binary" | tee /dev/stderr)"
+          [[ " $runtime_arches " == *" arm64 "* ]]
+      - name: Build and attest reusable iOS Simulator test products
+        id: build_inputs
+        env:
+          PYTHONPATH: ${{ github.workspace }}/torturer
+        run: |
+          set -euo pipefail
+          python3 torturer/tests/platform/ios_simulator/run_app_contract.py \
+            --candidate-root "$GITHUB_WORKSPACE" \
+            --work-dir "$RUNNER_TEMP/ios-simulator-compiled-inputs" \
+            --source-sha "${{ inputs.source_sha }}" \
+            --producer-attempt "$GITHUB_RUN_ATTEMPT" --prepare-only
+      - name: Retain reusable iOS Simulator products
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-ios-simulator-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-simulator-compiled-inputs/compiled-test-products.tar.gz
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+      - name: Retain iOS Simulator producer diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-ios-simulator-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-simulator-compiled-inputs/diagnostics
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
+      - name: Remove reusable build scratch
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ios-simulator-compiled-inputs"
+
+  ios_simulator:
+    name: iOS Simulator app contract (${{ matrix.shard }})
+    needs: ios_simulator_build
+    environment: release-tests
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [subscription, interaction, logs]
+    timeout-minutes: 45
+    env:
+      DOBBY_PRODUCT_ROOT: ${{ github.workspace }}
+      DOBBY_TESTS_ROOT: ${{ github.workspace }}/torturer
+      DOBBY_TEST_SHA: ${{ inputs.torturer_sha }}
+      DOBBY_TEST_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+      DOBBY_SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - name: Require final Test on main
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TORTURER_SHA: ${{ inputs.torturer_sha }}
+          TORTURER_TREE_SHA256: ${{ inputs.torturer_tree_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" -ge 1
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TORTURER_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TORTURER_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: DobbyVPN/DobbyVPN
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Check out exact private tests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: DobbyVPN/Torturer
+          ref: ${{ inputs.torturer_sha }}
+          path: torturer
+          ssh-key: ${{ secrets.TORTURER_READ_KEY }}
+          persist-credentials: false
+
+      - name: Verify selected product and private test trees
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import runpy
+          import subprocess
+          from pathlib import Path
+
+          product_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          if product_sha != os.environ["SOURCE_SHA"]:
+              raise SystemExit("product checkout does not match selected source revision")
+
+          tests_root = Path(os.environ["DOBBY_TESTS_ROOT"])
+          tests_sha = subprocess.check_output(
+              ["git", "-C", str(tests_root), "rev-parse", "HEAD"], text=True
+          ).strip()
+          if tests_sha != os.environ["DOBBY_TEST_SHA"]:
+              raise SystemExit("private tests checkout does not match selected revision")
+
+          release_guard = runpy.run_path(
+              ".github/scripts/release/release_guard.py"
+          )
+          tree_sha = release_guard["tests_tree_sha256"](tests_root)
+          if tree_sha != os.environ["DOBBY_TEST_TREE_SHA256"]:
+              raise SystemExit("private tests tree does not match selected fingerprint")
+          PY
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
+      - name: Download the producer's compiled test products
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dobbyvpn-ios-simulator-inputs-${{ github.run_id }}-${{ needs.ios_simulator_build.outputs.producer_attempt }}
+          path: ${{ runner.temp }}/ios-simulator-mini-contract/compiled-inputs
+
+      - name: Install pinned screenshot decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/dobbyvpn-screenshot-python"
+          python3 -m pip install --disable-pip-version-check --only-binary=:all: \
+            --no-deps --target "$package_dir" \
+            --requirement .github/scripts/requirements-native-ui.txt
+
+      - name: Run private iOS Simulator app contract
+        env:
+          PYTHONPATH: ${{ runner.temp }}/dobbyvpn-screenshot-python:${{ github.workspace }}/torturer
+          SHARD: ${{ matrix.shard }}
+          PRODUCER_ATTEMPT: ${{ needs.ios_simulator_build.outputs.producer_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$DOBBY_TESTS_ROOT/tests/platform/ios_simulator/run_app_contract.py" \
+            --candidate-root "$DOBBY_PRODUCT_ROOT" \
+            --work-dir "$RUNNER_TEMP/ios-simulator-mini-contract" \
+            --source-sha "$DOBBY_SOURCE_SHA" \
+            --producer-attempt "$PRODUCER_ATTEMPT" \
+            --compiled-test-archive "$RUNNER_TEMP/ios-simulator-mini-contract/compiled-inputs/compiled-test-products.tar.gz" \
+            --compiled-test-manifest-sha256 "${{ needs.ios_simulator_build.outputs.manifest_sha256 }}" \
+            --shard "$SHARD"
+
+      - name: Retain complete iOS Simulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dobbyvpn-ios-simulator-contract-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-simulator-mini-contract/diagnostics
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+      - name: Remove Simulator build and decoder scratch
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/ios-simulator-mini-contract" \
+            "$RUNNER_TEMP/dobbyvpn-screenshot-python"

@@ -12,6 +12,7 @@ runs:
         fixture_status=0
         # Root owns both supervision and tests so SO_MARK and timeout cleanup work.
         sudo -n env \
+          "PATH=$PATH" \
           "DOBBY_PRODUCT_ROOT=$DOBBY_PRODUCT_ROOT" \
           "PYTHONPATH=$DOBBY_TESTS_ROOT" \
           "DOBBY_WEBSOCKET_FIXTURE_PROFILE=$GITHUB_WORKSPACE/fixtures/websocket-profile.toml" \
@@ -33,10 +34,10 @@ runs:
         profile = Path(os.environ["DOBBY_WEBSOCKET_FIXTURE_PROFILE"])
         if not profile.is_file() or profile.stat().st_size == 0:
             raise RuntimeError("disposable protocol fixtures require the selected nonempty profile")
-        # Preserve the functional lane's existing provider deadline and recovery reserve.
+        # Consume the same execution deadline; the caller owns the cleanup margin.
         environment = os.environ.copy()
         environment[COMMAND_DEADLINE_ENV] = str(
-            time.monotonic() + float(os.environ["RUN_DEADLINE_EPOCH"]) - time.time() - 300
+            time.monotonic() + float(os.environ["RUN_DEADLINE_EPOCH"]) - time.time()
         )
         command = [
             sys.executable, "-m", "source_tests.checks", "go-unit",
