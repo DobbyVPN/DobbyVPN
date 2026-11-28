@@ -36,16 +36,6 @@ func exportLocalDiagnostics(client: DobbySessionClient, to url: URL, writeError:
     return try exportDiagnostics(paths: client.diagnosticPaths, to: url, header: header)
 }
 
-final class DobbyUploadCancellation: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-    func cancel() { lock.lock(); cancelled = true; lock.unlock() }
-    func check() throws {
-        lock.lock(); let value = cancelled; lock.unlock()
-        if value { throw CancellationError() }
-    }
-}
-
 typealias DobbyLogEntry = DiagnosticFiles.Entry
 
 func isShownOnScreen(_ entry: DobbyLogEntry) -> Bool { entry.level != "DEBUG" && entry.level != "TRACE" }
@@ -94,16 +84,6 @@ struct DobbyUploadReference: Codable, Sendable {
     let reference: String
     let completed: Date
     let provider: String
-    var shareText: String { "DobbyVPN logs: \(reference)" }
-
-    /// The logs menu item: "Copy last reference (0192a3b4… · 14:05)", with the date instead of the time when not today.
-    func menuTitle(now: Date = Date(), calendar: Calendar = .current) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = calendar.isDate(completed, inSameDayAs: now) ? "HH:mm" : "d MMM"
-        return "Copy last reference (\(reference.prefix(8))… · \(formatter.string(from: completed)))"
-    }
 }
 
 extension DobbySessionViewModel {
@@ -112,10 +92,9 @@ extension DobbySessionViewModel {
                          event: "ui.logs_share", level: "INFO")
     }
 
-    /// A confirmed upload: kept for the logs menu, shown once in the result dialog
-    /// (never again after a restart), and logged with its upload address.
+    /// A confirmed upload: shown once in the result dialog (never again after a
+    /// restart) and logged with its upload address.
     func finishUpload(_ result: DobbyUploadReference) {
-        latestUpload = result
         uploadResult = result
         recordDiagnostic("reference=\(result.reference) address=\(result.provider) " +
                          "completed=\(ISO8601DateFormatter().string(from: result.completed))",
@@ -132,43 +111,13 @@ extension DobbySessionViewModel {
     }
 }
 
-/// The "latest upload" result shared with dobby-cli: `<ui log>.upload`, JSON `{"reference","time","provider"}`
-/// (the file and format written by `dobby-cli logs upload`). Used on macOS; iOS has no CLI and keeps UserDefaults.
+/// The "latest upload" result shared with dobby-cli on macOS: `<ui log>.upload`, JSON
+/// `{"reference","time","provider"}` (the file and format `dobby-cli logs upload` writes and
+/// `dobby-cli logs` reads). The window only writes it; it shows a number once, right after the upload.
 enum DobbyLatestUploadFile {
     private struct Record: Codable { let reference: String; let time: String; let provider: String }
 
     static func url(forLog uiLog: URL) -> URL { URL(fileURLWithPath: uiLog.path + ".upload") }
-
-    /// False only if the file is absent (ENOENT); any other lstat error counts as present.
-    static func exists(forLog uiLog: URL) -> Bool {
-        var info = stat()
-        return lstat(url(forLog: uiLog).path, &info) == 0 || errno != ENOENT
-    }
-
-    static func read(forLog uiLog: URL) -> DobbyUploadReference? {
-        guard let data = try? Data(contentsOf: url(forLog: uiLog)),
-              let record = try? JSONDecoder().decode(Record.self, from: data), !record.reference.isEmpty,
-              let time = parse(record.time) else { return nil }
-        return DobbyUploadReference(reference: record.reference, completed: time, provider: record.provider)
-    }
-
-    /// macOS: the shared file; the old UserDefaults value only when the file is absent (a damaged file must not bring it back).
-    /// iOS: UserDefaults.
-    static func load(forLog uiLog: URL, defaultsKey: String) -> DobbyUploadReference? {
-        #if os(macOS)
-        if let upload = read(forLog: uiLog) { return upload }
-        if exists(forLog: uiLog) { return nil }
-        #endif
-        return UserDefaults.standard.data(forKey: defaultsKey).flatMap { try? JSONDecoder().decode(DobbyUploadReference.self, from: $0) }
-    }
-
-    static func save(_ upload: DobbyUploadReference, forLog uiLog: URL, defaultsKey: String) throws {
-        #if os(macOS)
-        try write(upload, forLog: uiLog)
-        #else
-        UserDefaults.standard.set(try JSONEncoder().encode(upload), forKey: defaultsKey)
-        #endif
-    }
 
     static func write(_ upload: DobbyUploadReference, forLog uiLog: URL) throws {
         let destination = url(forLog: uiLog)
@@ -186,15 +135,6 @@ enum DobbyLatestUploadFile {
             try? FileManager.default.removeItem(at: temporary)
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
-    }
-
-    // Go writes RFC 3339 with a variable number of fractional digits.
-    private static func parse(_ text: String) -> Date? {
-        let plain = ISO8601DateFormatter()
-        if let date = plain.date(from: text) { return date }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: text)
     }
 }
 

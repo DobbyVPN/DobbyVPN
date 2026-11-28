@@ -15,11 +15,12 @@ import javax.net.ssl.HttpsURLConnection
 import org.json.JSONObject
 
 /** One user-owned transfer; no redirects, retries, or provider lookup after preparation. */
-internal data class LogUploadResult(val reference: String, val provider: String, val time: String, val persistenceError: String = "")
+internal data class LogUploadResult(val reference: String)
 
 internal class LogUploader(
     private val context: Context,
-    private val phase: (String) -> Unit = {},
+    /** Called once the archive is ready and the transfer begins (tests observe this moment). */
+    private val transferStarted: () -> Unit = {},
     private val responseObserved: (Int) -> Unit = {},
     private val transferTimeoutMillis: Long = TimeUnit.MINUTES.toMillis(15),
 ) {
@@ -54,7 +55,6 @@ internal class LogUploader(
         val reference = prepared.getString("reference")
         val uuid = UUID.fromString(reference)
         require(uuid.version() == 7 && uuid.toString() == reference)
-        val provider = prepared.getString("provider")
         val destination = prepared.getString("destination")
         val authorization = prepared.getString("authorization")
         val maxBytes = prepared.getLong("max_bytes")
@@ -76,7 +76,7 @@ internal class LogUploader(
             archive.outputStream().use { writeDiagnosticArchive(it, paths, metadata, ::checkCancelled, requireComplete = true) }
             checkCancelled()
             if (archive.length() > maxBytes) throw IOException("Diagnostics archive exceeds upload size limit")
-            phase("Uploading logs…")
+            transferStarted()
             val http = URL(destination).openConnection() as? HttpsURLConnection ?: throw IOException("Upload destination is not HTTPS")
             connection = http
             val timer = Executors.newSingleThreadScheduledExecutor()
@@ -100,11 +100,8 @@ internal class LogUploader(
                 val status = http.responseCode
                 responseObserved(status)
                 if (status != HttpURLConnection.HTTP_CREATED) throw IOException("Log upload returned HTTP $status")
-                val time = Instant.now().toString()
-                val saved = context.getSharedPreferences("log-upload", Context.MODE_PRIVATE).edit()
-                    .putString("reference", reference).putString("provider", provider).putString("time", time).commit()
                 completed = true
-                return LogUploadResult(reference, provider, time, if (saved) "" else "Upload succeeded, but the reference could not be saved")
+                return LogUploadResult(reference)
             } finally { deadline.cancel(false); timer.shutdownNow(); connection = null; http.disconnect() }
         } catch (failure: Throwable) {
             originalFailure = failure

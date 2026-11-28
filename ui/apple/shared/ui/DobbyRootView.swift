@@ -90,7 +90,6 @@ public struct DobbyRootView: View {
     @State private var exportedLogsURL: URL?
     @State private var showingExport = false
     @State private var showingLogMenu = false
-    @State private var showingReferenceShare = false
     @State private var rowHeight: CGFloat = 0
     @State private var errorDetailHeight: CGFloat = 240
 #if os(iOS)
@@ -170,15 +169,6 @@ public struct DobbyRootView: View {
         .onOpenURL { model.importLink($0) }
         .importConfirmation(model)
 #if os(iOS)
-        .sheet(isPresented: $showingReferenceShare, onDismiss: {
-            model.recordLogsShare(kind: "reference", phase: "dismissed")
-        }) {
-            if let latest = model.latestUpload {
-                DobbyShareSheet(url: nil, text: latest.shareText) {
-                    model.recordLogsShare(kind: "reference", phase: "controller-created")
-                }.onAppear { model.recordLogsShare(kind: "reference", phase: "view-appeared") }
-            }
-        }
         .sheet(isPresented: $showingExport, onDismiss: {
             model.recordLogsShare(kind: "archive", phase: "dismissed")
             removeExport()
@@ -414,12 +404,6 @@ public struct DobbyRootView: View {
                             .accessibilityIdentifier("logs.upload")
                             .disabled(!model.uploadStatus.isEmpty)
                     }
-                    if let latest = model.latestUpload {
-                        Button { showingLogMenu = false; copyUploadReference(latest.reference) } label: {
-                            Text(latest.menuTitle()).frame(maxWidth: .infinity).contentShape(Rectangle())
-                        }
-                            .accessibilityIdentifier("logs.upload.copy-last")
-                    }
                     HStack {
                         Button("Clear") { showingLogMenu = false; model.clearLogs() }.accessibilityIdentifier("logs.clear")
                         Spacer()
@@ -455,7 +439,6 @@ public struct DobbyRootView: View {
                 entries: model.logEntries, following: $followingLogs, clear: model.clearRevision,
                 interactive: !showingError && !showingUploadResult, onSendLogs: sendLogs,
                 onUploadLogs: model.snapshot.logsUploadAvailable ? { model.startLogsUpload() } : nil,
-                lastUpload: model.latestUpload, onCopyLastReference: copyUploadReference,
                 onClear: { followingLogs = true; model.clearLogs() },
                 onReadingPositionRestored: model.recordMacLogRestore,
                 onReadingPositionCaptured: model.recordMacLogCapture,
@@ -483,8 +466,7 @@ public struct DobbyRootView: View {
         if showingUploadResult, let result = model.uploadResult {
             DobbyUploadResultDialog(
                 result: result, stacked: sizeCategory.isAccessibilityCategory, titleFocus: $uploadTitleFocused,
-                copy: { copyUploadReference(result.reference) }, share: { shareUploadReference(result.shareText) },
-                close: model.closeUploadResult
+                copy: { copyUploadReference(result.reference) }, close: model.closeUploadResult
             )
         }
     }
@@ -498,18 +480,9 @@ public struct DobbyRootView: View {
 #endif
     }
 
-    private func shareUploadReference(_ text: String) {
-#if os(iOS)
-        model.recordLogsShare(kind: "reference", phase: "requested", context: "scene=\(String(describing: scenePhase)) reference_binding=\(showingReferenceShare) archive_binding=\(showingExport) menu_open=\(showingLogMenu)")
-        showingReferenceShare = true
-#else
-        DobbyMacSharePresenter.present(text: text, reportError: model.reportLogsError)
-#endif
-    }
-
     private func sendLogs() {
 #if os(iOS)
-        model.recordLogsShare(kind: "archive", phase: "requested", context: "scene=\(String(describing: scenePhase)) reference_binding=\(showingReferenceShare) archive_binding=\(showingExport) menu_open=\(showingLogMenu)")
+        model.recordLogsShare(kind: "archive", phase: "requested", context: "scene=\(String(describing: scenePhase)) archive_binding=\(showingExport) menu_open=\(showingLogMenu)")
 #endif
         model.prepareLogsExport { url in
 #if os(macOS)
@@ -692,8 +665,8 @@ private struct ErrorDetailHeight: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
-/// Upload progress or failure: one line above the logs in the app's text style.
-/// A finished upload opens the result dialog instead, so nothing stays here.
+/// "Uploading logs…" or the upload failure: one line above the logs in the app's
+/// text style. A finished upload opens the result dialog instead, so nothing stays here.
 private struct DobbyUploadLines: View {
     @ObservedObject var model: DobbySessionViewModel
 
@@ -704,8 +677,7 @@ private struct DobbyUploadLines: View {
                                    actionID: "logs.upload.error.close", perform: model.dismissUploadError)
             }
             if !model.uploadStatus.isEmpty {
-                DobbyLogActionLine(text: model.uploadStatus, textID: nil, action: "Cancel",
-                                   actionID: "logs.upload.cancel", perform: model.cancelLogsUpload)
+                DobbyLogActionLine(text: model.uploadStatus, textID: "logs.upload.status")
             }
         }
         .frame(maxWidth: .infinity)
@@ -715,10 +687,10 @@ private struct DobbyUploadLines: View {
 /// Upload progress or failure above the logs, in the app's text style.
 private struct DobbyLogActionLine: View {
     let text: String
-    let textID: String?
-    let action: String
-    let actionID: String
-    let perform: () -> Void
+    let textID: String
+    var action: String?
+    var actionID = ""
+    var perform: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: pt(10)) {
@@ -727,12 +699,14 @@ private struct DobbyLogActionLine: View {
                 .foregroundColor(.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier(textID ?? "")
-            Button(action: perform) {
-                Text(action).underline().dobbyFont(12, .semibold).foregroundColor(.ink)
+                .accessibilityIdentifier(textID)
+            if let action {
+                Button(action: perform) {
+                    Text(action).underline().dobbyFont(12, .semibold).foregroundColor(.ink)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier(actionID)
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier(actionID)
         }
         .padding(.horizontal, pt(12))
         .padding(.vertical, pt(8))
@@ -747,7 +721,6 @@ private struct DobbyUploadResultDialog: View {
     let stacked: Bool
     let titleFocus: AccessibilityFocusState<Bool>.Binding
     let copy: () -> Void
-    let share: () -> Void
     let close: () -> Void
 
     var body: some View {
@@ -803,7 +776,6 @@ private struct DobbyUploadResultDialog: View {
     @ViewBuilder
     private var actions: some View {
         DialogButton(title: "Copy", filled: true, action: copy).accessibilityIdentifier("logs.upload.copy")
-        DialogButton(title: "Share", filled: false, action: share).accessibilityIdentifier("logs.upload.share")
         DialogButton(title: "Close", filled: false, action: close).accessibilityIdentifier("logs.upload.close")
     }
 }
