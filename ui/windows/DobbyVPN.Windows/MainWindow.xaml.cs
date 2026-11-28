@@ -1280,9 +1280,8 @@ public sealed partial class MainWindow : Window
                 var accepted = _snapshot?.SourceUrl ?? "";
                 bool sameSource = _snapshot?.Configured == true && accepted.Length > 0 && request.Source == accepted;
                 if (sameSource) _subscriptionLoad.MarkAccepted(request);
-                var owner = _snapshot?.Configured == true && !sameSource && accepted.Length > 0
-                    ? $" Showing profiles from {accepted}." : "";
-                _loadError = $"Could not load {request.Source}: {error.Message}.{owner}";
+                _loadError = SubscriptionLoadError.Compose(
+                    request.Source, accepted, _snapshot?.Configured == true, sameSource, error.Message);
                 RecordError(error.ToString());
             }
         }

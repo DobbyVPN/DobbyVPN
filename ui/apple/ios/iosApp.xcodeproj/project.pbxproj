@@ -10,6 +10,7 @@
         F20000000000000000000043 /* DobbyVPNRuntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */; };
         F20000000000000000000042 /* DiagnosticFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000042 /* DiagnosticFiles.swift */; };
 		F20000000000000000000040 /* DobbyDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000040 /* DobbyDiagnostics.swift */; };
+		F20000000000000000000072 /* DobbySubscriptionLoadError.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000072 /* DobbySubscriptionLoadError.swift */; };
 		8C7731F12E566DCD00B3782E /* DobbyVPNRuntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C7731F02E566DCD00B3782E /* DobbyVPNRuntime.xcframework */; };
 		A12013A02D80DE3200D43A3A /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A12012EC2D7DAE1200D43A3A /* NetworkExtension.framework */; };
 		A15F0FEA2D874D38007FA45D /* IOSIntegration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A15F0FCE2D874CDC007FA45D /* IOSIntegration.framework */; settings = {ATTRIBUTES = (Required, ); }; };
@@ -61,6 +62,7 @@
 /* Begin PBXFileReference section */
         F10000000000000000000042 /* DiagnosticFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../shared/diagnostics/DiagnosticFiles.swift; sourceTree = SOURCE_ROOT; };
 		F10000000000000000000040 /* DobbyDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbyDiagnostics.swift; sourceTree = "<group>"; };
+		F10000000000000000000072 /* DobbySubscriptionLoadError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DobbySubscriptionLoadError.swift; sourceTree = "<group>"; };
 		058557BA273AAA24004C7B11 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		058557D8273AAEEB004C7B11 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		7555FF8C242A565B00829871 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -227,6 +229,7 @@
 			children = (
 				F10000000000000000000004 /* DobbySessionClient.swift */,
 				F10000000000000000000040 /* DobbyDiagnostics.swift */,
+				F10000000000000000000072 /* DobbySubscriptionLoadError.swift */,
                 F10000000000000000000042 /* DiagnosticFiles.swift */,
 				F10000000000000000000005 /* DobbySessionViewModel.swift */,
 				F10000000000000000000006 /* DobbyRootView.swift */,
@@ -434,6 +437,7 @@
 				F20000000000000000000006 /* IOSSessionClient.swift in Sources */,
 				F20000000000000000000007 /* DobbySessionClient.swift in Sources */,
 				F20000000000000000000040 /* DobbyDiagnostics.swift in Sources */,
+				F20000000000000000000072 /* DobbySubscriptionLoadError.swift in Sources */,
 				F20000000000000000000008 /* DobbySessionViewModel.swift in Sources */,
 				F20000000000000000000009 /* DobbyRootView.swift in Sources */,
 				F20000000000000000000071 /* DobbyProfileList.swift in Sources */,
