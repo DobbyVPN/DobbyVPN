@@ -216,8 +216,9 @@ enum MacNetworkExtension {
         try await vpn.loadFromPreferences()
     }
 
-    private static func activateExtensions() async throws {
-        let request = ExtensionRequest()
+    /// Each extension waits for its own approval; Connect continues with the next one.
+    static func activateExtensions(_ request: ExtensionRequest? = nil) async throws {
+        let request = request ?? ExtensionRequest()
         for id in [protectionID, tunnelID] { try await request.submit(id) }
     }
 

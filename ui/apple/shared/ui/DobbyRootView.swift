@@ -308,19 +308,14 @@ public struct DobbyRootView: View {
     }
 
     /// `fillHeight` lets the button match a taller neighbour in the Retry and Stop row.
-    private var mainTitle: String { approval.title(replacing: model.mainActionTitle) }
+    private var mainTitle: String { DobbyMainButtonState(model: model, approval: approval).title }
 
     private func primaryButton(fillHeight: Bool = false) -> some View {
-        let title = mainTitle
-        let enabled = approval.pending || model.mainActionEnabled
-        // After a refused VPN setup, or while macOS waits for the extension approval,
-        // the main button is the filled way forward.
-        let idle = title == "Auto connect" || title == "Allow VPN" || approval.pending
-        let filled = enabled && idle
-        let outlined = enabled || !idle
+        let state = DobbyMainButtonState(model: model, approval: approval)
+        let title = state.title, enabled = state.enabled, filled = state.filled, outlined = state.outlined
         return Button {
             sourceFocused = false
-            if approval.pending { approval.openSettings() } else { model.mainAction() }
+            state.perform()
         } label: {
             Text(title)
                 .dobbyFont(20, .semibold)
@@ -337,7 +332,8 @@ public struct DobbyRootView: View {
         .disabled(!enabled)
         .accessibilityIdentifier("VPN connection action")
         .accessibilityValue(model.status)
-        .keyboardShortcut(.return, modifiers: .command)
+        // While macOS waits for approval, Command-Return stays with Stop, as before.
+        .modifier(DobbyReturnShortcut(enabled: !approval.pending))
     }
 
     private var stopButton: some View {
@@ -356,6 +352,7 @@ public struct DobbyRootView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .modifier(DobbyReturnShortcut(enabled: approval.pending))
         .accessibilityIdentifier("connection.stop")
     }
 
@@ -682,6 +679,39 @@ private struct LogActionsHeight: PreferenceKey {
 private struct ErrorDetailHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// What the main button shows and does; the root view renders exactly this.
+@MainActor
+struct DobbyMainButtonState {
+    let title: String
+    let enabled: Bool
+    let filled: Bool
+    let outlined: Bool
+    private let action: () -> Void
+
+    init(model: DobbySessionViewModel, approval: DobbySystemApprovalMonitor) {
+        title = approval.title(replacing: model.mainActionTitle)
+        enabled = approval.pending || model.mainActionEnabled
+        // After a refused VPN setup, or while macOS waits for the extension approval,
+        // the main button is the filled way forward.
+        let idle = title == "Auto connect" || title == "Allow VPN" || approval.pending
+        filled = enabled && idle
+        outlined = enabled || !idle
+        action = approval.pending ? approval.openSettings : model.mainAction
+    }
+
+    func perform() { action() }
+}
+
+/// Command-Return on exactly one of the main row's buttons.
+private struct DobbyReturnShortcut: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled { content.keyboardShortcut(.return, modifiers: .command) } else { content }
+    }
 }
 
 /// A permission the user has to give: one sentence above the main button and, for
