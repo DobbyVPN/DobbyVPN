@@ -23,16 +23,25 @@ private func hostError(_ message: String) -> NSError {
 }
 
 @MainActor
-private final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate {
+final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate {
     private var completion: CheckedContinuation<Void, Error>?
     private var inventoryCompletion: CheckedContinuation<Bool, Error>?
+    private let approval: MacExtensionApproval
+    private let submitRequest: (OSSystemExtensionRequest) -> Void
+
+    /// Tests replace the system submission and the approval record's location.
+    init(approval: MacExtensionApproval? = nil,
+         submitRequest: @escaping (OSSystemExtensionRequest) -> Void = { OSSystemExtensionManager.shared.submitRequest($0) }) {
+        self.approval = approval ?? MacExtensionApproval(uiLogPath: preferenceDiagnostics.uiDiagnosticPath)
+        self.submitRequest = submitRequest
+    }
 
     func requiresDeactivation(_ id: String) async throws -> Bool {
         let request = OSSystemExtensionRequest.propertiesRequest(forExtensionWithIdentifier: id, queue: .main)
         request.delegate = self
         return try await withCheckedThrowingContinuation { continuation in
             inventoryCompletion = continuation
-            OSSystemExtensionManager.shared.submitRequest(request)
+            submitRequest(request)
         }
     }
 
@@ -44,17 +53,21 @@ private final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate
         request.delegate = self
         try await withCheckedThrowingContinuation { continuation in
             completion = continuation
-            OSSystemExtensionManager.shared.submitRequest(request)
+            submitRequest(request)
         }
     }
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
         recordPreference("Waiting for System Settings approval", fields: ["identifier": request.identifier])
         NSLog("DobbyVPN needs System Settings approval for %@", request.identifier)
+        // The window shows the approval step while this request waits (#586).
+        let identifier = request.identifier
+        Task { @MainActor in approval.begin(identifier: identifier) }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties,
                              withExtension replacement: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction { .replace }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
         Task { @MainActor in
+            approval.end()
             if result == .completed { completion?.resume() }
             else { completion?.resume(throwing: hostError("Restart the Mac to finish the system extension request")) }
             completion = nil
@@ -62,6 +75,7 @@ private final class ExtensionRequest: NSObject, OSSystemExtensionRequestDelegate
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
         Task { @MainActor in
+            approval.end()
             completion?.resume(throwing: error)
             completion = nil
             inventoryCompletion?.resume(throwing: error)
