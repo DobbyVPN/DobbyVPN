@@ -1314,7 +1314,12 @@ internal class SessionController(
         }
     }
 
+    /** Bumped when the Activity becomes visible again; the profile list keeps the active row on screen. */
+    var resumeTick by mutableStateOf(0)
+        private set
+
     fun setVisible(value: Boolean) {
+        if (value && !visible) resumeTick++
         visible = value
         if (value) {
             worker.execute { if (visible) refreshSnapshot() }
