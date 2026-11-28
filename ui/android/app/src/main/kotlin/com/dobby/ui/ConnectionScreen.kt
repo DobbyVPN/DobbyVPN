@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -49,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,6 +66,7 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -97,7 +100,9 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.dobby.nativebridge.NativeVpnBridge
 import com.dobby.presentation.shownError
+import kotlinx.coroutines.flow.first
 
 internal val Paper = Color(0xFFD9D2C9)
 internal val Ink = Color(0xFF141414)
@@ -110,6 +115,8 @@ private val ButtonShape = RoundedCornerShape(10.dp)
 private val MaxTrayHeight = 264.dp
 private val MinTrayHeight = 72.dp
 private val ControlsHeight = 180.dp
+// Statuses whose row is the active connection the user must still see after returning.
+private val ActiveRowStatuses = setOf(ProfileStatus.CONNECTING, ProfileStatus.CONNECTED, ProfileStatus.RECONNECTING)
 
 @Composable
 internal fun DobbyApp(controller: SessionController) {
@@ -286,9 +293,12 @@ private fun StopButton(controller: SessionController, modifier: Modifier = Modif
 @Composable
 private fun Connections(controller: SessionController, modifier: Modifier) {
     val session = controller.state.session
+    val orphan = controller.orphanProfile
+    // Hoisted above the empty/error branches so a transiently empty inventory cannot drop the
+    // scroll position, and saved so an Activity or process recreation can restore it.
+    val listState = rememberLazyListState()
     Box(modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Tray)
         .testTag("connection.profiles")) {
-        val orphan = controller.orphanProfile
         if (session.profiles.isEmpty() && orphan == null && controller.state.loadError.isNotEmpty()) {
             Column(
                 Modifier.align(Alignment.Center),
@@ -316,12 +326,37 @@ private fun Connections(controller: SessionController, modifier: Modifier) {
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
+                state = listState,
                 contentPadding = PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (orphan != null) item(key = "active") { OrphanRow(controller, orphan) }
                 items(session.profiles, key = { it.index }) { ConnectionRow(controller, it, session.digest) }
             }
+        }
+    }
+    val activePosition = session.profiles
+        .indexOfFirst { profile ->
+            controller.profileStatus(profile.index).let { it != null && it in ActiveRowStatuses }
+        }
+        .let { position -> if (position < 0) -1 else position + (if (orphan != null) 1 else 0) }
+    val context = LocalContext.current
+    LaunchedEffect(controller.resumeTick, activePosition) {
+        if (activePosition < 0) return@LaunchedEffect
+        // Wait for the inventory to lay out first, so a restored offset that already shows the
+        // active row is left alone instead of being re-pinned.
+        snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+        val shown = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == activePosition }
+        val fullyVisible = shown != null && shown.offset >= listState.layoutInfo.viewportStartOffset &&
+            shown.offset + shown.size <= listState.layoutInfo.viewportEndOffset
+        if (!fullyVisible) {
+            listState.scrollToItem(activePosition)
+            NativeVpnBridge.recordDiagnostic(
+                context,
+                "ui.profile_list_active_scrolled",
+                "position=$activePosition",
+                level = "DEBUG",
+            )
         }
     }
 }
