@@ -340,6 +340,7 @@ private fun Connections(controller: SessionController, modifier: Modifier) {
             controller.profileStatus(profile.index).let { it != null && it in ActiveRowStatuses }
         }
         .let { position -> if (position < 0) -1 else position + (if (orphan != null) 1 else 0) }
+    val context = LocalContext.current
     LaunchedEffect(controller.resumeTick, activePosition) {
         if (activePosition < 0) return@LaunchedEffect
         // Wait for the inventory to lay out first, so a restored offset that already shows the
@@ -351,7 +352,7 @@ private fun Connections(controller: SessionController, modifier: Modifier) {
         if (!fullyVisible) {
             listState.scrollToItem(activePosition)
             NativeVpnBridge.recordDiagnostic(
-                LocalContext.current,
+                context,
                 "ui.profile_list_active_scrolled",
                 "position=$activePosition",
                 level = "DEBUG",
