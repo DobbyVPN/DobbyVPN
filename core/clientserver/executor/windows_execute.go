@@ -32,6 +32,7 @@ type managerService struct {
 
 func prepareDesktopControl() (net.Listener, error) {
 	return prepareDesktopControlWith(
+		func() error { return platform_engine.RecoverStaleWindowsNRPTRule(2 * time.Second) },
 		controlplane.ListenDesktopControlPipe,
 		func() error {
 			startupFailure = prepareServiceProtection()
@@ -45,10 +46,17 @@ func prepareDesktopControl() (net.Listener, error) {
 }
 
 func prepareDesktopControlWith(
+	recoverNRPT func() error,
 	listen func() (net.Listener, error),
 	recoverInterrupted func() error,
 	recoverStaleIPv6Rules func() error,
 ) (net.Listener, error) {
+	// A stale NRPT rule sends all of the machine's DNS to the tunnel servers.
+	// Remove it first, whatever else fails at startup. A failure is logged, not
+	// fatal: connect and disconnect retry the removal.
+	if err := recoverNRPT(); err != nil {
+		log.Errorf(desktopLogCategory, "stale NRPT rule recovery failed: %v", err)
+	}
 	listener, err := listen()
 	if err != nil {
 		return nil, fmt.Errorf("listen for desktop control: %w", err)
@@ -234,7 +242,11 @@ func executeWith(mode string, initLog func() error, runNormal func(), runService
 
 	switch mode {
 	case "release-protection":
-		if err := removeDesktopInstallationState(context.Background(), controlplane.WindowsInstallationSourceStore); err != nil {
+		err := removeDesktopInstallationState(context.Background(), controlplane.WindowsInstallationSourceStore)
+		// Uninstall must not leave the machine's DNS pointed at the tunnel servers.
+		// The service is stopped by now; wait a little for its owner mutex.
+		err = errors.Join(err, platform_engine.RecoverStaleWindowsNRPTRule(10*time.Second))
+		if err != nil {
 			log.Errorf(desktopLogCategory, "failed to release installed VPN state: %v", err)
 			return reportStartupFailure("release installed VPN state", err, true)
 		}

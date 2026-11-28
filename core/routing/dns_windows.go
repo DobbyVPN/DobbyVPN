@@ -40,6 +40,7 @@ func SetWindowsDNS(luid winipcfg.LUID, static bool, servers []netip.Addr) error 
 		if applyErr != nil {
 			fields["apply_error"] = applyErr.Error()
 		}
+		addNRPTState(fields, luid)
 		log.Info(Category, "Windows tunnel DNS state", fields)
 	}
 	return applyErr
