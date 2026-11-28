@@ -109,6 +109,43 @@ func readSnapshot(
     }
 }
 
+/// macOS: a system extension request waits for the user's approval in System Settings.
+/// The window shows the step and its main button opens the pane (#586).
+public protocol DobbySystemApprovalProviding: DobbySessionClient {
+    var systemApprovalPending: Bool { get }
+    func openSystemApprovalSettings()
+}
+
+/// Polls the client for a pending System Settings approval, independently of
+/// the Go snapshot: the approval belongs to macOS, not to the session.
+@MainActor
+final class DobbySystemApprovalMonitor: ObservableObject {
+    @Published private(set) var pending = false
+    private let provider: DobbySystemApprovalProviding?
+    private var timer: Timer?
+
+    init(client: DobbySessionClient, interval: TimeInterval = 0.75) {
+        provider = client as? DobbySystemApprovalProviding
+        guard provider != nil else { return }
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    deinit { timer?.invalidate() }
+
+    func refresh() {
+        let value = provider?.systemApprovalPending ?? false
+        if value != pending { pending = value }
+    }
+
+    func openSettings() { provider?.openSystemApprovalSettings() }
+
+    /// While approval is pending the main button opens System Settings instead.
+    func title(replacing title: String) -> String { pending ? "Open System Settings" : title }
+}
+
 /// Native failure presentation for platforms whose transport may outlive the backend.
 public protocol DobbyDisconnectObserving: DobbySessionClient {
     var disconnectFailure: String { get }

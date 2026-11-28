@@ -77,6 +77,7 @@ let buttonShape = RoundedRectangle(cornerRadius: pt(10))
 
 public struct DobbyRootView: View {
     @ObservedObject private var model: DobbySessionViewModel
+    @StateObject private var approval: DobbySystemApprovalMonitor
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.sizeCategory) private var sizeCategory
 #if os(macOS)
@@ -99,6 +100,7 @@ public struct DobbyRootView: View {
 
     public init(model: DobbySessionViewModel) {
         self.model = model
+        _approval = StateObject(wrappedValue: DobbySystemApprovalMonitor(client: model.client))
     }
 
     public var body: some View {
@@ -111,7 +113,14 @@ public struct DobbyRootView: View {
                             .font(.caption)
                             .accessibilityIdentifier("configuration.offline")
                     }
-                    if model.vpnPermissionNeeded { vpnPermission }
+                    if model.vpnPermissionNeeded {
+                        DobbyPermissionNotice(text: "DobbyVPN needs VPN permission to connect.", identifier: "vpn.permission") {
+                            copyError(model.vpnSetupFailureDetail, onObservation: model.recordErrorCopy)
+                        }
+                    }
+                    if approval.pending {
+                        DobbyPermissionNotice(text: "Allow DobbyVPN in System Settings to connect.", identifier: "system.approval")
+                    }
                     mainButton
                     reconnectLine(identifier: "connection.reconnect")
                     connections
@@ -277,11 +286,12 @@ public struct DobbyRootView: View {
 
     @ViewBuilder
     private var mainButton: some View {
-        if model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
+        // While macOS waits for System Settings approval, Stop stays next to the main button.
+        if approval.pending || model.snapshot.vpnActive && model.snapshot.state == "FAILED" && model.snapshot.canRetry {
             // Retry and Stop share one row, 2:1 as Android's weights 1 and 0.5. A hidden
             // copy of the Retry title sets the row height, so larger text grows the row;
             // both titles stay on one line, so the copy's width does not change the height.
-            Text(model.mainActionTitle)
+            Text(mainTitle)
                 .dobbyFont(20, .semibold)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, minHeight: pt(60))
@@ -298,16 +308,14 @@ public struct DobbyRootView: View {
     }
 
     /// `fillHeight` lets the button match a taller neighbour in the Retry and Stop row.
+    private var mainTitle: String { DobbyMainButtonState(model: model, approval: approval).title }
+
     private func primaryButton(fillHeight: Bool = false) -> some View {
-        let title = model.mainActionTitle
-        let enabled = model.mainActionEnabled
-        // After a refused VPN setup the main button is the filled "Allow VPN".
-        let idle = title == "Auto connect" || title == "Allow VPN"
-        let filled = enabled && idle
-        let outlined = enabled || !idle
+        let state = DobbyMainButtonState(model: model, approval: approval)
+        let title = state.title, enabled = state.enabled, filled = state.filled, outlined = state.outlined
         return Button {
             sourceFocused = false
-            model.mainAction()
+            state.perform()
         } label: {
             Text(title)
                 .dobbyFont(20, .semibold)
@@ -324,7 +332,8 @@ public struct DobbyRootView: View {
         .disabled(!enabled)
         .accessibilityIdentifier("VPN connection action")
         .accessibilityValue(model.status)
-        .keyboardShortcut(.return, modifiers: .command)
+        // While macOS waits for approval, Command-Return stays with Stop, as before.
+        .modifier(DobbyReturnShortcut(enabled: !approval.pending))
     }
 
     private var stopButton: some View {
@@ -343,28 +352,8 @@ public struct DobbyRootView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .modifier(DobbyReturnShortcut(enabled: approval.pending))
         .accessibilityIdentifier("connection.stop")
-    }
-
-    /// A refused or timed-out VPN setup: one sentence above the main button, which
-    /// reads "Allow VPN" and retries the save; the technical detail only behind Copy.
-    private var vpnPermission: some View {
-        VStack(alignment: .leading, spacing: pt(6)) {
-            Text("DobbyVPN needs VPN permission to connect.")
-                .dobbyFont(15)
-                .foregroundColor(.ink)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("vpn.permission.message")
-            Button { copyError(model.vpnSetupFailureDetail, onObservation: model.recordErrorCopy) } label: {
-                Text("Copy").underline().dobbyFont(12, .semibold).foregroundColor(.ink)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Copy VPN setup details")
-            .accessibilityIdentifier("vpn.permission.copy")
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("vpn.permission")
     }
 
     /// Shown before the first save, which makes iOS ask for VPN permission.
@@ -690,6 +679,68 @@ private struct LogActionsHeight: PreferenceKey {
 private struct ErrorDetailHeight: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// What the main button shows and does; the root view renders exactly this.
+@MainActor
+struct DobbyMainButtonState {
+    let title: String
+    let enabled: Bool
+    let filled: Bool
+    let outlined: Bool
+    private let action: () -> Void
+
+    init(model: DobbySessionViewModel, approval: DobbySystemApprovalMonitor) {
+        title = approval.title(replacing: model.mainActionTitle)
+        enabled = approval.pending || model.mainActionEnabled
+        // After a refused VPN setup, or while macOS waits for the extension approval,
+        // the main button is the filled way forward.
+        let idle = title == "Auto connect" || title == "Allow VPN" || approval.pending
+        filled = enabled && idle
+        outlined = enabled || !idle
+        action = approval.pending ? approval.openSettings : model.mainAction
+    }
+
+    func perform() { action() }
+}
+
+/// Command-Return on exactly one of the main row's buttons.
+private struct DobbyReturnShortcut: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled { content.keyboardShortcut(.return, modifiers: .command) } else { content }
+    }
+}
+
+/// A permission the user has to give: one sentence above the main button and, for
+/// the iOS VPN permission, the technical detail only behind Copy.
+private struct DobbyPermissionNotice: View {
+    let text: String
+    let identifier: String
+    var copy: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: pt(6)) {
+            Text(text)
+                .dobbyFont(15)
+                .foregroundColor(.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(identifier + ".message")
+            if let copy {
+                Button(action: copy) {
+                    Text("Copy").underline().dobbyFont(12, .semibold).foregroundColor(.ink)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Copy VPN setup details")
+                .accessibilityIdentifier(identifier + ".copy")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
 }
 
 /// Upload progress or failure: one line above the logs in the app's text style.
