@@ -135,6 +135,14 @@ func (o *flowOwner) residualErrorLocked() error {
 	return errors.Join(errs...)
 }
 
+// isSealed reports whether the generation has been sealed, which attributes a
+// close of its remaining flows to the engine rather than to a peer.
+func (o *flowOwner) isSealed() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.closed
+}
+
 func (o *flowOwner) sealAndClose() {
 	o.mu.Lock()
 	if !o.closed {

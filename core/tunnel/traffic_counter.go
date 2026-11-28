@@ -15,6 +15,7 @@ type trafficCounter struct {
 	nowForTest func() time.Time
 	readError  atomic.Bool
 	writeError atomic.Bool
+	totals     *sessionTraffic
 }
 
 func (t *trafficCounter) now() time.Time {
@@ -29,6 +30,9 @@ func (t *trafficCounter) recordRead(n int, started time.Time) (time.Duration, bo
 		return 0, false
 	}
 	t.down.Add(int64(n))
+	if t.totals != nil {
+		t.totals.down.Add(int64(n))
+	}
 	if t.firstByte.Load() == nil {
 		elapsed := t.now().Sub(started)
 		if t.firstByte.CompareAndSwap(nil, &elapsed) {
@@ -41,7 +45,14 @@ func (t *trafficCounter) recordRead(n int, started time.Time) (time.Duration, bo
 func (t *trafficCounter) recordWrite(n int) {
 	if n > 0 {
 		t.up.Add(int64(n))
+		if t.totals != nil {
+			t.totals.up.Add(int64(n))
+		}
 	}
+}
+
+func (t *trafficCounter) total() int64 {
+	return t.up.Load() + t.down.Load()
 }
 
 // summary describes the traffic as fixed key=value fields. ttfb is measured

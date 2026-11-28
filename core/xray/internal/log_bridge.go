@@ -62,8 +62,12 @@ func (l *xrayLogBridge) Handle(msg xrayLog.Message) {
 	case *xrayLog.DNSLog:
 		appLog.Debugf("Xray-Core", "%s", msg.String())
 	case *xrayLog.GeneralMessage:
-		severity := classifyXrayMessage(msg.Severity, fmt.Sprint(msg.Content))
-		if int32(severity) <= l.logLevel.Load() {
+		text := fmt.Sprint(msg.Content)
+		severity := classifyXrayMessage(msg.Severity, text)
+		// Connection endings always reach the log at their classified level:
+		// failures stay visible at the default threshold, and routine endings
+		// land in the raw debug output rather than disappearing outright.
+		if isStreamEndMessage(text) || int32(severity) <= l.logLevel.Load() {
 			switch severity {
 			case xrayLog.Severity_Debug:
 				appLog.Debugf("Xray-Core", "%s", msg.Content)

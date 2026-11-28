@@ -17,6 +17,7 @@ import (
 	stackTunnel "github.com/xjasonlyu/tun2socks/v2/tunnel"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel/statistic"
 
+	"core/common"
 	"core/dnscache"
 	"core/log"
 	"core/tunnel/platform_engine"
@@ -86,6 +87,8 @@ type DobbyProxy struct {
 	udpOrigins     atomic.Int32
 	udpRefused     atomic.Uint64
 	reclaiming     atomic.Bool
+	session        sessionTraffic
+	notice         *common.NoticeBudget
 }
 
 type flowIdentity struct {
@@ -128,6 +131,18 @@ func (t *trafficCounter) observeWrite(n int, err error, identity flowIdentity) {
 	}
 }
 
+// streamEnd is the first terminal event of one stream; later teardown events
+// do not overwrite it.
+type streamEnd struct {
+	initiator string // "app", "engine" or "upstream"
+	class     string // "fin", "rst", "timeout", "error" or "closed"
+}
+
+const (
+	streamNoticeBytes = 1 << 20 // a stream at or above 1 MiB is the size whose end is worth a note
+	streamNoticeLimit = 20      // noteworthy stream records one generation may emit before suppression
+)
+
 type trackedConn struct {
 	net.Conn
 	route      string
@@ -143,10 +158,33 @@ type trackedConn struct {
 	closeErr   error
 	traffic    trafficCounter
 	lastIO     atomic.Int64
+	end        atomic.Pointer[streamEnd]
+	notice     *common.NoticeBudget
 }
 
 func (c *trackedConn) identity() flowIdentity {
 	return flowIdentity{c.generation, c.attempt, flowProtocolTCP, c.family, c.route, c.dest}
+}
+
+func (c *trackedConn) noteTerminal(err error) {
+	if err == nil {
+		return
+	}
+	c.end.CompareAndSwap(nil, &streamEnd{initiator: "upstream", class: common.StreamErrorClass(err)})
+}
+
+func (c *trackedConn) noteAppCloseWrite() {
+	c.end.CompareAndSwap(nil, &streamEnd{initiator: "app", class: "fin"})
+}
+
+func (c *trackedConn) ending() (string, string) {
+	if end := c.end.Load(); end != nil {
+		return end.initiator, end.class
+	}
+	if c.owner != nil && c.owner.isSealed() {
+		return "engine", "fin"
+	}
+	return "app", "fin"
 }
 
 func (c *trackedConn) Read(b []byte) (int, error) {
@@ -155,6 +193,7 @@ func (c *trackedConn) Read(b []byte) (int, error) {
 		c.lastIO.Store(time.Since(flowClock).Nanoseconds())
 	}
 	c.traffic.observeRead(n, err, c.started, c.identity())
+	c.noteTerminal(err)
 	return n, err
 }
 
@@ -164,6 +203,7 @@ func (c *trackedConn) Write(b []byte) (int, error) {
 		c.lastIO.Store(time.Since(flowClock).Nanoseconds())
 	}
 	c.traffic.observeWrite(n, err, c.identity())
+	c.noteTerminal(err)
 	return n, err
 }
 
@@ -174,12 +214,13 @@ func (c *trackedConn) Close() error {
 		return nil
 	}
 	log.Debugf(Category, "[Router] TCP close begin %s", c.identity())
+	initiator, class := c.ending()
 	c.closeErr = c.Conn.Close()
 	if c.closeErr != nil && !errors.Is(c.closeErr, net.ErrClosed) {
 		if c.owner != nil {
 			c.owner.release(c, c.closeErr)
 		}
-		log.Errorf(Category, "[Router] TCP close failed %s lifetime=%s %s err=%v", c.identity(), time.Since(c.started), c.traffic.summary(), c.closeErr)
+		log.Errorf(Category, "[Router] TCP close failed %s lifetime=%s %s initiator=%s class=%s err=%v", c.identity(), time.Since(c.started), c.traffic.summary(), initiator, class, c.closeErr)
 		return c.closeErr
 	}
 	c.closed, c.closeErr = true, nil
@@ -187,7 +228,24 @@ func (c *trackedConn) Close() error {
 	if c.owner != nil {
 		c.owner.release(c, nil)
 	}
-	log.Debugf(Category, "[Router] TCP closed %s lifetime=%s %s activeTCP=%d", c.identity(), time.Since(c.started), c.traffic.summary(), active)
+	record := func(logf func(string, string, ...any)) {
+		logf(Category, "[Router] TCP closed %s lifetime=%s %s initiator=%s class=%s activeTCP=%d", c.identity(), time.Since(c.started), c.traffic.summary(), initiator, class, active)
+	}
+	noteworthy := class == "rst" || class == "timeout" || class == "error"
+	if noteworthy {
+		if ok, exhaustedNow := c.notice.Take(); ok {
+			record(log.Infof)
+		} else {
+			record(log.Debugf)
+			if exhaustedNow {
+				log.Infof(Category, "[Router] stream diagnostics suppressed after %d records generation=%d", streamNoticeLimit, c.generation)
+			}
+		}
+	} else if c.traffic.total() >= streamNoticeBytes {
+		record(log.Infof)
+	} else {
+		record(log.Debugf)
+	}
 	return nil
 }
 
@@ -199,6 +257,7 @@ func (c *trackedConn) CloseRead() error {
 }
 
 func (c *trackedConn) CloseWrite() error {
+	c.noteAppCloseWrite()
 	if conn, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return conn.CloseWrite()
 	}
@@ -381,11 +440,32 @@ func (p *DobbyProxy) dialTCPRoute(ctx context.Context, metadata *M.Metadata, rou
 	conn, err := px.DialContext(ctx, metadata)
 	if err != nil {
 		release()
-		log.Debugf(Category, "[Router] TCP dial error %s elapsed=%s stats={%s} err=%v", flowIdentity{p.generation, attempt, flowProtocolTCP, logicalFamily(metadata), route, dest}, time.Since(start), p.flowStats(), err)
+		class := "dial"
+		var dialErr *socksDialError
+		if errors.As(err, &dialErr) {
+			class = dialErr.stage
+		}
+		routine := p.flows.isSealed() || ctx.Err() != nil || errors.Is(err, net.ErrClosed)
+		record := func(logf func(string, string, ...any)) {
+			logf(Category, "[Router] TCP dial error %s elapsed=%s stats={%s} class=%s err=%v",
+				flowIdentity{p.generation, attempt, flowProtocolTCP, logicalFamily(metadata), route, dest},
+				time.Since(start), p.flowStats(), class, err)
+		}
+		if routine {
+			record(log.Debugf)
+		} else if ok, exhaustedNow := p.notice.Take(); ok {
+			record(log.Infof)
+		} else {
+			record(log.Debugf)
+			if exhaustedNow {
+				log.Infof(Category, "[Router] stream diagnostics suppressed after %d records generation=%d", streamNoticeLimit, p.generation)
+			}
+		}
 		return nil, err
 	}
 	log.Debugf(Category, "[Router] TCP dial OK %s elapsed=%s local=%s remote=%s stats={%s}", flowIdentity{p.generation, attempt, flowProtocolTCP, logicalFamily(metadata), route, dest}, time.Since(start), conn.LocalAddr(), conn.RemoteAddr(), p.flowStats())
-	tracked := &trackedConn{Conn: conn, release: release, route: route, dest: dest, generation: p.generation, attempt: attempt, family: logicalFamily(metadata), started: time.Now(), owner: &p.flows}
+	tracked := &trackedConn{Conn: conn, release: release, route: route, dest: dest, generation: p.generation, attempt: attempt, family: logicalFamily(metadata), started: time.Now(), owner: &p.flows, notice: p.notice}
+	tracked.traffic.totals = &p.session
 	if !p.flows.track(tracked) {
 		closeErr := tracked.Close()
 		log.Debugf(Category, "[Router] late TCP dial closed %s elapsed=%s err=%v", tracked.identity(), time.Since(start), closeErr)
@@ -424,6 +504,7 @@ func (p *DobbyProxy) dialUDPRoute(metadata *M.Metadata, route string, px proxy.P
 	}
 	log.Debugf(Category, "[Router] UDP dial OK %s elapsed=%s local=%s stats={%s}", flowIdentity{p.generation, attempt, flowProtocolUDP, logicalFamily(metadata), route, dest}, time.Since(start), conn.LocalAddr(), p.flowStats())
 	tracked := &trackedPacketConn{PacketConn: conn, release: release, route: route, dest: dest, generation: p.generation, attempt: attempt, family: logicalFamily(metadata), started: time.Now()}
+	tracked.traffic.totals = &p.session
 	owned := newIdlePacketConn(tracked, udpAssociationIdleTimeout, tracked.identity(), func() uint64 {
 		return p.udpIdleTimeout.Add(1)
 	}, &p.flows)
@@ -514,6 +595,9 @@ func (e *Engine) Attach(ctx context.Context, generation uint64, address string, 
 		return err
 	}
 	wrapper := &DobbyProxy{vpn: outbound, direct: &protected_dialer.ProtectedDirectProxy{Proxy: proxy.NewDirect(), DNSCache: cache, OwnerContext: ctx}, bypass: bypass, generation: generation}
+	wrapper.notice = common.NewNoticeBudget(streamNoticeLimit)
+	wrapper.session.started = time.Now()
+	wrapper.session.done = make(chan struct{})
 	wrapper.vpn, err = newSocksTCPProxy(outbound, address, &wrapper.flows)
 	if err != nil {
 		return err
@@ -526,6 +610,7 @@ func (e *Engine) Attach(ctx context.Context, generation uint64, address string, 
 	activeFlowDiagnostics.Store(wrapper)
 	e.router.set(wrapper)
 	log.Infof(Category, "[Engine] transport attached generation=%d interface=%s", generation, e.ifaceName)
+	go wrapper.logSessionTraffic()
 	return nil
 }
 
@@ -547,6 +632,8 @@ func (e *Engine) detachLocked(ctx context.Context) error {
 	if e.proxy == nil {
 		return nil
 	}
+	proxy := e.proxy
+	defer proxy.closeSessionTraffic()
 	// Connections still waiting for a TCP slot belong to this attempt; refuse
 	// them now instead of admitting them after its flows close.
 	platform_engine.CancelPendingTCPAdmissions()
@@ -660,6 +747,9 @@ func (e *Engine) Stop(ctx context.Context) error {
 	var flowErr error
 	if e.proxy != nil {
 		flowErr = runPhase("flow-wait", func() error { return e.proxy.flows.wait(ctx) })
+	}
+	if e.proxy != nil {
+		e.proxy.closeSessionTraffic()
 	}
 	e.stopErr = errors.Join(platformErr, flowErr)
 	if e.stopErr != nil {

@@ -17,27 +17,35 @@ var perConnectionPrefixes = []string{
 	"accepted",
 }
 
-// routineEndings are the wordings of an ordinary connection end: a socket being closed during teardown.
-var routineEndings = []string{
-	"use of closed network connection",
-	"io: read/write on closed pipe",
-	"io: read on closed pipe",
-	"io: write on closed pipe",
-	"context canceled",
+// isStreamEndMessage reports a per-connection ending, the messages whose
+// reasons must survive the bridge threshold.
+func isStreamEndMessage(content string) bool {
+	body := strings.ToLower(content)
+	return strings.Contains(body, "connection ends") || strings.Contains(body, "failed to process outbound traffic")
 }
 
 // classifyXrayMessage returns the severity Xray's message should be logged at.
-// Per-connection chatter and routine connection ends drop to debug, and the
-// start notice that Xray words as a warning is shown as info.
+// A connection ending surfaces at warning when its reason points at a stream
+// failure, and at debug otherwise; per-connection chatter drops to debug, and
+// the start notice that Xray words as a warning is shown as info.
 func classifyXrayMessage(severity xrayLog.Severity, content string) xrayLog.Severity {
-	body := strings.ToLower(content)
-	// An unexplained peer reset can indicate a broken tunnel, even when Xray
-	// emits the connection failure at info level. Keep it visible by default.
-	if severity == xrayLog.Severity_Info &&
-		(strings.Contains(body, "failed to process outbound traffic") || strings.Contains(body, "connection ends")) &&
-		hasConnectionFault(body) {
-		return xrayLog.Severity_Warning
+	if isStreamEndMessage(content) {
+		switch severity {
+		case xrayLog.Severity_Warning, xrayLog.Severity_Error:
+			return severity
+		case xrayLog.Severity_Info:
+			// A bare ending (EOF, a closed socket, routine wording) is normal
+			// teardown; only an ending that names a stream failure stays
+			// visible at the default threshold.
+			if hasStreamFailureReason(content) {
+				return xrayLog.Severity_Warning
+			}
+			return xrayLog.Severity_Debug
+		default:
+			return severity
+		}
 	}
+	body := strings.ToLower(content)
 	// Real lines look like "[123456] app/dispatcher: sniffed domain: host" or
 	// "core: Xray 26.6.27 started": an optional bracketed context, then one or
 	// more "module/path: " prefixes, then the text.
@@ -57,37 +65,33 @@ func classifyXrayMessage(severity xrayLog.Severity, content string) xrayLog.Seve
 			}
 		}
 	}
-	// Xray words ended connections as "failed to process outbound traffic > ...
-	// connection ends > ..." at info, and some other endings at warning or error.
-	endsConnection := strings.Contains(body, "connection ends")
-	if severity == xrayLog.Severity_Info && endsConnection && IsRoutineConnectionEnd(content) {
-		return xrayLog.Severity_Debug
-	}
 	return severity
 }
 
 // modulePrefix matches the "app/proxyman/outbound: " style module labels.
 var modulePrefix = regexp.MustCompile(`^(?:[a-z][a-z0-9_]*(?:/[a-z0-9_]+)*:\s+)+`)
 
-func hasConnectionFault(text string) bool {
+// hasStreamFailureReason reports whether text names a stream failure rather
+// than an ordinary teardown.
+func hasStreamFailureReason(text string) bool {
 	lower := strings.ToLower(text)
-	for _, fault := range []string{"connection reset by peer", "forcibly closed by the remote host", "rst_stream", "too_many_pings", "enhance_your_calm"} {
-		if strings.Contains(lower, fault) {
-			return true
-		}
-	}
-	return false
-}
-
-// IsRoutineConnectionEnd reports whether text describes the ordinary end of a
-// connection rather than a fault in the tunnel.
-func IsRoutineConnectionEnd(text string) bool {
-	if hasConnectionFault(text) {
-		return false
-	}
-	lower := strings.ToLower(text)
-	for _, ending := range routineEndings {
-		if strings.Contains(lower, ending) {
+	for _, failure := range []string{
+		"connection reset by peer",
+		"forcibly closed by the remote host",
+		"rst_stream",
+		"too_many_pings",
+		"enhance_your_calm",
+		"broken pipe",
+		"aborted by the software",
+		"i/o timeout",
+		"deadline exceeded",
+		"connection refused",
+		"no route to host",
+		"network is unreachable",
+		"handshake failure",
+		"handshake error",
+	} {
+		if strings.Contains(lower, failure) {
 			return true
 		}
 	}
