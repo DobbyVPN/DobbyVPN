@@ -37,6 +37,13 @@ REQUIRED_CHECKS = frozenset({
     "source_linux", "source_linux_arm", "source_windows", "source_macos",
     "source_android", "ios_simulator",
 })
+# R1 hosted coverage deliberately excludes live macOS extensions and Windows GUI.
+HOSTED_CHECKS = frozenset({
+    "resolve_build", "ios_analysis", "android_reproducibility", "fdroid_preflight", "dependency_scan",
+    "source_linux", "source_linux_arm", "source_windows", "source_macos", "source_android",
+    "ios_simulator", "migrate_windows", "migrate_macos_arm", "migrate_macos_intel",
+    "fixture_hosts", "qualify_linux", "qualify_windows", "qualify_android", "android_test_inputs",
+})
 
 
 class TestManifestError(ValueError):
@@ -92,14 +99,14 @@ def validate_result(
         if (not isinstance(child, dict) or set(child) != {"run_id", "run_attempt"}
                 or any(type(value) is not int or value < 1 for value in child.values())):
             raise TestManifestError("Test result has invalid private workflow binding")
-    elif not public and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(build.get("version", ""))) and tuple(
+    elif schema not in (4, 5) and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", str(build.get("version", ""))) and tuple(
         int(part) for part in build["version"].split(".")
     ) >= (1, 5, 15):
         raise TestManifestError("Build requires a Test with private workflow coverage")
     if not isinstance(result, dict) or set(result) not in (expected_fields, expected_fields | {"run_attempt"}):
         raise TestManifestError("Test result has unexpected or missing fields")
     if (
-        type(result.get("schema")) is not int or result.get("schema") not in (2, 3, 4)
+        type(result.get("schema")) is not int or result.get("schema") not in (2, 3, 4, 5)
         or result.get("repository") != repository
         or not isinstance(repository, str) or not REPOSITORY_RE.fullmatch(repository)
     ):
@@ -139,7 +146,7 @@ def validate_result(
         raise TestManifestError("Test result release_attempt_id must be a positive integer")
     _validate_android_pairing(result, build)
     checks = result.get("checks")
-    if not isinstance(checks, dict) or set(checks) != (PUBLIC_CHECKS if public else REQUIRED_CHECKS):
+    if not isinstance(checks, dict) or set(checks) != (HOSTED_CHECKS if schema == 5 else PUBLIC_CHECKS if public else REQUIRED_CHECKS):
         raise TestManifestError("Test result does not contain the complete qualification check set")
     if any(value != "success" for value in checks.values()):
         raise TestManifestError("Test result contains a failed or skipped qualification check")
@@ -203,12 +210,12 @@ def guard_candidate(result: Any) -> dict[str, Any]:
         source_sha=result.get("source_sha"),
     )
     candidate = {
-        "schema": release_guard.PUBLIC_SCHEMA if result["schema"] == 4 else release_guard.SCHEMA,
+        "schema": release_guard.PUBLIC_SCHEMA if result["schema"] in (4, 5) else release_guard.SCHEMA,
         "build_run_id": result["build_run_id"],
         "build_manifest_sha256": result["build_manifest_sha256"],
         "product_sha": result["source_sha"],
     }
-    if result["schema"] != 4:
+    if result["schema"] not in (4, 5):
         candidate.update(tests_repository=result["torturer_repository"],
                          tests_sha=result["torturer_sha"], tests_tree_sha256=result["torturer_tree_sha256"])
     return candidate
