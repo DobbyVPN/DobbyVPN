@@ -166,7 +166,7 @@
 
       <Rectangle Grid.Row="2" Height="1.5" Fill="{StaticResource Ink}" />
 
-      <ScrollViewer Grid.Row="4" x:Name="LogsScroll" Background="{StaticResource Surface}" Padding="9,4.5,9,4.5"
+      <ScrollViewer Grid.Row="4" x:Name="LogsScroll" Background="{StaticResource Surface}"
                     VerticalScrollBarVisibility="Auto"
                     AutomationProperties.AutomationId="Connection logs">
         <ScrollViewer.ContextFlyout>
@@ -184,7 +184,7 @@
             <MenuFlyoutItem Text="Clear" HorizontalContentAlignment="Center" Click="ClearLogs_Click" AutomationProperties.AutomationId="logs.clear" />
           </MenuFlyout>
         </ScrollViewer.ContextFlyout>
-        <StackPanel x:Name="LogEntries" />
+        <StackPanel x:Name="LogEntries" Padding="9,4.5,9,4.5" />
       </ScrollViewer>
       <Border x:Name="UploadStatusPanel" Grid.Row="3" Background="{StaticResource Surface}" Padding="9,6" Visibility="Collapsed">
         <StackPanel Spacing="4">
