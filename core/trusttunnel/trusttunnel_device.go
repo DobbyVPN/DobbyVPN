@@ -318,7 +318,8 @@ func (d *TrustTunnelDevice) GetProxyAddr() string {
 
 func (d *TrustTunnelDevice) Close() error {
 	if d == nil {
-		return errors.New("trusttunnel device is not initialized")
+		// A device that was never created holds nothing; Stop must not fail on it.
+		return nil
 	}
 	if d.readiness != nil {
 		d.readiness.close()

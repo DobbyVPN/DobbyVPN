@@ -236,7 +236,8 @@ func (d *OutlineDevice) Resolve(parent context.Context, _ string) (context.Conte
 
 func (d *OutlineDevice) Close() error {
 	if d == nil {
-		return errors.New("outline device is not initialized")
+		// A device that was never created holds nothing; Stop must not fail on it.
+		return nil
 	}
 	started := time.Now()
 	var phase atomic.Value
